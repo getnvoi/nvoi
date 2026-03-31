@@ -1,0 +1,83 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── NVOI_ENV is the differentiator ─────────────────────────────────────────────
+# Different NVOI_ENV = brand new infrastructure.
+#   NVOI_ENV=production  → nvoi-production-*
+#   NVOI_ENV=staging     → nvoi-staging-*
+
+export NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
+export NVOI_ENV=${NVOI_ENV:-production}
+
+# Load credentials
+set -a
+source .env.deploy
+set +a
+
+echo "==> deploying $NVOI_APP_NAME ($NVOI_ENV)"
+
+# ── Infrastructure ──────────────────────────────────────────────────────────────
+
+bin/cli compute set master --provider hetzner --type cax11 --region fsn1
+bin/cli compute set worker-1 --provider hetzner --type cax21 --region fsn1
+# bin/cli bootstrap
+# bin/cli volume set pgdata --size 20 --server master
+# bin/cli volume set meili-data --size 10 --server master
+
+# ── Services ────────────────────────────────────────────────────────────────────
+
+# bin/cli service set db \
+#   --image postgres:17 \
+#   --volume pgdata:/var/lib/postgresql/data \
+#   --env POSTGRES_USER="$POSTGRES_USER" \
+#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+#   --env POSTGRES_DB="$POSTGRES_DB"
+
+# bin/cli service set meilisearch \
+#   --image getmeili/meilisearch:latest \
+#   --volume meili-data:/meili_data
+
+# bin/cli service set web \
+#   --build benbonnet/dummy-rails \
+#   --port 80 \
+#   --replicas 2 \
+#   --health-path /up \
+#   --server worker-1 \
+#   --env RAILS_ENV=production \
+#   --env POSTGRES_HOST=db \
+#   --env POSTGRES_USER="$POSTGRES_USER" \
+#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+#   --env POSTGRES_DB="$POSTGRES_DB"
+
+# bin/cli service set jobs \
+#   --build benbonnet/dummy-rails \
+#   --command "bin/jobs" \
+#   --server worker-1 \
+#   --env RAILS_ENV=production \
+#   --env POSTGRES_HOST=db \
+#   --env POSTGRES_USER="$POSTGRES_USER" \
+#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+#   --env POSTGRES_DB="$POSTGRES_DB"
+
+# ── Secrets ─────────────────────────────────────────────────────────────────────
+
+# bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+
+# ── Storage ─────────────────────────────────────────────────────────────────────
+
+# bin/cli storage set assets --provider cloudflare --bucket nvoi-dummy-rails-assets --cors
+
+# ── DNS ─────────────────────────────────────────────────────────────────────────
+
+# bin/cli dns set web final.nvoi.to --provider cloudflare --zone nvoi.to
+
+# ── Deploy ──────────────────────────────────────────────────────────────────────
+
+# bin/cli apply
+
+# ── Verify ──────────────────────────────────────────────────────────────────────
+
+# bin/cli show
+
+# echo ""
+# echo "==> done. https://final.nvoi.to"

@@ -1,0 +1,5 @@
+.env
+.env.deploy
+!.env.example
+*.tmp
+/nvoi

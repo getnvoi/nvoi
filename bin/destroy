@@ -1,0 +1,29 @@
+#!/bin/bash
+set -euo pipefail
+
+export NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
+export NVOI_ENV=${NVOI_ENV:-production}
+
+# Load credentials
+set -a
+source .env.deploy
+set +a
+
+echo "==> destroying $NVOI_APP_NAME ($NVOI_ENV)"
+
+# ── Teardown (reverse order of bin/deploy) ──────────────────────────────────
+
+# bin/cli dns delete web final.nvoi.to --provider cloudflare --zone nvoi.to -y
+# bin/cli storage delete assets -y
+# bin/cli secret delete RAILS_MASTER_KEY -y
+# bin/cli service delete jobs -y
+# bin/cli service delete web -y
+# bin/cli service delete meilisearch -y
+# bin/cli service delete db -y
+# bin/cli volume delete meili-data -y
+# bin/cli volume delete pgdata -y
+bin/cli compute delete worker-1 --provider hetzner -y
+bin/cli compute delete master --provider hetzner -y
+
+echo ""
+echo "==> destroyed."
