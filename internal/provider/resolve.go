@@ -50,7 +50,12 @@ type bucketEntry struct {
 
 var computeProviders = map[string]computeEntry{}
 var buildProviders = map[string]buildEntry{}
-var dnsProviders = map[string]func(zone string) (DNSProvider, error){}
+type dnsEntry struct {
+	schema  CredentialSchema
+	factory func(creds map[string]string) DNSProvider
+}
+
+var dnsProviders = map[string]dnsEntry{}
 var bucketProviders = map[string]bucketEntry{}
 
 func RegisterCompute(name string, schema CredentialSchema, factory func(creds map[string]string) ComputeProvider) {
@@ -59,7 +64,9 @@ func RegisterCompute(name string, schema CredentialSchema, factory func(creds ma
 func RegisterBuild(name string, schema CredentialSchema, factory func(creds map[string]string) BuildProvider) {
 	buildProviders[name] = buildEntry{schema: schema, factory: factory}
 }
-func RegisterDNS(name string, factory func(string) (DNSProvider, error))   { dnsProviders[name] = factory }
+func RegisterDNS(name string, schema CredentialSchema, factory func(creds map[string]string) DNSProvider) {
+	dnsProviders[name] = dnsEntry{schema: schema, factory: factory}
+}
 func RegisterBucket(name string, schema CredentialSchema, factory func(creds map[string]string) BucketProvider) {
 	bucketProviders[name] = bucketEntry{schema: schema, factory: factory}
 }
@@ -106,12 +113,23 @@ func ResolveBuild(name string, creds map[string]string) (BuildProvider, error) {
 	return entry.factory(creds), nil
 }
 
-func ResolveDNS(name, zone string) (DNSProvider, error) {
-	factory, ok := dnsProviders[name]
+func GetDNSSchema(name string) (CredentialSchema, error) {
+	entry, ok := dnsProviders[name]
+	if !ok {
+		return CredentialSchema{}, fmt.Errorf("unsupported DNS provider: %q", name)
+	}
+	return entry.schema, nil
+}
+
+func ResolveDNS(name string, creds map[string]string) (DNSProvider, error) {
+	entry, ok := dnsProviders[name]
 	if !ok {
 		return nil, fmt.Errorf("unsupported DNS provider: %q", name)
 	}
-	return factory(zone)
+	if err := entry.schema.Validate(creds); err != nil {
+		return nil, err
+	}
+	return entry.factory(creds), nil
 }
 
 func GetBucketSchema(name string) (CredentialSchema, error) {
