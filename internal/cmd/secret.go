@@ -18,13 +18,22 @@ func newSecretCmd() *cobra.Command {
 }
 
 func newSecretSetCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "set [key] [value]",
 		Short: "Create or update a k8s secret",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
 			value := args[1]
+
+			_, _, err := resolveAppEnv(cmd)
+			if err != nil {
+				return err
+			}
+			_, err = resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
 
 			_ = key
 			_ = value
@@ -35,10 +44,13 @@ func newSecretSetCmd() *cobra.Command {
 			return fmt.Errorf("not implemented")
 		},
 	}
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
+	return cmd
 }
 
 func newSecretDeleteCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "delete [key]",
 		Short: "Remove a secret key",
 		Args:  cobra.ExactArgs(1),
@@ -49,10 +61,13 @@ func newSecretDeleteCmd() *cobra.Command {
 			return fmt.Errorf("not implemented")
 		},
 	}
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
+	return cmd
 }
 
 func newSecretListCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List secret keys (values stored in k8s only)",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -62,4 +77,7 @@ func newSecretListCmd() *cobra.Command {
 			return fmt.Errorf("not implemented")
 		},
 	}
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
+	return cmd
 }

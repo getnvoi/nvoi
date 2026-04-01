@@ -1,0 +1,157 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Explicit-flag path ────────────────────────────────────────────────────────
+# Zero env vars. Every command is fully self-contained.
+# Showcases the complete CLI interface.
+
+echo "==> deploying rails (production) — fully explicit"
+
+# ── Infrastructure ──────────────────────────────────────────────────────────────
+
+bin/cli instance set master \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --compute-type cx23 \
+  --compute-region fsn1
+
+bin/cli instance set worker-1 \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --compute-type cx33 \
+  --compute-region fsn1 \
+  --worker
+
+bin/cli volume set pgdata \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --size 30 \
+  --server master
+
+bin/cli volume set meili-data \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --size 20 \
+  --server master
+
+# ── Build ───────────────────────────────────────────────────────────────────────
+
+bin/cli build \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --build-provider daytona \
+  --build-credentials api_key=$DAYTONA_API_KEY \
+  --source benbonnet/dummy-rails \
+  --name web \
+  --git-token "$GITHUB_TOKEN"
+
+WEB_IMAGE=$(bin/cli build latest web \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN)
+
+echo "image: $WEB_IMAGE"
+
+# ── Services ────────────────────────────────────────────────────────────────────
+
+bin/cli service set db \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --image postgres:17 \
+  --volume pgdata:/var/lib/postgresql/data \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --env POSTGRES_DB="$POSTGRES_DB"
+
+bin/cli service set meilisearch \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --image getmeili/meilisearch:latest \
+  --volume meili-data:/meili_data
+
+bin/cli service set web \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --image "$WEB_IMAGE" \
+  --port 80 \
+  --replicas 2 \
+  --health-path /up \
+  --server worker-1 \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --env POSTGRES_DB="$POSTGRES_DB"
+
+bin/cli service set jobs \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --image "$WEB_IMAGE" \
+  --command "bin/jobs" \
+  --server worker-1 \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --env POSTGRES_DB="$POSTGRES_DB"
+
+# ── Secrets ─────────────────────────────────────────────────────────────────────
+
+bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY" \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
+
+# ── Storage ─────────────────────────────────────────────────────────────────────
+
+bin/cli storage set assets \
+  --app-name rails \
+  --env production \
+  --storage-provider cloudflare \
+  --bucket nvoi-dummy-rails-assets \
+  --cors
+
+# ── DNS ─────────────────────────────────────────────────────────────────────────
+
+bin/cli dns set web final.nvoi.to \
+  --app-name rails \
+  --env production \
+  --dns-provider cloudflare \
+  --zone nvoi.to
+
+# ── Deploy ──────────────────────────────────────────────────────────────────────
+
+bin/cli apply \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
+
+bin/cli show \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
+
+echo ""
+echo "==> done. https://final.nvoi.to"

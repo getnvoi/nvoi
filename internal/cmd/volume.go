@@ -24,15 +24,18 @@ func newVolumeSetCmd() *cobra.Command {
 		Short: "Provision or reconcile a block storage volume",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
 			size, _ := cmd.Flags().GetInt("size")
 			server, _ := cmd.Flags().GetString("server")
 
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -54,7 +57,8 @@ func newVolumeSetCmd() *cobra.Command {
 			return err
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().Int("size", 10, "volume size in GB")
 	cmd.Flags().String("server", "master", "target server name")
 	_ = cmd.MarkFlagRequired("size")
@@ -67,7 +71,6 @@ func newVolumeDeleteCmd() *cobra.Command {
 		Short: "Detach a volume (data preserved)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
 			yes, _ := cmd.Flags().GetBool("yes")
 
 			if !yes {
@@ -80,11 +83,15 @@ func newVolumeDeleteCmd() *cobra.Command {
 				}
 			}
 
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -103,7 +110,8 @@ func newVolumeDeleteCmd() *cobra.Command {
 			})
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().BoolP("yes", "y", false, "skip confirmation")
 	return cmd
 }
@@ -113,13 +121,15 @@ func newVolumeListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List volumes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
-
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -142,6 +152,7 @@ func newVolumeListCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	return cmd
 }

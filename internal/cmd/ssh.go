@@ -11,13 +11,15 @@ func newSSHCmd() *cobra.Command {
 		Short: "Run a command on the host server",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
-
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -36,6 +38,7 @@ func newSSHCmd() *cobra.Command {
 			})
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	return cmd
 }

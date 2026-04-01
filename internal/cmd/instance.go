@@ -8,33 +8,36 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newComputeCmd() *cobra.Command {
+func newInstanceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "compute",
-		Short: "Manage compute servers",
+		Use:   "instance",
+		Short: "Manage compute instances",
 	}
-	cmd.AddCommand(newComputeSetCmd())
-	cmd.AddCommand(newComputeDeleteCmd())
-	cmd.AddCommand(newComputeListCmd())
+	cmd.AddCommand(newInstanceSetCmd())
+	cmd.AddCommand(newInstanceDeleteCmd())
+	cmd.AddCommand(newInstanceListCmd())
 	return cmd
 }
 
-func newComputeSetCmd() *cobra.Command {
+func newInstanceSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set [name]",
-		Short: "Provision a server and install k3s (master by default, --worker to join)",
+		Short: "Provision an instance and install k3s (master by default, --worker to join)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
-			serverType, _ := cmd.Flags().GetString("type")
-			region, _ := cmd.Flags().GetString("region")
+			computeType, _ := cmd.Flags().GetString("compute-type")
+			region, _ := cmd.Flags().GetString("compute-region")
 			worker, _ := cmd.Flags().GetBool("worker")
 
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -50,33 +53,33 @@ func newComputeSetCmd() *cobra.Command {
 				Credentials: creds,
 				SSHKey:      sshKey,
 				Name:        args[0],
-				ServerType:  serverType,
+				ServerType:  computeType,
 				Region:      region,
 				Worker:      worker,
 			})
 			return err
 		},
 	}
-	addProviderFlags(cmd)
-	cmd.Flags().String("type", "", "server instance type (e.g. cax11)")
-	cmd.Flags().String("region", "", "server region (e.g. fsn1)")
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
+	cmd.Flags().String("compute-type", "", "instance type (e.g. cax11)")
+	cmd.Flags().String("compute-region", "", "instance region (e.g. fsn1)")
 	cmd.Flags().Bool("worker", false, "join as worker (default: master)")
-	_ = cmd.MarkFlagRequired("type")
-	_ = cmd.MarkFlagRequired("region")
+	_ = cmd.MarkFlagRequired("compute-type")
+	_ = cmd.MarkFlagRequired("compute-region")
 	return cmd
 }
 
-func newComputeDeleteCmd() *cobra.Command {
+func newInstanceDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete [name]",
-		Short: "Delete a server (firewall + network cleaned up)",
+		Short: "Delete an instance (firewall + network cleaned up)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
 			yes, _ := cmd.Flags().GetBool("yes")
 
 			if !yes {
-				fmt.Printf("Delete server %s? [y/N] ", args[0])
+				fmt.Printf("Delete instance %s? [y/N] ", args[0])
 				var confirm string
 				fmt.Scanln(&confirm)
 				if confirm != "y" && confirm != "yes" {
@@ -85,11 +88,15 @@ func newComputeDeleteCmd() *cobra.Command {
 				}
 			}
 
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -103,23 +110,26 @@ func newComputeDeleteCmd() *cobra.Command {
 			})
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().BoolP("yes", "y", false, "skip confirmation")
 	return cmd
 }
 
-func newComputeListCmd() *cobra.Command {
+func newInstanceListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List provisioned servers",
+		Short: "List provisioned instances",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
-
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -142,6 +152,7 @@ func newComputeListCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	return cmd
 }

@@ -7,7 +7,7 @@ import (
 )
 
 func newApplyCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Reconcile the cluster — rebuild and redeploy all services",
 		Long: `Queries the cluster for current state, rebuilds services that have
@@ -16,6 +16,15 @@ ingress if DNS records exist. Injects secrets if they exist.
 
 One command. Full reconciliation. Idempotent.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			_, _, err := resolveAppEnv(cmd)
+			if err != nil {
+				return err
+			}
+			_, err = resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+
 			// TODO Phase 2:
 			// 1. Resolve master from provider API → SSH
 			// 2. Query cluster: kubectl get deployments,statefulsets,services (on remote)
@@ -33,4 +42,7 @@ One command. Full reconciliation. Idempotent.`,
 			return fmt.Errorf("not implemented")
 		},
 	}
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
+	return cmd
 }

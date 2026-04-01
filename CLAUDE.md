@@ -10,7 +10,7 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 - **No state files.** No manifest, no database, no local cache. Infrastructure is the source of truth.
 - **Everything is idempotent.** Every command hits real infrastructure — provider APIs over HTTP, servers over SSH, cluster via kubectl. Run twice, same result.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
-- **Everything is `set`.** `compute set`, `volume set`, `dns set`, `service set`, `secret set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. `bin/deploy` runs end to end, every time, same outcome.
+- **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. `bin/deploy` runs end to end, every time, same outcome.
 - **`apply` reconciles.** Rebuilds stale images, regenerates ingress, reapplies. One command, full reconciliation.
 - **`show` fetches everything live.** Servers from provider API. Pods from kubectl. DNS from DNS API.
 - **Provider interfaces scale.** Hetzner and Cloudflare first. Interface-first. Add a provider = implement the interface.
@@ -31,9 +31,10 @@ Everything runs through Docker Compose. Never run Go on the host — use `bin/cl
 
 ```bash
 bin/cli <command>                       # runs any nvoi command inside compose
-bin/deploy                              # full deploy — idempotent, self-healing
+bin/deploy                              # full deploy — env vars, zero provider flags
+bin/deploy-full                         # full deploy — explicit flags, zero env vars
 NVOI_ENV=staging bin/deploy             # staging — brand new isolated infra
-NVOI_ENV=staging bin/cli compute list   # list staging servers
+NVOI_ENV=staging bin/cli instance list  # list staging instances
 ```
 
 ### How it works
@@ -51,7 +52,7 @@ NVOI_ENV=staging bin/cli compute list   # list staging servers
 
 ```bash
 cp .env.example .env                    # fill in provider credentials
-bin/cli compute set master --provider hetzner --type cax11 --region fsn1
+bin/cli instance set master --compute-type cax11 --compute-region fsn1
 ```
 
 ### Files
@@ -62,18 +63,21 @@ bin/cli compute set master --provider hetzner --type cax11 --region fsn1
 | `.env.deploy` | No | App secrets for `bin/deploy` (DB creds, Rails master key) |
 | `.env.example` | Yes | Template for `.env` |
 | `bin/cli` | Yes | `docker compose run --rm cli "$@"` |
-| `bin/deploy` | Yes | Full deploy script — sources `.env.deploy`, runs all commands |
+| `bin/deploy` | Yes | Full deploy — env vars, zero provider flags |
+| `bin/deploy-full` | Yes | Full deploy — explicit flags, zero env vars |
 
 ## Namespace
 
-Two environment variables. Both required. Everything keys off them.
+Two values. Both required. Everything keys off them. Flag or env var — same result.
 
 ```bash
+# Via env vars
 export NVOI_APP_NAME=dummy-rails
 export NVOI_ENV=production
 # → nvoi-dummy-rails-production-master, nvoi-dummy-rails-production-fw, ...
 
-export NVOI_ENV=staging
+# Via flags (overrides env vars)
+nvoi instance list --app-name dummy-rails --env staging
 # → nvoi-dummy-rails-staging-master, nvoi-dummy-rails-staging-fw, ...
 ```
 
@@ -81,55 +85,73 @@ Different app or env = completely isolated infrastructure. Same commands, differ
 
 ## Commands
 
+Every flag has an env var fallback. With env vars set, commands need zero provider flags.
+
 ```bash
-# Infrastructure — compute set installs k3s (master by default, --worker to join)
-nvoi compute set <name> --provider hetzner --type cax11 --region fsn1
-nvoi compute set <name> --provider hetzner --type cax21 --region fsn1 --worker
-nvoi compute delete <name> --provider hetzner
-nvoi compute list --provider hetzner
-nvoi volume set <name> --provider hetzner --size 20 --server master
-nvoi volume delete <name> --provider hetzner
-nvoi volume list --provider hetzner
-nvoi dns set <service> <domain...> --provider cloudflare --zone nvoi.to
-nvoi dns delete <service> <domain...> --provider cloudflare --zone nvoi.to
-nvoi dns list --provider cloudflare --zone nvoi.to
-nvoi storage set <name> --provider cloudflare --bucket myapp-assets
-nvoi storage delete <name> --provider cloudflare
+# ── Flag → env var resolution ──────────────────────────────────────────────────
+# --app-name         → NVOI_APP_NAME
+# --env              → NVOI_ENV
+# --compute-provider → COMPUTE_PROVIDER
+# --build-provider   → BUILD_PROVIDER
+# --dns-provider     → DNS_PROVIDER
+# --storage-provider → STORAGE_PROVIDER
+# --compute-credentials KEY=VAL → per-provider env vars (HETZNER_TOKEN, etc.)
+# --build-credentials KEY=VAL  → per-provider env vars (DAYTONA_API_KEY, etc.)
+
+# ── Infrastructure — instance set installs k3s (master by default, --worker to join)
+nvoi instance set <name> --compute-type cax11 --compute-region fsn1
+nvoi instance set <name> --compute-type cax21 --compute-region fsn1 --worker
+nvoi instance delete <name>
+nvoi instance list
+nvoi volume set <name> --size 20 --server master
+nvoi volume delete <name>
+nvoi volume list
+nvoi dns set <service> <domain...> --dns-provider cloudflare --zone nvoi.to
+nvoi dns delete <service> <domain...> --dns-provider cloudflare --zone nvoi.to
+nvoi dns list --dns-provider cloudflare --zone nvoi.to
+nvoi storage set <name> --storage-provider cloudflare --bucket myapp-assets
+nvoi storage delete <name>
 
 # Build — separate command, outputs image ref. Registry is the state.
-nvoi build --provider hetzner --builder local --source . --name web
-nvoi build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
-nvoi build --provider hetzner --builder github --source benbonnet/dummy-rails --name web
-nvoi build --provider hetzner --builder github --source benbonnet/dummy-rails --name web --architecture arm64
-nvoi build list --provider hetzner
-nvoi build latest <name> --provider hetzner                                               # returns image ref
-nvoi build prune <name> --provider hetzner --keep 3                                       # keep N, delete rest
+nvoi build --build-provider local --source . --name web
+nvoi build --build-provider daytona --source benbonnet/dummy-rails --name web
+nvoi build --build-provider github --source benbonnet/dummy-rails --name web
+nvoi build --build-provider github --source benbonnet/dummy-rails --name web --architecture arm64
+nvoi build list
+nvoi build latest <name>                                                        # returns image ref
+nvoi build prune <name> --keep 3                                                # keep N, delete rest
 
 # Application — --image only. Build is a separate step.
-nvoi service set <name> --provider hetzner --image postgres:17 --port 5432
-nvoi service set <name> --provider hetzner --image $IMAGE --port 3000 --replicas 2
-nvoi service delete <name> --provider hetzner
-nvoi secret set <key> <value> --provider hetzner
-nvoi secret delete <key> --provider hetzner
-nvoi secret list --provider hetzner
+nvoi service set <name> --image postgres:17 --port 5432
+nvoi service set <name> --image $IMAGE --port 3000 --replicas 2
+nvoi service delete <name>
+nvoi secret set <key> <value>
+nvoi secret delete <key>
+nvoi secret list
 
 # Reconcile
-nvoi apply --provider hetzner
+nvoi apply
 
 # Live view
-nvoi show --provider hetzner
+nvoi show
 
 # Operate
-nvoi logs <service> --provider hetzner [-f] [-n 50]
-nvoi exec <service> --provider hetzner -- <command>
-nvoi ssh --provider hetzner <command>
+nvoi logs <service> [-f] [-n 50]
+nvoi exec <service> -- <command>
+nvoi ssh <command>
 
 # Inspect
-nvoi resources --provider hetzner
+nvoi resources
 
 # Teardown
-nvoi destroy --provider hetzner [--yes]
+nvoi destroy [--yes]
+
+# ── Fully explicit (no env vars) ──────────────────────────────────────────────
+nvoi instance set master --compute-provider hetzner --compute-credentials HETZNER_TOKEN=xxx \
+  --compute-type cax11 --compute-region fsn1 --app-name rails --env production
 ```
+
+See `bin/deploy` for the env-var path and `bin/deploy-full` for the explicit-flag path.
 
 ## Architecture
 
@@ -153,32 +175,42 @@ internal/
 
 Everything pluggable is a provider. Same pattern: interface + credential schema + register.
 
-| Kind | Flag | Credentials flag | Interface | Implementations |
-|------|------|-----------------|-----------|----------------|
-| Compute | `--provider` | `--credentials` | `ComputeProvider` | hetzner, scaleway (future) |
-| DNS | `--provider` | `--credentials` | `DNSProvider` | cloudflare, hetzner (future) |
-| Storage | `--provider` | `--credentials` | `BucketProvider` | cloudflare, aws (future) |
-| Build | `--builder` | `--builder-credentials` | `BuildProvider` | local, daytona, github |
+| Kind | Flag | Env var | Credentials flag | Interface | Implementations |
+|------|------|---------|-----------------|-----------|----------------|
+| Compute | `--compute-provider` | `COMPUTE_PROVIDER` | `--compute-credentials` | `ComputeProvider` | hetzner, scaleway (future) |
+| DNS | `--dns-provider` | `DNS_PROVIDER` | — | `DNSProvider` | cloudflare, hetzner (future) |
+| Storage | `--storage-provider` | `STORAGE_PROVIDER` | — | `BucketProvider` | cloudflare, aws (future) |
+| Build | `--build-provider` | `BUILD_PROVIDER` | `--build-credentials` | `BuildProvider` | local, daytona, github |
 
-`--provider` is always compute. Every command that touches infrastructure uses it.
-`--builder` is only on `build`. It's the only command that needs two providers (compute for registry access + builder for building).
+`--compute-provider` is on every command that touches infrastructure.
+`--build-provider` is only on `build`. It's the only command that needs two providers (compute for registry access + builder for building).
 
 ### Credential pairs
 
 Every provider has a name flag + credentials flag. Always a pair. Credentials are `key=value` pairs.
 
 ```bash
-# Common: env vars in .env, no credential flags needed
-bin/cli compute set master --provider hetzner --type cax11 --region fsn1
+# Common: env vars set, no credential flags needed
+bin/cli instance set master --compute-type cax11 --compute-region fsn1
 
-# Override: --credentials takes priority over env var
-bin/cli compute set master --provider hetzner --credentials token=$OTHER_TOKEN
+# Override: --compute-credentials takes priority over env var
+bin/cli instance set master \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$OTHER_TOKEN \
+  --compute-type cax11 \
+  --compute-region fsn1
 
-# Build uses two providers — compute (--provider) for registry, builder (--builder) for building
-bin/cli build --provider hetzner --builder daytona --builder-credentials api_key=xxx --source myorg/app --name web
+# Build uses two providers — compute for registry, builder for building
+bin/cli build \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=xxx \
+  --build-provider daytona \
+  --build-credentials api_key=xxx \
+  --source myorg/app \
+  --name web
 
 # Error when missing
-# hetzner: token is required (--credentials token=..., env: HETZNER_TOKEN)
+# hetzner: token is required (--compute-credentials HETZNER_TOKEN=..., env: HETZNER_TOKEN)
 ```
 
 ### .env
@@ -200,24 +232,24 @@ Hard errors before touching k8s.
 
 **Cluster:**
 - Server named `master` must exist (resolved from provider API by name `nvoi-{app}-{env}-master`).
-- Cluster must have k3s installed (`compute set` handles this — kubectl get nodes succeeds over SSH).
+- Cluster must have k3s installed (`instance set` handles this — kubectl get nodes succeeds over SSH).
 
 **Services:**
 - `service set` takes `--image` only. `--image` is required.
 - Build is a separate command. `build` outputs an image ref. `service set` consumes it.
 
 **Build (`nvoi build`):**
-- `--provider` = compute provider (for SSH tunnel to cluster registry). Required.
-- `--builder` = build provider (local, daytona). Required.
+- `--compute-provider` = compute provider (for SSH tunnel to cluster registry). Required.
+- `--build-provider` = build provider (local, daytona, github). Required.
 - `--source` = what to build. Local path (`.`, `./path`) or remote repo (`org/repo`, `https://...`, `git@...`).
 - `--name` = image name in the registry. Required.
-- `build list` = query registry for all tags. Uses `--provider` only (no builder needed).
+- `build list` = query registry for all tags. Uses `--compute-provider` only (no builder needed).
 - `build latest <name>` = return latest image ref. Pipeable.
 - Source + builder validation:
-  - Local path (`.` or `/`) + `--builder local` → ok.
-  - Local path + `--builder daytona` → error (Daytona needs a git repo).
-  - Remote repo + `--builder daytona` → ok.
-  - Remote repo + `--builder local` → error (local can't clone remote repos).
+  - Local path (`.` or `/`) + `--build-provider local` → ok.
+  - Local path + `--build-provider daytona` → error (Daytona needs a git repo).
+  - Remote repo + `--build-provider daytona` → ok.
+  - Remote repo + `--build-provider local` → error (local can't clone remote repos).
   - Detection: `--source` starts with `.` or `/` → local. Otherwise → remote.
 - The registry IS the state. No build database. `build list` queries the registry directly over SSH.
 
@@ -240,7 +272,7 @@ Hard errors before touching k8s.
 
 ## Key rules
 
-1. `NVOI_APP_NAME` + `NVOI_ENV` are required. They're the namespace for everything.
+1. `NVOI_APP_NAME` + `NVOI_ENV` (or `--app-name` + `--env`) are required. They're the namespace for everything.
 2. No state files. Infrastructure is the truth. `show` fetches live.
 3. Everything is `set`. Idempotent. Run twice, same result. `bin/deploy` is the whole deploy — runs end to end, always same outcome.
 4. `set` writes directly to infrastructure. No intermediate files.

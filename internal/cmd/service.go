@@ -24,12 +24,11 @@ func newServiceSetCmd() *cobra.Command {
 		Long: `Creates or updates a k8s workload.
 
 Examples:
-  nvoi service set db --provider hetzner --image postgres:17 --volume pgdata:/var/lib/postgresql/data
-  nvoi service set web --provider hetzner --image 10.0.1.1:5000/web:20260401 --port 80 --replicas 2
-  nvoi service set redis --provider hetzner --image redis:7 --port 6379`,
+  nvoi service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data
+  nvoi service set web --image 10.0.1.1:5000/web:20260401 --port 80 --replicas 2
+  nvoi service set redis --image redis:7 --port 6379`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
 			image, _ := cmd.Flags().GetString("image")
 			port, _ := cmd.Flags().GetInt("port")
 			replicas, _ := cmd.Flags().GetInt("replicas")
@@ -39,11 +38,15 @@ Examples:
 			healthPath, _ := cmd.Flags().GetString("health-path")
 			envVars, _ := cmd.Flags().GetStringArray("env")
 
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -70,7 +73,8 @@ Examples:
 			})
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().String("image", "", "container image (required)")
 	cmd.Flags().Int("port", 0, "container port (0 = no exposed port)")
 	cmd.Flags().Int("replicas", 1, "number of replicas")
@@ -89,7 +93,6 @@ func newServiceDeleteCmd() *cobra.Command {
 		Short: "Delete a service from the cluster",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
 			yes, _ := cmd.Flags().GetBool("yes")
 
 			if !yes {
@@ -102,11 +105,15 @@ func newServiceDeleteCmd() *cobra.Command {
 				}
 			}
 
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -125,7 +132,8 @@ func newServiceDeleteCmd() *cobra.Command {
 			})
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().BoolP("yes", "y", false, "skip confirmation")
 	return cmd
 }

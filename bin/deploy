@@ -1,15 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── NVOI_ENV is the differentiator ─────────────────────────────────────────────
-# Different NVOI_ENV = brand new infrastructure.
-#   NVOI_ENV=production  → nvoi-production-*
-#   NVOI_ENV=staging     → nvoi-staging-*
+# ── Env-var path ──────────────────────────────────────────────────────────────
+# All provider + identity config lives in env vars.
+# Commands below need zero provider flags.
 
 export NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
 export NVOI_ENV=${NVOI_ENV:-production}
+export COMPUTE_PROVIDER=hetzner
+export HETZNER_TOKEN=$HETZNER_TOKEN
+export BUILD_PROVIDER=daytona
+export DAYTONA_API_KEY=$DAYTONA_API_KEY
+export DAYTONA_API_URL=$DAYTONA_API_URL
+export GITHUB_TOKEN=$GITHUB_TOKEN
 
-# Load credentials
+# Load app secrets (POSTGRES_USER, POSTGRES_PASSWORD, RAILS_MASTER_KEY, etc.)
 set -a
 source .env.deploy
 set +a
@@ -18,73 +23,70 @@ echo "==> deploying $NVOI_APP_NAME ($NVOI_ENV)"
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/cli compute set master --provider hetzner --type cx23 --region fsn1
-bin/cli compute set worker-1 --provider hetzner --type cx33 --region fsn1 --worker
-bin/cli volume set pgdata --provider hetzner --size 30 --server master
-bin/cli volume set meili-data --provider hetzner --size 20 --server master
+bin/cli instance set master --compute-type cx23 --compute-region fsn1
+bin/cli instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
+bin/cli volume set pgdata --size 30 --server master
+bin/cli volume set meili-data --size 20 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
-# bin/cli build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
-BUILD_SOURCE=/Users/ben/Desktop/sources/dummy-rails bin/cli build --provider hetzner --builder local --source /build-source --name web # mount via BUILD_SOURCE in compose
-WEB_IMAGE=$(bin/cli build latest web --provider hetzner)
+bin/cli build --source benbonnet/dummy-rails --name web
 
-echo $WEB_IMAGE
+WEB_IMAGE=$(bin/cli build latest web)
+
+echo "image: $WEB_IMAGE"
 
 # ── Services ────────────────────────────────────────────────────────────────────
 
-# bin/cli service set db --provider hetzner \
-#   --image postgres:17 \
-#   --volume pgdata:/var/lib/postgresql/data \
-#   --env POSTGRES_USER="$POSTGRES_USER" \
-#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-#   --env POSTGRES_DB="$POSTGRES_DB"
+bin/cli service set db \
+  --image postgres:17 \
+  --volume pgdata:/var/lib/postgresql/data \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --env POSTGRES_DB="$POSTGRES_DB"
 
-# bin/cli service set meilisearch --provider hetzner \
-#   --image getmeili/meilisearch:latest \
-#   --volume meili-data:/meili_data
+bin/cli service set meilisearch \
+  --image getmeili/meilisearch:latest \
+  --volume meili-data:/meili_data
 
-# bin/cli service set web --provider hetzner \
-#   --image "$WEB_IMAGE" \
-#   --port 80 \
-#   --replicas 2 \
-#   --health-path /up \
-#   --server worker-1 \
-#   --env RAILS_ENV=production \
-#   --env POSTGRES_HOST=db \
-#   --env POSTGRES_USER="$POSTGRES_USER" \
-#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-#   --env POSTGRES_DB="$POSTGRES_DB"
+bin/cli service set web \
+  --image "$WEB_IMAGE" \
+  --port 80 \
+  --replicas 2 \
+  --health-path /up \
+  --server worker-1 \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --env POSTGRES_DB="$POSTGRES_DB"
 
-# bin/cli service set jobs --provider hetzner \
-#   --image "$WEB_IMAGE" \
-#   --command "bin/jobs" \
-#   --server worker-1 \
-#   --env RAILS_ENV=production \
-#   --env POSTGRES_HOST=db \
-#   --env POSTGRES_USER="$POSTGRES_USER" \
-#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-#   --env POSTGRES_DB="$POSTGRES_DB"
+bin/cli service set jobs \
+  --image "$WEB_IMAGE" \
+  --command "bin/jobs" \
+  --server worker-1 \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --env POSTGRES_DB="$POSTGRES_DB"
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
-# bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY" --provider hetzner
+bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
-# bin/cli storage set assets --provider cloudflare --bucket nvoi-dummy-rails-assets --cors
+bin/cli storage set assets --storage-provider cloudflare --bucket nvoi-dummy-rails-assets --cors
 
 # ── DNS ─────────────────────────────────────────────────────────────────────────
 
-# bin/cli dns set web final.nvoi.to --provider cloudflare --zone nvoi.to
+bin/cli dns set web final.nvoi.to --dns-provider cloudflare --zone nvoi.to
 
 # ── Deploy ──────────────────────────────────────────────────────────────────────
 
-# bin/cli apply --provider hetzner
+bin/cli apply
+bin/cli show
 
-# ── Verify ──────────────────────────────────────────────────────────────────────
-
-# bin/cli show --provider hetzner
-
-# echo ""
-# echo "==> done. https://final.nvoi.to"
+echo ""
+echo "==> done. https://final.nvoi.to"

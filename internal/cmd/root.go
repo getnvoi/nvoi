@@ -14,7 +14,7 @@ func Root() *cobra.Command {
 	root.PersistentFlags().String("env-file", ".env", "path to .env file")
 
 	// Infrastructure.
-	root.AddCommand(newComputeCmd())
+	root.AddCommand(newInstanceCmd())
 	root.AddCommand(newVolumeCmd())
 	root.AddCommand(newDNSCmd())
 	root.AddCommand(newStorageCmd())

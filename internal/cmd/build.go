@@ -18,11 +18,9 @@ func newBuildCmd() *cobra.Command {
 		Long: `Builds a container image and pushes to the cluster registry.
 
 Examples:
-  nvoi build --provider hetzner --builder local --source . --name web
-  nvoi build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web`,
+  nvoi build --build-provider local --source . --name web
+  nvoi build --build-provider daytona --source benbonnet/dummy-rails --name web`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
-			builderName, _ := cmd.Flags().GetString("builder")
 			source, _ := cmd.Flags().GetString("source")
 			name, _ := cmd.Flags().GetString("name")
 			branch, _ := cmd.Flags().GetString("branch")
@@ -41,11 +39,19 @@ Examples:
 				}
 			}
 
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			builderName, err := resolveBuildProvider(cmd)
 			if err != nil {
 				return err
 			}
@@ -80,9 +86,9 @@ Examples:
 			return err
 		},
 	}
-	addProviderFlags(cmd)
-	cmd.Flags().String("builder", "local", "build provider (local, daytona)")
-	cmd.Flags().StringArray("builder-credentials", nil, "build provider credentials (key=value)")
+	addComputeProviderFlags(cmd)
+	addBuildProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().String("source", "", "source to build (local path or remote repo)")
 	cmd.Flags().String("name", "", "image name in registry")
 	cmd.Flags().String("branch", "main", "git branch (remote sources only)")
@@ -105,13 +111,15 @@ func newBuildListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List images in the cluster registry",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
-
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -144,7 +152,8 @@ func newBuildListCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	return cmd
 }
 
@@ -154,17 +163,19 @@ func newBuildLatestCmd() *cobra.Command {
 		Short: "Return the latest image ref (pipeable)",
 		Long: `Returns just the image reference string, for use in scripts:
 
-  IMAGE=$(nvoi build latest web --provider hetzner)
-  nvoi service set web --provider hetzner --image $IMAGE --port 80`,
+  IMAGE=$(nvoi build latest web)
+  nvoi service set web --image $IMAGE --port 80`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
-
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -190,7 +201,8 @@ func newBuildLatestCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	return cmd
 }
 
@@ -200,14 +212,17 @@ func newBuildPruneCmd() *cobra.Command {
 		Short: "Keep N most recent tags, delete the rest",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
 			keep, _ := cmd.Flags().GetInt("keep")
 
-			appName, env, err := resolveAppEnv()
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -227,7 +242,8 @@ func newBuildPruneCmd() *cobra.Command {
 			})
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().Int("keep", 3, "number of recent tags to keep")
 	return cmd
 }

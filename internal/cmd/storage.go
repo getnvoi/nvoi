@@ -23,10 +23,14 @@ func newStorageSetCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			providerName, _ := cmd.Flags().GetString("provider")
 			bucketName, _ := cmd.Flags().GetString("bucket")
 			cors, _ := cmd.Flags().GetBool("cors")
 			expireDays, _ := cmd.Flags().GetInt("expire-days")
+
+			providerName, err := resolveStorageProvider(cmd)
+			if err != nil {
+				return err
+			}
 
 			_ = name
 			_ = providerName
@@ -35,7 +39,7 @@ func newStorageSetCmd() *cobra.Command {
 			_ = expireDays
 
 			// TODO Phase 4:
-			// 1. Resolve bucket provider from --provider flag
+			// 1. Resolve bucket provider from --storage-provider flag
 			// 2. EnsureBucket (idempotent — bucket API)
 			// 3. SetCORS if --cors (bucket API)
 			// 4. SetLifecycle if --expire-days > 0 (bucket API)
@@ -44,17 +48,17 @@ func newStorageSetCmd() *cobra.Command {
 			return fmt.Errorf("not implemented")
 		},
 	}
-	cmd.Flags().String("provider", "", "storage provider (cloudflare, aws, hetzner)")
+	addStorageProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().String("bucket", "", "bucket name")
 	cmd.Flags().Bool("cors", false, "enable CORS")
 	cmd.Flags().Int("expire-days", 0, "object expiration in days (0 = disabled)")
-	_ = cmd.MarkFlagRequired("provider")
 	_ = cmd.MarkFlagRequired("bucket")
 	return cmd
 }
 
 func newStorageDeleteCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "delete [name]",
 		Short: "Remove storage credentials (bucket preserved in cloud)",
 		Args:  cobra.ExactArgs(1),
@@ -65,4 +69,7 @@ func newStorageDeleteCmd() *cobra.Command {
 			return fmt.Errorf("not implemented")
 		},
 	}
+	addStorageProviderFlags(cmd)
+	addAppFlags(cmd)
+	return cmd
 }

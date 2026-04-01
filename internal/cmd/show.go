@@ -7,10 +7,19 @@ import (
 )
 
 func newShowCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "show",
 		Short: "Show full deployment status — fetches everything live",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			_, _, err := resolveAppEnv(cmd)
+			if err != nil {
+				return err
+			}
+			_, err = resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+
 			// TODO Phase 2:
 			// 1. Resolve provider
 			// 2. List servers by label (provider API) → print table
@@ -26,4 +35,7 @@ func newShowCmd() *cobra.Command {
 			return fmt.Errorf("not implemented")
 		},
 	}
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
+	return cmd
 }

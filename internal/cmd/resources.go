@@ -12,9 +12,11 @@ func newResourcesCmd() *cobra.Command {
 		Use:   "resources",
 		Short: "List all resources under the provider account",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName, _ := cmd.Flags().GetString("provider")
-
-			creds, err := resolveCredentials(cmd, providerName)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
 			if err != nil {
 				return err
 			}
@@ -51,6 +53,6 @@ func newResourcesCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addProviderFlags(cmd)
+	addComputeProviderFlags(cmd)
 	return cmd
 }

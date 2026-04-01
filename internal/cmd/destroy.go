@@ -17,6 +17,16 @@ Volumes are detached but NOT deleted — data is preserved in the cloud.
 Queries all live infrastructure by naming convention — nothing read from files.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			yes, _ := cmd.Flags().GetBool("yes")
+
+			_, _, err := resolveAppEnv(cmd)
+			if err != nil {
+				return err
+			}
+			_, err = resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+
 			_ = yes
 
 			// TODO Phase 4:
@@ -34,6 +44,8 @@ Queries all live infrastructure by naming convention — nothing read from files
 			return fmt.Errorf("not implemented")
 		},
 	}
+	addComputeProviderFlags(cmd)
+	addAppFlags(cmd)
 	cmd.Flags().Bool("yes", false, "skip confirmation")
 	return cmd
 }
