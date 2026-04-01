@@ -3,11 +3,13 @@ package kube
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/core"
+	"github.com/getnvoi/nvoi/internal/infra"
 )
 
 var kubeconfigPath = fmt.Sprintf("/home/%s/.kube/config", core.DefaultUser)
@@ -62,6 +64,113 @@ func ListSecretKeys(ctx context.Context, ssh core.SSHClient, ns, secretName stri
 		keys = append(keys, k)
 	}
 	return keys, nil
+}
+
+// UpsertSecretKey adds or updates a single key in a k8s Secret.
+// Creates the secret if it doesn't exist. Idempotent.
+func UpsertSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, key, value string) error {
+	// kubectl create secret generic handles create-or-patch via dry-run + apply.
+	// But it replaces the whole secret. We need to merge with existing keys.
+	// Strategy: patch if exists, create if not.
+
+	// Check if secret exists
+	_, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get secret %s 2>/dev/null", secretName)))
+	if err != nil {
+		// Secret doesn't exist — create it
+		cmd := kubectl(ns, fmt.Sprintf(
+			"create secret generic %s --from-literal=%s=%s",
+			secretName, shellQuote(key), shellQuote(value),
+		))
+		out, err := ssh.Run(ctx, cmd)
+		if err != nil {
+			return fmt.Errorf("create secret: %s: %w", string(out), err)
+		}
+		return nil
+	}
+
+	// Secret exists — patch the key
+	cmd := kubectl(ns, fmt.Sprintf(
+		"patch secret %s -p '{\"stringData\":{\"%s\":\"%s\"}}'",
+		secretName, key, escapeJSON(value),
+	))
+	out, err := ssh.Run(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("patch secret: %s: %w", string(out), err)
+	}
+	return nil
+}
+
+// DeleteSecretKey removes a single key from a k8s Secret.
+func DeleteSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, key string) error {
+	cmd := kubectl(ns, fmt.Sprintf(
+		"patch secret %s --type=json -p '[{\"op\":\"remove\",\"path\":\"/data/%s\"}]'",
+		secretName, key,
+	))
+	out, err := ssh.Run(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("delete secret key %s: %s: %w", key, string(out), err)
+	}
+	return nil
+}
+
+// GetSecretValue returns the decoded value of a single key from a k8s Secret.
+func GetSecretValue(ctx context.Context, ssh core.SSHClient, ns, secretName, key string) (string, error) {
+	cmd := kubectl(ns, fmt.Sprintf(
+		"get secret %s -o jsonpath='{.data.%s}'", secretName, key,
+	))
+	out, err := ssh.Run(ctx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("secret key %q not found", key)
+	}
+
+	raw := strings.TrimSpace(string(out))
+	raw = strings.Trim(raw, "'")
+	if raw == "" {
+		return "", fmt.Errorf("secret key %q not found or empty", key)
+	}
+
+	// Decode base64
+	decoded, err := base64Decode(raw)
+	if err != nil {
+		return "", fmt.Errorf("decode secret %q: %w", key, err)
+	}
+	return decoded, nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func escapeJSON(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
+func base64Decode(s string) (string, error) {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// LabelNode labels a k8s node with nvoi-role={role}. Idempotent — runs every deploy.
+// Connects to master via SSH since kubectl lives there.
+func LabelNode(ctx context.Context, masterIP string, sshKey []byte, nodeName, role string) error {
+	ssh, err := infra.ConnectSSH(ctx, masterIP+":22", core.DefaultUser, sshKey)
+	if err != nil {
+		return fmt.Errorf("ssh master for node label: %w", err)
+	}
+	defer ssh.Close()
+
+	cmd := fmt.Sprintf("KUBECONFIG=%s kubectl label node %s %s=%s --overwrite",
+		kubeconfigPath, nodeName, core.LabelNvoiRole, role)
+	out, err := ssh.Run(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("label node %s: %s: %w", nodeName, string(out), err)
+	}
+	return nil
 }
 
 // EnsureNamespace creates a namespace if it doesn't exist.

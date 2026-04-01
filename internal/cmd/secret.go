@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/getnvoi/nvoi/internal/app"
 	"github.com/spf13/cobra"
 )
 
@@ -29,25 +30,32 @@ secrets by key name via --secret KEY on service set.
   nvoi service set web --image ... --secret RAILS_MASTER_KEY`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key := args[0]
-			value := args[1]
-
-			_, _, err := resolveAppEnv(cmd)
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			_, err = resolveComputeProvider(cmd)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
 			if err != nil {
 				return err
 			}
 
-			_ = key
-			_ = value
-
-			// TODO Phase 3:
-			// 1. Resolve master from provider API → SSH
-			// 2. kubectl create secret generic secrets --from-literal=KEY=VALUE --dry-run=client -o yaml | kubectl apply
-			return fmt.Errorf("not implemented")
+			return app.SecretSet(cmd.Context(), app.SecretSetRequest{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+				SSHKey:      sshKey,
+				Key:         args[0],
+				Value:       args[1],
+			})
 		},
 	}
 	addComputeProviderFlags(cmd)
@@ -61,10 +69,31 @@ func newSecretDeleteCmd() *cobra.Command {
 		Short: "Remove a secret key from the cluster",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO Phase 3:
-			// 1. Resolve master from provider API → SSH
-			// 2. Rebuild k8s secret without this key (kubectl on remote)
-			return fmt.Errorf("not implemented")
+			appName, env, err := resolveAppEnv(cmd)
+			if err != nil {
+				return err
+			}
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
+			if err != nil {
+				return err
+			}
+
+			return app.SecretDelete(cmd.Context(), app.SecretDeleteRequest{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+				SSHKey:      sshKey,
+				Key:         args[0],
+			})
 		},
 	}
 	addComputeProviderFlags(cmd)
@@ -77,10 +106,45 @@ func newSecretListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List secret key names (values hidden)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO Phase 3:
-			// 1. Resolve master from provider API → SSH
-			// 2. kubectl get secret secrets -o jsonpath='{.data}' on remote — list keys only
-			return fmt.Errorf("not implemented")
+			appName, env, err := resolveAppEnv(cmd)
+			if err != nil {
+				return err
+			}
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
+			if err != nil {
+				return err
+			}
+
+			keys, err := app.SecretList(cmd.Context(), app.SecretListRequest{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+				SSHKey:      sshKey,
+			})
+			if err != nil {
+				return err
+			}
+
+			if len(keys) == 0 {
+				fmt.Println("no secrets")
+				return nil
+			}
+
+			t := NewTable("KEY")
+			for _, k := range keys {
+				t.Row(k)
+			}
+			t.Print()
+			return nil
 		},
 	}
 	addComputeProviderFlags(cmd)
@@ -94,10 +158,37 @@ func newSecretRevealCmd() *cobra.Command {
 		Short: "Show a secret value",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO Phase 3:
-			// 1. Resolve master from provider API → SSH
-			// 2. kubectl get secret secrets -o jsonpath='{.data.KEY}' | base64 -d
-			return fmt.Errorf("not implemented")
+			appName, env, err := resolveAppEnv(cmd)
+			if err != nil {
+				return err
+			}
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
+			if err != nil {
+				return err
+			}
+
+			value, err := app.SecretReveal(cmd.Context(), app.SecretRevealRequest{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+				SSHKey:      sshKey,
+				Key:         args[0],
+			})
+			if err != nil {
+				return err
+			}
+
+			fmt.Println(value)
+			return nil
 		},
 	}
 	addComputeProviderFlags(cmd)

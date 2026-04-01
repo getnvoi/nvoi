@@ -8,6 +8,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/core"
 	"github.com/getnvoi/nvoi/internal/infra"
+	"github.com/getnvoi/nvoi/internal/kube"
 	"github.com/getnvoi/nvoi/internal/provider"
 )
 
@@ -84,17 +85,20 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	}
 	fmt.Printf("  ✓ Docker ready\n")
 
+	var masterIP string
 	if req.Worker {
 		master, err := FindMaster(ctx, prov, names)
 		if err != nil {
 			return nil, err
 		}
+		masterIP = master.IPv4
 		fmt.Printf("  joining cluster via master %s...\n", master.IPv4)
 		if err := infra.JoinK3sWorker(ctx, srv.IPv4, srv.PrivateIP, master.IPv4, master.PrivateIP, req.SSHKey); err != nil {
 			return nil, fmt.Errorf("k3s worker join: %w", err)
 		}
 		fmt.Printf("  ✓ joined cluster\n")
 	} else {
+		masterIP = srv.IPv4
 		fmt.Printf("  installing k3s master...\n")
 		if err := infra.InstallK3sMaster(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey); err != nil {
 			return nil, fmt.Errorf("k3s master: %w", err)
@@ -105,6 +109,13 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 			return nil, fmt.Errorf("registry: %w", err)
 		}
 	}
+
+	// Label the k8s node — idempotent, runs every deploy.
+	// kubectl is on master, so we always SSH to master to label any node.
+	if err := kube.LabelNode(ctx, masterIP, req.SSHKey, names.Server(req.Name), req.Name); err != nil {
+		return nil, fmt.Errorf("label node: %w", err)
+	}
+	fmt.Printf("  ✓ node labeled %s=%s\n", core.LabelNvoiRole, req.Name)
 
 	fmt.Printf("  ✓ %s %s (private: %s)\n", names.Server(req.Name), srv.IPv4, srv.PrivateIP)
 	return &ComputeSetResult{Server: srv}, nil
