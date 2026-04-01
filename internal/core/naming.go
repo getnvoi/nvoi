@@ -41,7 +41,7 @@ func (n *Names) Firewall() string          { return n.Base() + "-fw" }
 func (n *Names) Network() string           { return n.Base() + "-net" }
 func (n *Names) Server(key string) string  { return fmt.Sprintf("%s-%s", n.Base(), key) }
 func (n *Names) Stack() string             { return n.Base() }
-func (n *Names) Volume(name string) string { return fmt.Sprintf("%s-%s-data", n.Base(), name) }
+func (n *Names) Volume(name string) string { return fmt.Sprintf("%s-%s", n.Base(), name) }
 func (n *Names) Bucket(name string) string { return fmt.Sprintf("%s-%s", n.Base(), name) }
 
 // ── K8s ────────────────────────────────────────────────────────────────────────

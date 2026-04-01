@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/getnvoi/nvoi/internal/app"
 	"github.com/spf13/cobra"
 )
 
@@ -23,58 +24,124 @@ func newVolumeSetCmd() *cobra.Command {
 		Short: "Provision or reconcile a block storage volume",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			providerName, _ := cmd.Flags().GetString("provider")
 			size, _ := cmd.Flags().GetInt("size")
 			server, _ := cmd.Flags().GetString("server")
 
-			_ = name
-			_ = size
-			_ = server
+			appName, env, err := resolveAppEnv()
+			if err != nil {
+				return err
+			}
+			creds, err := resolveCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
+			if err != nil {
+				return err
+			}
 
-			// TODO Phase 3:
-			// 1. Resolve compute provider
-			// 2. Get target server by name from provider API: nvoi-{env}-{server}
-			// 3. EnsureVolume by name (idempotent — provider API)
-			// 4. AttachVolume to server (provider API)
-			// 5. Resolve device path (provider API + SSH ls /dev/disk/by-id/ fallback)
-			// 6. Wait for device node (SSH: test -b)
-			// 7. Format XFS if needed (SSH: blkid + mkfs.xfs)
-			// 8. Mount + fstab entry (SSH: mount + tee -a /etc/fstab)
-			// 9. Write VOLUME_{NAME}_PATH to .env
-			return fmt.Errorf("not implemented")
+			_, err = app.VolumeSet(cmd.Context(), app.VolumeSetRequest{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+				SSHKey:      sshKey,
+				Name:        args[0],
+				Size:        size,
+				Server:      server,
+			})
+			return err
 		},
 	}
+	addProviderFlags(cmd)
 	cmd.Flags().Int("size", 10, "volume size in GB")
 	cmd.Flags().String("server", "master", "target server name")
+	_ = cmd.MarkFlagRequired("size")
 	return cmd
 }
 
 func newVolumeDeleteCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "delete [name]",
 		Short: "Detach a volume (data preserved)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO Phase 4:
-			// 1. Resolve provider
-			// 2. Find volume by name: nvoi-{env}-{name} (provider API)
-			// 3. DetachVolume (provider API — data preserved, volume NOT deleted)
-			// 4. Remove VOLUME_* from .env
-			return fmt.Errorf("not implemented")
+			providerName, _ := cmd.Flags().GetString("provider")
+			yes, _ := cmd.Flags().GetBool("yes")
+
+			if !yes {
+				fmt.Printf("Detach volume %s? Data preserved. [y/N] ", args[0])
+				var confirm string
+				fmt.Scanln(&confirm)
+				if confirm != "y" && confirm != "yes" {
+					fmt.Println("aborted.")
+					return nil
+				}
+			}
+
+			appName, env, err := resolveAppEnv()
+			if err != nil {
+				return err
+			}
+			creds, err := resolveCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
+			if err != nil {
+				return err
+			}
+
+			return app.VolumeDelete(cmd.Context(), app.VolumeDeleteRequest{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+				SSHKey:      sshKey,
+				Name:        args[0],
+			})
 		},
 	}
+	addProviderFlags(cmd)
+	cmd.Flags().BoolP("yes", "y", false, "skip confirmation")
+	return cmd
 }
 
 func newVolumeListCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List volumes",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO Phase 3:
-			// 1. Resolve provider
-			// 2. Query provider API: list volumes by label nvoi/stack={env}
-			// 3. Print table (name, size, attached server, mount path)
-			return fmt.Errorf("not implemented")
+			providerName, _ := cmd.Flags().GetString("provider")
+
+			appName, env, err := resolveAppEnv()
+			if err != nil {
+				return err
+			}
+			creds, err := resolveCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+
+			volumes, err := app.VolumeList(cmd.Context(), app.VolumeListRequest{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+			})
+			if err != nil {
+				return err
+			}
+
+			t := NewTable("NAME", "SIZE", "SERVER", "DEVICE")
+			for _, v := range volumes {
+				t.Row(v.Name, fmt.Sprintf("%dGB", v.Size), v.ServerName, v.DevicePath)
+			}
+			t.Print()
+			return nil
 		},
 	}
+	addProviderFlags(cmd)
+	return cmd
 }

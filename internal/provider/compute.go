@@ -20,6 +20,7 @@ type ComputeProvider interface {
 	// Volume
 	EnsureVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
 	DetachVolume(ctx context.Context, name string, labels map[string]string) error
+	DeleteVolume(ctx context.Context, name string, labels map[string]string) error // detach + delete cloud resource
 	ListVolumes(ctx context.Context, labels map[string]string) ([]*Volume, error)
 }
 
@@ -39,7 +40,9 @@ type Volume struct {
 	ID, Name   string
 	Size       int
 	ServerID   string
+	ServerName string
 	DevicePath string
+	Location   string
 }
 
 type CreateServerRequest struct {
@@ -53,10 +56,11 @@ type DeleteServerRequest struct {
 	Labels                         map[string]string
 }
 
+// CreateVolumeRequest — provider resolves server name → ID internally.
 type CreateVolumeRequest struct {
-	Name, Location, ServerID string
-	Size                     int
-	Labels                   map[string]string
+	Name, ServerName string
+	Size             int
+	Labels           map[string]string
 }
 
 type HTTPStatusError interface {
