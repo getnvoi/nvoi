@@ -99,8 +99,11 @@ nvoi storage delete <name> --provider cloudflare
 # Build — separate command, outputs image ref. Registry is the state.
 nvoi build --provider hetzner --builder local --source . --name web
 nvoi build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
+nvoi build --provider hetzner --builder github --source benbonnet/dummy-rails --name web
+nvoi build --provider hetzner --builder github --source benbonnet/dummy-rails --name web --architecture arm64
 nvoi build list --provider hetzner
 nvoi build latest <name> --provider hetzner                                               # returns image ref
+nvoi build prune <name> --provider hetzner --keep 3                                       # keep N, delete rest
 
 # Application — --image only. Build is a separate step.
 nvoi service set <name> --provider hetzner --image postgres:17 --port 5432
@@ -155,7 +158,7 @@ Everything pluggable is a provider. Same pattern: interface + credential schema 
 | Compute | `--provider` | `--credentials` | `ComputeProvider` | hetzner, scaleway (future) |
 | DNS | `--provider` | `--credentials` | `DNSProvider` | cloudflare, hetzner (future) |
 | Storage | `--provider` | `--credentials` | `BucketProvider` | cloudflare, aws (future) |
-| Build | `--builder` | `--builder-credentials` | `BuildProvider` | local, daytona, hetzner (future) |
+| Build | `--builder` | `--builder-credentials` | `BuildProvider` | local, daytona, github |
 
 `--provider` is always compute. Every command that touches infrastructure uses it.
 `--builder` is only on `build`. It's the only command that needs two providers (compute for registry access + builder for building).

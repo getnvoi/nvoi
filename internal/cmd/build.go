@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/app"
 	_ "github.com/getnvoi/nvoi/internal/provider/daytona" // register daytona builder
+	_ "github.com/getnvoi/nvoi/internal/provider/github"  // register github actions builder
 	_ "github.com/getnvoi/nvoi/internal/provider/local"   // register local builder
 	"github.com/spf13/cobra"
 )
@@ -26,6 +27,19 @@ Examples:
 			name, _ := cmd.Flags().GetString("name")
 			branch, _ := cmd.Flags().GetString("branch")
 			platform, _ := cmd.Flags().GetString("platform")
+			architecture, _ := cmd.Flags().GetString("architecture")
+
+			// --architecture takes precedence over --platform
+			if architecture != "" {
+				switch architecture {
+				case "amd64", "amd":
+					platform = "linux/amd64"
+				case "arm64", "arm":
+					platform = "linux/arm64"
+				default:
+					return fmt.Errorf("invalid architecture %q — use amd64 or arm64", architecture)
+				}
+			}
 
 			appName, env, err := resolveAppEnv()
 			if err != nil {
@@ -45,6 +59,7 @@ Examples:
 			}
 
 			gitUsername, gitToken := resolveGitAuth(cmd)
+			history, _ := cmd.Flags().GetInt("history")
 
 			_, err = app.BuildRun(cmd.Context(), app.BuildRunRequest{
 				AppName:            appName,
@@ -60,6 +75,7 @@ Examples:
 				Platform:           platform,
 				GitUsername:         gitUsername,
 				GitToken:           gitToken,
+				History:            history,
 			})
 			return err
 		},
@@ -71,12 +87,15 @@ Examples:
 	cmd.Flags().String("name", "", "image name in registry")
 	cmd.Flags().String("branch", "main", "git branch (remote sources only)")
 	cmd.Flags().String("platform", "", "target platform (auto-detected if empty)")
+	cmd.Flags().String("architecture", "", "target architecture (amd64, arm64)")
 	cmd.Flags().String("git-token", "", "git token for private repo cloning")
+	cmd.Flags().Int("history", 0, "keep N most recent tags, prune the rest (0 = keep all)")
 	_ = cmd.MarkFlagRequired("source")
 	_ = cmd.MarkFlagRequired("name")
 
 	cmd.AddCommand(newBuildListCmd())
 	cmd.AddCommand(newBuildLatestCmd())
+	cmd.AddCommand(newBuildPruneCmd())
 
 	return cmd
 }
@@ -172,5 +191,43 @@ func newBuildLatestCmd() *cobra.Command {
 		},
 	}
 	addProviderFlags(cmd)
+	return cmd
+}
+
+func newBuildPruneCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "prune [name]",
+		Short: "Keep N most recent tags, delete the rest",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			providerName, _ := cmd.Flags().GetString("provider")
+			keep, _ := cmd.Flags().GetInt("keep")
+
+			appName, env, err := resolveAppEnv()
+			if err != nil {
+				return err
+			}
+			creds, err := resolveCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
+			if err != nil {
+				return err
+			}
+
+			return app.BuildPrune(cmd.Context(), app.BuildPruneRequest{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+				SSHKey:      sshKey,
+				Name:        args[0],
+				Keep:        keep,
+			})
+		},
+	}
+	addProviderFlags(cmd)
+	cmd.Flags().Int("keep", 3, "number of recent tags to keep")
 	return cmd
 }
