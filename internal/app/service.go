@@ -60,20 +60,28 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return err
 	}
 
-	// Resolve managed volumes — check which --volume names have provider volumes
+	// Resolve volumes — named volumes must exist as provider volumes
 	managedVolPaths := map[string]string{}
 	managed := false
 	vols, _ := prov.ListVolumes(ctx, names.Labels())
 	for _, mount := range req.Volumes {
 		source, _, named, ok := core.ParseVolumeMount(mount)
-		if ok && named {
+		if !ok {
+			return fmt.Errorf("invalid volume mount %q", mount)
+		}
+		if named {
 			volName := names.Volume(source)
+			found := false
 			for _, v := range vols {
 				if v.Name == volName {
 					managedVolPaths[source] = names.VolumeMountPath(source)
 					managed = true
+					found = true
 					break
 				}
+			}
+			if !found {
+				return fmt.Errorf("volume %q not found — run 'volume set %s --provider ...' first", source, source)
 			}
 		}
 	}
