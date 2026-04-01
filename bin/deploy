@@ -2,21 +2,20 @@
 set -euo pipefail
 
 # ── Env-var path ──────────────────────────────────────────────────────────────
-# All provider + identity config lives in env vars.
-# Commands below need zero provider flags.
+# All provider + identity config lives in env vars via compose:
+#   .env          → credentials (HETZNER_TOKEN, DAYTONA_API_KEY, etc.)
+#                 → provider selection (COMPUTE_PROVIDER, BUILD_PROVIDER, etc.)
+#                 → app identity (NVOI_APP_NAME, NVOI_ENV)
+#   environment:  → passes them into the container
+#
+# This script only sources .env.deploy for app secrets (DB creds, etc.)
+# and calls bin/cli — which runs inside compose with everything already set.
 
-# Load provider credentials from .env (HETZNER_TOKEN, DAYTONA_API_KEY, etc.)
 set -a
-source .env
 source .env.deploy
 set +a
 
-export NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
-export NVOI_ENV=${NVOI_ENV:-production}
-export COMPUTE_PROVIDER=hetzner
-export BUILD_PROVIDER=daytona
-
-echo "==> deploying $NVOI_APP_NAME ($NVOI_ENV)"
+echo "==> deploying ${NVOI_APP_NAME:-rails} (${NVOI_ENV:-production})"
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 

@@ -44,9 +44,12 @@ NVOI_ENV=staging bin/cli instance list  # list staging instances
 - Mounts source (`.:/app`) — changes picked up instantly, no rebuild
 - Mounts SSH keys (`~/.ssh:/root/.ssh:ro`)
 - Loads `.env` — provider credentials (`HETZNER_TOKEN`, `CF_API_KEY`, etc.)
+- Hardcodes provider selection (`COMPUTE_PROVIDER=hetzner`, `BUILD_PROVIDER=daytona`, `DNS_PROVIDER=cloudflare`, `STORAGE_PROVIDER=cloudflare`)
 - Passes `NVOI_APP_NAME` + `NVOI_ENV` from host (defaults: `rails` + `production`)
 - Passes `SSH_KEY_PATH=/root/.ssh/id_rsa` — the mounted key
 - Caches Go modules across runs (Docker volumes)
+
+Provider selection is hardcoded in `docker-compose.yml`, credentials come from `.env`. This is why `bin/deploy` and `bin/cli` need zero provider flags — compose injects everything.
 
 ### First run
 
@@ -151,7 +154,7 @@ nvoi instance set master --compute-provider hetzner --compute-credentials HETZNE
   --compute-type cax11 --compute-region fsn1 --app-name rails --env production
 ```
 
-See `bin/deploy` for the env-var path and `bin/deploy-full` for the explicit-flag path.
+See `bin/deploy` for the env-var path (compose injects everything) and `bin/deploy-full` for the explicit-flag path (zero env vars).
 
 ## Architecture
 

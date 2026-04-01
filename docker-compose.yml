@@ -16,10 +16,10 @@ services:
     environment:
       - NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
       - NVOI_ENV=${NVOI_ENV:-production}
-      - COMPUTE_PROVIDER=${COMPUTE_PROVIDER:-}
-      - BUILD_PROVIDER=${BUILD_PROVIDER:-}
-      - DNS_PROVIDER=${DNS_PROVIDER:-}
-      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-}
+      - COMPUTE_PROVIDER=hetzner
+      - BUILD_PROVIDER=daytona
+      - DNS_PROVIDER=cloudflare
+      - STORAGE_PROVIDER=cloudflare
       - SSH_KEY_PATH=/root/.ssh/id_rsa
       - GOBIN=/app/tmp
     working_dir: /app
