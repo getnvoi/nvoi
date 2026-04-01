@@ -67,7 +67,7 @@ bin/cli instance set master --compute-type cax11 --compute-region fsn1
 | `.env.example` | Yes | Template for `.env` |
 | `bin/cli` | Yes | `docker compose run --rm cli "$@"` |
 | `bin/deploy` | Yes | Full deploy — env vars, zero provider flags |
-| `bin/deploy-full` | Yes | Full deploy — explicit flags, zero env vars |
+| `bin/deploy-full` | Yes | Full deploy — all flags inline |
 
 ## Namespace
 
@@ -176,6 +176,8 @@ internal/
     hetzner/             Hetzner Cloud (compute + volumes)
     cloudflare/          Cloudflare (DNS + R2 buckets)
     daytona/             Daytona remote builds
+    github/              GitHub Actions builds
+    local/               Local docker buildx builds
   core/                  Pure utilities: naming, poll, httpclient, ssh keys
 ```
 
@@ -261,8 +263,12 @@ Hard errors before touching k8s.
   - Detection: `--source` starts with `.` or `/` → local. Otherwise → remote.
 - The registry IS the state. No build database. `build list` queries the registry directly over SSH.
 
+**Node labeling:**
+- `instance set` labels k8s nodes with `nvoi-role={name}` after k3s install/join. Idempotent — runs every deploy.
+- This is what `--server` on `service set` matches against (k8s `nodeSelector: {nvoi-role: name}`).
+
 **Placement:**
-- `--server` pins a service to a node via k8s node selector. Defaults to master.
+- `--server` pins a service to a node via k8s node selector matching `nvoi-role`. Defaults to master.
 - Services with managed volumes pinned to the volume's server.
 
 **Volumes:**
@@ -277,12 +283,17 @@ Hard errors before touching k8s.
 - `--secret KEY=VALUE` is rejected — use `secret set KEY VALUE` first.
 - Injected as `env.valueFrom.secretKeyRef` — value never in the manifest.
 
+**Rollout:**
+- `service set` polls pods via `kubectl get pods -o json` with live feedback: `"web: 2/3 ready (ContainerCreating)"`.
+- Terminal states exit immediately with error + logs: `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `CreateContainerConfigError`, `OOMKilled`, `Unschedulable`.
+- Transient states keep polling: `ContainerCreating`, `PodInitializing`, `Scheduling`.
+
 **Env vars:**
 - No rewriting. `POSTGRES_HOST=db` stays `POSTGRES_HOST=db`. K8s namespaces handle isolation — each app+env gets its own namespace, service names stay short.
 
 ## Key rules
 
-1. `NVOI_APP_NAME` + `NVOI_ENV` (or `--app-name` + `--env`) are required. They're the namespace for everything.
+1. `NVOI_APP_NAME` + `NVOI_ENV` (or `--app-name` + `--environment`) are required. They're the namespace for everything.
 2. No state files. Infrastructure is the truth. `show` fetches live.
 3. Everything is `set`. Idempotent. Run twice, same result. `bin/deploy` is the whole deploy — runs end to end, always same outcome.
 4. `set` writes directly to infrastructure. No intermediate files.
