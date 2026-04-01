@@ -85,44 +85,47 @@ Different app or env = completely isolated infrastructure. Same commands, differ
 # Infrastructure — compute set installs k3s (master by default, --worker to join)
 nvoi compute set <name> --provider hetzner --type cax11 --region fsn1
 nvoi compute set <name> --provider hetzner --type cax21 --region fsn1 --worker
-nvoi compute delete <name>
-nvoi compute list
-nvoi volume set <name> --size 20 --server master
-nvoi volume delete <name>
-nvoi volume list
+nvoi compute delete <name> --provider hetzner
+nvoi compute list --provider hetzner
+nvoi volume set <name> --provider hetzner --size 20 --server master
+nvoi volume delete <name> --provider hetzner
+nvoi volume list --provider hetzner
 nvoi dns set <service> <domain...> --provider cloudflare --zone nvoi.to
 nvoi dns delete <service> <domain...> --provider cloudflare --zone nvoi.to
 nvoi dns list --provider cloudflare --zone nvoi.to
 nvoi storage set <name> --provider cloudflare --bucket myapp-assets
-nvoi storage delete <name>
+nvoi storage delete <name> --provider cloudflare
 
-# Application
-nvoi service set <name> --image postgres:17 --port 5432
-nvoi service set <name> --build myorg/myapp --branch main --port 3000 --replicas 2
-nvoi service delete <name>
-nvoi secret set <key> <value>
-nvoi secret delete <key>
-nvoi secret list
+# Build — separate command, outputs image ref. Registry is the state.
+nvoi build --provider hetzner --builder local --source . --name web
+nvoi build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
+nvoi build list --provider hetzner
+nvoi build latest <name> --provider hetzner                                               # returns image ref
 
-# Build
-nvoi build [repo] [--branch main]
+# Application — --image only. Build is a separate step.
+nvoi service set <name> --provider hetzner --image postgres:17 --port 5432
+nvoi service set <name> --provider hetzner --image $IMAGE --port 3000 --replicas 2
+nvoi service delete <name> --provider hetzner
+nvoi secret set <key> <value> --provider hetzner
+nvoi secret delete <key> --provider hetzner
+nvoi secret list --provider hetzner
 
 # Reconcile
-nvoi apply
+nvoi apply --provider hetzner
 
 # Live view
-nvoi show
+nvoi show --provider hetzner
 
 # Operate
-nvoi logs <service> [-f] [-n 50]
-nvoi exec <service> -- <command>
-nvoi ssh <command>
+nvoi logs <service> --provider hetzner [-f] [-n 50]
+nvoi exec <service> --provider hetzner -- <command>
+nvoi ssh --provider hetzner <command>
 
 # Inspect
-nvoi resources [--provider hetzner]
+nvoi resources --provider hetzner
 
 # Teardown
-nvoi destroy [--yes]
+nvoi destroy --provider hetzner [--yes]
 ```
 
 ## Architecture
@@ -147,39 +150,32 @@ internal/
 
 Everything pluggable is a provider. Same pattern: interface + credential schema + register.
 
-| Kind | Flag | Interface | Implementations |
-|------|------|-----------|----------------|
-| Compute | `--provider` | `ComputeProvider` | hetzner, scaleway (future) |
-| DNS | `--provider` | `DNSProvider` | cloudflare, hetzner (future) |
-| Storage | `--provider` | `BucketProvider` | cloudflare, aws (future) |
-| Build | `--build-provider` | `BuildProvider` | local, daytona, hetzner (future) |
+| Kind | Flag | Credentials flag | Interface | Implementations |
+|------|------|-----------------|-----------|----------------|
+| Compute | `--provider` | `--credentials` | `ComputeProvider` | hetzner, scaleway (future) |
+| DNS | `--provider` | `--credentials` | `DNSProvider` | cloudflare, hetzner (future) |
+| Storage | `--provider` | `--credentials` | `BucketProvider` | cloudflare, aws (future) |
+| Build | `--builder` | `--builder-credentials` | `BuildProvider` | local, daytona, hetzner (future) |
 
-Build providers are just like any other provider. `local` builds on your machine with `docker buildx`. `daytona` builds in a remote sandbox. `hetzner` could spin up a one-off server, build, push, destroy. Same interface, different backend.
+`--provider` is always compute. Every command that touches infrastructure uses it.
+`--builder` is only on `build`. It's the only command that needs two providers (compute for registry access + builder for building).
 
-### Credential schema
+### Credential pairs
 
-Each provider declares what credentials it needs. The `cmd/` layer resolves them (flag → env → error). No `os.Getenv` below `cmd/`.
-
-```go
-provider.CredentialSchema{
-    Name: "hetzner",
-    Fields: []provider.CredentialField{
-        {Key: "token", Required: true, EnvVar: "HETZNER_TOKEN", Flag: "token"},
-    },
-}
-```
-
-Resolution: **flag → env var → error**. Flag overrides env var.
+Every provider has a name flag + credentials flag. Always a pair. Credentials are `key=value` pairs.
 
 ```bash
-# Common: env var in .env, no flags needed
+# Common: env vars in .env, no credential flags needed
 bin/cli compute set master --provider hetzner --type cax11 --region fsn1
 
-# Override: flag takes priority
-bin/cli compute set master --provider hetzner --token $OTHER_TOKEN --type cax11 --region fsn1
+# Override: --credentials takes priority over env var
+bin/cli compute set master --provider hetzner --credentials token=$OTHER_TOKEN
+
+# Build uses two providers — compute (--provider) for registry, builder (--builder) for building
+bin/cli build --provider hetzner --builder daytona --builder-credentials api_key=xxx --source myorg/app --name web
 
 # Error when missing
-# hetzner: token is required (flag: --token, env: HETZNER_TOKEN)
+# hetzner: token is required (--credentials token=..., env: HETZNER_TOKEN)
 ```
 
 ### .env
@@ -204,17 +200,23 @@ Hard errors before touching k8s.
 - Cluster must have k3s installed (`compute set` handles this — kubectl get nodes succeeds over SSH).
 
 **Services:**
-- Every service must have `--image` or `--build`. Neither = hard error. Both = hard error.
-- `--build` triggers a build+push+deploy in one command. No separate build step.
+- `service set` takes `--image` only. `--image` is required.
+- Build is a separate command. `build` outputs an image ref. `service set` consumes it.
 
-**Build rules:**
-- `--build .` or `--build ./path` → local path → `--build-provider local` assumed. Builds with local `docker buildx`, pushes through SSH tunnel to cluster registry.
-- `--build .` with `--build-provider local` → same as above (explicit).
-- `--build .` with `--build-provider daytona` → error. Daytona needs a git repo, not a local path.
-- `--build benbonnet/dummy-rails` or `--build https://github.com/...` or `--build git@github.com:...` → remote repo → `--build-provider` required (no default for remote).
-- `--build benbonnet/dummy-rails --build-provider local` → error. Local builder can't clone remote repos.
-- `--build benbonnet/dummy-rails --build-provider daytona` → ok. Daytona clones and builds remotely.
-- Local build detection: `--build` value starts with `.` or `/` → local. Otherwise → remote.
+**Build (`nvoi build`):**
+- `--provider` = compute provider (for SSH tunnel to cluster registry). Required.
+- `--builder` = build provider (local, daytona). Required.
+- `--source` = what to build. Local path (`.`, `./path`) or remote repo (`org/repo`, `https://...`, `git@...`).
+- `--name` = image name in the registry. Required.
+- `build list` = query registry for all tags. Uses `--provider` only (no builder needed).
+- `build latest <name>` = return latest image ref. Pipeable.
+- Source + builder validation:
+  - Local path (`.` or `/`) + `--builder local` → ok.
+  - Local path + `--builder daytona` → error (Daytona needs a git repo).
+  - Remote repo + `--builder daytona` → ok.
+  - Remote repo + `--builder local` → error (local can't clone remote repos).
+  - Detection: `--source` starts with `.` or `/` → local. Otherwise → remote.
+- The registry IS the state. No build database. `build list` queries the registry directly over SSH.
 
 **Placement:**
 - `--server` pins a service to a node via k8s node selector. Defaults to master.

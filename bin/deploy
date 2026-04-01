@@ -23,6 +23,11 @@ bin/cli compute set worker-1 --provider hetzner --type cax21 --region fsn1 --wor
 bin/cli volume set pgdata --provider hetzner --size 30 --server master
 bin/cli volume set meili-data --provider hetzner --size 20 --server master
 
+# ── Build ───────────────────────────────────────────────────────────────────────
+
+bin/cli build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
+WEB_IMAGE=$(bin/cli build latest web --provider hetzner)
+
 # ── Services ────────────────────────────────────────────────────────────────────
 
 bin/cli service set db --provider hetzner \
@@ -37,8 +42,7 @@ bin/cli service set meilisearch --provider hetzner \
   --volume meili-data:/meili_data
 
 bin/cli service set web --provider hetzner \
-  --build benbonnet/dummy-rails \
-  --build-provider daytona \
+  --image "$WEB_IMAGE" \
   --port 80 \
   --replicas 2 \
   --health-path /up \
@@ -49,16 +53,15 @@ bin/cli service set web --provider hetzner \
   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
   --env POSTGRES_DB="$POSTGRES_DB"
 
-# bin/cli service set jobs --provider hetzner \
-#   --build benbonnet/dummy-rails \
-#   --build-provider daytona \
-#   --command "bin/jobs" \
-#   --server worker-1 \
-#   --env RAILS_ENV=production \
-#   --env POSTGRES_HOST=db \
-#   --env POSTGRES_USER="$POSTGRES_USER" \
-#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-#   --env POSTGRES_DB="$POSTGRES_DB"
+bin/cli service set jobs --provider hetzner \
+  --image "$WEB_IMAGE" \
+  --command "bin/jobs" \
+  --server worker-1 \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --env POSTGRES_DB="$POSTGRES_DB"
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
