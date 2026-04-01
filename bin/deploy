@@ -5,19 +5,16 @@ set -euo pipefail
 # All provider + identity config lives in env vars.
 # Commands below need zero provider flags.
 
+# Load provider credentials from .env (HETZNER_TOKEN, DAYTONA_API_KEY, etc.)
+set -a
+source .env
+source .env.deploy
+set +a
+
 export NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
 export NVOI_ENV=${NVOI_ENV:-production}
 export COMPUTE_PROVIDER=hetzner
-export HETZNER_TOKEN=$HETZNER_TOKEN
 export BUILD_PROVIDER=daytona
-export DAYTONA_API_KEY=$DAYTONA_API_KEY
-export DAYTONA_API_URL=$DAYTONA_API_URL
-export GITHUB_TOKEN=$GITHUB_TOKEN
-
-# Load app secrets (POSTGRES_USER, POSTGRES_PASSWORD, RAILS_MASTER_KEY, etc.)
-set -a
-source .env.deploy
-set +a
 
 echo "==> deploying $NVOI_APP_NAME ($NVOI_ENV)"
 
