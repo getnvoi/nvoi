@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/app"
+	_ "github.com/getnvoi/nvoi/internal/provider/local" // register local builder
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +33,9 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName, _ := cmd.Flags().GetString("provider")
 			image, _ := cmd.Flags().GetString("image")
+			build, _ := cmd.Flags().GetString("build")
+			buildProvider, _ := cmd.Flags().GetString("build-provider")
+			buildBranch, _ := cmd.Flags().GetString("build-branch")
 			port, _ := cmd.Flags().GetInt("port")
 			replicas, _ := cmd.Flags().GetInt("replicas")
 			command, _ := cmd.Flags().GetString("command")
@@ -53,26 +57,42 @@ Examples:
 				return err
 			}
 
+			// Resolve build provider credentials if building
+			var buildCreds map[string]string
+			if build != "" && buildProvider != "" {
+				buildCreds, err = resolveBuildCredentials(cmd, buildProvider)
+				if err != nil {
+					return err
+				}
+			}
+
 			return app.ServiceSet(cmd.Context(), app.ServiceSetRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Name:        args[0],
-				Image:       image,
-				Port:        port,
-				Command:     command,
-				Replicas:    replicas,
-				EnvVars:     envVars,
-				Volumes:     volumes,
-				HealthPath:  healthPath,
-				Server:      server,
+				AppName:          appName,
+				Env:              env,
+				Provider:         providerName,
+				Credentials:      creds,
+				SSHKey:           sshKey,
+				Name:             args[0],
+				Image:            image,
+				Build:            build,
+				BuildProvider:    buildProvider,
+				BuildBranch:      buildBranch,
+				BuildCredentials: buildCreds,
+				Port:             port,
+				Command:          command,
+				Replicas:         replicas,
+				EnvVars:          envVars,
+				Volumes:          volumes,
+				HealthPath:       healthPath,
+				Server:           server,
 			})
 		},
 	}
 	addProviderFlags(cmd)
 	cmd.Flags().String("image", "", "container image (e.g. postgres:17)")
+	cmd.Flags().String("build", "", "build context (local path or remote repo)")
+	cmd.Flags().String("build-provider", "", "build provider (local, daytona)")
+	cmd.Flags().String("build-branch", "main", "git branch (remote builds only)")
 	cmd.Flags().Int("port", 0, "container port (0 = no exposed port)")
 	cmd.Flags().Int("replicas", 1, "number of replicas")
 	cmd.Flags().String("command", "", "override container command")

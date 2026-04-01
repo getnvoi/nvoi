@@ -38,24 +38,37 @@ type computeEntry struct {
 	factory func(creds map[string]string) ComputeProvider
 }
 
+type buildEntry struct {
+	schema  CredentialSchema
+	factory func(creds map[string]string) BuildProvider
+}
+
 var computeProviders = map[string]computeEntry{}
+var buildProviders = map[string]buildEntry{}
 var dnsProviders = map[string]func(zone string) (DNSProvider, error){}
 var bucketProviders = map[string]func() (BucketProvider, error){}
-var builders = map[string]func() (Builder, error){}
 
 func RegisterCompute(name string, schema CredentialSchema, factory func(creds map[string]string) ComputeProvider) {
 	computeProviders[name] = computeEntry{schema: schema, factory: factory}
 }
-
+func RegisterBuild(name string, schema CredentialSchema, factory func(creds map[string]string) BuildProvider) {
+	buildProviders[name] = buildEntry{schema: schema, factory: factory}
+}
 func RegisterDNS(name string, factory func(string) (DNSProvider, error))   { dnsProviders[name] = factory }
 func RegisterBucket(name string, factory func() (BucketProvider, error))   { bucketProviders[name] = factory }
-func RegisterBuilder(name string, factory func() (Builder, error))         { builders[name] = factory }
 
-// GetComputeSchema returns the credential schema for a compute provider.
 func GetComputeSchema(name string) (CredentialSchema, error) {
 	entry, ok := computeProviders[name]
 	if !ok {
 		return CredentialSchema{}, fmt.Errorf("unsupported compute provider: %q", name)
+	}
+	return entry.schema, nil
+}
+
+func GetBuildSchema(name string) (CredentialSchema, error) {
+	entry, ok := buildProviders[name]
+	if !ok {
+		return CredentialSchema{}, fmt.Errorf("unsupported build provider: %q", name)
 	}
 	return entry.schema, nil
 }
@@ -68,6 +81,17 @@ func ResolveCompute(name string, creds map[string]string) (ComputeProvider, erro
 	entry, ok := computeProviders[name]
 	if !ok {
 		return nil, fmt.Errorf("unsupported compute provider: %q", name)
+	}
+	if err := entry.schema.Validate(creds); err != nil {
+		return nil, err
+	}
+	return entry.factory(creds), nil
+}
+
+func ResolveBuild(name string, creds map[string]string) (BuildProvider, error) {
+	entry, ok := buildProviders[name]
+	if !ok {
+		return nil, fmt.Errorf("unsupported build provider: %q", name)
 	}
 	if err := entry.schema.Validate(creds); err != nil {
 		return nil, err
@@ -91,10 +115,3 @@ func ResolveBucket(name string) (BucketProvider, error) {
 	return factory()
 }
 
-func ResolveBuilder(name string) (Builder, error) {
-	factory, ok := builders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported builder: %q", name)
-	}
-	return factory()
-}

@@ -172,6 +172,39 @@ func (c *SSHClient) Close() error {
 
 var _ core.SSHClient = (*SSHClient)(nil)
 
+// LocalForward opens a local TCP listener that tunnels through SSH to a remote address.
+// Returns the local address (e.g. "localhost:54321") and a cleanup function.
+func LocalForward(client core.SSHClient, remoteAddr string) (localAddr string, cleanup func(), err error) {
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		return "", nil, fmt.Errorf("listen: %w", err)
+	}
+	addr := ln.Addr().String()
+
+	go func() {
+		for {
+			local, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer local.Close()
+				remote, err := client.DialTCP(context.Background(), remoteAddr)
+				if err != nil {
+					return
+				}
+				defer remote.Close()
+				done := make(chan struct{})
+				go func() { io.Copy(remote, local); close(done) }()
+				io.Copy(local, remote)
+				<-done
+			}()
+		}
+	}()
+
+	return addr, func() { ln.Close() }, nil
+}
+
 // --- Sentinel errors ---
 
 // ErrHostKeyChanged is returned when a known host presents a different key.

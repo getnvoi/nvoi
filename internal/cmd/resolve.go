@@ -58,11 +58,24 @@ func resolveSSHKey() ([]byte, error) {
 	return key, nil
 }
 
+// resolveBuildCredentials resolves build provider credentials from flags → env vars.
+func resolveBuildCredentials(cmd *cobra.Command, buildProviderName string) (map[string]string, error) {
+	schema, err := provider.GetBuildSchema(buildProviderName)
+	if err != nil {
+		return nil, err
+	}
+	creds := make(map[string]string, len(schema.Fields))
+	for _, f := range schema.Fields {
+		if v := os.Getenv(f.EnvVar); v != "" {
+			creds[f.Key] = v
+		}
+	}
+	return creds, nil
+}
+
 // addProviderFlags adds --provider and credential flags for a compute provider.
 func addProviderFlags(cmd *cobra.Command) {
 	cmd.Flags().String("provider", "", "compute provider (hetzner)")
-	// Provider-specific credential flags are generic — each provider
-	// declares what it needs, but we add common ones here.
 	cmd.Flags().String("token", "", "provider API token (overrides env var)")
 	_ = cmd.MarkFlagRequired("provider")
 }

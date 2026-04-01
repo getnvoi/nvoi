@@ -32,24 +32,26 @@ bin/cli service set db --provider hetzner \
   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
   --env POSTGRES_DB="$POSTGRES_DB"
 
-# bin/cli service set meilisearch --provider hetzner \
-#   --image getmeili/meilisearch:latest \
-#   --volume meili-data:/meili_data
+bin/cli service set meilisearch --provider hetzner \
+  --image getmeili/meilisearch:latest \
+  --volume meili-data:/meili_data
 
-# bin/cli service set web --provider hetzner \
-#   --build benbonnet/dummy-rails \
-#   --port 80 \
-#   --replicas 2 \
-#   --health-path /up \
-#   --server worker-1 \
-#   --env RAILS_ENV=production \
-#   --env POSTGRES_HOST=db \
-#   --env POSTGRES_USER="$POSTGRES_USER" \
-#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-#   --env POSTGRES_DB="$POSTGRES_DB"
+bin/cli service set web --provider hetzner \
+  --build benbonnet/dummy-rails \
+  --build-provider daytona \
+  --port 80 \
+  --replicas 2 \
+  --health-path /up \
+  --server worker-1 \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  --env POSTGRES_DB="$POSTGRES_DB"
 
 # bin/cli service set jobs --provider hetzner \
 #   --build benbonnet/dummy-rails \
+#   --build-provider daytona \
 #   --command "bin/jobs" \
 #   --server worker-1 \
 #   --env RAILS_ENV=production \

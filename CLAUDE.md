@@ -143,14 +143,24 @@ internal/
   core/                  Pure utilities: naming, poll, httpclient, ssh keys
 ```
 
-## Provider credentials
+## Providers
 
-Each provider declares a credential schema: what fields it needs, the env var convention, and the flag name. Resolution order: **flag → env var → error**.
+Everything pluggable is a provider. Same pattern: interface + credential schema + register.
 
-The command layer doesn't know what credentials a provider needs. The provider owns the schema. The resolve layer applies it.
+| Kind | Flag | Interface | Implementations |
+|------|------|-----------|----------------|
+| Compute | `--provider` | `ComputeProvider` | hetzner, scaleway (future) |
+| DNS | `--provider` | `DNSProvider` | cloudflare, hetzner (future) |
+| Storage | `--provider` | `BucketProvider` | cloudflare, aws (future) |
+| Build | `--build-provider` | `BuildProvider` | local, daytona, hetzner (future) |
+
+Build providers are just like any other provider. `local` builds on your machine with `docker buildx`. `daytona` builds in a remote sandbox. `hetzner` could spin up a one-off server, build, push, destroy. Same interface, different backend.
+
+### Credential schema
+
+Each provider declares what credentials it needs. The `cmd/` layer resolves them (flag → env → error). No `os.Getenv` below `cmd/`.
 
 ```go
-// Each provider registers a CredentialSchema:
 provider.CredentialSchema{
     Name: "hetzner",
     Fields: []provider.CredentialField{
@@ -159,21 +169,17 @@ provider.CredentialSchema{
 }
 ```
 
-**Common case**: env vars in `.env`, no flags needed.
+Resolution: **flag → env var → error**. Flag overrides env var.
+
 ```bash
-# .env
-HETZNER_TOKEN=...
+# Common: env var in .env, no flags needed
 bin/cli compute set master --provider hetzner --type cax11 --region fsn1
-```
 
-**Override**: flags take precedence over env vars.
-```bash
+# Override: flag takes priority
 bin/cli compute set master --provider hetzner --token $OTHER_TOKEN --type cax11 --region fsn1
-```
 
-**Error when missing**: clear message with both resolution paths.
-```
-hetzner: token is required (flag: --token, env: HETZNER_TOKEN)
+# Error when missing
+# hetzner: token is required (flag: --token, env: HETZNER_TOKEN)
 ```
 
 ### .env
@@ -185,6 +191,7 @@ HETZNER_TOKEN=...
 CF_API_KEY=...
 CF_ACCOUNT_ID=...
 CF_ZONE_ID=...
+DAYTONA_API_KEY=...
 SSH_KEY_PATH=~/.ssh/id_rsa
 ```
 
@@ -197,8 +204,17 @@ Hard errors before touching k8s.
 - Cluster must have k3s installed (`compute set` handles this — kubectl get nodes succeeds over SSH).
 
 **Services:**
-- Every service must have `image` or `build`. Neither = hard error.
-- If `build` set but `image` missing/stale, `apply` builds automatically.
+- Every service must have `--image` or `--build`. Neither = hard error. Both = hard error.
+- `--build` triggers a build+push+deploy in one command. No separate build step.
+
+**Build rules:**
+- `--build .` or `--build ./path` → local path → `--build-provider local` assumed. Builds with local `docker buildx`, pushes through SSH tunnel to cluster registry.
+- `--build .` with `--build-provider local` → same as above (explicit).
+- `--build .` with `--build-provider daytona` → error. Daytona needs a git repo, not a local path.
+- `--build benbonnet/dummy-rails` or `--build https://github.com/...` or `--build git@github.com:...` → remote repo → `--build-provider` required (no default for remote).
+- `--build benbonnet/dummy-rails --build-provider local` → error. Local builder can't clone remote repos.
+- `--build benbonnet/dummy-rails --build-provider daytona` → ok. Daytona clones and builds remotely.
+- Local build detection: `--build` value starts with `.` or `/` → local. Otherwise → remote.
 
 **Placement:**
 - `--server` pins a service to a node via k8s node selector. Defaults to master.

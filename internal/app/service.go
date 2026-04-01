@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,25 +15,32 @@ import (
 )
 
 type ServiceSetRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	SSHKey      []byte
-	Name        string
-	Image       string
-	Port        int
-	Command     string
-	Replicas    int
-	EnvVars     []string // KEY=VALUE pairs
-	Volumes     []string // name:/path
-	HealthPath  string
-	Server      string
+	AppName       string
+	Env           string
+	Provider      string
+	Credentials   map[string]string
+	SSHKey        []byte
+	Name             string
+	Image            string
+	Build            string            // local path or remote repo
+	BuildProvider    string            // "local" or "daytona"
+	BuildBranch      string            // git branch (remote only)
+	BuildCredentials map[string]string // build provider credentials
+	Port             int
+	Command       string
+	Replicas      int
+	EnvVars       []string // KEY=VALUE pairs
+	Volumes       []string // name:/path
+	HealthPath    string
+	Server        string
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
-	if req.Image == "" {
-		return fmt.Errorf("--image is required")
+	if req.Image == "" && req.Build == "" {
+		return fmt.Errorf("--image or --build is required")
+	}
+	if req.Image != "" && req.Build != "" {
+		return fmt.Errorf("--image and --build are mutually exclusive")
 	}
 
 	names, err := core.NewNames(req.AppName, req.Env)
@@ -96,9 +104,54 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}
 
+	// Build if --build is set
+	image := req.Image
+	if req.Build != "" {
+		isLocal := strings.HasPrefix(req.Build, ".") || strings.HasPrefix(req.Build, "/")
+		buildProviderName := req.BuildProvider
+
+		if isLocal {
+			if buildProviderName == "" {
+				buildProviderName = "local"
+			}
+			if buildProviderName != "local" {
+				return fmt.Errorf("local path %q requires --build-provider local (or omit it)", req.Build)
+			}
+		} else {
+			if buildProviderName == "" {
+				return fmt.Errorf("remote repo %q requires --build-provider (e.g. daytona)", req.Build)
+			}
+			if buildProviderName == "local" {
+				return fmt.Errorf("local builder cannot clone remote repo %q", req.Build)
+			}
+		}
+
+		bp, err := provider.ResolveBuild(buildProviderName, req.BuildCredentials)
+		if err != nil {
+			return err
+		}
+
+		result, err := bp.Build(ctx, provider.BuildRequest{
+			ServiceName: req.Name,
+			Source:      req.Build,
+			Branch:      req.BuildBranch,
+			RegistrySSH: provider.SSHAccess{
+				MasterIP:        master.IPv4,
+				MasterPrivateIP: master.PrivateIP,
+				PrivKey:         req.SSHKey,
+			},
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		})
+		if err != nil {
+			return fmt.Errorf("build: %w", err)
+		}
+		image = result.ImageRef
+	}
+
 	spec := kube.ServiceSpec{
 		Name:       req.Name,
-		Image:      req.Image,
+		Image:      image,
 		Port:       req.Port,
 		Command:    req.Command,
 		Replicas:   req.Replicas,
