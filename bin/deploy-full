@@ -147,13 +147,7 @@ bin/cli dns set web final.nvoi.to \
   --dns-provider cloudflare \
   --zone nvoi.to
 
-# ── Deploy ──────────────────────────────────────────────────────────────────────
-
-bin/cli apply \
-  --app-name rails \
-  --environment production \
-  --compute-provider hetzner \
-  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
+# ── Verify ──────────────────────────────────────────────────────────────────────
 
 bin/cli show \
   --app-name rails \

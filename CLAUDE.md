@@ -11,7 +11,6 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 - **Everything is idempotent.** Every command hits real infrastructure — provider APIs over HTTP, servers over SSH, cluster via kubectl. Run twice, same result.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
 - **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. `bin/deploy` runs end to end, every time, same outcome.
-- **`apply` reconciles.** Rebuilds stale images, regenerates ingress, reapplies. One command, full reconciliation.
 - **`show` fetches everything live.** Servers from provider API. Pods from kubectl. DNS from DNS API.
 - **Provider interfaces scale.** Hetzner and Cloudflare first. Interface-first. Add a provider = implement the interface.
 - **SSH is the transport.** No agent binary. SSH in, run commands, done.
@@ -136,9 +135,6 @@ nvoi secret reveal <key>                                                        
 nvoi service set <name> --image postgres:17 --port 5432 --secret DB_PASSWORD
 nvoi service set <name> --image $IMAGE --port 3000 --replicas 2 --secret RAILS_MASTER_KEY
 nvoi service delete <name>
-
-# Reconcile
-nvoi apply
 
 # Live view
 nvoi show
@@ -297,8 +293,7 @@ Hard errors before touching k8s.
 2. No state files. Infrastructure is the truth. `show` fetches live.
 3. Everything is `set`. Idempotent. Run twice, same result. `bin/deploy` is the whole deploy — runs end to end, always same outcome.
 4. `set` writes directly to infrastructure. No intermediate files.
-5. `apply` reconciles everything — services, ingress, secrets.
-6. Provider interfaces scale. Add a provider = implement the interface.
+5. Provider interfaces scale. Add a provider = implement the interface.
 7. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 8. SSH is the only transport to remote servers.
 9. **`os.Getenv` lives exclusively in `cmd/`.** Environment variables are a CLI concept. `app/`, `provider/`, `infra/`, `core/` never read env vars. All external values (credentials, SSH key path, app name, env) are resolved in `cmd/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.

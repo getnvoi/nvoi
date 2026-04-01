@@ -26,9 +26,6 @@ func Root() *cobra.Command {
 	// Build.
 	root.AddCommand(newBuildCmd())
 
-	// Apply.
-	root.AddCommand(newApplyCmd())
-
 	// Live view.
 	root.AddCommand(newShowCmd())
 
