@@ -21,6 +21,8 @@ type ServiceSpec struct {
 	Command    string
 	Replicas   int
 	Env        []corev1.EnvVar
+	Secrets    []string // secret key references → env.valueFrom.secretKeyRef
+	SecretName string   // k8s Secret name (from names.KubeSecrets())
 	Volumes    []string // "pgdata:/var/lib/postgresql/data"
 	HealthPath string
 	Server     string // node selector (empty = any)
@@ -37,10 +39,22 @@ func GenerateYAML(spec ServiceSpec, names *core.Names, managedVolPaths map[strin
 	}
 
 	// Container
+	envVars := append([]corev1.EnvVar{}, spec.Env...)
+	for _, key := range spec.Secrets {
+		envVars = append(envVars, corev1.EnvVar{
+			Name: key,
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: spec.SecretName},
+					Key:                  key,
+				},
+			},
+		})
+	}
 	container := corev1.Container{
 		Name:  spec.Name,
 		Image: spec.Image,
-		Env:   spec.Env,
+		Env:   envVars,
 	}
 	if spec.Command != "" {
 		container.Command = []string{"/bin/sh", "-c"}

@@ -63,6 +63,20 @@ WEB_IMAGE=$(bin/cli build latest web \
 
 echo "image: $WEB_IMAGE"
 
+# ── Secrets ─────────────────────────────────────────────────────────────────────
+
+bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY" \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
+
+bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD" \
+  --app-name rails \
+  --env production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
+
 # ── Services ────────────────────────────────────────────────────────────────────
 
 bin/cli service set db \
@@ -73,8 +87,8 @@ bin/cli service set db \
   --image postgres:17 \
   --volume pgdata:/var/lib/postgresql/data \
   --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD
 
 bin/cli service set meilisearch \
   --app-name rails \
@@ -97,8 +111,9 @@ bin/cli service set web \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
   --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD \
+  --secret RAILS_MASTER_KEY
 
 bin/cli service set jobs \
   --app-name rails \
@@ -111,16 +126,9 @@ bin/cli service set jobs \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
   --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
-
-# ── Secrets ─────────────────────────────────────────────────────────────────────
-
-bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY" \
-  --app-name rails \
-  --env production \
-  --compute-provider hetzner \
-  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD \
+  --secret RAILS_MASTER_KEY
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 

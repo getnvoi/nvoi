@@ -32,14 +32,19 @@ WEB_IMAGE=$(bin/cli build latest web)
 
 echo "image: $WEB_IMAGE"
 
+# ── Secrets ─────────────────────────────────────────────────────────────────────
+
+bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+
 # ── Services ────────────────────────────────────────────────────────────────────
 
 bin/cli service set db \
   --image postgres:17 \
   --volume pgdata:/var/lib/postgresql/data \
   --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD
 
 bin/cli service set meilisearch \
   --image getmeili/meilisearch:latest \
@@ -54,8 +59,9 @@ bin/cli service set web \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
   --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD \
+  --secret RAILS_MASTER_KEY
 
 bin/cli service set jobs \
   --image "$WEB_IMAGE" \
@@ -64,25 +70,22 @@ bin/cli service set jobs \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
   --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
-
-# ── Secrets ─────────────────────────────────────────────────────────────────────
-
-bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD \
+  --secret RAILS_MASTER_KEY
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
-bin/cli storage set assets --storage-provider cloudflare --bucket nvoi-dummy-rails-assets --cors
+# bin/cli storage set assets --storage-provider cloudflare --bucket nvoi-dummy-rails-assets --cors
 
-# ── DNS ─────────────────────────────────────────────────────────────────────────
+# # ── DNS ─────────────────────────────────────────────────────────────────────────
 
-bin/cli dns set web final.nvoi.to --dns-provider cloudflare --zone nvoi.to
+# bin/cli dns set web final.nvoi.to --dns-provider cloudflare --zone nvoi.to
 
-# ── Deploy ──────────────────────────────────────────────────────────────────────
+# # ── Deploy ──────────────────────────────────────────────────────────────────────
 
-bin/cli apply
-bin/cli show
+# bin/cli apply
+# bin/cli show
 
-echo ""
-echo "==> done. https://final.nvoi.to"
+# echo ""
+# echo "==> done. https://final.nvoi.to"

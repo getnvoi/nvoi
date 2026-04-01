@@ -25,6 +25,7 @@ type ServiceSetRequest struct {
 	Command     string
 	Replicas    int
 	EnvVars     []string // KEY=VALUE pairs
+	Secrets     []string // secret key references (must exist in cluster)
 	Volumes     []string // name:/path
 	HealthPath  string
 	Server      string
@@ -96,6 +97,27 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}
 
+	// Validate secret references — every key must already exist in the cluster
+	secretName := names.KubeSecrets()
+	if len(req.Secrets) > 0 {
+		existing, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
+		if err != nil {
+			return fmt.Errorf("cannot verify secrets — run 'secret set' first: %w", err)
+		}
+		for _, key := range req.Secrets {
+			found := false
+			for _, k := range existing {
+				if k == key {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("secret %q not found — run 'nvoi secret set %s <value>' first", key, key)
+			}
+		}
+	}
+
 	spec := kube.ServiceSpec{
 		Name:       req.Name,
 		Image:      req.Image,
@@ -103,6 +125,8 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		Command:    req.Command,
 		Replicas:   req.Replicas,
 		Env:        env,
+		Secrets:    req.Secrets,
+		SecretName: secretName,
 		Volumes:    req.Volumes,
 		HealthPath: req.HealthPath,
 		Server:     req.Server,

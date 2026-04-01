@@ -124,13 +124,18 @@ nvoi build list
 nvoi build latest <name>                                                        # returns image ref
 nvoi build prune <name> --keep 3                                                # keep N, delete rest
 
-# Application — --image only. Build is a separate step.
-nvoi service set <name> --image postgres:17 --port 5432
-nvoi service set <name> --image $IMAGE --port 3000 --replicas 2
-nvoi service delete <name>
+# Secrets — stored in k8s, referenced by key name on service set.
 nvoi secret set <key> <value>
 nvoi secret delete <key>
-nvoi secret list
+nvoi secret list                                                                # keys only
+nvoi secret reveal <key>                                                        # shows value
+
+# Application — --image only. Build is a separate step.
+# --secret KEY references a pre-existing secret (must exist, hard error if not).
+# --secret KEY=VALUE is rejected — use secret set first.
+nvoi service set <name> --image postgres:17 --port 5432 --secret DB_PASSWORD
+nvoi service set <name> --image $IMAGE --port 3000 --replicas 2 --secret RAILS_MASTER_KEY
+nvoi service delete <name>
 
 # Reconcile
 nvoi apply
@@ -268,7 +273,9 @@ Hard errors before touching k8s.
 - If DNS records exist, Caddy ingress auto-generated. Service must have `port > 0`.
 
 **Secrets:**
-- If secrets exist, injected as `envFrom: secretRef` into service pods.
+- `--secret KEY` on `service set` references a pre-existing secret. Must exist (validated via kubectl before apply). Hard error if not found.
+- `--secret KEY=VALUE` is rejected — use `secret set KEY VALUE` first.
+- Injected as `env.valueFrom.secretKeyRef` — value never in the manifest.
 
 **Env vars:**
 - No rewriting. `POSTGRES_HOST=db` stays `POSTGRES_HOST=db`. K8s namespaces handle isolation — each app+env gets its own namespace, service names stay short.
