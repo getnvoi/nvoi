@@ -146,6 +146,8 @@ bin/cli service set jobs \
 bin/cli dns set web final.nvoi.to \
   --app-name rails \
   --environment production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --dns-provider cloudflare \
   --zone nvoi.to
 

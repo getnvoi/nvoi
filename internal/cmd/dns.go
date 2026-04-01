@@ -26,14 +26,17 @@ func newDNSSetCmd() *cobra.Command {
 		Long: `Points domains at the server running the service.
 
 Examples:
-  nvoi dns set web myapp.com --dns-provider cloudflare --zone myapp.com
+  nvoi dns set web myapp.com --zone myapp.com
   nvoi dns set web api.myapp.com www.myapp.com --zone myapp.com`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := args[0]
 			domains := args[1:]
-			zone, _ := cmd.Flags().GetString("zone")
 
+			zone, err := resolveDNSZone(cmd)
+			if err != nil {
+				return err
+			}
 			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
@@ -75,8 +78,7 @@ Examples:
 	addComputeProviderFlags(cmd)
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().String("zone", "", "DNS zone (e.g. myapp.com)")
-	_ = cmd.MarkFlagRequired("zone")
+	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
 	return cmd
 }
 
@@ -88,7 +90,6 @@ func newDNSDeleteCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := args[0]
 			domains := args[1:]
-			zone, _ := cmd.Flags().GetString("zone")
 			yes, _ := cmd.Flags().GetBool("yes")
 
 			if !yes {
@@ -101,6 +102,10 @@ func newDNSDeleteCmd() *cobra.Command {
 				}
 			}
 
+			zone, err := resolveDNSZone(cmd)
+			if err != nil {
+				return err
+			}
 			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
@@ -142,9 +147,8 @@ func newDNSDeleteCmd() *cobra.Command {
 	addComputeProviderFlags(cmd)
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().String("zone", "", "DNS zone (e.g. myapp.com)")
+	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
 	cmd.Flags().BoolP("yes", "y", false, "skip confirmation")
-	_ = cmd.MarkFlagRequired("zone")
 	return cmd
 }
 
@@ -154,8 +158,10 @@ func newDNSListCmd() *cobra.Command {
 		Short: "List DNS records in zone",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			zone, _ := cmd.Flags().GetString("zone")
-
+			zone, err := resolveDNSZone(cmd)
+			if err != nil {
+				return err
+			}
 			dnsProvider, err := resolveDNSProvider(cmd)
 			if err != nil {
 				return err
@@ -186,7 +192,6 @@ func newDNSListCmd() *cobra.Command {
 	}
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().String("zone", "", "DNS zone (e.g. myapp.com)")
-	_ = cmd.MarkFlagRequired("zone")
+	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
 	return cmd
 }

@@ -144,6 +144,18 @@ func resolveDNSProvider(cmd *cobra.Command) (string, error) {
 	return name, nil
 }
 
+// resolveDNSZone reads --zone flag → DNS_ZONE env var.
+func resolveDNSZone(cmd *cobra.Command) (string, error) {
+	zone, _ := cmd.Flags().GetString("zone")
+	if zone == "" {
+		zone = os.Getenv("DNS_ZONE")
+	}
+	if zone == "" {
+		return "", fmt.Errorf("DNS zone is required.\n  flag:    --zone myapp.com\n  env var: export DNS_ZONE=myapp.com")
+	}
+	return zone, nil
+}
+
 // resolveDNSCredentials resolves DNS provider credentials from env vars + --zone flag.
 func resolveDNSCredentials(providerName, zone string) (map[string]string, error) {
 	schema, err := provider.GetDNSSchema(providerName)

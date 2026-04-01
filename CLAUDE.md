@@ -99,6 +99,7 @@ Every flag has an env var fallback. With env vars set, commands need zero provid
 # --compute-provider → COMPUTE_PROVIDER
 # --build-provider   → BUILD_PROVIDER
 # --dns-provider     → DNS_PROVIDER
+# --zone             → DNS_ZONE
 # --storage-provider → STORAGE_PROVIDER
 # --compute-credentials KEY=VAL → per-provider env vars (HETZNER_TOKEN, etc.)
 # --build-credentials KEY=VAL  → per-provider env vars (DAYTONA_API_KEY, etc.)
@@ -115,9 +116,9 @@ nvoi volume list
 # ── DNS + Ingress — creates A record AND deploys Caddy reverse proxy
 # "web" is the service name — must have --port set via service set.
 # Caddy runs on master with hostNetwork, handles TLS via Let's Encrypt.
-nvoi dns set <service> <domain...> --zone nvoi.to
-nvoi dns delete <service> <domain...> --zone nvoi.to
-nvoi dns list --zone nvoi.to
+nvoi dns set <service> <domain...>                                              # --zone or DNS_ZONE
+nvoi dns delete <service> <domain...>
+nvoi dns list
 
 # ── Storage — creates bucket, stores S3 credentials as k8s secrets
 # Bucket name derived from convention: nvoi-{app}-{env}-{name}. Override with --bucket.

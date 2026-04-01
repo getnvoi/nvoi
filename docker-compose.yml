@@ -19,6 +19,7 @@ services:
       - COMPUTE_PROVIDER=hetzner
       - BUILD_PROVIDER=daytona
       - DNS_PROVIDER=cloudflare
+      - DNS_ZONE=${DNS_ZONE:-nvoi.to}
       - STORAGE_PROVIDER=cloudflare
       - SSH_KEY_PATH=/root/.ssh/id_rsa
       - GOBIN=/app/tmp

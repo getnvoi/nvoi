@@ -27,8 +27,10 @@ func newResourcesCmd() *cobra.Command {
 			dnsProvider, _ := resolveDNSProvider(cmd)
 			var dnsCreds map[string]string
 			if dnsProvider != "" {
-				zone, _ := cmd.Flags().GetString("zone")
-				dnsCreds, _ = resolveDNSCredentials(dnsProvider, zone)
+				zone, _ := resolveDNSZone(cmd)
+				if zone != "" {
+					dnsCreds, _ = resolveDNSCredentials(dnsProvider, zone)
+				}
 			}
 
 			sshKey, _ := resolveSSHKey()
@@ -106,7 +108,7 @@ func newResourcesCmd() *cobra.Command {
 	}
 	addComputeProviderFlags(cmd)
 	addDNSProviderFlags(cmd)
-	cmd.Flags().String("zone", "", "DNS zone for listing records")
+	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
 
 	// Silence usage on error since DNS/zone are optional
 	cmd.SilenceUsage = true

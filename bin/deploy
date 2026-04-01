@@ -81,7 +81,7 @@ bin/cli service set jobs \
 
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
-bin/cli dns set web final.nvoi.to --zone nvoi.to
+bin/cli dns set web final.nvoi.to
 
 echo ""
 echo "==> done. https://final.nvoi.to"
