@@ -43,10 +43,15 @@ type buildEntry struct {
 	factory func(creds map[string]string) BuildProvider
 }
 
+type bucketEntry struct {
+	schema  CredentialSchema
+	factory func(creds map[string]string) BucketProvider
+}
+
 var computeProviders = map[string]computeEntry{}
 var buildProviders = map[string]buildEntry{}
 var dnsProviders = map[string]func(zone string) (DNSProvider, error){}
-var bucketProviders = map[string]func() (BucketProvider, error){}
+var bucketProviders = map[string]bucketEntry{}
 
 func RegisterCompute(name string, schema CredentialSchema, factory func(creds map[string]string) ComputeProvider) {
 	computeProviders[name] = computeEntry{schema: schema, factory: factory}
@@ -55,7 +60,9 @@ func RegisterBuild(name string, schema CredentialSchema, factory func(creds map[
 	buildProviders[name] = buildEntry{schema: schema, factory: factory}
 }
 func RegisterDNS(name string, factory func(string) (DNSProvider, error))   { dnsProviders[name] = factory }
-func RegisterBucket(name string, factory func() (BucketProvider, error))   { bucketProviders[name] = factory }
+func RegisterBucket(name string, schema CredentialSchema, factory func(creds map[string]string) BucketProvider) {
+	bucketProviders[name] = bucketEntry{schema: schema, factory: factory}
+}
 
 func GetComputeSchema(name string) (CredentialSchema, error) {
 	entry, ok := computeProviders[name]
@@ -107,11 +114,22 @@ func ResolveDNS(name, zone string) (DNSProvider, error) {
 	return factory(zone)
 }
 
-func ResolveBucket(name string) (BucketProvider, error) {
-	factory, ok := bucketProviders[name]
+func GetBucketSchema(name string) (CredentialSchema, error) {
+	entry, ok := bucketProviders[name]
 	if !ok {
-		return nil, fmt.Errorf("unsupported bucket provider: %q", name)
+		return CredentialSchema{}, fmt.Errorf("unsupported storage provider: %q", name)
 	}
-	return factory()
+	return entry.schema, nil
+}
+
+func ResolveBucket(name string, creds map[string]string) (BucketProvider, error) {
+	entry, ok := bucketProviders[name]
+	if !ok {
+		return nil, fmt.Errorf("unsupported storage provider: %q", name)
+	}
+	if err := entry.schema.Validate(creds); err != nil {
+		return nil, err
+	}
+	return entry.factory(creds), nil
 }
 

@@ -26,6 +26,7 @@ type ServiceSetRequest struct {
 	Replicas    int
 	EnvVars     []string // KEY=VALUE pairs
 	Secrets     []string // secret key references (must exist in cluster)
+	Storages    []string // storage names → expands to STORAGE_{NAME}_* secret refs
 	Volumes     []string // name:/path
 	HealthPath  string
 	Server      string
@@ -95,6 +96,13 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 			return fmt.Errorf("invalid env var %q — expected KEY=VALUE", e)
 		}
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
+	}
+
+	// Expand --storage names into secret refs
+	for _, storageName := range req.Storages {
+		for _, key := range StorageSecretKeys(storageName) {
+			req.Secrets = append(req.Secrets, key)
+		}
 	}
 
 	// Validate secret references — every key must already exist in the cluster

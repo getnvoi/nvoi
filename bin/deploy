@@ -37,6 +37,10 @@ echo "image: $WEB_IMAGE"
 bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
 bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 
+# ── Storage ─────────────────────────────────────────────────────────────────────
+
+bin/cli storage set assets --cors
+
 # ── Services ────────────────────────────────────────────────────────────────────
 
 bin/cli service set db \
@@ -61,7 +65,8 @@ bin/cli service set web \
   --env POSTGRES_USER="$POSTGRES_USER" \
   --env POSTGRES_DB="$POSTGRES_DB" \
   --secret POSTGRES_PASSWORD \
-  --secret RAILS_MASTER_KEY
+  --secret RAILS_MASTER_KEY \
+  --storage assets
 
 bin/cli service set jobs \
   --image "$WEB_IMAGE" \
@@ -74,17 +79,12 @@ bin/cli service set jobs \
   --secret POSTGRES_PASSWORD \
   --secret RAILS_MASTER_KEY
 
-# ── Storage ─────────────────────────────────────────────────────────────────────
-
-# bin/cli storage set assets --storage-provider cloudflare --bucket nvoi-dummy-rails-assets --cors
-
 # # ── DNS ─────────────────────────────────────────────────────────────────────────
 
 # bin/cli dns set web final.nvoi.to --dns-provider cloudflare --zone nvoi.to
 
 # # ── Deploy ──────────────────────────────────────────────────────────────────────
 
-# bin/cli apply
 # bin/cli show
 
 # echo ""

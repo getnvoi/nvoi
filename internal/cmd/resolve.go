@@ -158,6 +158,22 @@ func resolveStorageProvider(cmd *cobra.Command) (string, error) {
 	return name, nil
 }
 
+// resolveStorageCredentials resolves storage provider credentials from env vars.
+func resolveStorageCredentials(providerName string) (map[string]string, error) {
+	schema, err := provider.GetBucketSchema(providerName)
+	if err != nil {
+		return nil, err
+	}
+
+	creds := make(map[string]string, len(schema.Fields))
+	for _, f := range schema.Fields {
+		if v := os.Getenv(f.EnvVar); v != "" {
+			creds[f.Key] = v
+		}
+	}
+	return creds, nil
+}
+
 // ── SSH key ──────────────────────────────────────────────────────────────────
 
 // resolveSSHKey reads the SSH private key from disk.

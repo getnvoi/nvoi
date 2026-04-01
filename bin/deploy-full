@@ -77,6 +77,16 @@ bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD" \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
 
+# ── Storage ─────────────────────────────────────────────────────────────────────
+
+bin/cli storage set assets \
+  --app-name rails \
+  --environment production \
+  --compute-provider hetzner \
+  --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
+  --storage-provider cloudflare \
+  --cors
+
 # ── Services ────────────────────────────────────────────────────────────────────
 
 bin/cli service set db \
@@ -113,7 +123,8 @@ bin/cli service set web \
   --env POSTGRES_USER="$POSTGRES_USER" \
   --env POSTGRES_DB="$POSTGRES_DB" \
   --secret POSTGRES_PASSWORD \
-  --secret RAILS_MASTER_KEY
+  --secret RAILS_MASTER_KEY \
+  --storage assets
 
 bin/cli service set jobs \
   --app-name rails \
@@ -129,15 +140,6 @@ bin/cli service set jobs \
   --env POSTGRES_DB="$POSTGRES_DB" \
   --secret POSTGRES_PASSWORD \
   --secret RAILS_MASTER_KEY
-
-# ── Storage ─────────────────────────────────────────────────────────────────────
-
-bin/cli storage set assets \
-  --app-name rails \
-  --environment production \
-  --storage-provider cloudflare \
-  --bucket nvoi-dummy-rails-assets \
-  --cors
 
 # ── DNS ─────────────────────────────────────────────────────────────────────────
 

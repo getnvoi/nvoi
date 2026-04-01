@@ -7,15 +7,18 @@ import "context"
 type BucketProvider interface {
 	ValidateCredentials(ctx context.Context) error
 	EnsureBucket(ctx context.Context, name string) error
-	SetCORS(ctx context.Context, name string) error
+	EmptyBucket(ctx context.Context, name string) error
+	DeleteBucket(ctx context.Context, name string) error
+	SetCORS(ctx context.Context, name string, origins, methods []string) error
 	ClearCORS(ctx context.Context, name string) error
-	SetLifecycle(ctx context.Context, name string, days int) error
-	Credentials() (*BucketCredentials, error)
+	SetLifecycle(ctx context.Context, name string, expireDays int) error
+	Credentials() BucketCredentials
 }
 
+// BucketCredentials holds S3-compatible access details for injection into services.
 type BucketCredentials struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Region    string
+	Endpoint        string // e.g. https://acct.r2.cloudflarestorage.com
+	AccessKeyID     string
+	SecretAccessKey string
+	Region          string // "auto", "eu-central-1", etc.
 }

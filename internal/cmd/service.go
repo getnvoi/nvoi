@@ -39,6 +39,7 @@ Examples:
 			healthPath, _ := cmd.Flags().GetString("health-path")
 			envVars, _ := cmd.Flags().GetStringArray("env")
 			secrets, _ := cmd.Flags().GetStringArray("secret")
+			storages, _ := cmd.Flags().GetStringArray("storage")
 
 			// --secret is a reference, not a setter. KEY only, no KEY=VALUE.
 			for _, s := range secrets {
@@ -77,6 +78,7 @@ Examples:
 				Replicas:    replicas,
 				EnvVars:     envVars,
 				Secrets:     secrets,
+				Storages:    storages,
 				Volumes:     volumes,
 				HealthPath:  healthPath,
 				Server:      server,
@@ -94,6 +96,7 @@ Examples:
 	cmd.Flags().String("health-path", "", "readiness probe HTTP path")
 	cmd.Flags().StringArray("env", nil, "environment variable (KEY=VALUE)")
 	cmd.Flags().StringArray("secret", nil, "secret key reference (must exist via secret set)")
+	cmd.Flags().StringArray("storage", nil, "storage name (injects STORAGE_{NAME}_* env vars from secrets)")
 	_ = cmd.MarkFlagRequired("image")
 	return cmd
 }

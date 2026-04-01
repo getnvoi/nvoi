@@ -101,7 +101,30 @@ func UpsertSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, ke
 }
 
 // DeleteSecretKey removes a single key from a k8s Secret.
+// Idempotent — succeeds if the key or secret doesn't exist.
 func DeleteSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, key string) error {
+	// Check if secret exists
+	_, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get secret %s 2>/dev/null", secretName)))
+	if err != nil {
+		return nil // secret doesn't exist — nothing to delete
+	}
+
+	// Check if key exists in the secret
+	existing, err := ListSecretKeys(ctx, ssh, ns, secretName)
+	if err != nil {
+		return nil
+	}
+	found := false
+	for _, k := range existing {
+		if k == key {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil // key doesn't exist — already deleted
+	}
+
 	cmd := kubectl(ns, fmt.Sprintf(
 		"patch secret %s --type=json -p '[{\"op\":\"remove\",\"path\":\"/data/%s\"}]'",
 		secretName, key,
