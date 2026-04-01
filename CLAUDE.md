@@ -164,9 +164,6 @@ nvoi ssh <command>
 # Inspect
 nvoi resources
 
-# Teardown
-nvoi destroy [--yes]
-
 # ── Fully explicit (no env vars) ──────────────────────────────────────────────
 nvoi instance set master --compute-provider hetzner --compute-credentials HETZNER_TOKEN=xxx \
   --compute-type cx23 --compute-region fsn1 --app-name rails --environment production
@@ -358,4 +355,3 @@ These commands have cobra shells but return "not implemented":
 - `show` — live view of servers, pods, DNS, storage
 - `logs` — `kubectl logs` over SSH
 - `exec` — `kubectl exec` over SSH
-- `destroy` — the CLI command (the `bin/destroy` script works, the `nvoi destroy` command doesn't)

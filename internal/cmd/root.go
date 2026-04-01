@@ -37,8 +37,7 @@ func Root() *cobra.Command {
 	// Inspect.
 	root.AddCommand(newResourcesCmd())
 
-	// Teardown.
-	root.AddCommand(newDestroyCmd())
+	// Teardown — use bin/destroy (the script). No CLI command needed.
 
 	return root
 }
