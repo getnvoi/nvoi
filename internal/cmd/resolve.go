@@ -50,14 +50,22 @@ func resolveAppEnv() (appName, env string, err error) {
 // Path from SSH_KEY_PATH env var, fallback to ~/.ssh/id_ed25519.
 func resolveSSHKey() ([]byte, error) {
 	keyPath := os.Getenv("SSH_KEY_PATH")
-	if keyPath == "" {
-		keyPath = os.ExpandEnv("$HOME/.ssh/id_ed25519")
+	if keyPath != "" {
+		key, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("read SSH key %s: %w", keyPath, err)
+		}
+		return key, nil
 	}
-	key, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, fmt.Errorf("read SSH key %s: %w", keyPath, err)
+	// Try common key paths
+	home := os.Getenv("HOME")
+	for _, name := range []string{"id_ed25519", "id_rsa"} {
+		p := home + "/.ssh/" + name
+		if key, err := os.ReadFile(p); err == nil {
+			return key, nil
+		}
 	}
-	return key, nil
+	return nil, fmt.Errorf("no SSH key found — set SSH_KEY_PATH or place a key at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa")
 }
 
 // resolveBuildCredentials resolves build provider credentials from --builder-credentials flag → env vars.

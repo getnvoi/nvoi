@@ -3,7 +3,10 @@ package local
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -50,6 +53,13 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 	tunnelRef := fmt.Sprintf("%s/%s:%s", tunnelAddr, req.ServiceName, tag)
 	registryRef := fmt.Sprintf("%s/%s:%s", registryAddr, req.ServiceName, tag)
 
+	// Fix file permissions before build — Docker COPY preserves filesystem permissions.
+	// Files with 600 become unreadable by the container's non-root user.
+	fmt.Fprintf(req.Stdout, "  fixing file permissions...\n")
+	if err := fixPermissions(req.Source); err != nil {
+		return nil, fmt.Errorf("fix permissions: %w", err)
+	}
+
 	fmt.Fprintf(req.Stdout, "  building %s (platform: %s)...\n", req.ServiceName, platform)
 
 	cmd := exec.CommandContext(ctx, "docker", "buildx", "build",
@@ -67,4 +77,45 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 
 	fmt.Fprintf(req.Stdout, "  ✓ pushed %s\n", registryRef)
 	return &provider.BuildResult{ImageRef: registryRef}, nil
+}
+
+// fixPermissions ensures all files are 644 and all directories are 755
+// in the source tree. Skips .git and respects .dockerignore implicitly
+// (Docker handles that). Executable files in bin/ are set to 755.
+func fixPermissions(root string) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip .git directory
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() {
+			if info.Mode().Perm() != 0755 {
+				return os.Chmod(path, 0755)
+			}
+			return nil
+		}
+
+		// bin/* files → 755, everything else → 644
+		rel, _ := filepath.Rel(root, path)
+		if strings.HasPrefix(rel, "bin/") || strings.HasPrefix(rel, "bin"+string(filepath.Separator)) {
+			if info.Mode().Perm() != 0755 {
+				return os.Chmod(path, 0755)
+			}
+		} else {
+			if info.Mode().Perm() != 0644 {
+				return os.Chmod(path, 0644)
+			}
+		}
+		return nil
+	})
 }

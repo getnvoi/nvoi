@@ -25,7 +25,8 @@ bin/cli volume set meili-data --provider hetzner --size 20 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
-bin/cli build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
+# bin/cli build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
+BUILD_SOURCE=/Users/ben/Desktop/sources/dummy-rails bin/cli build --provider hetzner --builder local --source /build-source --name web # mount via BUILD_SOURCE in compose
 WEB_IMAGE=$(bin/cli build latest web --provider hetzner)
 
 echo $WEB_IMAGE

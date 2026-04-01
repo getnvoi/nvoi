@@ -9,6 +9,9 @@ services:
       - go-mod-cache:/root/go/pkg/mod
       - bin-cache:/app/tmp
       - ${HOME}/.ssh:/root/.ssh:ro
+      - ${BUILD_SOURCE:-/dev/null}:/build-source # local build source mount
+      - docker-data:/var/lib/docker # persist DinD cache across runs
+    privileged: true # DinD — local builder runs docker daemon + SSH tunnel in same namespace
     env_file: .env
     environment:
       - NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
@@ -22,3 +25,4 @@ volumes:
   go-cache:
   go-mod-cache:
   bin-cache:
+  docker-data:

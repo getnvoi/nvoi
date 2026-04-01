@@ -121,10 +121,22 @@ Every command is `set`. `compute set` provisions + installs k3s (master by defau
 
 ---
 
-## Phase 5 — Build (future)
+## Phase 5 — Build ✅
 
-- [ ] Port Daytona builder
-- [ ] `app/build.go` + `cmd/build.go`
+- [x] `app/build.go` — BuildRun, BuildList, BuildLatest
+- [x] `cmd/build.go` — `nvoi build`, `nvoi build list`, `nvoi build latest`
+- [x] `provider/local/builder.go` — local docker buildx + SSH tunnel + permission fix
+- [x] `provider/daytona/` — Daytona SDK sandbox builder (DinD, clone, tunnel, push)
+- [x] Git auth: signed URL → `gh auth token` → `--git-token` → `GITHUB_TOKEN`
+- [x] DinD support in Docker Compose (`docker-data` volume for cache persistence)
+
+- [x] **Smoke test**
+  ```bash
+  bin/cli build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
+  bin/cli build --provider hetzner --builder local --source /path/to/app --name web
+  bin/cli build list --provider hetzner
+  bin/cli build latest web --provider hetzner
+  ```
 
 ---
 
