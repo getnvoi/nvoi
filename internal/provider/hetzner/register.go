@@ -1,18 +1,16 @@
 package hetzner
 
-import (
-	"fmt"
-	"os"
+import "github.com/getnvoi/nvoi/internal/provider"
 
-	"github.com/getnvoi/nvoi/internal/provider"
-)
+var Schema = provider.CredentialSchema{
+	Name: "hetzner",
+	Fields: []provider.CredentialField{
+		{Key: "token", Required: true, EnvVar: "HETZNER_TOKEN", Flag: "token"},
+	},
+}
 
 func init() {
-	provider.RegisterCompute("hetzner", func() (provider.ComputeProvider, error) {
-		token := os.Getenv("HETZNER_TOKEN")
-		if token == "" {
-			return nil, fmt.Errorf("HETZNER_TOKEN is required")
-		}
-		return New(token), nil
+	provider.RegisterCompute("hetzner", Schema, func(creds map[string]string) provider.ComputeProvider {
+		return New(creds["token"])
 	})
 }

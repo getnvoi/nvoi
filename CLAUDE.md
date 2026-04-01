@@ -82,11 +82,11 @@ Different app or env = completely isolated infrastructure. Same commands, differ
 ## Commands
 
 ```bash
-# Infrastructure
-nvoi compute set <name> --provider hetzner --type cax11 --region nbg1
+# Infrastructure — compute set installs k3s (master by default, --worker to join)
+nvoi compute set <name> --provider hetzner --type cax11 --region fsn1
+nvoi compute set <name> --provider hetzner --type cax21 --region fsn1 --worker
 nvoi compute delete <name>
 nvoi compute list
-nvoi bootstrap
 nvoi volume set <name> --size 20 --server master
 nvoi volume delete <name>
 nvoi volume list
@@ -118,6 +118,9 @@ nvoi logs <service> [-f] [-n 50]
 nvoi exec <service> -- <command>
 nvoi ssh <command>
 
+# Inspect
+nvoi resources [--provider hetzner]
+
 # Teardown
 nvoi destroy [--yes]
 ```
@@ -128,9 +131,11 @@ nvoi destroy [--yes]
 cmd/cli/main.go         CLI entrypoint
 
 internal/
-  cmd/                   One file per command. Thin: parse args, call infra/kube.
+  app/                   Business logic. One file per domain. No cobra, no I/O formatting.
+                         Called by cmd/ (CLI) and future API handlers.
+  cmd/                   Thin cobra wrappers. Parse flags → call app/ → format output.
   kube/                  K8s YAML generation + kubectl over SSH
-  infra/                 SSH, server bootstrap, k3s, volume mounting
+  infra/                 SSH, server bootstrap, k3s, Docker, volume mounting
   provider/              ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
     hetzner/             Hetzner Cloud (compute + volumes)
     cloudflare/          Cloudflare (DNS + R2 buckets)
@@ -138,15 +143,49 @@ internal/
   core/                  Pure utilities: naming, poll, httpclient, ssh keys
 ```
 
-## .env
+## Provider credentials
 
-Provider credentials. Input, not state.
+Each provider declares a credential schema: what fields it needs, the env var convention, and the flag name. Resolution order: **flag → env var → error**.
+
+The command layer doesn't know what credentials a provider needs. The provider owns the schema. The resolve layer applies it.
+
+```go
+// Each provider registers a CredentialSchema:
+provider.CredentialSchema{
+    Name: "hetzner",
+    Fields: []provider.CredentialField{
+        {Key: "token", Required: true, EnvVar: "HETZNER_TOKEN", Flag: "token"},
+    },
+}
+```
+
+**Common case**: env vars in `.env`, no flags needed.
+```bash
+# .env
+HETZNER_TOKEN=...
+bin/cli compute set master --provider hetzner --type cax11 --region fsn1
+```
+
+**Override**: flags take precedence over env vars.
+```bash
+bin/cli compute set master --provider hetzner --token $OTHER_TOKEN --type cax11 --region fsn1
+```
+
+**Error when missing**: clear message with both resolution paths.
+```
+hetzner: token is required (flag: --token, env: HETZNER_TOKEN)
+```
+
+### .env
+
+Provider credentials + SSH key. Input, not state.
 
 ```
 HETZNER_TOKEN=...
 CF_API_KEY=...
+CF_ACCOUNT_ID=...
 CF_ZONE_ID=...
-SSH_KEY_PATH=~/.ssh/id_ed25519
+SSH_KEY_PATH=~/.ssh/id_rsa
 ```
 
 ## Apply guardrails
@@ -155,7 +194,7 @@ Hard errors before touching k8s.
 
 **Cluster:**
 - Server named `master` must exist (resolved from provider API by name `nvoi-{app}-{env}-master`).
-- Cluster must be bootstrapped (kubectl get nodes succeeds over SSH).
+- Cluster must have k3s installed (`compute set` handles this — kubectl get nodes succeeds over SSH).
 
 **Services:**
 - Every service must have `image` or `build`. Neither = hard error.
@@ -188,3 +227,4 @@ Hard errors before touching k8s.
 6. Provider interfaces scale. Add a provider = implement the interface.
 7. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 8. SSH is the only transport to remote servers.
+9. **`os.Getenv` lives exclusively in `cmd/`.** Environment variables are a CLI concept. `app/`, `provider/`, `infra/`, `core/` never read env vars. All external values (credentials, SSH key path, app name, env) are resolved in `cmd/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.

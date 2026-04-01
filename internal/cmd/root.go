@@ -15,7 +15,6 @@ func Root() *cobra.Command {
 
 	// Infrastructure.
 	root.AddCommand(newComputeCmd())
-	root.AddCommand(newBootstrapCmd())
 	root.AddCommand(newVolumeCmd())
 	root.AddCommand(newDNSCmd())
 	root.AddCommand(newStorageCmd())
@@ -37,6 +36,9 @@ func Root() *cobra.Command {
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newExecCmd())
 	root.AddCommand(newSSHCmd())
+
+	// Inspect.
+	root.AddCommand(newResourcesCmd())
 
 	// Teardown.
 	root.AddCommand(newDestroyCmd())

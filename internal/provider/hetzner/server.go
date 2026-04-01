@@ -53,9 +53,8 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 		return existing, nil
 	}
 
-	// Resolve firewall + network internally
-	fwName := req.Name[:strings.LastIndex(req.Name, "-")] + "-fw" // nvoi-app-env-fw
-	netName := req.Name[:strings.LastIndex(req.Name, "-")] + "-net"
+	fwName := req.FirewallName
+	netName := req.NetworkName
 
 	fwID, err := c.ensureFirewall(ctx, fwName, req.Labels)
 	if err != nil {
@@ -105,7 +104,7 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 	}
 
 	// Detach firewall
-	fwName := req.Name[:strings.LastIndex(req.Name, "-")] + "-fw"
+	fwName := req.FirewallName
 	var fwResp struct {
 		Firewalls []struct {
 			ID   int64  `json:"id"`
@@ -129,10 +128,13 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 
 	// Clean up firewall + network
 	_ = c.deleteFirewall(ctx, fwName)
-	netName := req.Name[:strings.LastIndex(req.Name, "-")] + "-net"
-	_ = c.deleteNetwork(ctx, netName)
+	_ = c.deleteNetwork(ctx, req.NetworkName)
 
 	return nil
+}
+
+func (c *Client) ListAllServers(ctx context.Context) ([]*provider.Server, error) {
+	return c.ListServers(ctx, nil)
 }
 
 func (c *Client) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {

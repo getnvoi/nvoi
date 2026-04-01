@@ -8,7 +8,6 @@ package core
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 )
@@ -23,19 +22,13 @@ type Names struct {
 	env string
 }
 
-// NewNames creates Names from NVOI_APP_NAME + NVOI_ENV environment variables.
-func NewNames() (*Names, error) {
-	app := os.Getenv("NVOI_APP_NAME")
-	env := os.Getenv("NVOI_ENV")
+// NewNames creates Names from app + env strings.
+// Caller (cmd layer) is responsible for reading env vars.
+func NewNames(app, env string) (*Names, error) {
 	if app == "" || env == "" {
-		return nil, fmt.Errorf("NVOI_APP_NAME and NVOI_ENV are required.\n  export NVOI_APP_NAME=dummy-rails\n  export NVOI_ENV=production")
+		return nil, fmt.Errorf("app and env are required")
 	}
 	return &Names{app: sanitize(app), env: sanitize(env)}, nil
-}
-
-// NewNamesFrom creates Names from given app + env strings (for testing).
-func NewNamesFrom(app, env string) *Names {
-	return &Names{app: sanitize(app), env: sanitize(env)}
 }
 
 func (n *Names) App() string { return n.app }
@@ -43,11 +36,11 @@ func (n *Names) Env() string { return n.env }
 
 // ── Infrastructure names ───────────────────────────────────────────────────────
 
-func (n *Names) Base() string             { return fmt.Sprintf("nvoi-%s-%s", n.app, n.env) }
-func (n *Names) Firewall() string         { return n.Base() + "-fw" }
-func (n *Names) Network() string          { return n.Base() + "-net" }
-func (n *Names) Server(key string) string { return fmt.Sprintf("%s-%s", n.Base(), key) }
-func (n *Names) Stack() string            { return n.Base() }
+func (n *Names) Base() string              { return fmt.Sprintf("nvoi-%s-%s", n.app, n.env) }
+func (n *Names) Firewall() string          { return n.Base() + "-fw" }
+func (n *Names) Network() string           { return n.Base() + "-net" }
+func (n *Names) Server(key string) string  { return fmt.Sprintf("%s-%s", n.Base(), key) }
+func (n *Names) Stack() string             { return n.Base() }
 func (n *Names) Volume(name string) string { return fmt.Sprintf("%s-%s-data", n.Base(), name) }
 func (n *Names) Bucket(name string) string { return fmt.Sprintf("%s-%s", n.Base(), name) }
 
@@ -55,12 +48,12 @@ func (n *Names) Bucket(name string) string { return fmt.Sprintf("%s-%s", n.Base(
 
 // KubeNamespace — each app+env gets its own. Service names stay short.
 // POSTGRES_HOST=db just works. No rewriting magic.
-func (n *Names) KubeNamespace() string           { return n.Base() }
-func (n *Names) KubeWorkload(svc string) string  { return svc }
-func (n *Names) KubeService(svc string) string   { return svc }
-func (n *Names) KubeCaddy() string               { return "caddy" }
-func (n *Names) KubeCaddyConfig() string         { return "caddy-config" }
-func (n *Names) KubeSecrets() string             { return "secrets" }
+func (n *Names) KubeNamespace() string          { return n.Base() }
+func (n *Names) KubeWorkload(svc string) string { return svc }
+func (n *Names) KubeService(svc string) string  { return svc }
+func (n *Names) KubeCaddy() string              { return "caddy" }
+func (n *Names) KubeCaddyConfig() string        { return "caddy-config" }
+func (n *Names) KubeSecrets() string            { return "secrets" }
 
 // ── Labels ─────────────────────────────────────────────────────────────────────
 

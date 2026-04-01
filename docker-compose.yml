@@ -7,15 +7,18 @@ services:
       - .:/app
       - go-cache:/root/go
       - go-mod-cache:/root/go/pkg/mod
+      - bin-cache:/app/tmp
       - ${HOME}/.ssh:/root/.ssh:ro
     env_file: .env
     environment:
       - NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
       - NVOI_ENV=${NVOI_ENV:-production}
       - SSH_KEY_PATH=/root/.ssh/id_rsa
+      - GOBIN=/app/tmp
     working_dir: /app
-    entrypoint: ["go", "run", "./cmd/cli"]
+    entrypoint: ["/app/bin/entrypoint"]
 
 volumes:
   go-cache:
   go-mod-cache:
+  bin-cache:

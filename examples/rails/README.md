@@ -3,8 +3,8 @@
 ```bash
 # 1. Provision
 nvoi compute set master --provider hetzner --type cax11 --region fsn1
-nvoi bootstrap
-nvoi volume set pgdata --size 20 --server master
+nvoi compute set worker-1 --provider hetzner --type cax21 --region fsn1 --worker
+nvoi volume set pgdata --size 20 --provider hetzner
 
 # 2. Services
 nvoi service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data --env POSTGRES_PASSWORD=secret
@@ -17,22 +17,18 @@ nvoi secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
 nvoi dns set web app.nvoi.to --provider cloudflare --zone nvoi.to
 
 # 5. Deploy
-nvoi apply
+nvoi apply --provider hetzner
 
 # 6. Check
-nvoi show
+nvoi show --provider hetzner
 
 # 7. Operate
-nvoi logs web -f
-nvoi exec web -- rails console
-nvoi ssh "df -h"
+nvoi logs web --provider hetzner -f
+nvoi exec web --provider hetzner -- rails console
+nvoi ssh --provider hetzner "df -h"
 
-# 8. Update
-nvoi service set web --image myapp:v2
-nvoi apply
-
-# 9. Tear down
-nvoi destroy
+# 8. Tear down
+bin/destroy
 ```
 
 Run it all at once — idempotent, self-healing:

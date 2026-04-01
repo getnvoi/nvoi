@@ -1,86 +1,76 @@
 # Build Checklist — Minimally Viable
 
 Each phase ends with a real smoke test against live infrastructure.
-Every command is `set` — idempotent, self-healing. `bin/deploy` runs end to end, always same outcome.
+Every command is `set`. `compute set` provisions + installs k3s (master by default, `--worker` to join).
+`bin/deploy` runs end to end, always same outcome.
 
 ---
 
-## Phase 1 — Compute + SSH
-**Goal:** `nvoi compute set master` provisions a Hetzner server you can SSH into.
+## Phase 1 — Compute + SSH ✅
+**Goal:** `nvoi compute set master` provisions a Hetzner server with k3s, Docker, registry.
 
-- [ ] **Port core utilities**
-  - [ ] `core/httpclient.go` — HTTP client wrapper
-  - [ ] `core/poll.go` — retry with deadline
-  - [ ] `core/sshutil.go` — key derivation
-  - [ ] `core/naming.go` — already written, verify tests
+- [x] `core/naming.go` — deterministic naming from app+env
+- [x] `core/httpclient.go` — JSON-over-HTTP client for provider APIs
+- [x] `core/poll.go` — retry with deadline
+- [x] `core/sshutil.go` — SSH key derivation
+- [x] `core/ssh.go` — SSHClient interface
+- [x] `infra/ssh.go` — SSH client + TOFU known hosts
+- [x] `infra/server.go` — WaitSSH, EnsureDocker over SSH
+- [x] `infra/cloudinit.go` — cloud-init rendering
+- [x] `infra/k3s.go` — InstallK3sMaster, JoinK3sWorker, EnsureRegistry
+- [x] `provider/compute.go` — ComputeProvider interface + credential schema
+- [x] `provider/resolve.go` — schema-based credential resolution
+- [x] `provider/hetzner/` — full Hetzner implementation (server, firewall, network)
+- [x] `app/compute.go` — ComputeSet, ComputeDelete, ComputeList
+- [x] `app/resources.go` — Resources (list all under account)
+- [x] `app/ssh.go` — SSH command execution on master
+- [x] `cmd/compute.go` — thin cobra wrapper
+- [x] `cmd/resources.go` — thin cobra wrapper
+- [x] `cmd/ssh.go` — thin cobra wrapper
+- [x] `cmd/resolve.go` — centralized env/flag resolution
+- [x] `cmd/table.go` — table rendering
 
-- [ ] **Port SSH**
-  - [ ] `infra/ssh.go` — already ported, verify it compiles
-
-- [ ] **Port Hetzner provider**
-  - [ ] `provider/hetzner/client.go` — New, ValidateCredentials, ArchForType
-  - [ ] `provider/hetzner/firewall.go` — full firewall CRUD
-  - [ ] `provider/hetzner/network.go` — full network CRUD
-  - [ ] `provider/hetzner/server.go` — EnsureServer, GetServerByName, DeleteServer, ListServers
-  - [ ] `provider/hetzner/volume.go` — full volume CRUD
-  - [ ] Register in `provider/resolve.go`
-
-- [ ] **Port server provisioning**
-  - [ ] `infra/server.go` — EnsureDocker over SSH, cloud-init rendering
-
-- [ ] **Implement commands**
-  - [ ] `cmd/compute.go` set: resolve provider → firewall → network → server → SSH → docker → write .env
-  - [ ] `cmd/compute.go` list: query provider API by label, print table
-  - [ ] `cmd/compute.go` delete: provider API teardown
-  - [ ] `cmd/ssh.go`: resolve master from provider API, SSH in, run command
-
-- [ ] **Smoke test**
+- [x] **Smoke test**
   ```bash
   bin/cli compute set master --provider hetzner --type cax11 --region fsn1
-  bin/cli ssh "uname -a"
-  bin/cli compute list
-  bin/cli compute delete master
+  bin/cli compute set worker-1 --provider hetzner --type cax21 --region fsn1 --worker
+  bin/cli ssh --provider hetzner "kubectl get nodes"
+  bin/cli resources --provider hetzner
+  bin/cli compute delete worker-1 --provider hetzner -y
+  bin/cli compute delete master --provider hetzner -y
   ```
 
 ---
 
-## Phase 2 — Bootstrap + Service + Apply + Show
+## Phase 2 — Service + Apply + Show
 **Goal:** `nvoi apply` deploys a container and `nvoi show` prints live state.
 
-- [ ] **Port k3s bootstrap**
-  - [ ] `infra/k3s.go` — install k3s, join workers, registry, all over SSH
-
-- [ ] **Implement bootstrap**
-  - [ ] `cmd/bootstrap.go`: resolve master from provider API → SSH → install k3s → registry
-
 - [ ] **Implement service set/delete**
-  - [ ] `cmd/service.go` set: resolve master → generate k8s YAML from flags → kubectl apply over SSH
-  - [ ] `cmd/service.go` delete: kubectl delete over SSH
+  - [ ] `app/service.go` + `cmd/service.go`
 
 - [ ] **Port k8s generation + kubectl**
   - [ ] `kube/generate.go` — service flags → Deployment/StatefulSet/Service YAML
   - [ ] `kube/apply.go` — kubectl apply/delete over SSH
-  - [ ] `kube/rollout.go` — kubectl rollout status over SSH (use -o json)
+  - [ ] `kube/rollout.go` — kubectl rollout status over SSH
 
 - [ ] **Implement apply**
-  - [ ] `cmd/apply.go`: resolve master → query cluster → rebuild if needed → kubectl apply → rollout
+  - [ ] `app/apply.go` + `cmd/apply.go`
 
 - [ ] **Implement show**
-  - [ ] `cmd/show.go`: provider API for servers/volumes + SSH kubectl for pods/services → print everything
+  - [ ] `app/show.go` + `cmd/show.go`
 
 - [ ] **Implement operations**
-  - [ ] `cmd/logs.go` — kubectl logs over SSH
-  - [ ] `cmd/exec.go` — kubectl exec over SSH
+  - [ ] `app/logs.go` + `cmd/logs.go`
+  - [ ] `app/exec.go` + `cmd/exec.go`
 
 - [ ] **Smoke test**
   ```bash
   bin/cli compute set master --provider hetzner --type cax11 --region fsn1
-  bin/cli bootstrap
   bin/cli service set web --image nginx --port 80
-  bin/cli apply
-  bin/cli show
-  bin/cli logs web
-  bin/cli ssh "curl -s localhost:80"
+  bin/cli apply --provider hetzner
+  bin/cli show --provider hetzner
+  bin/cli logs web --provider hetzner
+  bin/cli ssh --provider hetzner "curl -s localhost:80"
   ```
 
 ---
@@ -88,39 +78,31 @@ Every command is `set` — idempotent, self-healing. `bin/deploy` runs end to en
 ## Phase 3 — Volume + DNS + Secrets
 **Goal:** Full deploy with persistent storage, custom domain, HTTPS, k8s secrets.
 
-- [ ] **Port volume mounting**
-  - [ ] `infra/volume.go` — attach, resolve device, mount, fstab — all over SSH
-
 - [ ] **Implement volume commands**
-  - [ ] `cmd/volume.go` set: provider API + SSH mount
-  - [ ] `cmd/volume.go` delete: provider API detach
-  - [ ] `cmd/volume.go` list: provider API query
+  - [ ] `app/volume.go` + `cmd/volume.go`
 
 - [ ] **Port Cloudflare DNS**
-  - [ ] `provider/cloudflare/dns.go` — EnsureARecord, DeleteARecord, ListARecords
-  - [ ] Register in `provider/resolve.go`
+  - [ ] `provider/cloudflare/dns.go`
 
 - [ ] **Implement DNS commands**
-  - [ ] `cmd/dns.go` set/delete/list: DNS API directly
+  - [ ] `app/dns.go` + `cmd/dns.go`
 
 - [ ] **Port Caddy into apply**
-  - [ ] `kube/caddy.go` — Caddyfile + Caddy Deployment generation
-  - [ ] TLS verification: SSH check cert + HTTP probe
+  - [ ] `kube/caddy.go`
 
 - [ ] **Implement secret commands**
-  - [ ] `cmd/secret.go` set/delete/list: kubectl over SSH
+  - [ ] `app/secret.go` + `cmd/secret.go`
 
 - [ ] **Smoke test**
   ```bash
   bin/cli compute set master --provider hetzner --type cax11 --region fsn1
-  bin/cli bootstrap
-  bin/cli volume set pgdata --size 20
-  bin/cli service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data --env POSTGRES_PASSWORD=secret
+  bin/cli volume set pgdata --size 20 --provider hetzner
+  bin/cli service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data
   bin/cli service set web --image nginx --port 80
   bin/cli secret set API_KEY mykey123
   bin/cli dns set web final.nvoi.to --provider cloudflare --zone nvoi.to
-  bin/cli apply
-  bin/cli show
+  bin/cli apply --provider hetzner
+  bin/cli show --provider hetzner
   curl https://final.nvoi.to
   ```
 
@@ -130,36 +112,24 @@ Every command is `set` — idempotent, self-healing. `bin/deploy` runs end to en
 **Goal:** Object storage, full teardown, idempotency.
 
 - [ ] **Implement storage commands**
-  - [ ] `cmd/storage.go` set: bucket API + write credentials to .env
-  - [ ] `cmd/storage.go` delete: remove from .env
+  - [ ] `app/storage.go` + `cmd/storage.go`
 
 - [ ] **Implement destroy**
-  - [ ] `cmd/destroy.go`: query all infra by label → tear down in reverse → clear .env
+  - [ ] `app/destroy.go` + `cmd/destroy.go`
 
-- [ ] **Polish**
-  - [ ] All commands idempotent — `bin/deploy` runs end to end, always same outcome
-  - [ ] Error messages actionable
-  - [ ] Shell escaping for all SSH commands
-
-- [ ] **Smoke test — full lifecycle (`bin/deploy`)**
-  ```bash
-  bin/deploy   # runs everything — idempotent, self-healing
-  bin/cli show
-  bin/cli destroy --yes
-  bin/cli compute list  # should be empty
-  ```
+- [ ] **Smoke test — full lifecycle (`bin/deploy` + `bin/destroy`)**
 
 ---
 
 ## Phase 5 — Build (future)
 
 - [ ] Port Daytona builder
-- [ ] `cmd/build.go`: resolve builder → build repo → push to registry → update service image
+- [ ] `app/build.go` + `cmd/build.go`
 
 ---
 
 ## Future
 
-- [ ] Workers: `nvoi compute set worker-1 ...` + k3s worker join
+- [ ] Workers: `nvoi compute set worker-N --provider ... --worker`
 - [ ] Hooks: pre_deploy / post_build
-- [ ] API server on top of same commands
+- [ ] API server consuming `internal/app/` directly

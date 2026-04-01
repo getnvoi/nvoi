@@ -12,10 +12,23 @@ type ComputeProvider interface {
 	DeleteServer(ctx context.Context, req DeleteServerRequest) error
 	ListServers(ctx context.Context, labels map[string]string) ([]*Server, error)
 
+	// Resources — unfiltered, everything under the account
+	ListAllServers(ctx context.Context) ([]*Server, error)
+	ListAllFirewalls(ctx context.Context) ([]*Firewall, error)
+	ListAllNetworks(ctx context.Context) ([]*Network, error)
+
 	// Volume
 	EnsureVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
 	DetachVolume(ctx context.Context, name string, labels map[string]string) error
 	ListVolumes(ctx context.Context, labels map[string]string) ([]*Volume, error)
+}
+
+type Firewall struct {
+	ID, Name string
+}
+
+type Network struct {
+	ID, Name string
 }
 
 type Server struct {
@@ -31,12 +44,13 @@ type Volume struct {
 
 type CreateServerRequest struct {
 	Name, ServerType, Image, Location, UserData string
+	FirewallName, NetworkName                   string
 	Labels                                      map[string]string
 }
 
 type DeleteServerRequest struct {
-	Name   string
-	Labels map[string]string
+	Name, FirewallName, NetworkName string
+	Labels                         map[string]string
 }
 
 type CreateVolumeRequest struct {

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/getnvoi/nvoi/internal/core"
+	"github.com/getnvoi/nvoi/internal/provider"
 )
 
 type fwRule struct {
@@ -81,6 +82,23 @@ func (c *Client) detachFirewall(ctx context.Context, firewallID, serverID string
 		},
 	}
 	return c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/remove_from_resources", firewallID), body, nil)
+}
+
+func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {
+	var resp struct {
+		Firewalls []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"firewalls"`
+	}
+	if err := c.api.Do(ctx, "GET", "/firewalls?per_page=50", nil, &resp); err != nil {
+		return nil, fmt.Errorf("list firewalls: %w", err)
+	}
+	out := make([]*provider.Firewall, 0, len(resp.Firewalls))
+	for _, fw := range resp.Firewalls {
+		out = append(out, &provider.Firewall{ID: strconv.FormatInt(fw.ID, 10), Name: fw.Name})
+	}
+	return out, nil
 }
 
 // defaultFirewallRules returns the standard nvoi firewall rules.

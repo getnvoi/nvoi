@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/getnvoi/nvoi/internal/core"
+	"github.com/getnvoi/nvoi/internal/provider"
 )
 
 var locationToZone = map[string]string{
@@ -61,6 +62,23 @@ func (c *Client) ensureNetwork(ctx context.Context, name, location string, label
 		return "", fmt.Errorf("create network: %w", err)
 	}
 	return strconv.FormatInt(createResp.Network.ID, 10), nil
+}
+
+func (c *Client) ListAllNetworks(ctx context.Context) ([]*provider.Network, error) {
+	var resp struct {
+		Networks []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"networks"`
+	}
+	if err := c.api.Do(ctx, "GET", "/networks?per_page=50", nil, &resp); err != nil {
+		return nil, fmt.Errorf("list networks: %w", err)
+	}
+	out := make([]*provider.Network, 0, len(resp.Networks))
+	for _, n := range resp.Networks {
+		out = append(out, &provider.Network{ID: strconv.FormatInt(n.ID, 10), Name: n.Name})
+	}
+	return out, nil
 }
 
 func (c *Client) deleteNetwork(ctx context.Context, name string) error {
