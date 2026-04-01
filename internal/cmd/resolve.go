@@ -19,7 +19,7 @@ func resolveAppEnv(cmd *cobra.Command) (appName, env string, err error) {
 	if appName == "" {
 		appName = os.Getenv("NVOI_APP_NAME")
 	}
-	env, _ = cmd.Flags().GetString("env")
+	env, _ = cmd.Flags().GetString("environment")
 	if env == "" {
 		env = os.Getenv("NVOI_ENV")
 	}
@@ -242,5 +242,5 @@ func addStorageProviderFlags(cmd *cobra.Command) {
 // addAppFlags adds --app-name and --env to a command.
 func addAppFlags(cmd *cobra.Command) {
 	cmd.Flags().String("app-name", "", "application name (env: NVOI_APP_NAME)")
-	cmd.Flags().String("env", "", "environment (env: NVOI_ENV)")
+	cmd.Flags().String("environment", "", "environment (env: NVOI_ENV)")
 }

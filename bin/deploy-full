@@ -11,7 +11,7 @@ echo "==> deploying rails (production) — fully explicit"
 
 bin/cli instance set master \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --compute-type cx23 \
@@ -19,7 +19,7 @@ bin/cli instance set master \
 
 bin/cli instance set worker-1 \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --compute-type cx33 \
@@ -28,7 +28,7 @@ bin/cli instance set worker-1 \
 
 bin/cli volume set pgdata \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --size 30 \
@@ -36,7 +36,7 @@ bin/cli volume set pgdata \
 
 bin/cli volume set meili-data \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --size 20 \
@@ -46,7 +46,7 @@ bin/cli volume set meili-data \
 
 bin/cli build \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --build-provider daytona \
@@ -57,7 +57,7 @@ bin/cli build \
 
 WEB_IMAGE=$(bin/cli build latest web \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN)
 
@@ -67,13 +67,13 @@ echo "image: $WEB_IMAGE"
 
 bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY" \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
 
 bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD" \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
 
@@ -81,7 +81,7 @@ bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD" \
 
 bin/cli service set db \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --image postgres:17 \
@@ -92,7 +92,7 @@ bin/cli service set db \
 
 bin/cli service set meilisearch \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --image getmeili/meilisearch:latest \
@@ -100,7 +100,7 @@ bin/cli service set meilisearch \
 
 bin/cli service set web \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --image "$WEB_IMAGE" \
@@ -117,7 +117,7 @@ bin/cli service set web \
 
 bin/cli service set jobs \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN \
   --image "$WEB_IMAGE" \
@@ -134,7 +134,7 @@ bin/cli service set jobs \
 
 bin/cli storage set assets \
   --app-name rails \
-  --env production \
+  --environment production \
   --storage-provider cloudflare \
   --bucket nvoi-dummy-rails-assets \
   --cors
@@ -143,7 +143,7 @@ bin/cli storage set assets \
 
 bin/cli dns set web final.nvoi.to \
   --app-name rails \
-  --env production \
+  --environment production \
   --dns-provider cloudflare \
   --zone nvoi.to
 
@@ -151,13 +151,13 @@ bin/cli dns set web final.nvoi.to \
 
 bin/cli apply \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
 
 bin/cli show \
   --app-name rails \
-  --env production \
+  --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
 

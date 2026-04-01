@@ -80,7 +80,7 @@ export NVOI_ENV=production
 # → nvoi-dummy-rails-production-master, nvoi-dummy-rails-production-fw, ...
 
 # Via flags (overrides env vars)
-nvoi instance list --app-name dummy-rails --env staging
+nvoi instance list --app-name dummy-rails --environment staging
 # → nvoi-dummy-rails-staging-master, nvoi-dummy-rails-staging-fw, ...
 ```
 
@@ -93,7 +93,7 @@ Every flag has an env var fallback. With env vars set, commands need zero provid
 ```bash
 # ── Flag → env var resolution ──────────────────────────────────────────────────
 # --app-name         → NVOI_APP_NAME
-# --env              → NVOI_ENV
+# --environment      → NVOI_ENV
 # --compute-provider → COMPUTE_PROVIDER
 # --build-provider   → BUILD_PROVIDER
 # --dns-provider     → DNS_PROVIDER
@@ -156,7 +156,7 @@ nvoi destroy [--yes]
 
 # ── Fully explicit (no env vars) ──────────────────────────────────────────────
 nvoi instance set master --compute-provider hetzner --compute-credentials HETZNER_TOKEN=xxx \
-  --compute-type cax11 --compute-region fsn1 --app-name rails --env production
+  --compute-type cax11 --compute-region fsn1 --app-name rails --environment production
 ```
 
 See `bin/deploy` for the env-var path (compose injects everything) and `bin/deploy-full` for the full inline flags path.
