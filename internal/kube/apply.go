@@ -196,6 +196,22 @@ func LabelNode(ctx context.Context, masterIP string, sshKey []byte, nodeName, ro
 	return nil
 }
 
+// GetServicePort returns the first port of a k8s Service, or error if not found.
+func GetServicePort(ctx context.Context, ssh core.SSHClient, ns, name string) (int, error) {
+	cmd := kubectl(ns, fmt.Sprintf("get service %s -o jsonpath='{.spec.ports[0].port}' 2>/dev/null", name))
+	out, err := ssh.Run(ctx, cmd)
+	if err != nil {
+		return 0, fmt.Errorf("service %q not found", name)
+	}
+	raw := strings.TrimSpace(string(out))
+	raw = strings.Trim(raw, "'")
+	var port int
+	if _, err := fmt.Sscanf(raw, "%d", &port); err != nil || port == 0 {
+		return 0, fmt.Errorf("service %q has no port", name)
+	}
+	return port, nil
+}
+
 // EnsureNamespace creates a namespace if it doesn't exist.
 func EnsureNamespace(ctx context.Context, ssh core.SSHClient, ns string) error {
 	cmd := fmt.Sprintf("KUBECONFIG=%s kubectl create namespace %s --dry-run=client -o yaml | KUBECONFIG=%s kubectl apply -f -",

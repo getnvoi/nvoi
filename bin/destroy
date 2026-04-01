@@ -13,7 +13,7 @@ echo "==> destroying $NVOI_APP_NAME ($NVOI_ENV)"
 
 # ── Teardown (reverse order of bin/deploy) ──────────────────────────────────
 
-# bin/cli dns delete web final.nvoi.to --dns-provider cloudflare --zone nvoi.to -y
+bin/cli dns delete web final.nvoi.to --zone nvoi.to -y
 bin/cli storage empty assets -y
 bin/cli storage delete assets -y
 bin/cli secret delete RAILS_MASTER_KEY

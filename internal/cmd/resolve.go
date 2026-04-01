@@ -144,6 +144,23 @@ func resolveDNSProvider(cmd *cobra.Command) (string, error) {
 	return name, nil
 }
 
+// resolveDNSCredentials resolves DNS provider credentials from env vars + --zone flag.
+func resolveDNSCredentials(providerName, zone string) (map[string]string, error) {
+	schema, err := provider.GetDNSSchema(providerName)
+	if err != nil {
+		return nil, err
+	}
+
+	creds := make(map[string]string, len(schema.Fields)+1)
+	for _, f := range schema.Fields {
+		if v := os.Getenv(f.EnvVar); v != "" {
+			creds[f.Key] = v
+		}
+	}
+	creds["zone"] = zone
+	return creds, nil
+}
+
 // ── Storage provider ─────────────────────────────────────────────────────────
 
 // resolveStorageProvider reads --storage-provider flag → STORAGE_PROVIDER env var.

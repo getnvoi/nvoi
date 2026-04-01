@@ -79,13 +79,9 @@ bin/cli service set jobs \
   --secret POSTGRES_PASSWORD \
   --secret RAILS_MASTER_KEY
 
-# # ── DNS ─────────────────────────────────────────────────────────────────────────
+# ── DNS ──────────────────────────────────────────────────────────────────────────
 
-# bin/cli dns set web final.nvoi.to --dns-provider cloudflare --zone nvoi.to
+bin/cli dns set web final.nvoi.to --zone nvoi.to
 
-# # ── Deploy ──────────────────────────────────────────────────────────────────────
-
-# bin/cli show
-
-# echo ""
-# echo "==> done. https://final.nvoi.to"
+echo ""
+echo "==> done. https://final.nvoi.to"

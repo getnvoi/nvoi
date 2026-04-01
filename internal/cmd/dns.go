@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/getnvoi/nvoi/internal/app"
+	_ "github.com/getnvoi/nvoi/internal/provider/cloudflare" // register cloudflare DNS
 	"github.com/spf13/cobra"
 )
 
@@ -20,37 +22,60 @@ func newDNSCmd() *cobra.Command {
 func newDNSSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set [service] [domain...]",
-		Short: "Create or update DNS A records pointing to master",
-		Args:  cobra.MinimumNArgs(2),
+		Short: "Create or update DNS A records pointing to service server",
+		Long: `Points domains at the server running the service.
+
+Examples:
+  nvoi dns set web myapp.com --dns-provider cloudflare --zone myapp.com
+  nvoi dns set web api.myapp.com www.myapp.com --zone myapp.com`,
+		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := args[0]
 			domains := args[1:]
 			zone, _ := cmd.Flags().GetString("zone")
 
-			_, _, err := resolveAppEnv(cmd)
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			providerName, err := resolveDNSProvider(cmd)
+			computeProvider, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			computeCreds, err := resolveComputeCredentials(cmd, computeProvider)
+			if err != nil {
+				return err
+			}
+			dnsProvider, err := resolveDNSProvider(cmd)
+			if err != nil {
+				return err
+			}
+			dnsCreds, err := resolveDNSCredentials(dnsProvider, zone)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
 			if err != nil {
 				return err
 			}
 
-			_ = service
-			_ = domains
-			_ = providerName
-			_ = zone
-
-			// TODO Phase 3:
-			// 1. Resolve compute provider → get master server by name → get IP (provider API)
-			// 2. Resolve DNS provider from --dns-provider flag
-			// 3. For each domain: EnsureARecord(domain, masterIP) — DNS API
-			return fmt.Errorf("not implemented")
+			return app.DNSSet(cmd.Context(), app.DNSSetRequest{
+				AppName:         appName,
+				Env:             env,
+				ComputeProvider: computeProvider,
+				ComputeCreds:    computeCreds,
+				DNSProvider:     dnsProvider,
+				DNSCreds:        dnsCreds,
+				SSHKey:          sshKey,
+				Service:         service,
+				Domains:         domains,
+			})
 		},
 	}
+	addComputeProviderFlags(cmd)
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().String("zone", "", "DNS zone (e.g. nvoi.to)")
+	cmd.Flags().String("zone", "", "DNS zone (e.g. myapp.com)")
 	_ = cmd.MarkFlagRequired("zone")
 	return cmd
 }
@@ -64,26 +89,61 @@ func newDNSDeleteCmd() *cobra.Command {
 			service := args[0]
 			domains := args[1:]
 			zone, _ := cmd.Flags().GetString("zone")
+			yes, _ := cmd.Flags().GetBool("yes")
 
-			providerName, err := resolveDNSProvider(cmd)
+			if !yes {
+				fmt.Printf("Delete DNS records for %v? [y/N] ", domains)
+				var confirm string
+				fmt.Scanln(&confirm)
+				if confirm != "y" && confirm != "yes" {
+					fmt.Println("aborted.")
+					return nil
+				}
+			}
+
+			appName, env, err := resolveAppEnv(cmd)
+			if err != nil {
+				return err
+			}
+			computeProvider, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			computeCreds, err := resolveComputeCredentials(cmd, computeProvider)
+			if err != nil {
+				return err
+			}
+			dnsProvider, err := resolveDNSProvider(cmd)
+			if err != nil {
+				return err
+			}
+			dnsCreds, err := resolveDNSCredentials(dnsProvider, zone)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
 			if err != nil {
 				return err
 			}
 
-			_ = service
-			_ = domains
-			_ = providerName
-			_ = zone
-
-			// TODO Phase 4:
-			// 1. Resolve DNS provider from --dns-provider/--zone flags
-			// 2. Delete A records (DNS API)
-			return fmt.Errorf("not implemented")
+			return app.DNSDelete(cmd.Context(), app.DNSDeleteRequest{
+				AppName:         appName,
+				Env:             env,
+				ComputeProvider: computeProvider,
+				ComputeCreds:    computeCreds,
+				DNSProvider:     dnsProvider,
+				DNSCreds:        dnsCreds,
+				SSHKey:          sshKey,
+				Service:         service,
+				Domains:         domains,
+			})
 		},
 	}
+	addComputeProviderFlags(cmd)
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().String("zone", "", "DNS zone (e.g. nvoi.to)")
+	cmd.Flags().String("zone", "", "DNS zone (e.g. myapp.com)")
+	cmd.Flags().BoolP("yes", "y", false, "skip confirmation")
 	_ = cmd.MarkFlagRequired("zone")
 	return cmd
 }
@@ -91,28 +151,42 @@ func newDNSDeleteCmd() *cobra.Command {
 func newDNSListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List DNS records",
+		Short: "List DNS records in zone",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			zone, _ := cmd.Flags().GetString("zone")
 
-			providerName, err := resolveDNSProvider(cmd)
+			dnsProvider, err := resolveDNSProvider(cmd)
+			if err != nil {
+				return err
+			}
+			dnsCreds, err := resolveDNSCredentials(dnsProvider, zone)
 			if err != nil {
 				return err
 			}
 
-			_ = providerName
-			_ = zone
+			records, err := app.DNSList(cmd.Context(), app.DNSListRequest{
+				DNSProvider: dnsProvider,
+				DNSCreds:    dnsCreds,
+			})
+			if err != nil {
+				return err
+			}
 
-			// TODO Phase 3:
-			// 1. Resolve DNS provider from --dns-provider/--zone flags
-			// 2. Query DNS API: list A records in zone
-			// 3. Print table (domain, type, IP)
-			return fmt.Errorf("not implemented")
+			if len(records) == 0 {
+				fmt.Println("no records")
+				return nil
+			}
+
+			for _, r := range records {
+				fmt.Printf("%-4s %-40s %s\n", r.Type, r.Domain, r.IP)
+			}
+			return nil
 		},
 	}
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().String("zone", "", "DNS zone (e.g. nvoi.to)")
+	cmd.Flags().String("zone", "", "DNS zone (e.g. myapp.com)")
 	_ = cmd.MarkFlagRequired("zone")
 	return cmd
 }
