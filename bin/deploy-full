@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Explicit-flag path ────────────────────────────────────────────────────────
-# Zero env vars. Every command is fully self-contained.
+# ── Full inline flags path ────────────────────────────────────────────────────
+# Every command declares all options inline.
 # Showcases the complete CLI interface.
 
 echo "==> deploying rails (production) — fully explicit"

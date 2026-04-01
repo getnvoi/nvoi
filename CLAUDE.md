@@ -154,7 +154,7 @@ nvoi instance set master --compute-provider hetzner --compute-credentials HETZNE
   --compute-type cax11 --compute-region fsn1 --app-name rails --env production
 ```
 
-See `bin/deploy` for the env-var path (compose injects everything) and `bin/deploy-full` for the explicit-flag path (zero env vars).
+See `bin/deploy` for the env-var path (compose injects everything) and `bin/deploy-full` for the full inline flags path.
 
 ## Architecture
 
