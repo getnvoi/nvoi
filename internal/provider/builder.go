@@ -18,6 +18,8 @@ type BuildRequest struct {
 	Source      string    // local path (./path) or remote repo (org/repo, https://..., git@...)
 	Branch      string    // git branch (remote only, default "main")
 	Platform    string    // "linux/amd64" or "linux/arm64" (auto-detected if empty)
+	GitUsername  string    // HTTPS clone auth username (empty defaults to "x-access-token")
+	GitToken    string    // HTTPS clone auth token (PAT, gh token, etc.)
 	RegistrySSH SSHAccess // SSH tunnel to reach the private registry
 	Stdout      io.Writer
 	Stderr      io.Writer

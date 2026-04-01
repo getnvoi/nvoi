@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/getnvoi/nvoi/internal/provider"
 	"github.com/spf13/cobra"
@@ -58,19 +60,71 @@ func resolveSSHKey() ([]byte, error) {
 	return key, nil
 }
 
-// resolveBuildCredentials resolves build provider credentials from flags → env vars.
+// resolveBuildCredentials resolves build provider credentials from --builder-credentials flag → env vars.
+// Flag values take priority over env vars.
 func resolveBuildCredentials(cmd *cobra.Command, buildProviderName string) (map[string]string, error) {
 	schema, err := provider.GetBuildSchema(buildProviderName)
 	if err != nil {
 		return nil, err
 	}
+
+	// Parse --builder-credentials flag (key=value pairs)
+	flagCreds := make(map[string]string)
+	if cmd.Flags().Changed("builder-credentials") {
+		pairs, _ := cmd.Flags().GetStringArray("builder-credentials")
+		for _, pair := range pairs {
+			k, v, ok := strings.Cut(pair, "=")
+			if !ok {
+				return nil, fmt.Errorf("invalid builder credential %q — expected key=value", pair)
+			}
+			flagCreds[k] = v
+		}
+	}
+
 	creds := make(map[string]string, len(schema.Fields))
 	for _, f := range schema.Fields {
+		// 1. Flag takes priority
+		if v, ok := flagCreds[f.Key]; ok {
+			creds[f.Key] = v
+			continue
+		}
+		// 2. Env var fallback
 		if v := os.Getenv(f.EnvVar); v != "" {
 			creds[f.Key] = v
 		}
 	}
 	return creds, nil
+}
+
+// resolveGitAuth resolves git credentials for cloning remote repos.
+// Resolution order: signed URL (caller checks) → gh auth token → --git-token flag → GITHUB_TOKEN env.
+// Returns (username, token). Both empty if nothing found — app/ enforces when needed.
+func resolveGitAuth(cmd *cobra.Command) (string, string) {
+	// 1. Signed URL — handled by app/ (it parses the source value)
+
+	// 2. gh auth token
+	out, err := exec.Command("gh", "auth", "token").Output()
+	if err == nil {
+		token := strings.TrimSpace(string(out))
+		if token != "" {
+			return "x-access-token", token
+		}
+	}
+
+	// 3. --git-token flag
+	if cmd.Flags().Changed("git-token") {
+		token, _ := cmd.Flags().GetString("git-token")
+		if token != "" {
+			return "x-access-token", token
+		}
+	}
+
+	// 4. GITHUB_TOKEN env var
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return "x-access-token", token
+	}
+
+	return "", ""
 }
 
 // addProviderFlags adds --provider and credential flags for a compute provider.

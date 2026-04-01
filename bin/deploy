@@ -18,8 +18,8 @@ echo "==> deploying $NVOI_APP_NAME ($NVOI_ENV)"
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/cli compute set master --provider hetzner --type cax11 --region fsn1
-bin/cli compute set worker-1 --provider hetzner --type cax21 --region fsn1 --worker
+bin/cli compute set master --provider hetzner --type cx23 --region fsn1
+bin/cli compute set worker-1 --provider hetzner --type cx33 --region fsn1 --worker
 bin/cli volume set pgdata --provider hetzner --size 30 --server master
 bin/cli volume set meili-data --provider hetzner --size 20 --server master
 
@@ -28,40 +28,42 @@ bin/cli volume set meili-data --provider hetzner --size 20 --server master
 bin/cli build --provider hetzner --builder daytona --source benbonnet/dummy-rails --name web
 WEB_IMAGE=$(bin/cli build latest web --provider hetzner)
 
+echo $WEB_IMAGE
+
 # ── Services ────────────────────────────────────────────────────────────────────
 
-bin/cli service set db --provider hetzner \
-  --image postgres:17 \
-  --volume pgdata:/var/lib/postgresql/data \
-  --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
+# bin/cli service set db --provider hetzner \
+#   --image postgres:17 \
+#   --volume pgdata:/var/lib/postgresql/data \
+#   --env POSTGRES_USER="$POSTGRES_USER" \
+#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+#   --env POSTGRES_DB="$POSTGRES_DB"
 
-bin/cli service set meilisearch --provider hetzner \
-  --image getmeili/meilisearch:latest \
-  --volume meili-data:/meili_data
+# bin/cli service set meilisearch --provider hetzner \
+#   --image getmeili/meilisearch:latest \
+#   --volume meili-data:/meili_data
 
-bin/cli service set web --provider hetzner \
-  --image "$WEB_IMAGE" \
-  --port 80 \
-  --replicas 2 \
-  --health-path /up \
-  --server worker-1 \
-  --env RAILS_ENV=production \
-  --env POSTGRES_HOST=db \
-  --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
+# bin/cli service set web --provider hetzner \
+#   --image "$WEB_IMAGE" \
+#   --port 80 \
+#   --replicas 2 \
+#   --health-path /up \
+#   --server worker-1 \
+#   --env RAILS_ENV=production \
+#   --env POSTGRES_HOST=db \
+#   --env POSTGRES_USER="$POSTGRES_USER" \
+#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+#   --env POSTGRES_DB="$POSTGRES_DB"
 
-bin/cli service set jobs --provider hetzner \
-  --image "$WEB_IMAGE" \
-  --command "bin/jobs" \
-  --server worker-1 \
-  --env RAILS_ENV=production \
-  --env POSTGRES_HOST=db \
-  --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-  --env POSTGRES_DB="$POSTGRES_DB"
+# bin/cli service set jobs --provider hetzner \
+#   --image "$WEB_IMAGE" \
+#   --command "bin/jobs" \
+#   --server worker-1 \
+#   --env RAILS_ENV=production \
+#   --env POSTGRES_HOST=db \
+#   --env POSTGRES_USER="$POSTGRES_USER" \
+#   --env POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+#   --env POSTGRES_DB="$POSTGRES_DB"
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
