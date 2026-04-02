@@ -65,7 +65,6 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		Labels:       labels,
 	})
 	if err != nil {
-		out.Error(err)
 		return nil, err
 	}
 
@@ -73,14 +72,12 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	sshCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	if err := infra.WaitSSH(sshCtx, srv.IPv4+":22", req.SSHKey); err != nil {
-		out.Error(err)
 		return nil, fmt.Errorf("SSH not reachable on %s: %w", srv.IPv4, err)
 	}
 	out.Success("SSH ready")
 
 	out.Progress("ensuring Docker")
 	if err := infra.EnsureDocker(ctx, srv.IPv4, req.SSHKey); err != nil {
-		out.Error(err)
 		return nil, fmt.Errorf("docker on %s: %w", srv.IPv4, err)
 	}
 	out.Success("Docker ready")
@@ -94,7 +91,6 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		masterIP = master.IPv4
 		out.Progress(fmt.Sprintf("joining cluster via master %s", master.IPv4))
 		if err := infra.JoinK3sWorker(ctx, srv.IPv4, srv.PrivateIP, master.IPv4, master.PrivateIP, req.SSHKey); err != nil {
-			out.Error(err)
 			return nil, fmt.Errorf("k3s worker join: %w", err)
 		}
 		out.Success("joined cluster")
@@ -102,19 +98,16 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		masterIP = srv.IPv4
 		out.Progress("installing k3s master")
 		if err := infra.InstallK3sMaster(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey); err != nil {
-			out.Error(err)
 			return nil, fmt.Errorf("k3s master: %w", err)
 		}
 		out.Success("k3s master ready")
 
 		if err := infra.EnsureRegistry(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey); err != nil {
-			out.Error(err)
 			return nil, fmt.Errorf("registry: %w", err)
 		}
 	}
 
 	if err := kube.LabelNode(ctx, masterIP, req.SSHKey, names.Server(req.Name), req.Name); err != nil {
-		out.Error(err)
 		return nil, fmt.Errorf("label node: %w", err)
 	}
 	out.Success(fmt.Sprintf("node labeled %s=%s", core.LabelNvoiRole, req.Name))
@@ -147,7 +140,6 @@ func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
 		NetworkName:  names.Network(),
 		Labels:       names.Labels(),
 	}); err != nil {
-		out.Error(err)
 		return err
 	}
 	out.Success("deleted")

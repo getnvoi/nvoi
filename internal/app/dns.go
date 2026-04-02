@@ -39,7 +39,6 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	for _, domain := range req.Domains {
 		out.Progress(fmt.Sprintf("ensuring %s → %s", domain, ip))
 		if err := dns.EnsureARecord(ctx, domain, ip); err != nil {
-			out.Error(err)
 			return fmt.Errorf("dns set %s: %w", domain, err)
 		}
 		out.Success(domain)
@@ -74,13 +73,11 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 		return fmt.Errorf("generate caddy manifest: %w", err)
 	}
 	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
-		out.Error(err)
 		return fmt.Errorf("apply caddy: %w", err)
 	}
 
 	out.Progress("waiting for caddy rollout")
 	if err := kube.WaitRollout(ctx, ssh, ns, names.KubeCaddy(), "deployment", out); err != nil {
-		out.Error(err)
 		return fmt.Errorf("caddy rollout: %w", err)
 	}
 	out.Success("caddy ready")
@@ -123,7 +120,6 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	for _, domain := range req.Domains {
 		out.Progress(fmt.Sprintf("deleting %s", domain))
 		if err := dns.DeleteARecord(ctx, domain); err != nil {
-			out.Error(err)
 			return fmt.Errorf("dns delete %s: %w", domain, err)
 		}
 		out.Success(domain)

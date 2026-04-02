@@ -45,7 +45,6 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 
 	out.Progress(fmt.Sprintf("ensuring bucket %s", bucketName))
 	if err := bucket.EnsureBucket(ctx, bucketName); err != nil {
-		out.Error(err)
 		return err
 	}
 	out.Success(fmt.Sprintf("bucket %s", bucketName))
@@ -53,7 +52,6 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 	if req.CORS {
 		out.Progress("setting CORS")
 		if err := bucket.SetCORS(ctx, bucketName, []string{"*"}, nil); err != nil {
-			out.Error(err)
 			return fmt.Errorf("set cors: %w", err)
 		}
 		out.Success("CORS enabled")
@@ -62,7 +60,6 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 	if req.ExpireDays > 0 {
 		out.Progress(fmt.Sprintf("setting lifecycle (expire: %d days)", req.ExpireDays))
 		if err := bucket.SetLifecycle(ctx, bucketName, req.ExpireDays); err != nil {
-			out.Error(err)
 			return fmt.Errorf("set lifecycle: %w", err)
 		}
 		out.Success("lifecycle set")
@@ -92,7 +89,6 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 	out.Progress("storing secrets")
 	for key, value := range secrets {
 		if err := kube.UpsertSecretKey(ctx, ssh, ns, secretName, key, value); err != nil {
-			out.Error(err)
 			return fmt.Errorf("store %s: %w", key, err)
 		}
 	}
@@ -130,7 +126,6 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 		bucketName := names.Bucket(req.Name)
 		out.Progress(fmt.Sprintf("deleting bucket %s", bucketName))
 		if err := bucket.DeleteBucket(ctx, bucketName); err != nil {
-			out.Error(err)
 			return fmt.Errorf("delete bucket: %w", err)
 		}
 		out.Success("bucket deleted")
@@ -182,7 +177,6 @@ func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
 	out.Command("storage", "empty", req.Name)
 	out.Progress(fmt.Sprintf("emptying bucket %s", bucketName))
 	if err := bucket.EmptyBucket(ctx, bucketName); err != nil {
-		out.Error(err)
 		return fmt.Errorf("empty bucket: %w", err)
 	}
 	out.Success("bucket emptied")
