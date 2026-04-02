@@ -61,7 +61,7 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 		return nil, fmt.Errorf("server %s not found", serverName)
 	}
 
-	if err := infra.MountVolume(ctx, vol, serverIP, mountPath, req.SSHKey); err != nil {
+	if err := infra.MountVolume(ctx, vol, serverIP, mountPath, req.SSHKey, out.Writer()); err != nil {
 		return nil, fmt.Errorf("mount: %w", err)
 	}
 
@@ -93,7 +93,7 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 	servers, err := prov.ListServers(ctx, names.Labels())
 	if err == nil {
 		for _, s := range servers {
-			if err := infra.UnmountVolume(ctx, s.IPv4, mountPath, req.SSHKey); err != nil {
+			if err := infra.UnmountVolume(ctx, s.IPv4, mountPath, req.SSHKey, out.Writer()); err != nil {
 				out.Warning(fmt.Sprintf("unmount on %s: %s", s.Name, err))
 			}
 		}
