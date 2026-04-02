@@ -51,6 +51,7 @@ func newVolumeSetCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 				Name:   args[0],
 				Size:   size,
@@ -109,6 +110,7 @@ func newVolumeDeleteCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 				Name: args[0],
 			})
@@ -144,6 +146,7 @@ func newVolumeListCmd() *cobra.Command {
 					Env:         env,
 					Provider:    providerName,
 					Credentials: creds,
+					Output:      NewTUIOutput(),
 				},
 			})
 			if err != nil {

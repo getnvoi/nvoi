@@ -14,13 +14,14 @@ type StorageSetRequest struct {
 	Cluster
 	StorageProvider string
 	StorageCreds    map[string]string
-	Name            string // logical name (e.g. "assets")
-	Bucket          string // explicit bucket name override (empty = derived)
+	Name            string
+	Bucket          string
 	CORS            bool
 	ExpireDays      int
 }
 
 func StorageSet(ctx context.Context, req StorageSetRequest) error {
+	out := req.Log()
 	names, err := req.Names()
 	if err != nil {
 		return err
@@ -36,35 +37,37 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 		bucketName = names.Bucket(req.Name)
 	}
 
-	fmt.Printf("==> storage set %s\n", req.Name)
+	out.Command("storage", "set", req.Name)
 
 	if err := bucket.ValidateCredentials(ctx); err != nil {
 		return err
 	}
 
-	fmt.Printf("  ensuring bucket %s...\n", bucketName)
+	out.Progress(fmt.Sprintf("ensuring bucket %s", bucketName))
 	if err := bucket.EnsureBucket(ctx, bucketName); err != nil {
+		out.Error(err)
 		return err
 	}
-	fmt.Printf("  ✓ bucket %s\n", bucketName)
+	out.Success(fmt.Sprintf("bucket %s", bucketName))
 
 	if req.CORS {
-		fmt.Printf("  setting CORS...\n")
+		out.Progress("setting CORS")
 		if err := bucket.SetCORS(ctx, bucketName, []string{"*"}, nil); err != nil {
+			out.Error(err)
 			return fmt.Errorf("set cors: %w", err)
 		}
-		fmt.Printf("  ✓ CORS enabled\n")
+		out.Success("CORS enabled")
 	}
 
 	if req.ExpireDays > 0 {
-		fmt.Printf("  setting lifecycle (expire: %d days)...\n", req.ExpireDays)
+		out.Progress(fmt.Sprintf("setting lifecycle (expire: %d days)", req.ExpireDays))
 		if err := bucket.SetLifecycle(ctx, bucketName, req.ExpireDays); err != nil {
+			out.Error(err)
 			return fmt.Errorf("set lifecycle: %w", err)
 		}
-		fmt.Printf("  ✓ lifecycle set\n")
+		out.Success("lifecycle set")
 	}
 
-	// Store credentials as k8s secrets
 	creds := bucket.Credentials()
 	ssh, names2, err := req.Cluster.SSH(ctx)
 	if err != nil {
@@ -86,18 +89,19 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 		prefix + "_SECRET_ACCESS_KEY": creds.SecretAccessKey,
 	}
 
-	fmt.Printf("  storing secrets...\n")
+	out.Progress("storing secrets")
 	for key, value := range secrets {
 		if err := kube.UpsertSecretKey(ctx, ssh, ns, secretName, key, value); err != nil {
+			out.Error(err)
 			return fmt.Errorf("store %s: %w", key, err)
 		}
 	}
 
-	fmt.Printf("  ✓ secrets stored:\n")
+	out.Success("secrets stored")
 	for key := range secrets {
-		fmt.Printf("    %s\n", key)
+		out.Info(key)
 	}
-	fmt.Printf("\n  Use with service set:\n    --storage %s\n", req.Name)
+	out.Info(fmt.Sprintf("use with service set: --storage %s", req.Name))
 
 	return nil
 }
@@ -110,10 +114,13 @@ type StorageDeleteRequest struct {
 }
 
 func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
+	out := req.Log()
 	names, err := req.Names()
 	if err != nil {
 		return err
 	}
+
+	out.Command("storage", "delete", req.Name)
 
 	if req.StorageProvider != "" {
 		bucket, err := provider.ResolveBucket(req.StorageProvider, req.StorageCreds)
@@ -121,14 +128,12 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 			return err
 		}
 		bucketName := names.Bucket(req.Name)
-		fmt.Printf("==> storage delete %s\n", req.Name)
-		fmt.Printf("  deleting bucket %s...\n", bucketName)
+		out.Progress(fmt.Sprintf("deleting bucket %s", bucketName))
 		if err := bucket.DeleteBucket(ctx, bucketName); err != nil {
+			out.Error(err)
 			return fmt.Errorf("delete bucket: %w", err)
 		}
-		fmt.Printf("  ✓ bucket deleted\n")
-	} else {
-		fmt.Printf("==> storage delete %s\n", req.Name)
+		out.Success("bucket deleted")
 	}
 
 	ssh, names2, err := req.Cluster.SSH(ctx)
@@ -150,7 +155,7 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 	for _, key := range keys {
 		_ = kube.DeleteSecretKey(ctx, ssh, ns, secretName, key)
 	}
-	fmt.Printf("  ✓ secrets removed\n")
+	out.Success("secrets removed")
 	return nil
 }
 
@@ -162,6 +167,7 @@ type StorageEmptyRequest struct {
 }
 
 func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
+	out := req.Log()
 	names, err := req.Names()
 	if err != nil {
 		return err
@@ -173,12 +179,13 @@ func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
 	}
 
 	bucketName := names.Bucket(req.Name)
-	fmt.Printf("==> storage empty %s\n", req.Name)
-	fmt.Printf("  emptying bucket %s...\n", bucketName)
+	out.Command("storage", "empty", req.Name)
+	out.Progress(fmt.Sprintf("emptying bucket %s", bucketName))
 	if err := bucket.EmptyBucket(ctx, bucketName); err != nil {
+		out.Error(err)
 		return fmt.Errorf("empty bucket: %w", err)
 	}
-	fmt.Printf("  ✓ bucket emptied\n")
+	out.Success("bucket emptied")
 	return nil
 }
 
@@ -187,8 +194,8 @@ type StorageListRequest struct {
 }
 
 type StorageItem struct {
-	Name   string // logical name (e.g. "assets")
-	Bucket string // cloud bucket name
+	Name   string
+	Bucket string
 }
 
 func StorageList(ctx context.Context, req StorageListRequest) ([]StorageItem, error) {

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/kube"
 )
@@ -14,6 +13,9 @@ type SecretSetRequest struct {
 }
 
 func SecretSet(ctx context.Context, req SecretSetRequest) error {
+	out := req.Log()
+	out.Command("secret", "set", req.Key)
+
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return err
@@ -25,11 +27,11 @@ func SecretSet(ctx context.Context, req SecretSetRequest) error {
 		return err
 	}
 
-	fmt.Printf("==> secret set %s\n", req.Key)
 	if err := kube.UpsertSecretKey(ctx, ssh, ns, names.KubeSecrets(), req.Key, req.Value); err != nil {
+		out.Error(err)
 		return err
 	}
-	fmt.Printf("  ✓ %s stored\n", req.Key)
+	out.Success(req.Key + " stored")
 	return nil
 }
 
@@ -39,18 +41,20 @@ type SecretDeleteRequest struct {
 }
 
 func SecretDelete(ctx context.Context, req SecretDeleteRequest) error {
+	out := req.Log()
+	out.Command("secret", "delete", req.Key)
+
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return err
 	}
 	defer ssh.Close()
 
-	ns := names.KubeNamespace()
-	fmt.Printf("==> secret delete %s\n", req.Key)
-	if err := kube.DeleteSecretKey(ctx, ssh, ns, names.KubeSecrets(), req.Key); err != nil {
+	if err := kube.DeleteSecretKey(ctx, ssh, names.KubeNamespace(), names.KubeSecrets(), req.Key); err != nil {
+		out.Error(err)
 		return err
 	}
-	fmt.Printf("  ✓ %s removed\n", req.Key)
+	out.Success(req.Key + " removed")
 	return nil
 }
 

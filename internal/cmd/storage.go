@@ -76,6 +76,7 @@ Then reference on service set:
 					Provider:    computeProvider,
 					Credentials: computeCreds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 				StorageProvider: storageProvider,
 				StorageCreds:    storageCreds,
@@ -130,6 +131,7 @@ func newStorageEmptyCmd() *cobra.Command {
 				Cluster: app.Cluster{
 					AppName: appName,
 					Env:     env,
+					Output:  NewTUIOutput(),
 				},
 				StorageProvider: storageProvider,
 				StorageCreds:    storageCreds,
@@ -199,6 +201,7 @@ Examples:
 					Provider:    computeProvider,
 					Credentials: computeCreds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 				StorageProvider: storageProvider,
 				StorageCreds:    storageCreds,
@@ -243,6 +246,7 @@ func newStorageListCmd() *cobra.Command {
 					Provider:    computeProvider,
 					Credentials: computeCreds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 			})
 			if err != nil {

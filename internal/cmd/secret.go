@@ -54,6 +54,7 @@ secrets by key name via --secret KEY on service set.
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 				Key:   args[0],
 				Value: args[1],
@@ -95,6 +96,7 @@ func newSecretDeleteCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 				Key: args[0],
 			})
@@ -134,6 +136,7 @@ func newSecretListCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 			})
 			if err != nil {
@@ -188,6 +191,7 @@ func newSecretRevealCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 				Key: args[0],
 			})

@@ -39,6 +39,7 @@ func newDescribeCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
+					Output:      NewTUIOutput(),
 				},
 			}
 
@@ -57,9 +58,6 @@ func newDescribeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			fmt.Println()
-			fmt.Println(titleStyle.Render(res.Namespace))
 
 			g := NewTableGroup()
 
@@ -105,6 +103,7 @@ func newDescribeCmd() *cobra.Command {
 			}
 
 			g.Print()
+			fmt.Println(dimStyle.Render(fmt.Sprintf("  retrieved from project '%s'", res.Namespace)))
 			fmt.Println(dimStyle.Render(fmt.Sprintf("  generated at %s", time.Now().Format("2006-01-02 15:04:05"))))
 			fmt.Println()
 			return nil

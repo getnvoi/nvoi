@@ -28,6 +28,8 @@ type ServiceSetRequest struct {
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
+	out := req.Log()
+
 	if req.Image == "" {
 		return fmt.Errorf("--image is required")
 	}
@@ -69,7 +71,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 				}
 			}
 			if !found {
-				return fmt.Errorf("volume %q not found — run 'volume set %s --provider ...' first", source, source)
+				return fmt.Errorf("volume %q not found — run 'volume set %s' first", source, source)
 			}
 		}
 	}
@@ -91,7 +93,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		}
 	}
 
-	// Validate secret references — every key must already exist in the cluster
+	// Validate secret references
 	secretName := names.KubeSecrets()
 	if len(req.Secrets) > 0 {
 		existing, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
@@ -127,7 +129,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		Managed:    managed,
 	}
 
-	fmt.Printf("==> service set %s\n", req.Name)
+	out.Command("service", "set", req.Name)
 
 	yaml, workloadKind, err := kube.GenerateYAML(spec, names, managedVolPaths)
 	if err != nil {
@@ -135,15 +137,17 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 	}
 
 	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
+		out.Error(err)
 		return err
 	}
-	fmt.Printf("  ✓ applied\n")
+	out.Success("applied")
 
-	fmt.Printf("  waiting for rollout...\n")
-	if err := kube.WaitRollout(ctx, ssh, ns, req.Name, workloadKind); err != nil {
+	out.Progress("waiting for rollout")
+	if err := kube.WaitRollout(ctx, ssh, ns, req.Name, workloadKind, out); err != nil {
+		out.Error(err)
 		return err
 	}
-	fmt.Printf("  ✓ %s ready\n", req.Name)
+	out.Success(req.Name + " ready")
 
 	return nil
 }
@@ -154,18 +158,19 @@ type ServiceDeleteRequest struct {
 }
 
 func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
+	out := req.Log()
+	out.Command("service", "delete", req.Name)
+
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return err
 	}
 	defer ssh.Close()
 
-	ns := names.KubeNamespace()
-	fmt.Printf("==> service delete %s\n", req.Name)
-	if err := kube.DeleteByName(ctx, ssh, ns, req.Name); err != nil {
+	if err := kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name); err != nil {
+		out.Error(err)
 		return err
 	}
-	fmt.Printf("  ✓ deleted\n")
+	out.Success("deleted")
 	return nil
 }
-

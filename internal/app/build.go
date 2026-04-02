@@ -95,7 +95,8 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 		return nil, fmt.Errorf("--architecture arm64 is not available with --builder daytona — Daytona sandboxes are amd64 only")
 	}
 
-	fmt.Printf("==> build %s (builder: %s, source: %s)\n", req.Name, req.Builder, source)
+	out := req.Log()
+	out.Command("build", "run", req.Name, "builder", req.Builder, "source", source)
 
 	result, err := builder.Build(ctx, provider.BuildRequest{
 		ServiceName: req.Name,
@@ -116,27 +117,27 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 		return nil, err
 	}
 
-	fmt.Printf("  ✓ %s\n", result.ImageRef)
+	out.Success(result.ImageRef)
 
 	// Prune old tags if --history is set
 	if req.History > 0 {
-		if err := pruneRegistryTags(ctx, master.IPv4, master.PrivateIP, req.SSHKey, req.Name, req.History); err != nil {
-			fmt.Printf("  warning: failed to prune old tags: %v\n", err)
+		if err := pruneRegistryTags(ctx, req.Cluster, master, req.Name, req.History); err != nil {
+			out.Warning(fmt.Sprintf("failed to prune old tags: %v", err))
 		}
 	}
 
 	return result, nil
 }
 
-// pruneRegistryTags keeps the N most recent tags and deletes the rest via the registry API.
-func pruneRegistryTags(ctx context.Context, masterIP, masterPrivateIP string, sshKey []byte, imageName string, keep int) error {
-	ssh, err := infra.ConnectSSH(ctx, masterIP+":22", core.DefaultUser, sshKey)
+func pruneRegistryTags(ctx context.Context, c Cluster, master *provider.Server, imageName string, keep int) error {
+	log := c.Log()
+	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, c.SSHKey)
 	if err != nil {
 		return err
 	}
 	defer ssh.Close()
 
-	registryAddr := core.RegistryAddr(masterPrivateIP)
+	registryAddr := core.RegistryAddr(master.PrivateIP)
 
 	out, err := ssh.Run(ctx, fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list", registryAddr, imageName))
 	if err != nil {
@@ -185,7 +186,7 @@ func pruneRegistryTags(ctx context.Context, masterIP, masterPrivateIP string, ss
 		if _, err := ssh.Run(ctx, deleteCmd); err != nil {
 			continue
 		}
-		fmt.Printf("  pruned %s:%s\n", imageName, tag)
+		log.Info(fmt.Sprintf("pruned %s:%s", imageName, tag))
 	}
 
 	ssh.Run(ctx, "docker exec nvoi-registry bin/registry garbage-collect /etc/docker/registry/config.yml --delete-untagged 2>/dev/null")
@@ -224,7 +225,7 @@ func BuildPrune(ctx context.Context, req BuildPruneRequest) error {
 	if err != nil {
 		return err
 	}
-	return pruneRegistryTags(ctx, master.IPv4, master.PrivateIP, req.SSHKey, req.Name, req.Keep)
+	return pruneRegistryTags(ctx, req.Cluster, master, req.Name, req.Keep)
 }
 
 // ── Build list ────────────────────────────────────────────────────────────────
