@@ -25,6 +25,14 @@ go test ./...
 go vet ./...
 ```
 
+## CI
+
+Claude Code review runs on GitHub Actions (`.github/workflows/claude-code-review.yml`). Triggers:
+- **PR opened** — automatic review on new pull requests
+- **Manual** — `workflow_dispatch` from the Actions tab
+
+Does not run on every push/sync to a PR. Manual trigger for re-reviews.
+
 ## Local development
 
 Everything runs through Docker Compose. Never run Go on the host — use `bin/cli`.
