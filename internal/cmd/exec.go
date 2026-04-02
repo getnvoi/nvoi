@@ -1,8 +1,7 @@
 package cmd
 
 import (
-	"fmt"
-
+	"github.com/getnvoi/nvoi/internal/app"
 	"github.com/spf13/cobra"
 )
 
@@ -12,25 +11,35 @@ func newExecCmd() *cobra.Command {
 		Short: "Run a command in a service pod",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			service := args[0]
-			command := args[1:]
-
-			_, _, err := resolveAppEnv(cmd)
+			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
 			}
-			_, err = resolveComputeProvider(cmd)
+			providerName, err := resolveComputeProvider(cmd)
+			if err != nil {
+				return err
+			}
+			creds, err := resolveComputeCredentials(cmd, providerName)
+			if err != nil {
+				return err
+			}
+			sshKey, err := resolveSSHKey()
 			if err != nil {
 				return err
 			}
 
-			_ = service
-			_ = command
-
-			// TODO Phase 2:
-			// 1. Resolve master from provider API → SSH
-			// 2. kubectl exec deployment/{service} -- {command} (on remote)
-			return fmt.Errorf("not implemented")
+			return app.Exec(cmd.Context(), app.ExecRequest{
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+					Output:      resolveOutput(cmd),
+				},
+				Service: args[0],
+				Command: args[1:],
+			})
 		},
 	}
 	addComputeProviderFlags(cmd)
