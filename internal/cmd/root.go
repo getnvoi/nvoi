@@ -1,9 +1,9 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/getnvoi/nvoi/internal/app"
 	"github.com/spf13/cobra"
@@ -11,10 +11,9 @@ import (
 
 func Root() *cobra.Command {
 	root := &cobra.Command{
-		Use:           "nvoi",
-		Short:         "Deploy containers to cloud servers",
-		SilenceUsage:  true,
-		SilenceErrors: true,
+		Use:          "nvoi",
+		Short:        "Deploy containers to cloud servers",
+		SilenceUsage: true,
 	}
 
 	// Persistent flags.
@@ -45,15 +44,26 @@ func Root() *cobra.Command {
 	// Inspect.
 	root.AddCommand(newResourcesCmd())
 
-	// Teardown — use bin/destroy (the script). No CLI command needed.
-
-	// Style errors through Output.
-	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
-		resolveOutput(cmd).Error(err)
-		return err
-	})
+	// Style errors through Output — cobra writes errors here.
+	root.SetErr(&outputWriter{root: root})
+	root.SetErrPrefix("")
 
 	return root
+}
+
+// outputWriter wraps cobra's error output through our Output system.
+type outputWriter struct {
+	root *cobra.Command
+}
+
+func (w *outputWriter) Write(p []byte) (n int, err error) {
+	msg := string(p)
+	if msg != "" && msg != "\n" {
+		msg = strings.TrimSpace(msg)
+		msg = strings.TrimPrefix(msg, "Error: ")
+		resolveOutput(w.root).Error(fmt.Errorf("%s", msg))
+	}
+	return len(p), nil
 }
 
 func envFilePath(cmd *cobra.Command) string {
@@ -67,19 +77,4 @@ func resolveOutput(cmd *cobra.Command) app.Output {
 		return NewJSONOutput(os.Stdout)
 	}
 	return NewTUIOutput()
-}
-
-// HandleError styles an error through the Output system.
-// Called from main after Execute returns an error.
-func HandleError(ctx context.Context, cmd *cobra.Command, err error) {
-	if err == nil {
-		return
-	}
-	if ctx.Err() != nil {
-		// Signal interrupt — clean exit message
-		fmt.Fprintln(os.Stderr)
-		resolveOutput(cmd).Error(fmt.Errorf("interrupted"))
-		return
-	}
-	resolveOutput(cmd).Error(err)
 }

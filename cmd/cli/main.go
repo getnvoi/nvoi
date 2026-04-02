@@ -13,9 +13,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	root := cmd.Root()
-	if err := root.ExecuteContext(ctx); err != nil {
-		cmd.HandleError(ctx, root, err)
+	if err := cmd.Root().ExecuteContext(ctx); err != nil {
 		os.Exit(1)
 	}
 }
