@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/getnvoi/nvoi/internal/core"
 	"github.com/getnvoi/nvoi/internal/infra"
@@ -37,6 +38,7 @@ func (nopOutput) Success(string)                         {}
 func (nopOutput) Warning(string)                         {}
 func (nopOutput) Info(string)                            {}
 func (nopOutput) Error(error)                            {}
+func (nopOutput) Writer() io.Writer                      { return io.Discard }
 
 // Names resolves the naming convention for this cluster.
 func (c *Cluster) Names() (*core.Names, error) {

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 
@@ -50,4 +51,16 @@ func (j *jsonOutput) Info(msg string) {
 
 func (j *jsonOutput) Error(err error) {
 	j.enc.Encode(map[string]string{"type": "error", "message": err.Error()})
+}
+
+// Writer returns a writer that emits each line as a stream event.
+func (j *jsonOutput) Writer() io.Writer {
+	pr, pw := io.Pipe()
+	go func() {
+		scanner := bufio.NewScanner(pr)
+		for scanner.Scan() {
+			j.enc.Encode(map[string]string{"type": "stream", "message": scanner.Text()})
+		}
+	}()
+	return pw
 }
