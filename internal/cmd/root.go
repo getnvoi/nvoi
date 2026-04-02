@@ -19,6 +19,7 @@ func Root() *cobra.Command {
 	// Persistent flags.
 	root.PersistentFlags().String("env-file", ".env", "path to .env file")
 	root.PersistentFlags().Bool("json", false, "output JSONL")
+	root.PersistentFlags().Bool("ci", false, "plain text output for CI/logs")
 
 	// Infrastructure.
 	root.AddCommand(newInstanceCmd())
@@ -76,5 +77,17 @@ func resolveOutput(cmd *cobra.Command) app.Output {
 	if j {
 		return NewJSONOutput(os.Stdout)
 	}
+	ci, _ := cmd.Flags().GetBool("ci")
+	if ci || !isTerminal() {
+		return NewPlainOutput()
+	}
 	return NewTUIOutput()
+}
+
+func isTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
