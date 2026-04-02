@@ -21,9 +21,11 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 
 ```bash
 go build ./...
-go test ./...
+go test ./...                               # 53 tests across 5 packages
 go vet ./...
 ```
+
+Tests cover: naming conventions, YAML generation (Deployment/StatefulSet/Service), Caddyfile generation+parsing+round-trip, Poll retry logic, credential schema validation, volume mount parsing, signed URL parsing, route merging, storage key parsing, cloud-init rendering, APIError formatting. All pure function tests — no mocking, no infrastructure.
 
 ## CI
 
@@ -192,23 +194,25 @@ cmd/cli/main.go           CLI entrypoint — signal handling, exit codes
 
 pkg/                       Public library — importable by external repos (API, SDK, etc.)
   app/                     Business logic. One file per domain. No cobra, no I/O, no stdout.
-    cluster.go             Shared Cluster struct (AppName, Env, Provider, Credentials, SSHKey, Output)
+    cluster.go             Cluster struct + ProviderRef type
     output.go              Output interface — the contract between app/ and its viewers
   kube/                    K8s YAML generation + kubectl over SSH + Caddy ingress
-  infra/                   SSH, server bootstrap, k3s, Docker, volume mounting
+  infra/                   SSH, server bootstrap, k3s, Docker, volume mounting, WaitHTTPS
   provider/                ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
     hetzner/               Hetzner Cloud (compute + volumes)
-    cloudflare/            Cloudflare (DNS + R2 buckets)
+    cloudflare/            Cloudflare (DNS + R2 buckets) — all via core.HTTPClient
     daytona/               Daytona remote builds
     github/                GitHub Actions builds
     local/                 Local docker buildx builds
-  core/                    Pure utilities: naming, poll, httpclient, ssh keys, format
+  core/                    Pure utilities: naming, poll, httpclient (30s default timeout), ssh keys, format
     s3/                    AWS Signature V4 signing for S3-compatible APIs
 
 internal/                  Private — CLI only
   cmd/                     Cobra wrappers. Parse flags → call pkg/app/ → render output.
+    resolve.go             Centralized credential resolution — single generic resolveCredentials()
     output_tui.go          TUI renderer (lipgloss-styled terminal output)
     output_json.go         JSONL renderer (structured JSON, one event per line)
+    output_plain.go        Plain text renderer (CI/non-TTY environments)
     table.go               Bordered tables with lipgloss (Table + TableGroup for synchronized widths)
 ```
 
@@ -237,11 +241,21 @@ provider.RegisterX("name", CredentialSchema{...}, func(creds map[string]string) 
 
 All providers follow the same architecture:
 
-1. **Interface** — `internal/provider/{kind}.go` defines the interface
-2. **Credential schema** — `internal/provider/{impl}/register.go` declares required fields with env var mappings
+1. **Interface** — `pkg/provider/{kind}.go` defines the interface
+2. **Credential schema** — `pkg/provider/{impl}/register.go` declares required fields with env var mappings
 3. **Registration** — `init()` calls `provider.RegisterX(name, schema, factory)`
-4. **Blank import** — `internal/cmd/{command}.go` imports `_ "provider/{impl}"` to trigger `init()`
+4. **Blank import** — `internal/cmd/{command}.go` imports `_ "pkg/provider/{impl}"` to trigger `init()`
 5. **Resolution** — `provider.ResolveX(name, creds)` validates schema + returns instance
+
+### Credential resolution
+
+All four provider kinds (compute, build, DNS, storage) resolve credentials through a single generic function in `cmd/resolve.go`:
+
+```go
+resolveCredentials(cmd, schema, flagName) → map[string]string
+```
+
+Resolution order: `--xxx-credentials KEY=VALUE` flag → direct command flag (e.g. `--zone`) → env var from schema. One pattern for all providers. DNS zone is declared in the Cloudflare DNS schema (`EnvVar: "DNS_ZONE"`, `Flag: "zone"`) — no special-casing.
 
 ### Credential pairs
 
@@ -386,10 +400,11 @@ type Output interface {
 }
 ```
 
-`cmd/` provides two implementations, selected by `--json` persistent flag:
+`cmd/` provides three implementations:
 
-- **TUI** (`output_tui.go`) — lipgloss-styled: bold commands, dimmed progress, green success, yellow warnings, red errors. Streaming output dimmed and indented.
-- **JSONL** (`output_json.go`) — one JSON object per line. Structured `type` field (`command`, `progress`, `success`, `warning`, `info`, `error`, `stream`).
+- **TUI** (`output_tui.go`) — lipgloss-styled: bold commands, dimmed progress, green success, yellow warnings, red errors. Default for terminals.
+- **JSONL** (`output_json.go`) — one JSON object per line. `--json` flag.
+- **Plain** (`output_plain.go`) — aligned tags `[command]` `[progress]` `[success]` etc., no ANSI codes. `--ci` flag or auto-detected in non-TTY.
 
 ### JSONL event format
 
@@ -414,7 +429,7 @@ type Output interface {
 
 `infra/` functions (k3s install, volume mount) accept `io.Writer` for streaming output. `app/` passes `Output.Writer()`. In TUI mode, lines are dimmed and indented. In JSONL mode, each line becomes a `{"type":"stream","message":"..."}` event. A future API could stream to SSE or websocket through the same interface.
 
-### Cluster struct
+### Cluster struct + ProviderRef
 
 Every `app/` request type embeds `Cluster`:
 
@@ -429,6 +444,50 @@ type Cluster struct {
 
 `Cluster` provides methods: `Names()`, `Compute()`, `Master()`, `SSH()`, `Log()`. Eliminates the 4-line resolve-connect preamble that was duplicated 22 times. `cmd/` constructs `Cluster` with `resolveOutput(cmd)` to wire TUI or JSONL.
 
+Secondary providers (DNS, storage) use `ProviderRef`:
+
+```go
+type ProviderRef struct {
+    Name  string
+    Creds map[string]string
+}
+
+// Used on request types:
+type DNSSetRequest struct {
+    Cluster
+    DNS     ProviderRef   // not bare DNSProvider string + DNSCreds map
+    Service string
+    Domains []string
+}
+```
+
+### infra.Node
+
+Groups public + private IP for server functions. Eliminates the 5-string parameter explosion in k3s join:
+
+```go
+type Node struct {
+    PublicIP  string
+    PrivateIP string
+}
+
+// Before: JoinK3sWorker(ctx, workerIP, workerPrivateIP, masterIP, masterPrivateIP, privKey, w)
+// After:  JoinK3sWorker(ctx, worker, master Node, privKey, w)
+```
+
+### ServerStatus
+
+Typed enum for server status instead of bare `string`:
+
+```go
+type ServerStatus string
+const (
+    ServerRunning   ServerStatus = "running"
+    ServerOff       ServerStatus = "off"
+    // ...
+)
+```
+
 ## Key rules
 
 1. `NVOI_APP_NAME` + `NVOI_ENV` (or `--app-name` + `--environment`) are required. They're the namespace for everything.
@@ -439,9 +498,12 @@ type Cluster struct {
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 7. SSH is the only transport to remote servers.
 8. **`os.Getenv` lives exclusively in `cmd/`.** Environment variables are a CLI concept. `app/`, `provider/`, `infra/`, `core/` never read env vars. All external values (credentials, SSH key path, app name, env) are resolved in `cmd/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.
-11. **Providers are silent.** Providers are API clients — they do work and return data. They never print, log, or narrate. Progress output belongs in `app/` via the `Output` interface.
-12. **`app/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `app/` is a library — a future API handler calls the same functions.
-13. **Errors flow up, render once.** `app/` returns errors. Cobra renders them through `SetErr` → `Output.Error()`. Never double-print. Never swallow silently.
-9. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
-10. `bin/destroy` is the reverse of `bin/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
+9. **Providers are silent.** Providers are API clients — they do work and return data. They never print, log, or narrate. Progress output belongs in `app/` via the `Output` interface.
+10. **`app/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `app/` is a library — a future API handler calls the same functions.
+11. **`app/` never imports `net/http`.** HTTP calls belong in `infra/` (e.g. `WaitHTTPS`) or `provider/`. `app/` is pure orchestration.
+12. **Errors flow up, render once.** `app/` returns errors. Cobra renders them through `SetErr` → `Output.Error()`. Never double-print. Never swallow silently.
+13. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
+14. `bin/destroy` is the reverse of `bin/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
+15. **No shell injection.** Secret values flow to kubectl via file upload (`ssh.Upload` + `cat`), not inline `fmt.Sprintf`. `shellQuote` for `--from-literal` args. Never interpolate user values into shell strings.
+16. **All providers use `core.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`.
 
