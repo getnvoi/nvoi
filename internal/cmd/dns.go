@@ -63,15 +63,17 @@ Examples:
 			}
 
 			return app.DNSSet(cmd.Context(), app.DNSSetRequest{
-				AppName:         appName,
-				Env:             env,
-				ComputeProvider: computeProvider,
-				ComputeCreds:    computeCreds,
-				DNSProvider:     dnsProvider,
-				DNSCreds:        dnsCreds,
-				SSHKey:          sshKey,
-				Service:         service,
-				Domains:         domains,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    computeProvider,
+					Credentials: computeCreds,
+					SSHKey:      sshKey,
+				},
+				DNSProvider: dnsProvider,
+				DNSCreds:    dnsCreds,
+				Service:     service,
+				Domains:     domains,
 			})
 		},
 	}
@@ -132,15 +134,17 @@ func newDNSDeleteCmd() *cobra.Command {
 			}
 
 			return app.DNSDelete(cmd.Context(), app.DNSDeleteRequest{
-				AppName:         appName,
-				Env:             env,
-				ComputeProvider: computeProvider,
-				ComputeCreds:    computeCreds,
-				DNSProvider:     dnsProvider,
-				DNSCreds:        dnsCreds,
-				SSHKey:          sshKey,
-				Service:         service,
-				Domains:         domains,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    computeProvider,
+					Credentials: computeCreds,
+					SSHKey:      sshKey,
+				},
+				DNSProvider: dnsProvider,
+				DNSCreds:    dnsCreds,
+				Service:     service,
+				Domains:     domains,
 			})
 		},
 	}

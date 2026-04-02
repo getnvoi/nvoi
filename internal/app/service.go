@@ -10,26 +10,21 @@ import (
 	"github.com/getnvoi/nvoi/internal/core"
 	"github.com/getnvoi/nvoi/internal/infra"
 	"github.com/getnvoi/nvoi/internal/kube"
-	"github.com/getnvoi/nvoi/internal/provider"
 )
 
 type ServiceSetRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	SSHKey      []byte
-	Name        string
-	Image       string
-	Port        int
-	Command     string
-	Replicas    int
-	EnvVars     []string // KEY=VALUE pairs
-	Secrets     []string // secret key references (must exist in cluster)
-	Storages    []string // storage names → expands to STORAGE_{NAME}_* secret refs
-	Volumes     []string // name:/path
-	HealthPath  string
-	Server      string
+	Cluster
+	Name       string
+	Image      string
+	Port       int
+	Command    string
+	Replicas   int
+	EnvVars    []string // KEY=VALUE pairs
+	Secrets    []string // secret key references (must exist in cluster)
+	Storages   []string // storage names → expands to STORAGE_{NAME}_* secret refs
+	Volumes    []string // name:/path
+	HealthPath string
+	Server     string
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
@@ -37,23 +32,14 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return fmt.Errorf("--image is required")
 	}
 
-	names, err := core.NewNames(req.AppName, req.Env)
-	if err != nil {
-		return err
-	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
-	if err != nil {
-		return err
-	}
-
-	master, err := FindMaster(ctx, prov, names)
+	master, names, prov, err := req.Cluster.Master(ctx)
 	if err != nil {
 		return err
 	}
 
 	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, req.SSHKey)
 	if err != nil {
-		return fmt.Errorf("ssh master: %w", err)
+		return err
 	}
 	defer ssh.Close()
 
@@ -163,32 +149,14 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 }
 
 type ServiceDeleteRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	SSHKey      []byte
-	Name        string
+	Cluster
+	Name string
 }
 
 func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
-	names, err := core.NewNames(req.AppName, req.Env)
+	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return err
-	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
-	if err != nil {
-		return err
-	}
-
-	master, err := FindMaster(ctx, prov, names)
-	if err != nil {
-		return err
-	}
-
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, req.SSHKey)
-	if err != nil {
-		return fmt.Errorf("ssh master: %w", err)
 	}
 	defer ssh.Close()
 
@@ -200,3 +168,4 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	fmt.Printf("  ✓ deleted\n")
 	return nil
 }
+

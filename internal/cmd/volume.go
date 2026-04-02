@@ -45,14 +45,16 @@ func newVolumeSetCmd() *cobra.Command {
 			}
 
 			_, err = app.VolumeSet(cmd.Context(), app.VolumeSetRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Name:        args[0],
-				Size:        size,
-				Server:      server,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Name:   args[0],
+				Size:   size,
+				Server: server,
 			})
 			return err
 		},
@@ -101,12 +103,14 @@ func newVolumeDeleteCmd() *cobra.Command {
 			}
 
 			return app.VolumeDelete(cmd.Context(), app.VolumeDeleteRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Name:        args[0],
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Name: args[0],
 			})
 		},
 	}
@@ -135,10 +139,12 @@ func newVolumeListCmd() *cobra.Command {
 			}
 
 			volumes, err := app.VolumeList(cmd.Context(), app.VolumeListRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+				},
 			})
 			if err != nil {
 				return err

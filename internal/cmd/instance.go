@@ -47,15 +47,17 @@ func newInstanceSetCmd() *cobra.Command {
 			}
 
 			_, err = app.ComputeSet(cmd.Context(), app.ComputeSetRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Name:        args[0],
-				ServerType:  computeType,
-				Region:      region,
-				Worker:      worker,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Name:       args[0],
+				ServerType: computeType,
+				Region:     region,
+				Worker:     worker,
 			})
 			return err
 		},
@@ -102,11 +104,13 @@ func newInstanceDeleteCmd() *cobra.Command {
 			}
 
 			return app.ComputeDelete(cmd.Context(), app.ComputeDeleteRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				Name:        args[0],
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+				},
+				Name: args[0],
 			})
 		},
 	}
@@ -135,10 +139,12 @@ func newInstanceListCmd() *cobra.Command {
 			}
 
 			servers, err := app.ComputeList(cmd.Context(), app.ComputeListRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+				},
 			})
 			if err != nil {
 				return err

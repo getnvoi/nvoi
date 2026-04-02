@@ -68,13 +68,15 @@ Examples:
 			history, _ := cmd.Flags().GetInt("history")
 
 			_, err = app.BuildRun(cmd.Context(), app.BuildRunRequest{
-				AppName:            appName,
-				Env:                env,
-				Provider:           providerName,
-				Credentials:        creds,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
 				Builder:            builderName,
 				BuilderCredentials: builderCreds,
-				SSHKey:             sshKey,
 				Source:             source,
 				Name:               name,
 				Branch:             branch,
@@ -129,11 +131,13 @@ func newBuildListCmd() *cobra.Command {
 			}
 
 			images, err := app.BuildList(cmd.Context(), app.BuildListRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
 			})
 			if err != nil {
 				return err
@@ -185,12 +189,14 @@ func newBuildLatestCmd() *cobra.Command {
 			}
 
 			ref, err := app.BuildLatest(cmd.Context(), app.BuildLatestRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Name:        args[0],
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Name: args[0],
 			})
 			if err != nil {
 				return err
@@ -232,13 +238,15 @@ func newBuildPruneCmd() *cobra.Command {
 			}
 
 			return app.BuildPrune(cmd.Context(), app.BuildPruneRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Name:        args[0],
-				Keep:        keep,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Name: args[0],
+				Keep: keep,
 			})
 		},
 	}

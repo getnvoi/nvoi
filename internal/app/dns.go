@@ -13,27 +13,15 @@ import (
 )
 
 type DNSSetRequest struct {
-	AppName         string
-	Env             string
-	ComputeProvider string
-	ComputeCreds    map[string]string
-	DNSProvider     string
-	DNSCreds        map[string]string
-	SSHKey          []byte
-	Service         string
-	Domains         []string
+	Cluster
+	DNSProvider string
+	DNSCreds    map[string]string
+	Service     string
+	Domains     []string
 }
 
 func DNSSet(ctx context.Context, req DNSSetRequest) error {
-	names, err := core.NewNames(req.AppName, req.Env)
-	if err != nil {
-		return err
-	}
-	prov, err := provider.ResolveCompute(req.ComputeProvider, req.ComputeCreds)
-	if err != nil {
-		return err
-	}
-	master, err := FindMaster(ctx, prov, names)
+	master, names, _, err := req.Cluster.Master(ctx)
 	if err != nil {
 		return err
 	}
@@ -56,9 +44,9 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	}
 
 	// SSH to master for Caddy ingress
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, req.SSHKey)
+	ssh, err := connectToMaster(ctx, master.IPv4, req.SSHKey)
 	if err != nil {
-		return fmt.Errorf("ssh master: %w", err)
+		return err
 	}
 	defer ssh.Close()
 
@@ -117,15 +105,11 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 }
 
 type DNSDeleteRequest struct {
-	AppName         string
-	Env             string
-	ComputeProvider string
-	ComputeCreds    map[string]string
-	DNSProvider     string
-	DNSCreds        map[string]string
-	SSHKey          []byte
-	Service         string
-	Domains         []string
+	Cluster
+	DNSProvider string
+	DNSCreds    map[string]string
+	Service     string
+	Domains     []string
 }
 
 func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
@@ -144,20 +128,8 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	}
 
 	// Remove route from Caddy if we have cluster access
-	if req.ComputeProvider != "" {
-		names, err := core.NewNames(req.AppName, req.Env)
-		if err != nil {
-			return nil
-		}
-		prov, err := provider.ResolveCompute(req.ComputeProvider, req.ComputeCreds)
-		if err != nil {
-			return nil
-		}
-		master, err := FindMaster(ctx, prov, names)
-		if err != nil {
-			return nil
-		}
-		ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, req.SSHKey)
+	if req.Provider != "" {
+		ssh, names, err := req.Cluster.SSH(ctx)
 		if err != nil {
 			return nil
 		}
@@ -168,7 +140,6 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 		routes := removeRoute(existing, req.Service)
 
 		if len(routes) == 0 {
-			// No more routes — delete caddy entirely
 			kube.DeleteByName(ctx, ssh, ns, names.KubeCaddy())
 			kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete configmap %s --ignore-not-found", names.KubeCaddyConfig()))
 		} else {
@@ -193,6 +164,15 @@ func DNSList(ctx context.Context, req DNSListRequest) ([]provider.DNSRecord, err
 		return nil, err
 	}
 	return dns.ListARecords(ctx)
+}
+
+// connectToMaster is a shorthand for SSH connect to a known master IP.
+func connectToMaster(ctx context.Context, ip string, sshKey []byte) (core.SSHClient, error) {
+	ssh, err := infra.ConnectSSH(ctx, ip+":22", core.DefaultUser, sshKey)
+	if err != nil {
+		return nil, fmt.Errorf("ssh master: %w", err)
+	}
+	return ssh, nil
 }
 
 // mergeRoute adds or replaces a route in the list by service name.

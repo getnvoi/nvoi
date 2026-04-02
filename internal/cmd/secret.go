@@ -48,13 +48,15 @@ secrets by key name via --secret KEY on service set.
 			}
 
 			return app.SecretSet(cmd.Context(), app.SecretSetRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Key:         args[0],
-				Value:       args[1],
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Key:   args[0],
+				Value: args[1],
 			})
 		},
 	}
@@ -87,12 +89,14 @@ func newSecretDeleteCmd() *cobra.Command {
 			}
 
 			return app.SecretDelete(cmd.Context(), app.SecretDeleteRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Key:         args[0],
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Key: args[0],
 			})
 		},
 	}
@@ -124,11 +128,13 @@ func newSecretListCmd() *cobra.Command {
 			}
 
 			keys, err := app.SecretList(cmd.Context(), app.SecretListRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
 			})
 			if err != nil {
 				return err
@@ -176,12 +182,14 @@ func newSecretRevealCmd() *cobra.Command {
 			}
 
 			value, err := app.SecretReveal(cmd.Context(), app.SecretRevealRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Key:         args[0],
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Key: args[0],
 			})
 			if err != nil {
 				return err

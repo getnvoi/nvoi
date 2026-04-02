@@ -33,11 +33,13 @@ func newDescribeCmd() *cobra.Command {
 			}
 
 			req := app.DescribeRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
 			}
 
 			jsonOutput, _ := cmd.Flags().GetBool("json")
