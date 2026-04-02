@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"os"
 
 	"charm.land/lipgloss/v2"
 	"github.com/getnvoi/nvoi/internal/app"
@@ -14,6 +17,7 @@ var (
 	tuiWarning  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).MarginLeft(4)
 	tuiInfo     = lipgloss.NewStyle().MarginLeft(4)
 	tuiError    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).MarginLeft(4)
+	tuiStream   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
 type tuiOutput struct{}
@@ -50,4 +54,16 @@ func (tuiOutput) Info(msg string) {
 
 func (tuiOutput) Error(err error) {
 	fmt.Println(tuiError.Render("✗ " + err.Error()))
+}
+
+// Writer returns a writer that dims and indents each line.
+func (tuiOutput) Writer() io.Writer {
+	pr, pw := io.Pipe()
+	go func() {
+		scanner := bufio.NewScanner(pr)
+		for scanner.Scan() {
+			fmt.Fprintln(os.Stdout, tuiStream.Render("      "+scanner.Text()))
+		}
+	}()
+	return pw
 }

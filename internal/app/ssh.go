@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"os"
 	"strings"
 )
 
@@ -18,6 +17,7 @@ func SSH(ctx context.Context, req SSHRequest) error {
 	}
 	defer ssh.Close()
 
+	out := req.Log()
 	cmd := strings.Join(req.Command, " ")
-	return ssh.RunStream(ctx, cmd, os.Stdout, os.Stderr)
+	return ssh.RunStream(ctx, cmd, out.Writer(), out.Writer())
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 
@@ -110,8 +109,8 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 			MasterPrivateIP: master.PrivateIP,
 			PrivKey:         req.SSHKey,
 		},
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+		Stdout: out.Writer(),
+		Stderr: out.Writer(),
 	})
 	if err != nil {
 		return nil, err
