@@ -137,14 +137,12 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 	}
 
 	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
-		out.Error(err)
 		return err
 	}
 	out.Success("applied")
 
 	out.Progress("waiting for rollout")
 	if err := kube.WaitRollout(ctx, ssh, ns, req.Name, workloadKind, out); err != nil {
-		out.Error(err)
 		return err
 	}
 	out.Success(req.Name + " ready")
@@ -168,7 +166,6 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	defer ssh.Close()
 
 	if err := kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name); err != nil {
-		out.Error(err)
 		return err
 	}
 	out.Success("deleted")

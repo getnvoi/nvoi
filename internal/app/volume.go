@@ -43,7 +43,6 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 		Labels:     names.Labels(),
 	})
 	if err != nil {
-		out.Error(err)
 		return nil, err
 	}
 
@@ -63,7 +62,6 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 	}
 
 	if err := infra.MountVolume(ctx, vol, serverIP, mountPath, req.SSHKey); err != nil {
-		out.Error(err)
 		return nil, fmt.Errorf("mount: %w", err)
 	}
 
@@ -102,7 +100,6 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 	}
 
 	if err := prov.DetachVolume(ctx, volumeName, names.Labels()); err != nil {
-		out.Error(err)
 		return err
 	}
 	out.Success("detached")

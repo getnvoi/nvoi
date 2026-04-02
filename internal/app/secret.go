@@ -28,7 +28,6 @@ func SecretSet(ctx context.Context, req SecretSetRequest) error {
 	}
 
 	if err := kube.UpsertSecretKey(ctx, ssh, ns, names.KubeSecrets(), req.Key, req.Value); err != nil {
-		out.Error(err)
 		return err
 	}
 	out.Success(req.Key + " stored")
@@ -51,7 +50,6 @@ func SecretDelete(ctx context.Context, req SecretDeleteRequest) error {
 	defer ssh.Close()
 
 	if err := kube.DeleteSecretKey(ctx, ssh, names.KubeNamespace(), names.KubeSecrets(), req.Key); err != nil {
-		out.Error(err)
 		return err
 	}
 	out.Success(req.Key + " removed")
