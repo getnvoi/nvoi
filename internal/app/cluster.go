@@ -17,7 +17,26 @@ type Cluster struct {
 	Provider    string
 	Credentials map[string]string
 	SSHKey      []byte
+	Output      Output
 }
+
+// Log returns the Output, falling back to a no-op if nil.
+func (c *Cluster) Log() Output {
+	if c.Output != nil {
+		return c.Output
+	}
+	return nopOutput{}
+}
+
+// nopOutput silently discards all events.
+type nopOutput struct{}
+
+func (nopOutput) Command(string, string, string, ...any) {}
+func (nopOutput) Progress(string)                        {}
+func (nopOutput) Success(string)                         {}
+func (nopOutput) Warning(string)                         {}
+func (nopOutput) Info(string)                            {}
+func (nopOutput) Error(error)                            {}
 
 // Names resolves the naming convention for this cluster.
 func (c *Cluster) Names() (*core.Names, error) {

@@ -48,7 +48,13 @@ type podList struct {
 // WaitRollout polls pods by label until all are Ready, printing state changes.
 // Terminal failures (bad image, config error, crash loop) exit immediately.
 // Transient states (scheduling, pulling, creating) keep polling with feedback.
-func WaitRollout(ctx context.Context, ssh core.SSHClient, ns, name, kind string) error {
+// ProgressEmitter receives status updates during rollout polling.
+// Defined here so kube/ doesn't import app/. app.Output satisfies this.
+type ProgressEmitter interface {
+	Progress(msg string)
+}
+
+func WaitRollout(ctx context.Context, ssh core.SSHClient, ns, name, kind string, emitter ProgressEmitter) error {
 	selector := fmt.Sprintf("%s=%s", core.LabelAppName, name)
 	lastStatus := ""
 
@@ -139,7 +145,7 @@ func WaitRollout(ctx context.Context, ssh core.SSHClient, ns, name, kind string)
 			status += " (" + strings.Join(dedup(states), ", ") + ")"
 		}
 		if status != lastStatus {
-			fmt.Printf("  %s: %s\n", name, status)
+			emitter.Progress(name + ": " + status)
 			lastStatus = status
 		}
 

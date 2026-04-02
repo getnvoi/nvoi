@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/app"
@@ -60,29 +61,35 @@ func newResourcesCmd() *cobra.Command {
 
 			g := NewTableGroup()
 
-			t := g.Add("SERVERS", "ID", "NAME", "STATUS", "IPv4", "PRIVATE IP")
+			compute := fmt.Sprintf("SERVERS (%s)", providerName)
+			t := g.Add(compute, "ID", "NAME", "STATUS", "IPv4", "PRIVATE IP")
 			for _, s := range res.Servers {
 				t.Row(s.ID, s.Name, s.Status, s.IPv4, s.PrivateIP)
 			}
 
-			t = g.Add("FIREWALLS", "ID", "NAME")
+			t = g.Add(fmt.Sprintf("FIREWALLS (%s)", providerName), "ID", "NAME")
 			for _, fw := range res.Firewalls {
 				t.Row(fw.ID, fw.Name)
 			}
 
-			t = g.Add("NETWORKS", "ID", "NAME")
+			t = g.Add(fmt.Sprintf("NETWORKS (%s)", providerName), "ID", "NAME")
 			for _, n := range res.Networks {
 				t.Row(n.ID, n.Name)
 			}
 
 			if len(res.DNSRecords) > 0 {
-				t = g.Add("DNS RECORDS", "TYPE", "DOMAIN", "IP")
+				t = g.Add(fmt.Sprintf("DNS RECORDS (%s)", dnsProvider), "TYPE", "DOMAIN", "IP")
 				for _, r := range res.DNSRecords {
 					t.Row(r.Type, r.Domain, r.IP)
 				}
 			}
 
 			g.Print()
+			providers := []string{providerName}
+			if dnsProvider != "" {
+				providers = append(providers, dnsProvider)
+			}
+			fmt.Println(dimStyle.Render(fmt.Sprintf("  retrieved from %s", strings.Join(providers, ", "))))
 			fmt.Println(dimStyle.Render(fmt.Sprintf("  generated at %s", time.Now().Format("2006-01-02 15:04:05"))))
 			fmt.Println()
 			return nil

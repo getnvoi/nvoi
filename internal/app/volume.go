@@ -12,7 +12,7 @@ type VolumeSetRequest struct {
 	Cluster
 	Name   string
 	Size   int
-	Server string // server name (e.g. "master")
+	Server string
 }
 
 type VolumeSetResult struct {
@@ -20,6 +20,7 @@ type VolumeSetResult struct {
 }
 
 func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, error) {
+	out := req.Log()
 	names, err := req.Names()
 	if err != nil {
 		return nil, err
@@ -33,7 +34,7 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 	serverName := names.Server(req.Server)
 	mountPath := names.VolumeMountPath(req.Name)
 
-	fmt.Printf("==> volume set %s (%dGB on %s)\n", volumeName, req.Size, serverName)
+	out.Command("volume", "set", volumeName, "size", fmt.Sprintf("%dGB", req.Size), "server", serverName)
 
 	vol, err := prov.EnsureVolume(ctx, provider.CreateVolumeRequest{
 		Name:       volumeName,
@@ -42,10 +43,10 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 		Labels:     names.Labels(),
 	})
 	if err != nil {
+		out.Error(err)
 		return nil, err
 	}
 
-	// Find server IP for SSH mounting
 	servers, err := prov.ListServers(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("list servers: %w", err)
@@ -62,10 +63,11 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 	}
 
 	if err := infra.MountVolume(ctx, vol, serverIP, mountPath, req.SSHKey); err != nil {
+		out.Error(err)
 		return nil, fmt.Errorf("mount: %w", err)
 	}
 
-	fmt.Printf("  ✓ %s → %s on %s\n", volumeName, mountPath, serverName)
+	out.Success(fmt.Sprintf("%s → %s on %s", volumeName, mountPath, serverName))
 	return &VolumeSetResult{Volume: vol}, nil
 }
 
@@ -75,6 +77,7 @@ type VolumeDeleteRequest struct {
 }
 
 func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
+	out := req.Log()
 	names, err := req.Names()
 	if err != nil {
 		return err
@@ -87,21 +90,22 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 	volumeName := names.Volume(req.Name)
 	mountPath := names.VolumeMountPath(req.Name)
 
-	fmt.Printf("==> volume delete %s (detach only — data preserved)\n", volumeName)
+	out.Command("volume", "delete", volumeName)
 
 	servers, err := prov.ListServers(ctx, names.Labels())
 	if err == nil {
 		for _, s := range servers {
 			if err := infra.UnmountVolume(ctx, s.IPv4, mountPath, req.SSHKey); err != nil {
-				fmt.Printf("  warning: unmount on %s: %s\n", s.Name, err)
+				out.Warning(fmt.Sprintf("unmount on %s: %s", s.Name, err))
 			}
 		}
 	}
 
 	if err := prov.DetachVolume(ctx, volumeName, names.Labels()); err != nil {
+		out.Error(err)
 		return err
 	}
-	fmt.Printf("  ✓ detached\n")
+	out.Success("detached")
 	return nil
 }
 
