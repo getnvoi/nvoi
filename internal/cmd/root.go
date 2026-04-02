@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
 	"os"
 
 	"github.com/getnvoi/nvoi/internal/app"
@@ -9,10 +11,9 @@ import (
 
 func Root() *cobra.Command {
 	root := &cobra.Command{
-		Use:           "nvoi",
-		Short:         "Deploy containers to cloud servers",
-		SilenceUsage:  true,
-		SilenceErrors: true,
+		Use:          "nvoi",
+		Short:        "Deploy containers to cloud servers",
+		SilenceUsage: true,
 	}
 
 	// Persistent flags.
@@ -45,6 +46,12 @@ func Root() *cobra.Command {
 
 	// Teardown — use bin/destroy (the script). No CLI command needed.
 
+	// Style errors through Output.
+	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		resolveOutput(cmd).Error(err)
+		return err
+	})
+
 	return root
 }
 
@@ -59,4 +66,19 @@ func resolveOutput(cmd *cobra.Command) app.Output {
 		return NewJSONOutput(os.Stdout)
 	}
 	return NewTUIOutput()
+}
+
+// HandleError styles an error through the Output system.
+// Called from main after Execute returns an error.
+func HandleError(ctx context.Context, cmd *cobra.Command, err error) {
+	if err == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		// Signal interrupt — clean exit message
+		fmt.Fprintln(os.Stderr)
+		resolveOutput(cmd).Error(fmt.Errorf("interrupted"))
+		return
+	}
+	resolveOutput(cmd).Error(err)
 }
