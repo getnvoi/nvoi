@@ -8,7 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
+
+// defaultHTTPClient is used when HTTPClient.HTTPClient is nil.
+// 30s timeout prevents hanging on unresponsive APIs.
+var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type HTTPClient struct {
 	BaseURL    string
@@ -40,7 +45,7 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body, result a
 
 	client := c.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultHTTPClient
 	}
 	resp, err := client.Do(req)
 	if err != nil {

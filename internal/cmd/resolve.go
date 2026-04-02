@@ -29,9 +29,49 @@ func resolveAppEnv(cmd *cobra.Command) (appName, env string, err error) {
 	return appName, env, nil
 }
 
+// ── Generic credential resolution ───────────────────────────────────────────
+
+// resolveCredentials resolves provider credentials from flags → env vars.
+// flagName is the --xxx-credentials flag (empty if the provider has no credential flag).
+// Schema fields with a Flag value are also checked as direct command flags (e.g. --zone).
+func resolveCredentials(cmd *cobra.Command, schema provider.CredentialSchema, flagName string) (map[string]string, error) {
+	// Parse key=value pairs from the credentials flag
+	flagCreds := make(map[string]string)
+	if flagName != "" && cmd.Flags().Changed(flagName) {
+		pairs, _ := cmd.Flags().GetStringArray(flagName)
+		for _, pair := range pairs {
+			k, v, ok := strings.Cut(pair, "=")
+			if !ok {
+				return nil, fmt.Errorf("invalid credential %q — expected KEY=VALUE", pair)
+			}
+			flagCreds[k] = v
+		}
+	}
+
+	creds := make(map[string]string, len(schema.Fields))
+	for _, f := range schema.Fields {
+		// 1. Key=value credential flag takes priority
+		if v, ok := flagCreds[f.Key]; ok {
+			creds[f.Key] = v
+			continue
+		}
+		// 2. Direct command flag (e.g. --zone for the "zone" field)
+		if f.Flag != "" {
+			if v, _ := cmd.Flags().GetString(f.Flag); v != "" {
+				creds[f.Key] = v
+				continue
+			}
+		}
+		// 3. Env var fallback
+		if v := os.Getenv(f.EnvVar); v != "" {
+			creds[f.Key] = v
+		}
+	}
+	return creds, nil
+}
+
 // ── Compute provider ─────────────────────────────────────────────────────────
 
-// resolveComputeProvider reads --compute-provider flag → COMPUTE_PROVIDER env var.
 func resolveComputeProvider(cmd *cobra.Command) (string, error) {
 	name, _ := cmd.Flags().GetString("compute-provider")
 	if name == "" {
@@ -43,47 +83,16 @@ func resolveComputeProvider(cmd *cobra.Command) (string, error) {
 	return name, nil
 }
 
-// resolveComputeCredentials resolves compute provider credentials from flags → env vars.
-// --compute-credentials KEY=VALUE pairs take priority. Per-provider env vars are the fallback.
 func resolveComputeCredentials(cmd *cobra.Command, providerName string) (map[string]string, error) {
 	schema, err := provider.GetComputeSchema(providerName)
 	if err != nil {
 		return nil, err
 	}
-
-	// Parse --compute-credentials flag (key=value pairs)
-	flagCreds := make(map[string]string)
-	if cmd.Flags().Changed("compute-credentials") {
-		pairs, _ := cmd.Flags().GetStringArray("compute-credentials")
-		for _, pair := range pairs {
-			k, v, ok := strings.Cut(pair, "=")
-			if !ok {
-				return nil, fmt.Errorf("invalid compute credential %q — expected KEY=VALUE", pair)
-			}
-			flagCreds[k] = v
-		}
-	}
-
-	creds := make(map[string]string, len(schema.Fields))
-	for _, f := range schema.Fields {
-		// 1. Flag takes priority
-		if v, ok := flagCreds[f.Key]; ok {
-			creds[f.Key] = v
-			continue
-		}
-		// 2. Env var fallback
-		if v := os.Getenv(f.EnvVar); v != "" {
-			creds[f.Key] = v
-			continue
-		}
-		// Leave empty — provider.Validate will catch required fields
-	}
-	return creds, nil
+	return resolveCredentials(cmd, schema, "compute-credentials")
 }
 
 // ── Build provider ───────────────────────────────────────────────────────────
 
-// resolveBuildProvider reads --build-provider flag → BUILD_PROVIDER env var.
 func resolveBuildProvider(cmd *cobra.Command) (string, error) {
 	name, _ := cmd.Flags().GetString("build-provider")
 	if name == "" {
@@ -95,44 +104,16 @@ func resolveBuildProvider(cmd *cobra.Command) (string, error) {
 	return name, nil
 }
 
-// resolveBuildCredentials resolves build provider credentials from --build-credentials flag → env vars.
 func resolveBuildCredentials(cmd *cobra.Command, buildProviderName string) (map[string]string, error) {
 	schema, err := provider.GetBuildSchema(buildProviderName)
 	if err != nil {
 		return nil, err
 	}
-
-	// Parse --build-credentials flag (key=value pairs)
-	flagCreds := make(map[string]string)
-	if cmd.Flags().Changed("build-credentials") {
-		pairs, _ := cmd.Flags().GetStringArray("build-credentials")
-		for _, pair := range pairs {
-			k, v, ok := strings.Cut(pair, "=")
-			if !ok {
-				return nil, fmt.Errorf("invalid build credential %q — expected KEY=VALUE", pair)
-			}
-			flagCreds[k] = v
-		}
-	}
-
-	creds := make(map[string]string, len(schema.Fields))
-	for _, f := range schema.Fields {
-		// 1. Flag takes priority
-		if v, ok := flagCreds[f.Key]; ok {
-			creds[f.Key] = v
-			continue
-		}
-		// 2. Env var fallback
-		if v := os.Getenv(f.EnvVar); v != "" {
-			creds[f.Key] = v
-		}
-	}
-	return creds, nil
+	return resolveCredentials(cmd, schema, "build-credentials")
 }
 
 // ── DNS provider ─────────────────────────────────────────────────────────────
 
-// resolveDNSProvider reads --dns-provider flag → DNS_PROVIDER env var.
 func resolveDNSProvider(cmd *cobra.Command) (string, error) {
 	name, _ := cmd.Flags().GetString("dns-provider")
 	if name == "" {
@@ -144,34 +125,16 @@ func resolveDNSProvider(cmd *cobra.Command) (string, error) {
 	return name, nil
 }
 
-// resolveDNSCredentials resolves DNS provider credentials from flags → env vars.
-// Zone is part of the schema — resolved like any other credential field.
 func resolveDNSCredentials(cmd *cobra.Command, providerName string) (map[string]string, error) {
 	schema, err := provider.GetDNSSchema(providerName)
 	if err != nil {
 		return nil, err
 	}
-
-	creds := make(map[string]string, len(schema.Fields))
-	for _, f := range schema.Fields {
-		// 1. Check command flag (e.g. --zone for the "zone" field)
-		if f.Flag != "" {
-			if v, _ := cmd.Flags().GetString(f.Flag); v != "" {
-				creds[f.Key] = v
-				continue
-			}
-		}
-		// 2. Env var fallback
-		if v := os.Getenv(f.EnvVar); v != "" {
-			creds[f.Key] = v
-		}
-	}
-	return creds, nil
+	return resolveCredentials(cmd, schema, "")
 }
 
 // ── Storage provider ─────────────────────────────────────────────────────────
 
-// resolveStorageProvider reads --storage-provider flag → STORAGE_PROVIDER env var.
 func resolveStorageProvider(cmd *cobra.Command) (string, error) {
 	name, _ := cmd.Flags().GetString("storage-provider")
 	if name == "" {
@@ -183,26 +146,16 @@ func resolveStorageProvider(cmd *cobra.Command) (string, error) {
 	return name, nil
 }
 
-// resolveStorageCredentials resolves storage provider credentials from env vars.
-func resolveStorageCredentials(providerName string) (map[string]string, error) {
+func resolveStorageCredentials(cmd *cobra.Command, providerName string) (map[string]string, error) {
 	schema, err := provider.GetBucketSchema(providerName)
 	if err != nil {
 		return nil, err
 	}
-
-	creds := make(map[string]string, len(schema.Fields))
-	for _, f := range schema.Fields {
-		if v := os.Getenv(f.EnvVar); v != "" {
-			creds[f.Key] = v
-		}
-	}
-	return creds, nil
+	return resolveCredentials(cmd, schema, "")
 }
 
 // ── SSH key ──────────────────────────────────────────────────────────────────
 
-// resolveSSHKey reads the SSH private key from disk.
-// Path from SSH_KEY_PATH env var, fallback to ~/.ssh/id_ed25519 then ~/.ssh/id_rsa.
 func resolveSSHKey() ([]byte, error) {
 	keyPath := os.Getenv("SSH_KEY_PATH")
 	if keyPath != "" {
@@ -212,7 +165,6 @@ func resolveSSHKey() ([]byte, error) {
 		}
 		return key, nil
 	}
-	// Try common key paths
 	home := os.Getenv("HOME")
 	for _, name := range []string{"id_ed25519", "id_rsa"} {
 		p := home + "/.ssh/" + name
@@ -225,13 +177,7 @@ func resolveSSHKey() ([]byte, error) {
 
 // ── Git auth ─────────────────────────────────────────────────────────────────
 
-// resolveGitAuth resolves git credentials for cloning remote repos.
-// Resolution order: signed URL (caller checks) → gh auth token → --git-token flag → GITHUB_TOKEN env.
-// Returns (username, token). Both empty if nothing found — app/ enforces when needed.
 func resolveGitAuth(cmd *cobra.Command) (string, string) {
-	// 1. Signed URL — handled by app/ (it parses the source value)
-
-	// 2. gh auth token
 	out, err := exec.Command("gh", "auth", "token").Output()
 	if err == nil {
 		token := strings.TrimSpace(string(out))
@@ -239,48 +185,38 @@ func resolveGitAuth(cmd *cobra.Command) (string, string) {
 			return "x-access-token", token
 		}
 	}
-
-	// 3. --git-token flag
 	if cmd.Flags().Changed("git-token") {
 		token, _ := cmd.Flags().GetString("git-token")
 		if token != "" {
 			return "x-access-token", token
 		}
 	}
-
-	// 4. GITHUB_TOKEN env var
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		return "x-access-token", token
 	}
-
 	return "", ""
 }
 
 // ── Flag helpers ─────────────────────────────────────────────────────────────
 
-// addComputeProviderFlags adds --compute-provider and --compute-credentials to a command.
 func addComputeProviderFlags(cmd *cobra.Command) {
 	cmd.Flags().String("compute-provider", "", "compute provider (hetzner)")
 	cmd.Flags().StringArray("compute-credentials", nil, "compute provider credentials (KEY=VALUE)")
 }
 
-// addBuildProviderFlags adds --build-provider and --build-credentials to a command.
 func addBuildProviderFlags(cmd *cobra.Command) {
 	cmd.Flags().String("build-provider", "", "build provider (local, daytona, github)")
 	cmd.Flags().StringArray("build-credentials", nil, "build provider credentials (KEY=VALUE)")
 }
 
-// addDNSProviderFlags adds --dns-provider to a command.
 func addDNSProviderFlags(cmd *cobra.Command) {
 	cmd.Flags().String("dns-provider", "", "DNS provider (cloudflare)")
 }
 
-// addStorageProviderFlags adds --storage-provider to a command.
 func addStorageProviderFlags(cmd *cobra.Command) {
 	cmd.Flags().String("storage-provider", "", "storage provider (cloudflare)")
 }
 
-// addAppFlags adds --app-name and --env to a command.
 func addAppFlags(cmd *cobra.Command) {
 	cmd.Flags().String("app-name", "", "application name (env: NVOI_APP_NAME)")
 	cmd.Flags().String("environment", "", "environment (env: NVOI_ENV)")

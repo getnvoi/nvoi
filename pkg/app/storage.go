@@ -203,7 +203,7 @@ func StorageList(ctx context.Context, req StorageListRequest) ([]StorageItem, er
 	secretName := names.KubeSecrets()
 	keys, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	var items []StorageItem

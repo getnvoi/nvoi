@@ -4,11 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/getnvoi/nvoi/pkg/core"
 )
+
+// WaitHTTPS polls until https://domain returns a non-5xx response.
+// Parallel to WaitSSH — waits for a service to become reachable.
+func WaitHTTPS(ctx context.Context, domain string) error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	return core.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+		resp, err := client.Get("https://" + domain)
+		if err != nil {
+			return false, nil
+		}
+		resp.Body.Close()
+		return resp.StatusCode >= 200 && resp.StatusCode < 500, nil
+	})
+}
 
 // WaitSSH polls until SSH is reachable on addr (host:port).
 func WaitSSH(ctx context.Context, addr string, privateKey []byte) error {

@@ -5,15 +5,13 @@
 package cloudflare
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
+	"github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -21,6 +19,7 @@ const cfBaseURL = "https://api.cloudflare.com/client/v4"
 
 // Client manages R2 buckets via Cloudflare API + S3-compatible operations.
 type Client struct {
+	api       *core.HTTPClient
 	apiKey    string
 	accountID string
 	creds     *provider.BucketCredentials
@@ -28,8 +27,16 @@ type Client struct {
 
 // New creates a Cloudflare R2 bucket provider.
 func New(creds map[string]string) *Client {
+	apiKey := creds["api_key"]
 	return &Client{
-		apiKey:    creds["api_key"],
+		api: &core.HTTPClient{
+			BaseURL: cfBaseURL,
+			SetAuth: func(r *http.Request) {
+				r.Header.Set("Authorization", "Bearer "+apiKey)
+			},
+			Label: "cloudflare r2",
+		},
+		apiKey:    apiKey,
 		accountID: creds["account_id"],
 	}
 }
@@ -41,7 +48,7 @@ func (c *Client) ValidateCredentials(ctx context.Context) error {
 	if c.accountID == "" {
 		return fmt.Errorf("cloudflare r2: account_id is required")
 	}
-	_, err := c.tokenVerify()
+	_, err := c.tokenVerify(ctx)
 	if err != nil {
 		return fmt.Errorf("cloudflare r2: %w", err)
 	}
@@ -49,28 +56,15 @@ func (c *Client) ValidateCredentials(ctx context.Context) error {
 }
 
 func (c *Client) EnsureBucket(ctx context.Context, name string) error {
-	body, _ := json.Marshal(map[string]string{"name": name})
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		fmt.Sprintf("%s/accounts/%s/r2/buckets", cfBaseURL, c.accountID),
-		bytes.NewReader(body))
+	err := c.api.Do(ctx, "POST", fmt.Sprintf("/accounts/%s/r2/buckets", c.accountID), map[string]string{"name": name}, nil)
 	if err != nil {
-		return err
+		// 409 = already exists — success
+		if apiErr, ok := err.(*core.APIError); ok && apiErr.HTTPStatus() == 409 {
+			return nil
+		}
+		return fmt.Errorf("create bucket %s: %w", name, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// 200/201 = created, 409 = already exists
-	if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 409 {
-		return nil
-	}
-	data, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("cloudflare r2: create bucket %s: %d: %s", name, resp.StatusCode, string(data))
+	return nil
 }
 
 func (c *Client) EmptyBucket(ctx context.Context, name string) error {
@@ -82,25 +76,15 @@ func (c *Client) EmptyBucket(ctx context.Context, name string) error {
 }
 
 func (c *Client) DeleteBucket(ctx context.Context, name string) error {
-	req, err := http.NewRequestWithContext(ctx, "DELETE",
-		fmt.Sprintf("%s/accounts/%s/r2/buckets/%s", cfBaseURL, c.accountID, name), nil)
+	err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/accounts/%s/r2/buckets/%s", c.accountID, name), nil, nil)
 	if err != nil {
-		return err
+		// 404 = already gone — success
+		if core.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete bucket %s: %w", name, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// 200 = deleted, 404 = already gone
-	if resp.StatusCode == 200 || resp.StatusCode == 404 {
-		return nil
-	}
-	data, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("cloudflare r2: delete bucket %s: %d: %s", name, resp.StatusCode, string(data))
+	return nil
 }
 
 func (c *Client) SetCORS(ctx context.Context, name string, origins, methods []string) error {
@@ -133,7 +117,7 @@ func (c *Client) Credentials(ctx context.Context) (provider.BucketCredentials, e
 	if c.creds != nil {
 		return *c.creds, nil
 	}
-	tokenID, err := c.tokenVerify()
+	tokenID, err := c.tokenVerify(ctx)
 	if err != nil {
 		return provider.BucketCredentials{}, fmt.Errorf("cloudflare credentials: %w", err)
 	}
@@ -147,24 +131,13 @@ func (c *Client) Credentials(ctx context.Context) (provider.BucketCredentials, e
 	return *c.creds, nil
 }
 
-func (c *Client) tokenVerify() (string, error) {
-	req, err := http.NewRequest("GET", cfBaseURL+"/user/tokens/verify", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
+func (c *Client) tokenVerify(ctx context.Context) (string, error) {
 	var result struct {
 		Result struct {
 			ID string `json:"id"`
 		} `json:"result"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := c.api.Do(ctx, "GET", "/user/tokens/verify", nil, &result); err != nil {
 		return "", err
 	}
 	if result.Result.ID == "" {

@@ -13,6 +13,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/infra"
 )
 
+
 var kubeconfigPath = fmt.Sprintf("/home/%s/.kube/config", core.DefaultUser)
 
 // NvoiSelector is the label selector for nvoi-managed resources.
@@ -70,7 +71,7 @@ func FirstPod(ctx context.Context, ssh core.SSHClient, ns, service string) (stri
 	sel := PodSelector(service)
 	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get pods -l %s -o jsonpath='{.items[0].metadata.name}'", sel)))
 	if err != nil {
-		return "", fmt.Errorf("no pods found for service %q", service)
+		return "", fmt.Errorf("get pods for %q: %w", service, err)
 	}
 	pod := strings.Trim(strings.TrimSpace(string(out)), "'")
 	if pod == "" {
@@ -92,10 +93,17 @@ func Apply(ctx context.Context, ssh core.SSHClient, ns string, yaml string) erro
 }
 
 // DeleteByName removes a workload + service by name. Tries both deployment and statefulset.
+// --ignore-not-found handles "already gone." SSH errors are real failures.
 func DeleteByName(ctx context.Context, ssh core.SSHClient, ns, name string) error {
-	ssh.Run(ctx, kubectl(ns, fmt.Sprintf("delete deployment/%s --ignore-not-found", name)))
-	ssh.Run(ctx, kubectl(ns, fmt.Sprintf("delete statefulset/%s --ignore-not-found", name)))
-	ssh.Run(ctx, kubectl(ns, fmt.Sprintf("delete service/%s --ignore-not-found", name)))
+	if _, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("delete deployment/%s --ignore-not-found", name))); err != nil {
+		return fmt.Errorf("delete deployment/%s: %w", name, err)
+	}
+	if _, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("delete statefulset/%s --ignore-not-found", name))); err != nil {
+		return fmt.Errorf("delete statefulset/%s: %w", name, err)
+	}
+	if _, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("delete service/%s --ignore-not-found", name))); err != nil {
+		return fmt.Errorf("delete service/%s: %w", name, err)
+	}
 	return nil
 }
 
@@ -129,11 +137,9 @@ func ListSecretKeys(ctx context.Context, ssh core.SSHClient, ns, secretName stri
 
 // UpsertSecretKey adds or updates a single key in a k8s Secret.
 // Creates the secret if it doesn't exist. Idempotent.
+// Uses --from-literal for create (shellQuote handles special chars)
+// and uploads a JSON patch file for update (avoids shell injection).
 func UpsertSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, key, value string) error {
-	// kubectl create secret generic handles create-or-patch via dry-run + apply.
-	// But it replaces the whole secret. We need to merge with existing keys.
-	// Strategy: patch if exists, create if not.
-
 	// Check if secret exists
 	_, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get secret %s 2>/dev/null", secretName)))
 	if err != nil {
@@ -149,11 +155,17 @@ func UpsertSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, ke
 		return nil
 	}
 
-	// Secret exists — patch the key
-	cmd := kubectl(ns, fmt.Sprintf(
-		"patch secret %s -p '{\"stringData\":{\"%s\":\"%s\"}}'",
-		secretName, key, escapeJSON(value),
-	))
+	// Secret exists — upload patch as file to avoid shell injection
+	patch, err := json.Marshal(map[string]any{"stringData": map[string]string{key: value}})
+	if err != nil {
+		return fmt.Errorf("marshal patch: %w", err)
+	}
+	patchPath := fmt.Sprintf("/home/%s/.nvoi-patch.json", core.DefaultUser)
+	if err := ssh.Upload(ctx, bytes.NewReader(patch), patchPath, 0o600); err != nil {
+		return fmt.Errorf("upload patch: %w", err)
+	}
+
+	cmd := kubectl(ns, fmt.Sprintf("patch secret %s --type=merge -p \"$(cat %s)\"", secretName, patchPath))
 	out, err := ssh.Run(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("patch secret: %s: %w", string(out), err)

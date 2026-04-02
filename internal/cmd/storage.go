@@ -52,7 +52,7 @@ Then reference on service set:
 			if err != nil {
 				return err
 			}
-			storageCreds, err := resolveStorageCredentials(storageProvider)
+			storageCreds, err := resolveStorageCredentials(cmd, storageProvider)
 			if err != nil {
 				return err
 			}
@@ -121,7 +121,7 @@ func newStorageEmptyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			storageCreds, err := resolveStorageCredentials(storageProvider)
+			storageCreds, err := resolveStorageCredentials(cmd, storageProvider)
 			if err != nil {
 				return err
 			}
@@ -175,7 +175,7 @@ Examples:
 			if err != nil {
 				return err
 			}
-			storageCreds, err := resolveStorageCredentials(storageProvider)
+			storageCreds, err := resolveStorageCredentials(cmd, storageProvider)
 			if err != nil {
 				return err
 			}

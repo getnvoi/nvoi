@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"time"
 
 	"github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/infra"
@@ -82,15 +80,7 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	out.Success("caddy ready")
 
 	out.Progress(fmt.Sprintf("waiting for https://%s", req.Domains[0]))
-	httpClient := &http.Client{Timeout: 5 * time.Second}
-	if err := core.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
-		resp, err := httpClient.Get("https://" + req.Domains[0])
-		if err != nil {
-			return false, nil
-		}
-		resp.Body.Close()
-		return resp.StatusCode >= 200 && resp.StatusCode < 500, nil
-	}); err != nil {
+	if err := infra.WaitHTTPS(ctx, req.Domains[0]); err != nil {
 		out.Warning("domain not responding yet (TLS may still be provisioning)")
 	} else {
 		out.Success(fmt.Sprintf("https://%s live", req.Domains[0]))
