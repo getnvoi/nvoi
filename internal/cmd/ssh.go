@@ -35,7 +35,7 @@ func newSSHCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 				Command: args,
 			})

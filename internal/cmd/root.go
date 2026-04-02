@@ -1,6 +1,11 @@
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"os"
+
+	"github.com/getnvoi/nvoi/internal/app"
+	"github.com/spf13/cobra"
+)
 
 func Root() *cobra.Command {
 	root := &cobra.Command{
@@ -12,6 +17,7 @@ func Root() *cobra.Command {
 
 	// Persistent flags.
 	root.PersistentFlags().String("env-file", ".env", "path to .env file")
+	root.PersistentFlags().Bool("json", false, "output JSONL")
 
 	// Infrastructure.
 	root.AddCommand(newInstanceCmd())
@@ -45,4 +51,12 @@ func Root() *cobra.Command {
 func envFilePath(cmd *cobra.Command) string {
 	p, _ := cmd.Flags().GetString("env-file")
 	return p
+}
+
+func resolveOutput(cmd *cobra.Command) app.Output {
+	j, _ := cmd.Flags().GetBool("json")
+	if j {
+		return NewJSONOutput(os.Stdout)
+	}
+	return NewTUIOutput()
 }

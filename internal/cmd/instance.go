@@ -53,7 +53,7 @@ func newInstanceSetCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 				Name:       args[0],
 				ServerType: computeType,
@@ -110,7 +110,7 @@ func newInstanceDeleteCmd() *cobra.Command {
 					Env:         env,
 					Provider:    providerName,
 					Credentials: creds,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 				Name: args[0],
 			})
@@ -146,7 +146,7 @@ func newInstanceListCmd() *cobra.Command {
 					Env:         env,
 					Provider:    providerName,
 					Credentials: creds,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 			})
 			if err != nil {
