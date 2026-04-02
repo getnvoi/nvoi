@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 // MountVolume resolves the device path and mounts a volume on the server.
 // The volume must already be attached (via provider API).
 // Idempotent: skips if already mounted at mountPath.
-func MountVolume(ctx context.Context, vol *provider.Volume, serverIP string, mountPath string, privKey []byte) error {
+func MountVolume(ctx context.Context, vol *provider.Volume, serverIP string, mountPath string, privKey []byte, w io.Writer) error {
 	ssh, err := ConnectSSH(ctx, serverIP+":22", core.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh for volume mount: %w", err)
@@ -24,7 +25,7 @@ func MountVolume(ctx context.Context, vol *provider.Volume, serverIP string, mou
 	out, err := ssh.Run(ctx, fmt.Sprintf("mountpoint -q %s && echo mounted || echo not", mountPath))
 	if err == nil && strings.TrimSpace(string(out)) == "mounted" {
 		_, _ = ssh.Run(ctx, fmt.Sprintf("sudo xfs_growfs %s 2>/dev/null || true", mountPath))
-		fmt.Printf("  already mounted at %s\n", mountPath)
+		fmt.Fprintf(w, "already mounted at %s\n", mountPath)
 		return nil
 	}
 
@@ -47,7 +48,7 @@ func MountVolume(ctx context.Context, vol *provider.Volume, serverIP string, mou
 	// Format XFS if needed
 	out, err = ssh.Run(ctx, fmt.Sprintf("sudo blkid %s || true", devicePath))
 	if err == nil && !strings.Contains(string(out), "TYPE=") {
-		fmt.Printf("  formatting %s as XFS...\n", devicePath)
+		fmt.Fprintf(w, "formatting %s as XFS...\n", devicePath)
 		if _, err := ssh.Run(ctx, fmt.Sprintf("sudo mkfs.xfs %s", devicePath)); err != nil {
 			return fmt.Errorf("format %s: %w", devicePath, err)
 		}
@@ -79,13 +80,13 @@ func MountVolume(ctx context.Context, vol *provider.Volume, serverIP string, mou
 		return fmt.Errorf("volume not mounted at %s after mount attempt", mountPath)
 	}
 
-	fmt.Printf("  ✓ mounted at %s\n", mountPath)
+	fmt.Fprintf(w, "mounted at %s\n", mountPath)
 	return nil
 }
 
 // UnmountVolume unmounts a volume and removes the fstab entry.
 // No-op if not mounted. Non-fatal errors are returned (caller decides severity).
-func UnmountVolume(ctx context.Context, serverIP string, mountPath string, privKey []byte) error {
+func UnmountVolume(ctx context.Context, serverIP string, mountPath string, privKey []byte, w io.Writer) error {
 	ssh, err := ConnectSSH(ctx, serverIP+":22", core.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh: %w", err)
@@ -99,7 +100,7 @@ func UnmountVolume(ctx context.Context, serverIP string, mountPath string, privK
 	}
 
 	// Unmount
-	fmt.Printf("  unmounting %s...\n", mountPath)
+	fmt.Fprintf(w, "unmounting %s...\n", mountPath)
 	if _, err := ssh.Run(ctx, fmt.Sprintf("sudo umount -f %s", mountPath)); err != nil {
 		return fmt.Errorf("umount %s: %w", mountPath, err)
 	}
@@ -112,17 +113,15 @@ func UnmountVolume(ctx context.Context, serverIP string, mountPath string, privK
 	// Remove mount directory
 	_, _ = ssh.Run(ctx, fmt.Sprintf("sudo rmdir %s 2>/dev/null || true", mountPath))
 
-	fmt.Printf("  ✓ unmounted %s\n", mountPath)
+	fmt.Fprintf(w, "unmounted %s\n", mountPath)
 	return nil
 }
 
 func resolveDevicePath(ctx context.Context, vol *provider.Volume, ssh core.SSHClient) (string, error) {
-	// If provider already gave us a device path, use it
 	if vol.DevicePath != "" {
 		return vol.DevicePath, nil
 	}
 
-	// Poll: check /dev/disk/by-id/ for the volume ID
 	var devicePath string
 	err := core.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
 		out, err := ssh.Run(ctx, fmt.Sprintf("ls /dev/disk/by-id/ 2>/dev/null | grep -i '%s' || true", vol.ID))

@@ -90,19 +90,19 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		}
 		masterIP = master.IPv4
 		out.Progress(fmt.Sprintf("joining cluster via master %s", master.IPv4))
-		if err := infra.JoinK3sWorker(ctx, srv.IPv4, srv.PrivateIP, master.IPv4, master.PrivateIP, req.SSHKey); err != nil {
+		if err := infra.JoinK3sWorker(ctx, srv.IPv4, srv.PrivateIP, master.IPv4, master.PrivateIP, req.SSHKey, out.Writer()); err != nil {
 			return nil, fmt.Errorf("k3s worker join: %w", err)
 		}
 		out.Success("joined cluster")
 	} else {
 		masterIP = srv.IPv4
 		out.Progress("installing k3s master")
-		if err := infra.InstallK3sMaster(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey); err != nil {
+		if err := infra.InstallK3sMaster(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey, out.Writer()); err != nil {
 			return nil, fmt.Errorf("k3s master: %w", err)
 		}
 		out.Success("k3s master ready")
 
-		if err := infra.EnsureRegistry(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey); err != nil {
+		if err := infra.EnsureRegistry(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey, out.Writer()); err != nil {
 			return nil, fmt.Errorf("registry: %w", err)
 		}
 	}

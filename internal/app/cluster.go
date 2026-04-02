@@ -45,9 +45,16 @@ func (c *Cluster) Names() (*core.Names, error) {
 	return core.NewNames(c.AppName, c.Env)
 }
 
-// Compute resolves the compute provider.
+// Compute resolves the compute provider and wires the output writer.
 func (c *Cluster) Compute() (provider.ComputeProvider, error) {
-	return provider.ResolveCompute(c.Provider, c.Credentials)
+	prov, err := provider.ResolveCompute(c.Provider, c.Credentials)
+	if err != nil {
+		return nil, err
+	}
+	if w, ok := prov.(provider.Writable); ok {
+		w.SetWriter(c.Log().Writer())
+	}
+	return prov, nil
 }
 
 // Master finds the master server via provider API.

@@ -49,7 +49,7 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 	if existing != nil {
 		// TODO: validate labels match req.Labels to prevent cross-project collision
 		// on the same Hetzner account (different app, same naming by accident).
-		fmt.Printf("  server %s exists (%s)\n", req.Name, existing.IPv4)
+		fmt.Fprintf(c.w, "  server %s exists (%s)\n", req.Name, existing.IPv4)
 		return existing, nil
 	}
 
@@ -60,13 +60,13 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 	if err != nil {
 		return nil, fmt.Errorf("firewall: %w", err)
 	}
-	fmt.Printf("  ✓ firewall %s\n", fwName)
+	fmt.Fprintf(c.w, "  ✓ firewall %s\n", fwName)
 
 	netID, err := c.ensureNetwork(ctx, netName, req.Location, req.Labels)
 	if err != nil {
 		return nil, fmt.Errorf("network: %w", err)
 	}
-	fmt.Printf("  ✓ network %s\n", netName)
+	fmt.Fprintf(c.w, "  ✓ network %s\n", netName)
 
 	// Create server
 	fwInt, _ := strconv.ParseInt(fwID, 10, 64)
@@ -90,7 +90,7 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 		return nil, fmt.Errorf("create server: %w", err)
 	}
 
-	fmt.Printf("  ✓ server %s created (%s)\n", req.Name, serverFrom(resp.Server).IPv4)
+	fmt.Fprintf(c.w, "  ✓ server %s created (%s)\n", req.Name, serverFrom(resp.Server).IPv4)
 	return serverFrom(resp.Server), nil
 }
 

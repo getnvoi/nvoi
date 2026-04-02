@@ -3,6 +3,7 @@ package hetzner
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -15,11 +16,13 @@ const defaultBaseURL = "https://api.hetzner.cloud/v1"
 type Client struct {
 	api   *core.HTTPClient
 	token string
+	w     io.Writer
 }
 
 func New(token string) *Client {
 	return &Client{
 		token: token,
+		w:     io.Discard,
 		api: &core.HTTPClient{
 			BaseURL: defaultBaseURL,
 			SetAuth: func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) },
@@ -27,6 +30,9 @@ func New(token string) *Client {
 		},
 	}
 }
+
+// SetWriter sets the output writer for progress messages.
+func (c *Client) SetWriter(w io.Writer) { c.w = w }
 
 func (c *Client) ValidateCredentials(ctx context.Context) error {
 	if c.token == "" {
