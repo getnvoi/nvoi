@@ -1,15 +1,6 @@
 package provider
 
-import (
-	"fmt"
-	"io"
-)
-
-// Writable is implemented by any provider that accepts an io.Writer for progress output.
-// All providers should embed a writer and implement this.
-type Writable interface {
-	SetWriter(io.Writer)
-}
+import "fmt"
 
 // ── Credential schema ──────────────────────────────────────────────────────────
 
