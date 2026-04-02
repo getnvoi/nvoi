@@ -90,24 +90,27 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		}
 		masterIP = master.IPv4
 		out.Progress(fmt.Sprintf("joining cluster via master %s", master.IPv4))
-		if err := infra.JoinK3sWorker(ctx, srv.IPv4, srv.PrivateIP, master.IPv4, master.PrivateIP, req.SSHKey, out.Writer()); err != nil {
+		workerNode := infra.Node{PublicIP: srv.IPv4, PrivateIP: srv.PrivateIP}
+		masterNode := infra.Node{PublicIP: master.IPv4, PrivateIP: master.PrivateIP}
+		if err := infra.JoinK3sWorker(ctx, workerNode, masterNode, req.SSHKey, out.Writer()); err != nil {
 			return nil, fmt.Errorf("k3s worker join: %w", err)
 		}
 		out.Success("joined cluster")
 	} else {
 		masterIP = srv.IPv4
+		srvNode := infra.Node{PublicIP: srv.IPv4, PrivateIP: srv.PrivateIP}
 		out.Progress("installing k3s master")
-		if err := infra.InstallK3sMaster(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey, out.Writer()); err != nil {
+		if err := infra.InstallK3sMaster(ctx, srvNode, req.SSHKey, out.Writer()); err != nil {
 			return nil, fmt.Errorf("k3s master: %w", err)
 		}
 		out.Success("k3s master ready")
 
-		if err := infra.EnsureRegistry(ctx, srv.IPv4, srv.PrivateIP, req.SSHKey, out.Writer()); err != nil {
+		if err := infra.EnsureRegistry(ctx, srvNode, req.SSHKey, out.Writer()); err != nil {
 			return nil, fmt.Errorf("registry: %w", err)
 		}
 	}
 
-	if err := kube.LabelNode(ctx, masterIP, req.SSHKey, names.Server(req.Name), req.Name); err != nil {
+	if err := kube.LabelNode(ctx, infra.Node{PublicIP: masterIP}, req.SSHKey, names.Server(req.Name), req.Name); err != nil {
 		return nil, fmt.Errorf("label node: %w", err)
 	}
 	out.Success(fmt.Sprintf("node labeled %s=%s", core.LabelNvoiRole, req.Name))

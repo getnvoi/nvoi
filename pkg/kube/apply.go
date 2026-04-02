@@ -241,8 +241,8 @@ func base64Decode(s string) (string, error) {
 
 // LabelNode labels a k8s node with nvoi-role={role}. Idempotent — runs every deploy.
 // Connects to master via SSH since kubectl lives there.
-func LabelNode(ctx context.Context, masterIP string, sshKey []byte, nodeName, role string) error {
-	ssh, err := infra.ConnectSSH(ctx, masterIP+":22", core.DefaultUser, sshKey)
+func LabelNode(ctx context.Context, master infra.Node, sshKey []byte, nodeName, role string) error {
+	ssh, err := infra.ConnectSSH(ctx, master.PublicIP+":22", core.DefaultUser, sshKey)
 	if err != nil {
 		return fmt.Errorf("ssh master for node label: %w", err)
 	}

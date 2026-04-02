@@ -10,10 +10,17 @@ import (
 	"github.com/getnvoi/nvoi/pkg/core"
 )
 
+// Node identifies a server by its public and private IP addresses.
+// Groups the ip+privateIP pairs that are passed together everywhere.
+type Node struct {
+	PublicIP  string
+	PrivateIP string
+}
+
 // InstallK3sMaster installs k3s server on the master node.
 // Idempotent — skips if already installed and Ready.
-func InstallK3sMaster(ctx context.Context, ip string, privateIP string, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, ip+":22", core.DefaultUser, privKey)
+func InstallK3sMaster(ctx context.Context, node Node, privKey []byte, w io.Writer) error {
+	ssh, err := ConnectSSH(ctx, node.PublicIP+":22", core.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh master: %w", err)
 	}
@@ -26,14 +33,14 @@ func InstallK3sMaster(ctx context.Context, ip string, privateIP string, privKey 
 	}
 
 	// Discover private interface
-	privateIface, err := discoverPrivateInterface(ctx, ssh, privateIP)
+	privateIface, err := discoverPrivateInterface(ctx, ssh, node.PrivateIP)
 	if err != nil {
 		return fmt.Errorf("discover private interface: %w", err)
 	}
 
 	// Configure registry mirrors
 	fmt.Fprintln(w, "configuring k3s registries...")
-	if err := configureK3sRegistry(ctx, ssh, privateIP); err != nil {
+	if err := configureK3sRegistry(ctx, ssh, node.PrivateIP); err != nil {
 		return err
 	}
 
@@ -41,7 +48,7 @@ func InstallK3sMaster(ctx context.Context, ip string, privateIP string, privKey 
 	fmt.Fprintln(w, "installing k3s server...")
 	cmd := fmt.Sprintf(
 		`curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server --disable traefik --disable servicelb --write-kubeconfig-mode 644 --node-ip %s --advertise-address %s --tls-san %s --tls-san %s --cluster-cidr %s --service-cidr %s --flannel-backend vxlan --flannel-iface %s' sh -`,
-		privateIP, privateIP, privateIP, ip, core.K3sClusterCIDR, core.K3sServiceCIDR, privateIface,
+		node.PrivateIP, node.PrivateIP, node.PrivateIP, node.PublicIP, core.K3sClusterCIDR, core.K3sServiceCIDR, privateIface,
 	)
 	if err := ssh.RunStream(ctx, cmd, w, w); err != nil {
 		return fmt.Errorf("install k3s server: %w", err)
@@ -50,7 +57,7 @@ func InstallK3sMaster(ctx context.Context, ip string, privateIP string, privKey 
 	// Setup kubeconfig for deploy user
 	setupKubeconfig := fmt.Sprintf(
 		`mkdir -p /home/%s/.kube && sudo cp %s /home/%s/.kube/config && sudo sed -i 's/127.0.0.1/%s/g' /home/%s/.kube/config && sudo chown -R %s:%s /home/%s/.kube && chmod 600 /home/%s/.kube/config`,
-		core.DefaultUser, core.KubeconfigPath, core.DefaultUser, privateIP, core.DefaultUser, core.DefaultUser, core.DefaultUser, core.DefaultUser, core.DefaultUser,
+		core.DefaultUser, core.KubeconfigPath, core.DefaultUser, node.PrivateIP, core.DefaultUser, core.DefaultUser, core.DefaultUser, core.DefaultUser, core.DefaultUser,
 	)
 	if _, err := ssh.Run(ctx, setupKubeconfig); err != nil {
 		return fmt.Errorf("setup kubeconfig: %w", err)
@@ -73,14 +80,14 @@ func InstallK3sMaster(ctx context.Context, ip string, privateIP string, privKey 
 
 // EnsureRegistry starts the Docker registry container on master.
 // Idempotent — skips if already running.
-func EnsureRegistry(ctx context.Context, ip string, privateIP string, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, ip+":22", core.DefaultUser, privKey)
+func EnsureRegistry(ctx context.Context, node Node, privKey []byte, w io.Writer) error {
+	ssh, err := ConnectSSH(ctx, node.PublicIP+":22", core.DefaultUser, privKey)
 	if err != nil {
 		return err
 	}
 	defer ssh.Close()
 
-	registryAddr := core.RegistryAddr(privateIP)
+	registryAddr := core.RegistryAddr(node.PrivateIP)
 
 	// Already running?
 	if _, err := ssh.Run(ctx, fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr)); err == nil {
@@ -111,9 +118,9 @@ func EnsureRegistry(ctx context.Context, ip string, privateIP string, privKey []
 
 // JoinK3sWorker joins a worker to the cluster via the master.
 // Idempotent — skips if k3s-agent is already active.
-func JoinK3sWorker(ctx context.Context, workerIP string, workerPrivateIP string, masterIP string, masterPrivateIP string, privKey []byte, w io.Writer) error {
+func JoinK3sWorker(ctx context.Context, worker, master Node, privKey []byte, w io.Writer) error {
 	// Read token from master
-	masterSSH, err := ConnectSSH(ctx, masterIP+":22", core.DefaultUser, privKey)
+	masterSSH, err := ConnectSSH(ctx, master.PublicIP+":22", core.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh master for token: %w", err)
 	}
@@ -125,7 +132,7 @@ func JoinK3sWorker(ctx context.Context, workerIP string, workerPrivateIP string,
 	token := strings.TrimSpace(string(tokenBytes))
 
 	// SSH to worker
-	workerSSH, err := ConnectSSH(ctx, workerIP+":22", core.DefaultUser, privKey)
+	workerSSH, err := ConnectSSH(ctx, worker.PublicIP+":22", core.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh worker: %w", err)
 	}
@@ -138,12 +145,13 @@ func JoinK3sWorker(ctx context.Context, workerIP string, workerPrivateIP string,
 	}
 
 	// Configure registry on worker
-	if err := configureK3sRegistry(ctx, workerSSH, masterPrivateIP); err != nil {
+	if err := configureK3sRegistry(ctx, workerSSH, master.PrivateIP); err != nil {
 		return err
 	}
 
+	workerPrivateIP := worker.PrivateIP
 	if workerPrivateIP == "" {
-		workerPrivateIP = workerIP
+		workerPrivateIP = worker.PublicIP
 	}
 
 	privateIface, err := discoverPrivateInterface(ctx, workerSSH, workerPrivateIP)
@@ -155,14 +163,14 @@ func JoinK3sWorker(ctx context.Context, workerIP string, workerPrivateIP string,
 	fmt.Fprintln(w, "installing k3s agent...")
 	cmd := fmt.Sprintf(
 		`curl -sfL https://get.k3s.io | K3S_URL=https://%s:6443 K3S_TOKEN=%s INSTALL_K3S_EXEC='agent --node-ip %s --flannel-iface %s' sh -`,
-		masterPrivateIP, token, workerPrivateIP, privateIface,
+		master.PrivateIP, token, workerPrivateIP, privateIface,
 	)
 	if err := workerSSH.RunStream(ctx, cmd, w, w); err != nil {
 		return fmt.Errorf("install k3s agent: %w", err)
 	}
 
 	// Wait for node Ready on master
-	masterSSH2, err := ConnectSSH(ctx, masterIP+":22", core.DefaultUser, privKey)
+	masterSSH2, err := ConnectSSH(ctx, master.PublicIP+":22", core.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh master to verify worker: %w", err)
 	}

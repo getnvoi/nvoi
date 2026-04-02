@@ -33,10 +33,6 @@ Examples:
 			service := args[0]
 			domains := args[1:]
 
-			zone, err := resolveDNSZone(cmd)
-			if err != nil {
-				return err
-			}
 			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
@@ -53,7 +49,7 @@ Examples:
 			if err != nil {
 				return err
 			}
-			dnsCreds, err := resolveDNSCredentials(dnsProvider, zone)
+			dnsCreds, err := resolveDNSCredentials(cmd, dnsProvider)
 			if err != nil {
 				return err
 			}
@@ -71,10 +67,9 @@ Examples:
 					SSHKey:      sshKey,
 					Output:      resolveOutput(cmd),
 				},
-				DNSProvider: dnsProvider,
-				DNSCreds:    dnsCreds,
-				Service:     service,
-				Domains:     domains,
+				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
+				Service: service,
+				Domains: domains,
 			})
 		},
 	}
@@ -105,10 +100,6 @@ func newDNSDeleteCmd() *cobra.Command {
 				}
 			}
 
-			zone, err := resolveDNSZone(cmd)
-			if err != nil {
-				return err
-			}
 			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
 				return err
@@ -125,7 +116,7 @@ func newDNSDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			dnsCreds, err := resolveDNSCredentials(dnsProvider, zone)
+			dnsCreds, err := resolveDNSCredentials(cmd, dnsProvider)
 			if err != nil {
 				return err
 			}
@@ -143,10 +134,9 @@ func newDNSDeleteCmd() *cobra.Command {
 					SSHKey:      sshKey,
 					Output:      resolveOutput(cmd),
 				},
-				DNSProvider: dnsProvider,
-				DNSCreds:    dnsCreds,
-				Service:     service,
-				Domains:     domains,
+				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
+				Service: service,
+				Domains: domains,
 			})
 		},
 	}
@@ -164,22 +154,18 @@ func newDNSListCmd() *cobra.Command {
 		Short: "List DNS records in zone",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			zone, err := resolveDNSZone(cmd)
-			if err != nil {
-				return err
-			}
 			dnsProvider, err := resolveDNSProvider(cmd)
 			if err != nil {
 				return err
 			}
-			dnsCreds, err := resolveDNSCredentials(dnsProvider, zone)
+			dnsCreds, err := resolveDNSCredentials(cmd, dnsProvider)
 			if err != nil {
 				return err
 			}
 
 			records, err := app.DNSList(cmd.Context(), app.DNSListRequest{
-				DNSProvider: dnsProvider,
-				DNSCreds:    dnsCreds,
+				DNS:    app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
+				Output: resolveOutput(cmd),
 			})
 			if err != nil {
 				return err

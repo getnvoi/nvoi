@@ -14,10 +14,9 @@ import (
 
 type DNSSetRequest struct {
 	Cluster
-	DNSProvider string
-	DNSCreds    map[string]string
-	Service     string
-	Domains     []string
+	DNS     ProviderRef
+	Service string
+	Domains []string
 }
 
 func DNSSet(ctx context.Context, req DNSSetRequest) error {
@@ -28,7 +27,7 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 		return err
 	}
 
-	dns, err := provider.ResolveDNS(req.DNSProvider, req.DNSCreds)
+	dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)
 	if err != nil {
 		return err
 	}
@@ -102,17 +101,16 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 
 type DNSDeleteRequest struct {
 	Cluster
-	DNSProvider string
-	DNSCreds    map[string]string
-	Service     string
-	Domains     []string
+	DNS     ProviderRef
+	Service string
+	Domains []string
 }
 
 func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	out := req.Log()
 	out.Command("dns", "delete", req.Service)
 
-	dns, err := provider.ResolveDNS(req.DNSProvider, req.DNSCreds)
+	dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)
 	if err != nil {
 		return err
 	}
@@ -152,12 +150,12 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 }
 
 type DNSListRequest struct {
-	DNSProvider string
-	DNSCreds    map[string]string
+	DNS    ProviderRef
+	Output Output
 }
 
 func DNSList(ctx context.Context, req DNSListRequest) ([]provider.DNSRecord, error) {
-	dns, err := provider.ResolveDNS(req.DNSProvider, req.DNSCreds)
+	dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)
 	if err != nil {
 		return nil, err
 	}

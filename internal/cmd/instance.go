@@ -155,7 +155,7 @@ func newInstanceListCmd() *cobra.Command {
 
 			t := NewTable("NAME", "STATUS", "IPv4", "PRIVATE IP")
 			for _, s := range servers {
-				t.Row(s.Name, s.Status, s.IPv4, s.PrivateIP)
+				t.Row(s.Name, string(s.Status), s.IPv4, s.PrivateIP)
 			}
 			t.Print()
 			return nil

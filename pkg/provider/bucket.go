@@ -12,7 +12,7 @@ type BucketProvider interface {
 	SetCORS(ctx context.Context, name string, origins, methods []string) error
 	ClearCORS(ctx context.Context, name string) error
 	SetLifecycle(ctx context.Context, name string, expireDays int) error
-	Credentials() BucketCredentials
+	Credentials(ctx context.Context) (BucketCredentials, error)
 }
 
 // BucketCredentials holds S3-compatible access details for injection into services.

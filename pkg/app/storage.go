@@ -12,12 +12,11 @@ import (
 
 type StorageSetRequest struct {
 	Cluster
-	StorageProvider string
-	StorageCreds    map[string]string
-	Name            string
-	Bucket          string
-	CORS            bool
-	ExpireDays      int
+	Storage    ProviderRef
+	Name       string
+	Bucket     string
+	CORS       bool
+	ExpireDays int
 }
 
 func StorageSet(ctx context.Context, req StorageSetRequest) error {
@@ -27,7 +26,7 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 		return err
 	}
 
-	bucket, err := provider.ResolveBucket(req.StorageProvider, req.StorageCreds)
+	bucket, err := provider.ResolveBucket(req.Storage.Name, req.Storage.Creds)
 	if err != nil {
 		return err
 	}
@@ -65,7 +64,10 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 		out.Success("lifecycle set")
 	}
 
-	creds := bucket.Credentials()
+	creds, err := bucket.Credentials(ctx)
+	if err != nil {
+		return err
+	}
 	ssh, names2, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return err
@@ -104,9 +106,8 @@ func StorageSet(ctx context.Context, req StorageSetRequest) error {
 
 type StorageDeleteRequest struct {
 	Cluster
-	StorageProvider string
-	StorageCreds    map[string]string
-	Name            string
+	Storage ProviderRef
+	Name    string
 }
 
 func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
@@ -118,8 +119,8 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 
 	out.Command("storage", "delete", req.Name)
 
-	if req.StorageProvider != "" {
-		bucket, err := provider.ResolveBucket(req.StorageProvider, req.StorageCreds)
+	if req.Storage.Name != "" {
+		bucket, err := provider.ResolveBucket(req.Storage.Name, req.Storage.Creds)
 		if err != nil {
 			return err
 		}
@@ -156,9 +157,8 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 
 type StorageEmptyRequest struct {
 	Cluster
-	StorageProvider string
-	StorageCreds    map[string]string
-	Name            string
+	Storage ProviderRef
+	Name    string
 }
 
 func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
@@ -168,7 +168,7 @@ func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
 		return err
 	}
 
-	bucket, err := provider.ResolveBucket(req.StorageProvider, req.StorageCreds)
+	bucket, err := provider.ResolveBucket(req.Storage.Name, req.Storage.Creds)
 	if err != nil {
 		return err
 	}

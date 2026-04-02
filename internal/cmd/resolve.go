@@ -144,32 +144,28 @@ func resolveDNSProvider(cmd *cobra.Command) (string, error) {
 	return name, nil
 }
 
-// resolveDNSZone reads --zone flag → DNS_ZONE env var.
-func resolveDNSZone(cmd *cobra.Command) (string, error) {
-	zone, _ := cmd.Flags().GetString("zone")
-	if zone == "" {
-		zone = os.Getenv("DNS_ZONE")
-	}
-	if zone == "" {
-		return "", fmt.Errorf("DNS zone is required.\n  flag:    --zone myapp.com\n  env var: export DNS_ZONE=myapp.com")
-	}
-	return zone, nil
-}
-
-// resolveDNSCredentials resolves DNS provider credentials from env vars + --zone flag.
-func resolveDNSCredentials(providerName, zone string) (map[string]string, error) {
+// resolveDNSCredentials resolves DNS provider credentials from flags → env vars.
+// Zone is part of the schema — resolved like any other credential field.
+func resolveDNSCredentials(cmd *cobra.Command, providerName string) (map[string]string, error) {
 	schema, err := provider.GetDNSSchema(providerName)
 	if err != nil {
 		return nil, err
 	}
 
-	creds := make(map[string]string, len(schema.Fields)+1)
+	creds := make(map[string]string, len(schema.Fields))
 	for _, f := range schema.Fields {
+		// 1. Check command flag (e.g. --zone for the "zone" field)
+		if f.Flag != "" {
+			if v, _ := cmd.Flags().GetString(f.Flag); v != "" {
+				creds[f.Key] = v
+				continue
+			}
+		}
+		// 2. Env var fallback
 		if v := os.Getenv(f.EnvVar); v != "" {
 			creds[f.Key] = v
 		}
 	}
-	creds["zone"] = zone
 	return creds, nil
 }
 

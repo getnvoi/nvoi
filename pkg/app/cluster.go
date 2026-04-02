@@ -10,6 +10,13 @@ import (
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
+// ProviderRef pairs a provider name with its resolved credentials.
+// Used for secondary providers (DNS, storage) on request types.
+type ProviderRef struct {
+	Name  string
+	Creds map[string]string
+}
+
 // Cluster identifies a deployment target: app + env + compute provider + SSH key.
 // Embedded by every request type. Provides methods to resolve names, provider, master, SSH.
 type Cluster struct {

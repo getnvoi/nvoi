@@ -30,17 +30,12 @@ func newResourcesCmd() *cobra.Command {
 			dnsProvider, _ := resolveDNSProvider(cmd)
 			var dnsCreds map[string]string
 			if dnsProvider != "" {
-				zone, _ := resolveDNSZone(cmd)
-				if zone != "" {
-					dnsCreds, _ = resolveDNSCredentials(dnsProvider, zone)
-				}
+				dnsCreds, _ = resolveDNSCredentials(cmd, dnsProvider)
 			}
 
 			req := app.ResourcesRequest{
-				Provider:    providerName,
-				Credentials: creds,
-				DNSProvider: dnsProvider,
-				DNSCreds:    dnsCreds,
+				Compute: app.ProviderRef{Name: providerName, Creds: creds},
+				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
 			}
 
 			jsonOutput, _ := cmd.Flags().GetBool("json")
@@ -64,7 +59,7 @@ func newResourcesCmd() *cobra.Command {
 			compute := fmt.Sprintf("SERVERS (%s)", providerName)
 			t := g.Add(compute, "ID", "NAME", "STATUS", "IPv4", "PRIVATE IP")
 			for _, s := range res.Servers {
-				t.Row(s.ID, s.Name, s.Status, s.IPv4, s.PrivateIP)
+				t.Row(s.ID, s.Name, string(s.Status), s.IPv4, s.PrivateIP)
 			}
 
 			t = g.Add(fmt.Sprintf("FIREWALLS (%s)", providerName), "ID", "NAME")

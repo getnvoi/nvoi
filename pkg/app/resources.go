@@ -7,10 +7,8 @@ import (
 )
 
 type ResourcesRequest struct {
-	Provider    string
-	Credentials map[string]string
-	DNSProvider string
-	DNSCreds    map[string]string
+	Compute ProviderRef
+	DNS     ProviderRef
 }
 
 type ResourcesResult struct {
@@ -21,12 +19,12 @@ type ResourcesResult struct {
 }
 
 func Resources(ctx context.Context, req ResourcesRequest) (*ResourcesResult, error) {
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
+	prov, err := provider.ResolveCompute(req.Compute.Name, req.Compute.Creds)
 	if err != nil {
 		return nil, err
 	}
 
-	servers, err := prov.ListAllServers(ctx)
+	servers, err := prov.ListServers(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -46,8 +44,8 @@ func Resources(ctx context.Context, req ResourcesRequest) (*ResourcesResult, err
 	}
 
 	// DNS records (optional)
-	if req.DNSProvider != "" {
-		dns, err := provider.ResolveDNS(req.DNSProvider, req.DNSCreds)
+	if req.DNS.Name != "" {
+		dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)
 		if err == nil {
 			records, err := dns.ListARecords(ctx)
 			if err == nil {
@@ -67,15 +65,15 @@ func ResourcesJSON(ctx context.Context, req ResourcesRequest) (map[string]any, e
 	}
 
 	out := map[string]any{}
-	if req.Provider != "" {
-		out[req.Provider] = map[string]any{
+	if req.Compute.Name != "" {
+		out[req.Compute.Name] = map[string]any{
 			"servers":   res.Servers,
 			"firewalls": res.Firewalls,
 			"networks":  res.Networks,
 		}
 	}
-	if req.DNSProvider != "" && len(res.DNSRecords) > 0 {
-		out[req.DNSProvider] = map[string]any{
+	if req.DNS.Name != "" && len(res.DNSRecords) > 0 {
+		out[req.DNS.Name] = map[string]any{
 			"dns_records": res.DNSRecords,
 		}
 	}

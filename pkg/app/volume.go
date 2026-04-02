@@ -99,7 +99,7 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 		}
 	}
 
-	if err := prov.DetachVolume(ctx, volumeName, names.Labels()); err != nil {
+	if err := prov.DetachVolume(ctx, volumeName); err != nil {
 		return err
 	}
 	out.Success("detached")

@@ -29,7 +29,7 @@ type serverJSON struct {
 
 func serverFrom(s serverJSON) *provider.Server {
 	srv := &provider.Server{
-		ID: strconv.FormatInt(s.ID, 10), Name: s.Name, Status: s.Status,
+		ID: strconv.FormatInt(s.ID, 10), Name: s.Name, Status: provider.ServerStatus(s.Status),
 		IPv4: s.PublicNet.IPv4.IP, IPv6: s.PublicNet.IPv6.IP,
 	}
 	if len(s.PrivateNet) > 0 {
@@ -127,10 +127,6 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 	_ = c.deleteNetwork(ctx, req.NetworkName)
 
 	return nil
-}
-
-func (c *Client) ListAllServers(ctx context.Context) ([]*provider.Server, error) {
-	return c.ListServers(ctx, nil)
 }
 
 func (c *Client) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {

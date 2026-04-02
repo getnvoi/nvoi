@@ -80,16 +80,7 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 			// volume exists at requested size — no-op
 		}
 	} else {
-		// Create
-		body := map[string]any{
-			"name":      req.Name,
-			"size":      req.Size,
-			"location":  srv.IPv4, // not right — need location
-			"labels":    req.Labels,
-			"automount": false,
-			"format":    "xfs",
-		}
-		// Get server location from server details
+		// Resolve server location before creating volume
 		var srvResp struct {
 			Server struct {
 				Datacenter struct {
@@ -100,7 +91,15 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 		if err := c.api.Do(ctx, "GET", fmt.Sprintf("/servers/%s", srv.ID), nil, &srvResp); err != nil {
 			return nil, fmt.Errorf("get server location: %w", err)
 		}
-		body["location"] = srvResp.Server.Datacenter.Location.Name
+
+		body := map[string]any{
+			"name":      req.Name,
+			"size":      req.Size,
+			"location":  srvResp.Server.Datacenter.Location.Name,
+			"labels":    req.Labels,
+			"automount": false,
+			"format":    "xfs",
+		}
 
 		var createResp struct{ Volume volumeJSON `json:"volume"` }
 		if err := c.api.Do(ctx, "POST", "/volumes", body, &createResp); err != nil {
@@ -147,7 +146,7 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 	return vol, nil
 }
 
-func (c *Client) DetachVolume(ctx context.Context, name string, labels map[string]string) error {
+func (c *Client) DetachVolume(ctx context.Context, name string) error {
 	vol, err := c.getVolumeByName(ctx, name)
 	if err != nil {
 		return err
@@ -163,7 +162,7 @@ func (c *Client) DetachVolume(ctx context.Context, name string, labels map[strin
 
 // DeleteVolume detaches (if attached) then deletes the cloud volume.
 // 404 = already gone = success.
-func (c *Client) DeleteVolume(ctx context.Context, name string, labels map[string]string) error {
+func (c *Client) DeleteVolume(ctx context.Context, name string) error {
 	vol, err := c.getVolumeByName(ctx, name)
 	if err != nil {
 		return err

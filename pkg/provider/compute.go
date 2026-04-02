@@ -2,6 +2,21 @@ package provider
 
 import "context"
 
+// ServerStatus represents the state of a compute server.
+type ServerStatus string
+
+const (
+	ServerRunning      ServerStatus = "running"
+	ServerInitializing ServerStatus = "initializing"
+	ServerStarting     ServerStatus = "starting"
+	ServerStopping     ServerStatus = "stopping"
+	ServerOff          ServerStatus = "off"
+	ServerDeleting     ServerStatus = "deleting"
+	ServerMigrating    ServerStatus = "migrating"
+	ServerRebuilding   ServerStatus = "rebuilding"
+	ServerUnknown      ServerStatus = "unknown"
+)
+
 // ComputeProvider abstracts cloud compute operations.
 type ComputeProvider interface {
 	ValidateCredentials(ctx context.Context) error
@@ -13,14 +28,13 @@ type ComputeProvider interface {
 	ListServers(ctx context.Context, labels map[string]string) ([]*Server, error)
 
 	// Resources — unfiltered, everything under the account
-	ListAllServers(ctx context.Context) ([]*Server, error)
 	ListAllFirewalls(ctx context.Context) ([]*Firewall, error)
 	ListAllNetworks(ctx context.Context) ([]*Network, error)
 
 	// Volume
 	EnsureVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
-	DetachVolume(ctx context.Context, name string, labels map[string]string) error
-	DeleteVolume(ctx context.Context, name string, labels map[string]string) error // detach + delete cloud resource
+	DetachVolume(ctx context.Context, name string) error
+	DeleteVolume(ctx context.Context, name string) error
 	ListVolumes(ctx context.Context, labels map[string]string) ([]*Volume, error)
 }
 
@@ -35,21 +49,22 @@ type Network struct {
 }
 
 type Server struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	IPv4      string `json:"ipv4"`
-	IPv6      string `json:"ipv6,omitempty"`
-	PrivateIP string `json:"private_ip"`
+	ID        string       `json:"id"`
+	Name      string       `json:"name"`
+	Status    ServerStatus `json:"status"`
+	IPv4      string       `json:"ipv4"`
+	IPv6      string       `json:"ipv6,omitempty"`
+	PrivateIP string       `json:"private_ip"`
 }
 
 type Volume struct {
-	ID, Name   string
-	Size       int
-	ServerID   string
-	ServerName string
-	DevicePath string
-	Location   string
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Size       int    `json:"size"`
+	ServerID   string `json:"server_id"`
+	ServerName string `json:"server_name"`
+	DevicePath string `json:"device_path"`
+	Location   string `json:"location"`
 }
 
 type CreateServerRequest struct {

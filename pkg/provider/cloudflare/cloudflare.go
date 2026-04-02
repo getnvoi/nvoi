@@ -74,7 +74,10 @@ func (c *Client) EnsureBucket(ctx context.Context, name string) error {
 }
 
 func (c *Client) EmptyBucket(ctx context.Context, name string) error {
-	cr := c.Credentials()
+	cr, err := c.Credentials(ctx)
+	if err != nil {
+		return err
+	}
 	return s3EmptyBucket(ctx, cr.Endpoint, cr.AccessKeyID, cr.SecretAccessKey, cr.Region, name)
 }
 
@@ -101,27 +104,39 @@ func (c *Client) DeleteBucket(ctx context.Context, name string) error {
 }
 
 func (c *Client) SetCORS(ctx context.Context, name string, origins, methods []string) error {
-	cr := c.Credentials()
+	cr, err := c.Credentials(ctx)
+	if err != nil {
+		return err
+	}
 	return s3SetCORS(cr.Endpoint, cr.AccessKeyID, cr.SecretAccessKey, cr.Region, name, origins, methods)
 }
 
 func (c *Client) ClearCORS(ctx context.Context, name string) error {
-	cr := c.Credentials()
+	cr, err := c.Credentials(ctx)
+	if err != nil {
+		return err
+	}
 	return s3ClearCORS(cr.Endpoint, cr.AccessKeyID, cr.SecretAccessKey, cr.Region, name)
 }
 
 func (c *Client) SetLifecycle(ctx context.Context, name string, expireDays int) error {
-	cr := c.Credentials()
+	cr, err := c.Credentials(ctx)
+	if err != nil {
+		return err
+	}
 	return s3SetLifecycle(cr.Endpoint, cr.AccessKeyID, cr.SecretAccessKey, cr.Region, name, expireDays)
 }
 
 // Credentials returns S3-compatible access details derived from the CF API token.
 // R2 uses the token ID as access key and SHA-256(token) as secret key.
-func (c *Client) Credentials() provider.BucketCredentials {
+func (c *Client) Credentials(ctx context.Context) (provider.BucketCredentials, error) {
 	if c.creds != nil {
-		return *c.creds
+		return *c.creds, nil
 	}
-	tokenID, _ := c.tokenVerify()
+	tokenID, err := c.tokenVerify()
+	if err != nil {
+		return provider.BucketCredentials{}, fmt.Errorf("cloudflare credentials: %w", err)
+	}
 	hash := sha256.Sum256([]byte(c.apiKey))
 	c.creds = &provider.BucketCredentials{
 		Endpoint:        fmt.Sprintf("https://%s.r2.cloudflarestorage.com", c.accountID),
@@ -129,7 +144,7 @@ func (c *Client) Credentials() provider.BucketCredentials {
 		SecretAccessKey: hex.EncodeToString(hash[:]),
 		Region:          "auto",
 	}
-	return *c.creds
+	return *c.creds, nil
 }
 
 func (c *Client) tokenVerify() (string, error) {

@@ -78,12 +78,11 @@ Then reference on service set:
 					SSHKey:      sshKey,
 					Output:      resolveOutput(cmd),
 				},
-				StorageProvider: storageProvider,
-				StorageCreds:    storageCreds,
-				Name:            name,
-				Bucket:          bucketName,
-				CORS:            cors,
-				ExpireDays:      expireDays,
+				Storage:    app.ProviderRef{Name: storageProvider, Creds: storageCreds},
+				Name:       name,
+				Bucket:     bucketName,
+				CORS:       cors,
+				ExpireDays: expireDays,
 			})
 		},
 	}
@@ -133,9 +132,8 @@ func newStorageEmptyCmd() *cobra.Command {
 					Env:     env,
 					Output:  resolveOutput(cmd),
 				},
-				StorageProvider: storageProvider,
-				StorageCreds:    storageCreds,
-				Name:            args[0],
+				Storage: app.ProviderRef{Name: storageProvider, Creds: storageCreds},
+				Name:    args[0],
 			})
 		},
 	}
@@ -203,9 +201,8 @@ Examples:
 					SSHKey:      sshKey,
 					Output:      resolveOutput(cmd),
 				},
-				StorageProvider: storageProvider,
-				StorageCreds:    storageCreds,
-				Name:            args[0],
+				Storage: app.ProviderRef{Name: storageProvider, Creds: storageCreds},
+				Name:    args[0],
 			})
 		},
 	}
