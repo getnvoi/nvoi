@@ -15,8 +15,6 @@ set -a
 source .env.deploy
 set +a
 
-echo "==> deploying ${NVOI_APP_NAME:-rails} (${NVOI_ENV:-production})"
-
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
 bin/cli instance set master --compute-type cx23 --compute-region fsn1
@@ -29,8 +27,6 @@ bin/cli volume set meili-data --size 20 --server master
 bin/cli build --source benbonnet/dummy-rails --name web
 
 WEB_IMAGE=$(bin/cli build latest web)
-
-echo "image: $WEB_IMAGE"
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
