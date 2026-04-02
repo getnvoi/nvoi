@@ -72,7 +72,7 @@ Examples:
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 				Name:       args[0],
 				Image:      image,
@@ -146,7 +146,7 @@ func newServiceDeleteCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 				Name: args[0],
 			})

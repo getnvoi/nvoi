@@ -98,6 +98,5 @@ func newResourcesCmd() *cobra.Command {
 	addComputeProviderFlags(cmd)
 	addDNSProviderFlags(cmd)
 	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
-	cmd.Flags().Bool("json", false, "output JSON")
 	return cmd
 }

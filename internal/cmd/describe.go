@@ -39,7 +39,7 @@ func newDescribeCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 			}
 
@@ -111,6 +111,5 @@ func newDescribeCmd() *cobra.Command {
 	}
 	addComputeProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().Bool("json", false, "output raw kubectl JSON")
 	return cmd
 }

@@ -74,7 +74,7 @@ Examples:
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 				Builder:            builderName,
 				BuilderCredentials: builderCreds,
@@ -138,7 +138,7 @@ func newBuildListCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 			})
 			if err != nil {
@@ -197,7 +197,7 @@ func newBuildLatestCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 				Name: args[0],
 			})
@@ -247,7 +247,7 @@ func newBuildPruneCmd() *cobra.Command {
 					Provider:    providerName,
 					Credentials: creds,
 					SSHKey:      sshKey,
-					Output:      NewTUIOutput(),
+					Output:      resolveOutput(cmd),
 				},
 				Name: args[0],
 				Keep: keep,
