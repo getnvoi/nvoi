@@ -64,7 +64,6 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 			return nil, fmt.Errorf("volume %s is %dGB, requested %dGB — shrinking not supported", req.Name, vol.Size, req.Size)
 		}
 		if req.Size > vol.Size {
-			fmt.Fprintf(c.w, "  resizing %s from %dGB → %dGB...\n", req.Name, vol.Size, req.Size)
 			var resp struct {
 				Action struct{ ID int64 `json:"id"` } `json:"action"`
 			}
@@ -77,13 +76,11 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 				}
 			}
 			vol.Size = req.Size
-			fmt.Fprintf(c.w, "  ✓ resized to %dGB\n", req.Size)
 		} else {
-			fmt.Fprintf(c.w, "  volume %s exists (%dGB)\n", req.Name, vol.Size)
+			// volume exists at requested size — no-op
 		}
 	} else {
 		// Create
-		fmt.Fprintf(c.w, "  creating volume %s (%dGB)...\n", req.Name, req.Size)
 		body := map[string]any{
 			"name":      req.Name,
 			"size":      req.Size,
@@ -110,20 +107,17 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 			return nil, fmt.Errorf("create volume: %w", err)
 		}
 		vol = volumeFrom(createResp.Volume)
-		fmt.Fprintf(c.w, "  ✓ volume %s created\n", req.Name)
 	}
 
 	// Attach if not attached to the right server
 	if vol.ServerID != srv.ID {
 		// Detach from current server if attached elsewhere
 		if vol.ServerID != "" {
-			fmt.Fprintf(c.w, "  detaching %s from server %s...\n", req.Name, vol.ServerID)
 			if err := c.detachVolume(ctx, vol.ID); err != nil {
 				return nil, fmt.Errorf("detach before reattach: %w", err)
 			}
 		}
 
-		fmt.Fprintf(c.w, "  attaching %s → %s...\n", req.Name, req.ServerName)
 		intServerID, _ := strconv.ParseInt(srv.ID, 10, 64)
 		var resp struct {
 			Action struct {
@@ -147,9 +141,6 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 		if err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(c.w, "  ✓ attached\n")
-	} else {
-		fmt.Fprintf(c.w, "  volume %s already attached to %s\n", req.Name, req.ServerName)
 	}
 
 	vol.ServerName = req.ServerName
@@ -181,12 +172,10 @@ func (c *Client) DeleteVolume(ctx context.Context, name string, labels map[strin
 		return nil // already gone
 	}
 	if vol.ServerID != "" {
-		fmt.Fprintf(c.w, "  detaching %s...\n", name)
 		if err := c.detachVolume(ctx, vol.ID); err != nil {
 			return fmt.Errorf("detach before delete: %w", err)
 		}
 	}
-	fmt.Fprintf(c.w, "  deleting %s...\n", name)
 	if err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/volumes/%s", vol.ID), nil, nil); err != nil {
 		if !core.IsNotFound(err) {
 			return fmt.Errorf("delete volume: %w", err)
