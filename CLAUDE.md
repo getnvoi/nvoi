@@ -175,12 +175,18 @@ See `bin/deploy` for the env-var path (compose injects everything) and `bin/depl
 ## Architecture
 
 ```
-cmd/cli/main.go         CLI entrypoint
+cmd/cli/main.go         CLI entrypoint — signal handling, error rendering, exit codes
 
 internal/
-  app/                   Business logic. One file per domain. No cobra, no I/O formatting.
+  app/                   Business logic. One file per domain. No cobra, no I/O, no stdout.
                          Called by cmd/ (CLI) and future API handlers.
-  cmd/                   Thin cobra wrappers. Parse flags → call app/ → format output.
+    cluster.go           Shared Cluster struct (AppName, Env, Provider, Credentials, SSHKey, Output)
+                         with methods: Names(), Compute(), Master(), SSH(), Log()
+    output.go            Output interface — the contract between app/ and its viewers
+  cmd/                   Cobra wrappers. Parse flags → call app/ → render output.
+    output_tui.go        TUI renderer (lipgloss-styled terminal output)
+    output_json.go       JSONL renderer (structured JSON, one event per line)
+    table.go             Bordered tables with lipgloss (Table + TableGroup for synchronized widths)
   kube/                  K8s YAML generation + kubectl over SSH + Caddy ingress
   infra/                 SSH, server bootstrap, k3s, Docker, volume mounting
   provider/              ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
@@ -189,8 +195,9 @@ internal/
     daytona/             Daytona remote builds
     github/              GitHub Actions builds
     local/               Local docker buildx builds
-  core/                  Pure utilities: naming, poll, httpclient, ssh keys
+  core/                  Pure utilities: naming, poll, httpclient, ssh keys, format
     s3/                  AWS Signature V4 signing for S3-compatible APIs
+    format.go            Obfuscate, HumanAge — reusable formatting utilities
 ```
 
 ## Providers
@@ -336,6 +343,80 @@ Hard errors before touching k8s.
 **Env vars:**
 - No rewriting. `POSTGRES_HOST=db` stays `POSTGRES_HOST=db`. K8s namespaces handle isolation — each app+env gets its own namespace, service names stay short.
 
+## Output contract
+
+**Providers are silent. `app/` narrates. `cmd/` renders. No exceptions.**
+
+Strictly enforced across all layers:
+
+| Layer | Writes to stdout? | `fmt.Printf`? | `os.Stdout`? | `"os"` import? |
+|-------|-------------------|---------------|-------------|---------------|
+| `provider/` | Never | Never | Never | File ops only |
+| `app/` | Never | Never | Never | Never |
+| `infra/` | Never (writes to `io.Writer` param) | Never | Never | File ops only |
+| `kube/` | Never | Never | Never | Never |
+| `core/` | Never | Never | Never | Never |
+| `cmd/` | Yes — it's the viewer | Yes | Yes | Yes |
+
+### Output interface
+
+`app/` communicates through the `Output` interface on `Cluster`. Six event types:
+
+```go
+type Output interface {
+    Command(command, action, name string, extra ...any)  // opens a group
+    Progress(msg string)                                  // transient status
+    Success(msg string)                                   // step completed
+    Warning(msg string)                                   // non-fatal issue
+    Info(msg string)                                      // informational
+    Error(err error)                                      // terminal failure
+    Writer() io.Writer                                    // streaming (build logs, SSH, k3s install)
+}
+```
+
+`cmd/` provides two implementations, selected by `--json` persistent flag:
+
+- **TUI** (`output_tui.go`) — lipgloss-styled: bold commands, dimmed progress, green success, yellow warnings, red errors. Streaming output dimmed and indented.
+- **JSONL** (`output_json.go`) — one JSON object per line. Structured `type` field (`command`, `progress`, `success`, `warning`, `info`, `error`, `stream`).
+
+### JSONL event format
+
+```jsonl
+{"type":"command","command":"instance","action":"set","name":"nvoi-rails-production-master","role":"master"}
+{"type":"progress","message":"waiting for SSH on 91.98.91.222"}
+{"type":"success","message":"SSH ready"}
+{"type":"error","message":"SSH not reachable on 91.98.91.222: timeout"}
+```
+
+`type:"command"` opens a group. Everything after belongs to it until the next command or error.
+
+### Error handling
+
+- `app/` returns errors. It never renders them. It never calls `Output.Error()`.
+- Every error flows back through cobra to `HandleError` in `main.go`.
+- `HandleError` renders the error once through `Output.Error()`.
+- Single rendering path. No double-printing. No silent swallowing.
+- Ctrl+C: `signal.NotifyContext` cancels the context → operations abort → styled "interrupted" message → exit 1.
+
+### Streaming
+
+`infra/` functions (k3s install, volume mount) accept `io.Writer` for streaming output. `app/` passes `Output.Writer()`. In TUI mode, lines are dimmed and indented. In JSONL mode, each line becomes a `{"type":"stream","message":"..."}` event. A future API could stream to SSE or websocket through the same interface.
+
+### Cluster struct
+
+Every `app/` request type embeds `Cluster`:
+
+```go
+type Cluster struct {
+    AppName, Env, Provider string
+    Credentials            map[string]string
+    SSHKey                 []byte
+    Output                 Output
+}
+```
+
+`Cluster` provides methods: `Names()`, `Compute()`, `Master()`, `SSH()`, `Log()`. Eliminates the 4-line resolve-connect preamble that was duplicated 22 times. `cmd/` constructs `Cluster` with `resolveOutput(cmd)` to wire TUI or JSONL.
+
 ## Key rules
 
 1. `NVOI_APP_NAME` + `NVOI_ENV` (or `--app-name` + `--environment`) are required. They're the namespace for everything.
@@ -346,6 +427,9 @@ Hard errors before touching k8s.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 7. SSH is the only transport to remote servers.
 8. **`os.Getenv` lives exclusively in `cmd/`.** Environment variables are a CLI concept. `app/`, `provider/`, `infra/`, `core/` never read env vars. All external values (credentials, SSH key path, app name, env) are resolved in `cmd/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.
+11. **Providers are silent.** Providers are API clients — they do work and return data. They never print, log, or narrate. Progress output belongs in `app/` via the `Output` interface.
+12. **`app/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `app/` is a library — a future API handler calls the same functions.
+13. **Errors flow up, render once.** `app/` returns errors. `cmd/` renders them through `Output.Error()` in `HandleError`. Never double-print. Never swallow silently.
 9. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
 10. `bin/destroy` is the reverse of `bin/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
 
