@@ -11,9 +11,10 @@ import (
 
 func Root() *cobra.Command {
 	root := &cobra.Command{
-		Use:          "nvoi",
-		Short:        "Deploy containers to cloud servers",
-		SilenceUsage: true,
+		Use:           "nvoi",
+		Short:         "Deploy containers to cloud servers",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
 	// Persistent flags.

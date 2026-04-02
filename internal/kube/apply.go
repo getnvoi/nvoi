@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/core"
@@ -49,9 +50,33 @@ func GetNamedJSON(ctx context.Context, ssh core.SSHClient, ns, resource, name st
 	return out, nil
 }
 
-// RunKubectl runs an arbitrary kubectl command (non-namespaced).
+// RunKubectl runs an arbitrary kubectl command and returns output.
 func RunKubectl(ctx context.Context, ssh core.SSHClient, ns, command string) ([]byte, error) {
 	return ssh.Run(ctx, kubectl(ns, command))
+}
+
+// RunStream runs a kubectl command and streams stdout/stderr to the provided writers.
+func RunStream(ctx context.Context, ssh core.SSHClient, ns, command string, stdout, stderr io.Writer) error {
+	return ssh.RunStream(ctx, kubectl(ns, command), stdout, stderr)
+}
+
+// PodSelector returns the label selector for pods belonging to a service.
+func PodSelector(service string) string {
+	return fmt.Sprintf("%s=%s", core.LabelAppName, service)
+}
+
+// FirstPod returns the name of the first running pod for a service.
+func FirstPod(ctx context.Context, ssh core.SSHClient, ns, service string) (string, error) {
+	sel := PodSelector(service)
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get pods -l %s -o jsonpath='{.items[0].metadata.name}'", sel)))
+	if err != nil {
+		return "", fmt.Errorf("no pods found for service %q", service)
+	}
+	pod := strings.Trim(strings.TrimSpace(string(out)), "'")
+	if pod == "" {
+		return "", fmt.Errorf("no pods found for service %q", service)
+	}
+	return pod, nil
 }
 
 // Apply uploads a YAML manifest and runs kubectl apply.

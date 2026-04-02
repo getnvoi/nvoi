@@ -433,9 +433,3 @@ type Cluster struct {
 9. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
 10. `bin/destroy` is the reverse of `bin/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
 
-## Not yet implemented
-
-These commands have cobra shells but return "not implemented":
-
-- `logs` — `kubectl logs` over SSH
-- `exec` — `kubectl exec` over SSH
