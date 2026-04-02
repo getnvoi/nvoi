@@ -14,8 +14,44 @@ import (
 
 var kubeconfigPath = fmt.Sprintf("/home/%s/.kube/config", core.DefaultUser)
 
+// NvoiSelector is the label selector for nvoi-managed resources.
+var NvoiSelector = fmt.Sprintf("%s=%s", core.LabelAppManagedBy, core.LabelManagedBy)
+
 func kubectl(ns, command string) string {
 	return fmt.Sprintf("KUBECONFIG=%s kubectl -n %s %s", kubeconfigPath, ns, command)
+}
+
+func kubectlGlobal(command string) string {
+	return fmt.Sprintf("KUBECONFIG=%s kubectl %s", kubeconfigPath, command)
+}
+
+// GetJSON runs a namespaced kubectl get and returns raw JSON bytes.
+// selector is optional (e.g. NvoiSelector or "").
+func GetJSON(ctx context.Context, ssh core.SSHClient, ns, resource, selector string) ([]byte, error) {
+	sel := ""
+	if selector != "" {
+		sel = " -l " + selector
+	}
+	return ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get %s%s -o json", resource, sel)))
+}
+
+// GetClusterJSON runs a cluster-wide (non-namespaced) kubectl get and returns raw JSON bytes.
+func GetClusterJSON(ctx context.Context, ssh core.SSHClient, resource string) ([]byte, error) {
+	return ssh.Run(ctx, kubectlGlobal(fmt.Sprintf("get %s -o json", resource)))
+}
+
+// GetNamedJSON runs kubectl get on a specific named resource and returns raw JSON bytes.
+func GetNamedJSON(ctx context.Context, ssh core.SSHClient, ns, resource, name string) ([]byte, error) {
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get %s %s -o json 2>/dev/null", resource, name)))
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RunKubectl runs an arbitrary kubectl command (non-namespaced).
+func RunKubectl(ctx context.Context, ssh core.SSHClient, ns, command string) ([]byte, error) {
+	return ssh.Run(ctx, kubectl(ns, command))
 }
 
 // Apply uploads a YAML manifest and runs kubectl apply.

@@ -12,9 +12,9 @@ type DNSProvider interface {
 }
 
 type DNSRecord struct {
-	Domain string
-	Type   string // "A" or "AAAA"
-	IP     string
+	Domain string `json:"domain"`
+	Type   string `json:"type"`
+	IP     string `json:"ip"`
 }
 
 // RecordName extracts the short record name from a full domain relative to a zone.

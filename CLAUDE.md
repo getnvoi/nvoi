@@ -2,7 +2,7 @@
 
 ## What nvoi is
 
-A CLI that deploys containers to cloud servers. Granular commands hit real infrastructure. `nvoi show` fetches everything live.
+A CLI that deploys containers to cloud servers. Granular commands hit real infrastructure. `nvoi describe` fetches everything live from the cluster.
 
 ## Philosophy
 
@@ -11,7 +11,7 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 - **Everything is idempotent.** Every command hits real infrastructure — provider APIs over HTTP, servers over SSH, cluster via kubectl. Run twice, same result.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
 - **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`, `storage set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. `bin/deploy` runs end to end, every time, same outcome.
-- **`show` fetches everything live.** Servers from provider API. Pods from kubectl. DNS from DNS API.
+- **`describe` fetches everything live from the cluster.** Nodes, workloads, pods, services, ingress, secrets, storage — all via kubectl over SSH.
 - **Provider interfaces scale.** Hetzner and Cloudflare first. Interface-first. Add a provider = implement the interface.
 - **SSH is the transport.** No agent binary. SSH in, run commands, done.
 - **Secrets are k8s secrets.** Values live in the cluster only.
@@ -154,8 +154,8 @@ nvoi service set <name> --image postgres:17 --port 5432 --secret DB_PASSWORD
 nvoi service set <name> --image $IMAGE --port 3000 --replicas 2 --secret RAILS_MASTER_KEY --storage assets
 nvoi service delete <name>
 
-# Live view
-nvoi show
+# Live view — nodes, workloads, pods, services, ingress, secrets, storage
+nvoi describe
 
 # Operate
 nvoi logs <service> [-f] [-n 50]
@@ -339,7 +339,7 @@ Hard errors before touching k8s.
 ## Key rules
 
 1. `NVOI_APP_NAME` + `NVOI_ENV` (or `--app-name` + `--environment`) are required. They're the namespace for everything.
-2. No state files. Infrastructure is the truth. `show` fetches live.
+2. No state files. Infrastructure is the truth. `describe` fetches live from the cluster.
 3. Everything is `set`. Idempotent. Run twice, same result. `bin/deploy` is the whole deploy — runs end to end, always same outcome.
 4. `set` writes directly to infrastructure. No intermediate files.
 5. Provider interfaces scale. Add a provider = implement the interface. Same registration pattern for all four kinds.
@@ -353,6 +353,5 @@ Hard errors before touching k8s.
 
 These commands have cobra shells but return "not implemented":
 
-- `show` — live view of servers, pods, DNS, storage
 - `logs` — `kubectl logs` over SSH
 - `exec` — `kubectl exec` over SSH

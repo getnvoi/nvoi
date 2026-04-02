@@ -170,8 +170,7 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 		if len(routes) == 0 {
 			// No more routes — delete caddy entirely
 			kube.DeleteByName(ctx, ssh, ns, names.KubeCaddy())
-			ssh.Run(ctx, fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config kubectl -n %s delete configmap %s --ignore-not-found",
-				core.DefaultUser, ns, names.KubeCaddyConfig()))
+			kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete configmap %s --ignore-not-found", names.KubeCaddyConfig()))
 		} else {
 			yaml, err := kube.GenerateCaddyManifest(routes, names)
 			if err == nil {

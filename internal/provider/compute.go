@@ -25,15 +25,22 @@ type ComputeProvider interface {
 }
 
 type Firewall struct {
-	ID, Name string
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type Network struct {
-	ID, Name string
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type Server struct {
-	ID, Name, Status, IPv4, IPv6, PrivateIP string
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	IPv4      string `json:"ipv4"`
+	IPv6      string `json:"ipv6,omitempty"`
+	PrivateIP string `json:"private_ip"`
 }
 
 type Volume struct {
