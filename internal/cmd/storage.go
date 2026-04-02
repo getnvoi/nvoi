@@ -70,13 +70,15 @@ Then reference on service set:
 			}
 
 			return app.StorageSet(cmd.Context(), app.StorageSetRequest{
-				AppName:         appName,
-				Env:             env,
-				ComputeProvider: computeProvider,
-				ComputeCreds:    computeCreds,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    computeProvider,
+					Credentials: computeCreds,
+					SSHKey:      sshKey,
+				},
 				StorageProvider: storageProvider,
 				StorageCreds:    storageCreds,
-				SSHKey:          sshKey,
 				Name:            name,
 				Bucket:          bucketName,
 				CORS:            cors,
@@ -125,8 +127,10 @@ func newStorageEmptyCmd() *cobra.Command {
 			}
 
 			return app.StorageEmpty(cmd.Context(), app.StorageEmptyRequest{
-				AppName:         appName,
-				Env:             env,
+				Cluster: app.Cluster{
+					AppName: appName,
+					Env:     env,
+				},
 				StorageProvider: storageProvider,
 				StorageCreds:    storageCreds,
 				Name:            args[0],
@@ -189,13 +193,15 @@ Examples:
 			}
 
 			return app.StorageDelete(cmd.Context(), app.StorageDeleteRequest{
-				AppName:         appName,
-				Env:             env,
-				ComputeProvider: computeProvider,
-				ComputeCreds:    computeCreds,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    computeProvider,
+					Credentials: computeCreds,
+					SSHKey:      sshKey,
+				},
 				StorageProvider: storageProvider,
 				StorageCreds:    storageCreds,
-				SSHKey:          sshKey,
 				Name:            args[0],
 			})
 		},
@@ -231,11 +237,13 @@ func newStorageListCmd() *cobra.Command {
 			}
 
 			items, err := app.StorageList(cmd.Context(), app.StorageListRequest{
-				AppName:         appName,
-				Env:             env,
-				ComputeProvider: computeProvider,
-				ComputeCreds:    computeCreds,
-				SSHKey:          sshKey,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    computeProvider,
+					Credentials: computeCreds,
+					SSHKey:      sshKey,
+				},
 			})
 			if err != nil {
 				return err

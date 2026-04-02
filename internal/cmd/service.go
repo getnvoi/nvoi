@@ -66,22 +66,24 @@ Examples:
 			}
 
 			return app.ServiceSet(cmd.Context(), app.ServiceSetRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Name:        args[0],
-				Image:       image,
-				Port:        port,
-				Command:     command,
-				Replicas:    replicas,
-				EnvVars:     envVars,
-				Secrets:     secrets,
-				Storages:    storages,
-				Volumes:     volumes,
-				HealthPath:  healthPath,
-				Server:      server,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Name:       args[0],
+				Image:      image,
+				Port:       port,
+				Command:    command,
+				Replicas:   replicas,
+				EnvVars:    envVars,
+				Secrets:    secrets,
+				Storages:   storages,
+				Volumes:    volumes,
+				HealthPath: healthPath,
+				Server:     server,
 			})
 		},
 	}
@@ -137,12 +139,14 @@ func newServiceDeleteCmd() *cobra.Command {
 			}
 
 			return app.ServiceDelete(cmd.Context(), app.ServiceDeleteRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Name:        args[0],
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Name: args[0],
 			})
 		},
 	}

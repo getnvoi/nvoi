@@ -29,12 +29,14 @@ func newSSHCmd() *cobra.Command {
 			}
 
 			return app.SSH(cmd.Context(), app.SSHRequest{
-				AppName:     appName,
-				Env:         env,
-				Provider:    providerName,
-				Credentials: creds,
-				SSHKey:      sshKey,
-				Command:     args,
+				Cluster: app.Cluster{
+					AppName:     appName,
+					Env:         env,
+					Provider:    providerName,
+					Credentials: creds,
+					SSHKey:      sshKey,
+				},
+				Command: args,
 			})
 		},
 	}

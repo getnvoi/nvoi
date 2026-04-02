@@ -20,20 +20,16 @@ func isLocalSource(source string) bool {
 }
 
 type BuildRunRequest struct {
-	AppName            string
-	Env                string
-	Provider           string
-	Credentials        map[string]string
+	Cluster
 	Builder            string
 	BuilderCredentials map[string]string
-	SSHKey             []byte
 	Source             string
 	Name               string
 	Branch             string
 	Platform           string
 	GitUsername         string // resolved by cmd layer (signed URL, gh, flag, env)
 	GitToken           string
-	History            int    // keep N most recent tags, delete the rest (0 = keep all)
+	History            int // keep N most recent tags, delete the rest (0 = keep all)
 }
 
 func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, error) {
@@ -63,15 +59,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 		return nil, fmt.Errorf("git authentication required for remote source.\n  Use a signed URL:  --source https://user:TOKEN@github.com/org/repo\n  Or install gh CLI:  gh auth login\n  Or pass explicitly: --git-token TOKEN\n  Or set env var:     export GITHUB_TOKEN=...")
 	}
 
-	names, err := core.NewNames(req.AppName, req.Env)
-	if err != nil {
-		return nil, err
-	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
-	if err != nil {
-		return nil, err
-	}
-	master, err := FindMaster(ctx, prov, names)
+	master, _, _, err := req.Cluster.Master(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +159,6 @@ func pruneRegistryTags(ctx context.Context, masterIP, masterPrivateIP string, ss
 	toDelete := tagList.Tags[:len(tagList.Tags)-keep]
 
 	for _, tag := range toDelete {
-		// Get manifest digest from response headers (OCI format — buildx pushes OCI manifests)
 		headCmd := fmt.Sprintf(
 			"curl -sI -H 'Accept: application/vnd.oci.image.index.v1+json' http://%s/v2/%s/manifests/%s",
 			registryAddr, imageName, tag,
@@ -180,7 +167,6 @@ func pruneRegistryTags(ctx context.Context, masterIP, masterPrivateIP string, ss
 		if err != nil {
 			continue
 		}
-		// Parse Docker-Content-Digest header from response
 		digest := ""
 		for _, line := range strings.Split(string(headOut), "\n") {
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "docker-content-digest:") {
@@ -195,7 +181,6 @@ func pruneRegistryTags(ctx context.Context, masterIP, masterPrivateIP string, ss
 			continue
 		}
 
-		// Delete by digest
 		deleteCmd := fmt.Sprintf("curl -s -X DELETE http://%s/v2/%s/manifests/%s", registryAddr, imageName, digest)
 		if _, err := ssh.Run(ctx, deleteCmd); err != nil {
 			continue
@@ -203,14 +188,12 @@ func pruneRegistryTags(ctx context.Context, masterIP, masterPrivateIP string, ss
 		fmt.Printf("  pruned %s:%s\n", imageName, tag)
 	}
 
-	// Run garbage collection
 	ssh.Run(ctx, "docker exec nvoi-registry bin/registry garbage-collect /etc/docker/registry/config.yml --delete-untagged 2>/dev/null")
 
 	return nil
 }
 
 // parseSignedURL extracts credentials from URLs like https://user:token@github.com/org/repo.
-// Returns (cleanURL, username, token, ok).
 func parseSignedURL(source string) (string, string, string, bool) {
 	if !strings.Contains(source, "@") || !strings.HasPrefix(source, "http") {
 		return source, "", "", false
@@ -224,32 +207,20 @@ func parseSignedURL(source string) (string, string, string, bool) {
 		return source, "", "", false
 	}
 	username := u.User.Username()
-	u.User = nil // strip credentials
+	u.User = nil
 	return u.String(), username, password, true
 }
 
 // ── Build prune ───────────────────────────────────────────────────────────────
 
 type BuildPruneRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	SSHKey      []byte
-	Name        string
-	Keep        int
+	Cluster
+	Name string
+	Keep int
 }
 
 func BuildPrune(ctx context.Context, req BuildPruneRequest) error {
-	names, err := core.NewNames(req.AppName, req.Env)
-	if err != nil {
-		return err
-	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
-	if err != nil {
-		return err
-	}
-	master, err := FindMaster(ctx, prov, names)
+	master, _, _, err := req.Cluster.Master(ctx)
 	if err != nil {
 		return err
 	}
@@ -264,33 +235,20 @@ type RegistryImage struct {
 }
 
 type BuildListRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	SSHKey      []byte
+	Cluster
 }
 
 func BuildList(ctx context.Context, req BuildListRequest) ([]RegistryImage, error) {
-	names, err := core.NewNames(req.AppName, req.Env)
+	ssh, _, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return nil, err
-	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
-	if err != nil {
-		return nil, err
-	}
-	master, err := FindMaster(ctx, prov, names)
-	if err != nil {
-		return nil, err
-	}
-
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, req.SSHKey)
-	if err != nil {
-		return nil, fmt.Errorf("ssh master: %w", err)
 	}
 	defer ssh.Close()
 
+	master, _, _, err := req.Cluster.Master(ctx)
+	if err != nil {
+		return nil, err
+	}
 	registryAddr := core.RegistryAddr(master.PrivateIP)
 
 	out, err := ssh.Run(ctx, fmt.Sprintf("curl -sf http://%s/v2/_catalog", registryAddr))
@@ -327,34 +285,21 @@ func BuildList(ctx context.Context, req BuildListRequest) ([]RegistryImage, erro
 // ── Build latest ──────────────────────────────────────────────────────────────
 
 type BuildLatestRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	SSHKey      []byte
-	Name        string
+	Cluster
+	Name string
 }
 
 func BuildLatest(ctx context.Context, req BuildLatestRequest) (string, error) {
-	names, err := core.NewNames(req.AppName, req.Env)
+	ssh, _, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return "", err
-	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
-	if err != nil {
-		return "", err
-	}
-	master, err := FindMaster(ctx, prov, names)
-	if err != nil {
-		return "", err
-	}
-
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, req.SSHKey)
-	if err != nil {
-		return "", fmt.Errorf("ssh master: %w", err)
 	}
 	defer ssh.Close()
 
+	master, _, _, err := req.Cluster.Master(ctx)
+	if err != nil {
+		return "", err
+	}
 	registryAddr := core.RegistryAddr(master.PrivateIP)
 
 	out, err := ssh.Run(ctx, fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list", registryAddr, req.Name))
@@ -372,7 +317,6 @@ func BuildLatest(ctx context.Context, req BuildLatestRequest) (string, error) {
 		return "", fmt.Errorf("no tags found for %q", req.Name)
 	}
 
-	// Tags are timestamp-based (20060102-150405), lexicographic sort = chronological order
 	sort.Strings(tagList.Tags)
 	latestTag := tagList.Tags[len(tagList.Tags)-1]
 

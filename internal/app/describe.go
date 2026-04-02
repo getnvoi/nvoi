@@ -7,19 +7,13 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/core"
-	"github.com/getnvoi/nvoi/internal/infra"
 	"github.com/getnvoi/nvoi/internal/kube"
-	"github.com/getnvoi/nvoi/internal/provider"
 )
 
 // ── Request / Result types ──────────────────────────────────────────────────────
 
 type DescribeRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	SSHKey      []byte
+	Cluster
 }
 
 type DescribeNode struct {
@@ -77,7 +71,7 @@ type DescribeResult struct {
 // ── Public ──────────────────────────────────────────────────────────────────────
 
 func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error) {
-	ssh, names, err := connectMaster(ctx, req)
+	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +118,7 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 
 // DescribeJSON returns raw kubectl JSON keyed by resource type.
 func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.RawMessage, error) {
-	ssh, names, err := connectMaster(ctx, req)
+	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -157,26 +151,6 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────────
-
-func connectMaster(ctx context.Context, req DescribeRequest) (core.SSHClient, *core.Names, error) {
-	names, err := core.NewNames(req.AppName, req.Env)
-	if err != nil {
-		return nil, nil, err
-	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
-	if err != nil {
-		return nil, nil, err
-	}
-	master, err := FindMaster(ctx, prov, names)
-	if err != nil {
-		return nil, nil, err
-	}
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, req.SSHKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ssh master: %w", err)
-	}
-	return ssh, names, nil
-}
 
 // kubeGet runs a kubectl get and unmarshals the JSON result into dest.
 func kubeGet(ctx context.Context, ssh core.SSHClient, ns, resource string, dest any) error {

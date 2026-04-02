@@ -13,15 +13,11 @@ import (
 )
 
 type ComputeSetRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	SSHKey      []byte // private key bytes
-	Name        string
-	ServerType  string
-	Region      string
-	Worker      bool
+	Cluster
+	Name       string
+	ServerType string
+	Region     string
+	Worker     bool
 }
 
 type ComputeSetResult struct {
@@ -29,11 +25,11 @@ type ComputeSetResult struct {
 }
 
 func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, error) {
-	names, err := core.NewNames(req.AppName, req.Env)
+	names, err := req.Names()
 	if err != nil {
 		return nil, err
 	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
+	prov, err := req.Compute()
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +107,6 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	}
 
 	// Label the k8s node — idempotent, runs every deploy.
-	// kubectl is on master, so we always SSH to master to label any node.
 	if err := kube.LabelNode(ctx, masterIP, req.SSHKey, names.Server(req.Name), req.Name); err != nil {
 		return nil, fmt.Errorf("label node: %w", err)
 	}
@@ -122,19 +117,16 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 }
 
 type ComputeDeleteRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
-	Name        string
+	Cluster
+	Name string
 }
 
 func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
-	names, err := core.NewNames(req.AppName, req.Env)
+	names, err := req.Names()
 	if err != nil {
 		return err
 	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
+	prov, err := req.Compute()
 	if err != nil {
 		return err
 	}
@@ -154,18 +146,15 @@ func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
 }
 
 type ComputeListRequest struct {
-	AppName     string
-	Env         string
-	Provider    string
-	Credentials map[string]string
+	Cluster
 }
 
 func ComputeList(ctx context.Context, req ComputeListRequest) ([]*provider.Server, error) {
-	names, err := core.NewNames(req.AppName, req.Env)
+	names, err := req.Names()
 	if err != nil {
 		return nil, err
 	}
-	prov, err := provider.ResolveCompute(req.Provider, req.Credentials)
+	prov, err := req.Compute()
 	if err != nil {
 		return nil, err
 	}
