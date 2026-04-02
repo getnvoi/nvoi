@@ -158,8 +158,13 @@ nvoi service delete <name>
 nvoi describe
 
 # Operate
-nvoi logs <service> [-f] [-n 50]
-nvoi exec <service> -- <command>
+nvoi logs <service>                                                             # last 50 lines
+nvoi logs <service> -f                                                          # follow/stream
+nvoi logs <service> -n 100                                                      # last 100 lines
+nvoi logs <service> --since 5m                                                  # last 5 minutes
+nvoi logs <service> --previous                                                  # previous crashed container
+nvoi logs <service> --timestamps                                                # with timestamps
+nvoi exec <service> -- <command>                                                # run command in first pod
 nvoi ssh <command>
 
 # Inspect
@@ -393,10 +398,10 @@ type Output interface {
 ### Error handling
 
 - `app/` returns errors. It never renders them. It never calls `Output.Error()`.
-- Every error flows back through cobra to `HandleError` in `main.go`.
-- `HandleError` renders the error once through `Output.Error()`.
+- Cobra handles all errors. `root.SetErr()` wires cobra's error output through our `Output.Error()` renderer.
+- No `SilenceErrors`. Cobra is the single error path — we style it, not suppress it.
 - Single rendering path. No double-printing. No silent swallowing.
-- Ctrl+C: `signal.NotifyContext` cancels the context → operations abort → styled "interrupted" message → exit 1.
+- Ctrl+C: `signal.NotifyContext` cancels the context → operations abort → exit 1.
 
 ### Streaming
 
@@ -429,7 +434,7 @@ type Cluster struct {
 8. **`os.Getenv` lives exclusively in `cmd/`.** Environment variables are a CLI concept. `app/`, `provider/`, `infra/`, `core/` never read env vars. All external values (credentials, SSH key path, app name, env) are resolved in `cmd/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.
 11. **Providers are silent.** Providers are API clients — they do work and return data. They never print, log, or narrate. Progress output belongs in `app/` via the `Output` interface.
 12. **`app/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `app/` is a library — a future API handler calls the same functions.
-13. **Errors flow up, render once.** `app/` returns errors. `cmd/` renders them through `Output.Error()` in `HandleError`. Never double-print. Never swallow silently.
+13. **Errors flow up, render once.** `app/` returns errors. Cobra renders them through `SetErr` → `Output.Error()`. Never double-print. Never swallow silently.
 9. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
 10. `bin/destroy` is the reverse of `bin/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
 
