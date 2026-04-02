@@ -180,29 +180,28 @@ See `bin/deploy` for the env-var path (compose injects everything) and `bin/depl
 ## Architecture
 
 ```
-cmd/cli/main.go         CLI entrypoint — signal handling, error rendering, exit codes
+cmd/cli/main.go           CLI entrypoint — signal handling, exit codes
 
-internal/
-  app/                   Business logic. One file per domain. No cobra, no I/O, no stdout.
-                         Called by cmd/ (CLI) and future API handlers.
-    cluster.go           Shared Cluster struct (AppName, Env, Provider, Credentials, SSHKey, Output)
-                         with methods: Names(), Compute(), Master(), SSH(), Log()
-    output.go            Output interface — the contract between app/ and its viewers
-  cmd/                   Cobra wrappers. Parse flags → call app/ → render output.
-    output_tui.go        TUI renderer (lipgloss-styled terminal output)
-    output_json.go       JSONL renderer (structured JSON, one event per line)
-    table.go             Bordered tables with lipgloss (Table + TableGroup for synchronized widths)
-  kube/                  K8s YAML generation + kubectl over SSH + Caddy ingress
-  infra/                 SSH, server bootstrap, k3s, Docker, volume mounting
-  provider/              ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
-    hetzner/             Hetzner Cloud (compute + volumes)
-    cloudflare/          Cloudflare (DNS + R2 buckets)
-    daytona/             Daytona remote builds
-    github/              GitHub Actions builds
-    local/               Local docker buildx builds
-  core/                  Pure utilities: naming, poll, httpclient, ssh keys, format
-    s3/                  AWS Signature V4 signing for S3-compatible APIs
-    format.go            Obfuscate, HumanAge — reusable formatting utilities
+pkg/                       Public library — importable by external repos (API, SDK, etc.)
+  app/                     Business logic. One file per domain. No cobra, no I/O, no stdout.
+    cluster.go             Shared Cluster struct (AppName, Env, Provider, Credentials, SSHKey, Output)
+    output.go              Output interface — the contract between app/ and its viewers
+  kube/                    K8s YAML generation + kubectl over SSH + Caddy ingress
+  infra/                   SSH, server bootstrap, k3s, Docker, volume mounting
+  provider/                ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
+    hetzner/               Hetzner Cloud (compute + volumes)
+    cloudflare/            Cloudflare (DNS + R2 buckets)
+    daytona/               Daytona remote builds
+    github/                GitHub Actions builds
+    local/                 Local docker buildx builds
+  core/                    Pure utilities: naming, poll, httpclient, ssh keys, format
+    s3/                    AWS Signature V4 signing for S3-compatible APIs
+
+internal/                  Private — CLI only
+  cmd/                     Cobra wrappers. Parse flags → call pkg/app/ → render output.
+    output_tui.go          TUI renderer (lipgloss-styled terminal output)
+    output_json.go         JSONL renderer (structured JSON, one event per line)
+    table.go               Bordered tables with lipgloss (Table + TableGroup for synchronized widths)
 ```
 
 ## Providers

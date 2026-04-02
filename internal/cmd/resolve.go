@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/getnvoi/nvoi/internal/provider"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/spf13/cobra"
 )
 

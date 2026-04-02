@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/getnvoi/nvoi/internal/app"
+	"github.com/getnvoi/nvoi/pkg/app"
 )
 
 type jsonOutput struct {

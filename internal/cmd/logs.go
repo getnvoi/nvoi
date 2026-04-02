@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/getnvoi/nvoi/internal/app"
+	"github.com/getnvoi/nvoi/pkg/app"
 	"github.com/spf13/cobra"
 )
 

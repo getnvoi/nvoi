@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/getnvoi/nvoi/internal/app"
-	_ "github.com/getnvoi/nvoi/internal/provider/cloudflare" // register cloudflare DNS
+	"github.com/getnvoi/nvoi/pkg/app"
+	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare DNS
 	"github.com/spf13/cobra"
 )
 

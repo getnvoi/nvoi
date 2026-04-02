@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/getnvoi/nvoi/internal/app"
+	"github.com/getnvoi/nvoi/pkg/app"
 	"github.com/spf13/cobra"
 )
 

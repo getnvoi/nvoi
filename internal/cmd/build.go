@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getnvoi/nvoi/internal/app"
-	_ "github.com/getnvoi/nvoi/internal/provider/daytona" // register daytona builder
-	_ "github.com/getnvoi/nvoi/internal/provider/github"  // register github actions builder
-	_ "github.com/getnvoi/nvoi/internal/provider/local"   // register local builder
+	"github.com/getnvoi/nvoi/pkg/app"
+	_ "github.com/getnvoi/nvoi/pkg/provider/daytona" // register daytona builder
+	_ "github.com/getnvoi/nvoi/pkg/provider/github"  // register github actions builder
+	_ "github.com/getnvoi/nvoi/pkg/provider/local"   // register local builder
 	"github.com/spf13/cobra"
 )
 

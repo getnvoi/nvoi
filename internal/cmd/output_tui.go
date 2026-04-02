@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"charm.land/lipgloss/v2"
-	"github.com/getnvoi/nvoi/internal/app"
+	"github.com/getnvoi/nvoi/pkg/app"
 )
 
 var (
