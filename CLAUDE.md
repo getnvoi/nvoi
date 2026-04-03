@@ -507,3 +507,9 @@ const (
 15. **No shell injection.** Secret values flow to kubectl via file upload (`ssh.Upload` + `cat`), not inline `fmt.Sprintf`. `shellQuote` for `--from-literal` args. Never interpolate user values into shell strings.
 16. **All providers use `core.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`.
 
+## Known limitations
+
+- **No pagination on provider list operations.** Hetzner uses `per_page=50` for servers, volumes, firewalls, networks. No cursor continuation. If results exceed one page, the list is silently incomplete — it doesn't error, it lies. Fine at current scale (1-5 servers per app). Fix when adding multi-tenant or `resources` across many apps on one Hetzner account.
+- **No retry / backoff on transient HTTP errors.** Provider API calls fail immediately on 500s or connection drops. User re-runs the command. Idempotent `set` design makes this safe. Fix if `bin/deploy` reliability becomes a problem.
+- **`s3ops.go` uses its own `s3Client` (not `core.HTTPClient`).** The S3/XML operations need raw HTTP (not JSON), so they use a dedicated `var s3Client = &http.Client{Timeout: 30 * time.Second}`. All `io.ReadAll` errors are checked. Context is propagated. This is correct — `core.HTTPClient` is JSON-oriented.
+
