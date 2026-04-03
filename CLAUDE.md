@@ -20,12 +20,17 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 ## Build & Test
 
 ```bash
-go build ./...
-go test ./...                               # 53 tests across 5 packages
-go vet ./...
+bin/test                                    # vet + 121 tests across 7 packages
+bin/test -v                                 # verbose
+bin/test -run TestWaitRollout               # single test
+bin/test -cover                             # with coverage
+go build ./...                              # build only
 ```
 
-Tests cover: naming conventions, YAML generation (Deployment/StatefulSet/Service), Caddyfile generation+parsing+round-trip, Poll retry logic, credential schema validation, volume mount parsing, signed URL parsing, route merging, storage key parsing, cloud-init rendering, APIError formatting. All pure function tests — no mocking, no infrastructure.
+121 tests in three tiers:
+- **Tier 1** — pure functions: naming, YAML generation, Caddyfile, Poll, credential validation, volume parsing, signed URLs, route merging, cloud-init, APIError
+- **Tier 2** — mock SSH: WaitRollout terminal errors, kubectl secret ops, Apply, DeleteByName, FirstPod, FindMaster, describe parsers, k3s install, registry, Docker, volume mount/unmount
+- **Tier 3** — httptest: Hetzner API (servers, volumes, firewalls, networks, auth), Cloudflare API (buckets, DNS records, credentials)
 
 ## CI
 
