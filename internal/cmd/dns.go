@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/app"
+	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register aws DNS
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare DNS
 	"github.com/spf13/cobra"
 )

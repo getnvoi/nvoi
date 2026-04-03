@@ -1,0 +1,63 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── AWS deploy ───────────────────────────────────────────────────────────────
+# Injects AWS provider selection, then runs the same deploy flow.
+# Credentials come from .env (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION).
+
+export COMPUTE_PROVIDER=aws
+export DNS_PROVIDER=aws
+export STORAGE_PROVIDER=aws
+
+set -a
+source .env.deploy
+set +a
+
+# ── Infrastructure ──────────────────────────────────────────────────────────────
+
+bin/cli instance set master --compute-type t3.small --compute-region us-east-1
+bin/cli volume set pgdata --size 30 --server master
+
+# ── Build ───────────────────────────────────────────────────────────────────────
+
+bin/cli build --source benbonnet/dummy-rails --name web
+
+WEB_IMAGE=$(bin/cli build latest web)
+
+# ── Secrets ─────────────────────────────────────────────────────────────────────
+
+bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+
+# ── Storage ─────────────────────────────────────────────────────────────────────
+
+bin/cli storage set assets --cors
+
+# ── Services ────────────────────────────────────────────────────────────────────
+
+bin/cli service set db \
+  --image postgres:17 \
+  --volume pgdata:/var/lib/postgresql/data \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD
+
+bin/cli service set web \
+  --image "$WEB_IMAGE" \
+  --port 80 \
+  --replicas 2 \
+  --health-path /up \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD \
+  --secret RAILS_MASTER_KEY \
+  --storage assets
+
+# ── DNS ──────────────────────────────────────────────────────────────────────────
+
+bin/cli dns set web final.nvoi.to
+
+echo ""
+echo "==> done. https://final.nvoi.to"

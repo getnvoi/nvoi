@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/app"
+	_ "github.com/getnvoi/nvoi/pkg/provider/aws"     // register
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner" // register
 	"github.com/spf13/cobra"
 )
