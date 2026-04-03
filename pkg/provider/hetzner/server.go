@@ -47,8 +47,6 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 		return nil, err
 	}
 	if existing != nil {
-		// TODO: validate labels match req.Labels to prevent cross-project collision
-		// on the same Hetzner account (different app, same naming by accident).
 		return existing, nil
 	}
 

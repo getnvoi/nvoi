@@ -82,6 +82,7 @@ bin/cli instance set master --compute-type cx23 --compute-region fsn1
 | `.env.deploy` | No | App secrets for `bin/deploy` (DB creds, Rails master key) |
 | `.env.example` | Yes | Template for `.env` |
 | `bin/cli` | Yes | `docker compose run --rm cli "$@"` |
+| `bin/test` | Yes | `go vet ./... && go test ./... "$@"` |
 | `bin/deploy` | Yes | Full deploy — env vars, zero provider flags |
 | `bin/deploy-full` | Yes | Full deploy — all flags inline |
 | `bin/destroy` | Yes | Full teardown — reverse order of deploy |
@@ -213,6 +214,7 @@ pkg/                       Public library — importable by external repos (API,
     s3/                    AWS Signature V4 signing for S3-compatible APIs
 
 internal/                  Private — CLI only
+  testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
   cmd/                     Cobra wrappers. Parse flags → call pkg/app/ → render output.
     resolve.go             Centralized credential resolution — single generic resolveCredentials()
     output_tui.go          TUI renderer (lipgloss-styled terminal output)
@@ -444,6 +446,7 @@ type Cluster struct {
     Credentials            map[string]string
     SSHKey                 []byte
     Output                 Output
+    SSHFunc                func(ctx, addr) (SSHClient, error)  // nil = real SSH, set in tests
 }
 ```
 
@@ -516,5 +519,5 @@ const (
 
 - **No pagination on provider list operations.** Hetzner uses `per_page=50` for servers, volumes, firewalls, networks. No cursor continuation. If results exceed one page, the list is silently incomplete — it doesn't error, it lies. Fine at current scale (1-5 servers per app). Fix when adding multi-tenant or `resources` across many apps on one Hetzner account.
 - **No retry / backoff on transient HTTP errors.** Provider API calls fail immediately on 500s or connection drops. User re-runs the command. Idempotent `set` design makes this safe. Fix if `bin/deploy` reliability becomes a problem.
-- **`s3ops.go` uses its own `s3Client` (not `core.HTTPClient`).** The S3/XML operations need raw HTTP (not JSON), so they use a dedicated `var s3Client = &http.Client{Timeout: 30 * time.Second}`. All `io.ReadAll` errors are checked. Context is propagated. This is correct — `core.HTTPClient` is JSON-oriented.
+- **`s3ops.go` uses a dedicated `s3Client` (not `core.HTTPClient`).** S3/XML operations need raw HTTP, not JSON. Uses `var s3Client = &http.Client{Timeout: 30 * time.Second}` with all `io.ReadAll` errors checked and context propagated. This is by design — `core.HTTPClient` is JSON-oriented.
 
