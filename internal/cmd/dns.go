@@ -5,6 +5,7 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/app"
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare DNS
+	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"  // register scaleway DNS
 	"github.com/spf13/cobra"
 )
 
