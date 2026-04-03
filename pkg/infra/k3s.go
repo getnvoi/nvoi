@@ -25,7 +25,11 @@ func InstallK3sMaster(ctx context.Context, node Node, privKey []byte, w io.Write
 		return fmt.Errorf("ssh master: %w", err)
 	}
 	defer ssh.Close()
+	return installK3sMaster(ctx, ssh, node, w)
+}
 
+// installK3sMaster contains the k3s install logic, testable with a mock SSH client.
+func installK3sMaster(ctx context.Context, ssh core.SSHClient, node Node, w io.Writer) error {
 	// Already installed?
 	if _, err := ssh.Run(ctx, "command -v kubectl >/dev/null 2>&1 && sudo k3s kubectl get nodes 2>/dev/null | grep -q ' Ready '"); err == nil {
 		fmt.Fprintln(w, "k3s already installed")
@@ -86,7 +90,11 @@ func EnsureRegistry(ctx context.Context, node Node, privKey []byte, w io.Writer)
 		return err
 	}
 	defer ssh.Close()
+	return ensureRegistry(ctx, ssh, node, w)
+}
 
+// ensureRegistry contains the registry logic, testable with a mock SSH client.
+func ensureRegistry(ctx context.Context, ssh core.SSHClient, node Node, w io.Writer) error {
 	registryAddr := core.RegistryAddr(node.PrivateIP)
 
 	// Already running?

@@ -39,7 +39,14 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return err
 	}
 
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, req.SSHKey)
+	addr := master.IPv4 + ":22"
+	connectFn := req.Cluster.SSHFunc
+	if connectFn == nil {
+		connectFn = func(ctx context.Context, addr string) (core.SSHClient, error) {
+			return infra.ConnectSSH(ctx, addr, core.DefaultUser, req.SSHKey)
+		}
+	}
+	ssh, err := connectFn(ctx, addr)
 	if err != nil {
 		return err
 	}

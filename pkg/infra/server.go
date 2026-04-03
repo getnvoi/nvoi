@@ -52,6 +52,25 @@ func EnsureDocker(ctx context.Context, ip string, privateKey []byte) error {
 	}
 	defer ssh.Close()
 
+	if err := ensureDocker(ctx, ssh); err != nil {
+		return err
+	}
+
+	// Verify with fresh session (picks up docker group)
+	ssh.Close()
+	return core.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
+		fresh, err := ConnectSSH(ctx, ip+":22", core.DefaultUser, privateKey)
+		if err != nil {
+			return false, nil
+		}
+		defer fresh.Close()
+		_, err = fresh.Run(ctx, "docker info >/dev/null 2>&1")
+		return err == nil, nil
+	})
+}
+
+// ensureDocker contains the Docker install logic, testable with a mock SSH client.
+func ensureDocker(ctx context.Context, ssh core.SSHClient) error {
 	// Already installed?
 	if _, err := ssh.Run(ctx, "sudo docker info >/dev/null 2>&1"); err == nil {
 		return nil
@@ -89,15 +108,5 @@ func EnsureDocker(ctx context.Context, ip string, privateKey []byte) error {
 		return fmt.Errorf("docker install did not converge: %w", err)
 	}
 
-	// Verify with fresh session (picks up docker group)
-	ssh.Close()
-	return core.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
-		fresh, err := ConnectSSH(ctx, ip+":22", core.DefaultUser, privateKey)
-		if err != nil {
-			return false, nil
-		}
-		defer fresh.Close()
-		_, err = fresh.Run(ctx, "docker info >/dev/null 2>&1")
-		return err == nil, nil
-	})
+	return nil
 }

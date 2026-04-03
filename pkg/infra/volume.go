@@ -20,7 +20,11 @@ func MountVolume(ctx context.Context, vol *provider.Volume, serverIP string, mou
 		return fmt.Errorf("ssh for volume mount: %w", err)
 	}
 	defer ssh.Close()
+	return mountVolume(ctx, ssh, vol, mountPath, w)
+}
 
+// mountVolume contains the mount logic, testable with a mock SSH client.
+func mountVolume(ctx context.Context, ssh core.SSHClient, vol *provider.Volume, mountPath string, w io.Writer) error {
 	// Already mounted? Grow filesystem in case of resize, then return.
 	out, err := ssh.Run(ctx, fmt.Sprintf("mountpoint -q %s && echo mounted || echo not", mountPath))
 	if err == nil && strings.TrimSpace(string(out)) == "mounted" {
@@ -92,7 +96,11 @@ func UnmountVolume(ctx context.Context, serverIP string, mountPath string, privK
 		return fmt.Errorf("ssh: %w", err)
 	}
 	defer ssh.Close()
+	return unmountVolume(ctx, ssh, mountPath, w)
+}
 
+// unmountVolume contains the unmount logic, testable with a mock SSH client.
+func unmountVolume(ctx context.Context, ssh core.SSHClient, mountPath string, w io.Writer) error {
 	// Check if mounted
 	out, err := ssh.Run(ctx, fmt.Sprintf("mountpoint -q %s && echo mounted || echo not", mountPath))
 	if err != nil || strings.TrimSpace(string(out)) != "mounted" {

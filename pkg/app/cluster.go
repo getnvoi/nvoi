@@ -26,6 +26,9 @@ type Cluster struct {
 	Credentials map[string]string
 	SSHKey      []byte
 	Output      Output
+	// SSHFunc overrides the default SSH connection for testing.
+	// When nil, uses infra.ConnectSSH (production path).
+	SSHFunc func(ctx context.Context, addr string) (core.SSHClient, error)
 }
 
 // Log returns the Output, falling back to a no-op if nil.
@@ -81,7 +84,14 @@ func (c *Cluster) SSH(ctx context.Context) (core.SSHClient, *core.Names, error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", core.DefaultUser, c.SSHKey)
+	addr := master.IPv4 + ":22"
+	connectFn := c.SSHFunc
+	if connectFn == nil {
+		connectFn = func(ctx context.Context, addr string) (core.SSHClient, error) {
+			return infra.ConnectSSH(ctx, addr, core.DefaultUser, c.SSHKey)
+		}
+	}
+	ssh, err := connectFn(ctx, addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssh master: %w", err)
 	}
