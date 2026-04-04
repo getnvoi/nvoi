@@ -20,7 +20,26 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 	r.POST("/login", LoginHandler(db, verify))
 
 	// Authenticated
-	_ = r.Group("/", api.AuthRequired(db))
+	auth := r.Group("/", api.AuthRequired(db))
+	{
+		ws := auth.Group("/workspaces")
+		{
+			ws.GET("", ListWorkspaces(db))
+			ws.POST("", CreateWorkspace(db))
+			ws.GET("/:workspace_id", GetWorkspace(db))
+			ws.PUT("/:workspace_id", UpdateWorkspace(db))
+			ws.DELETE("/:workspace_id", DeleteWorkspace(db))
+
+			repos := ws.Group("/:workspace_id/repos")
+			{
+				repos.GET("", ListRepos(db))
+				repos.POST("", CreateRepo(db))
+				repos.GET("/:repo_id", GetRepo(db))
+				repos.PUT("/:repo_id", UpdateRepo(db))
+				repos.DELETE("/:repo_id", DeleteRepo(db))
+			}
+		}
+	}
 
 	return r
 }

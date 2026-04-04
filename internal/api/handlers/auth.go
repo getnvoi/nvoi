@@ -13,9 +13,10 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	Token string   `json:"token"`
-	User  api.User `json:"user"`
-	IsNew bool     `json:"is_new"`
+	Token     string        `json:"token"`
+	User      api.User      `json:"user"`
+	Workspace api.Workspace `json:"workspace"`
+	IsNew     bool          `json:"is_new"`
 }
 
 func LoginHandler(db *gorm.DB, verify api.GitHubVerifier) gin.HandlerFunc {
@@ -33,16 +34,41 @@ func LoginHandler(db *gorm.DB, verify api.GitHubVerifier) gin.HandlerFunc {
 		}
 
 		var user api.User
+		var workspace api.Workspace
 		isNew := false
 
 		err = db.Transaction(func(tx *gorm.DB) error {
+			// Find or create user.
 			result := tx.Where("github_username = ?", ghUser.Login).First(&user)
 			if result.Error == gorm.ErrRecordNotFound {
 				user = api.User{GithubUsername: ghUser.Login}
 				isNew = true
-				return tx.Create(&user).Error
+				if err := tx.Create(&user).Error; err != nil {
+					return err
+				}
+			} else if result.Error != nil {
+				return result.Error
 			}
-			return result.Error
+
+			// Find or create default workspace.
+			err := tx.Joins("JOIN workspace_users ON workspace_users.workspace_id = workspaces.id").
+				Where("workspace_users.user_id = ?", user.ID).
+				First(&workspace).Error
+			if err == gorm.ErrRecordNotFound {
+				workspace = api.Workspace{
+					Name:      "default",
+					CreatedBy: user.ID,
+				}
+				if err := tx.Create(&workspace).Error; err != nil {
+					return err
+				}
+				return tx.Create(&api.WorkspaceUser{
+					UserID:      user.ID,
+					WorkspaceID: workspace.ID,
+					Role:        "owner",
+				}).Error
+			}
+			return err
 		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "login failed"})
@@ -56,9 +82,10 @@ func LoginHandler(db *gorm.DB, verify api.GitHubVerifier) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, loginResponse{
-			Token: token,
-			User:  user,
-			IsNew: isNew,
+			Token:     token,
+			User:      user,
+			Workspace: workspace,
+			IsNew:     isNew,
 		})
 	}
 }

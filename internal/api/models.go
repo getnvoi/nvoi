@@ -30,3 +30,66 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 	}
 	return nil
 }
+
+// ── Workspace ─────────────────────────────────────────────────────────────────
+
+type Workspace struct {
+	ID        string         `gorm:"primaryKey" json:"id"`
+	Name      string         `gorm:"not null" json:"name"`
+	CreatedBy string         `gorm:"not null;index" json:"created_by"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Creator User   `gorm:"foreignKey:CreatedBy" json:"-"`
+	Repos   []Repo `gorm:"foreignKey:WorkspaceID" json:"repos,omitempty"`
+}
+
+func (w *Workspace) BeforeCreate(tx *gorm.DB) error {
+	if w.ID == "" {
+		w.ID = newUUID()
+	}
+	return nil
+}
+
+// ── WorkspaceUser (join table) ────────────────────────────────────────────────
+
+type WorkspaceUser struct {
+	ID          string    `gorm:"primaryKey" json:"id"`
+	UserID      string    `gorm:"not null;uniqueIndex:idx_ws_user" json:"user_id"`
+	WorkspaceID string    `gorm:"not null;uniqueIndex:idx_ws_user" json:"workspace_id"`
+	Role        string    `gorm:"not null;default:'owner'" json:"role"`
+	CreatedAt   time.Time `json:"created_at"`
+
+	User      User      `gorm:"foreignKey:UserID" json:"-"`
+	Workspace Workspace `gorm:"foreignKey:WorkspaceID" json:"-"`
+}
+
+func (WorkspaceUser) TableName() string { return "workspace_users" }
+
+func (wu *WorkspaceUser) BeforeCreate(tx *gorm.DB) error {
+	if wu.ID == "" {
+		wu.ID = newUUID()
+	}
+	return nil
+}
+
+// ── Repo ──────────────────────────────────────────────────────────────────────
+
+type Repo struct {
+	ID          string         `gorm:"primaryKey" json:"id"`
+	WorkspaceID string         `gorm:"not null;index" json:"workspace_id"`
+	Name        string         `gorm:"not null" json:"name"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Workspace Workspace `gorm:"foreignKey:WorkspaceID" json:"-"`
+}
+
+func (r *Repo) BeforeCreate(tx *gorm.DB) error {
+	if r.ID == "" {
+		r.ID = newUUID()
+	}
+	return nil
+}
