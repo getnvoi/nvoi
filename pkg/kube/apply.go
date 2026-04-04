@@ -9,15 +9,15 @@ import (
 	"io"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/infra"
 )
 
 
-var kubeconfigPath = fmt.Sprintf("/home/%s/.kube/config", core.DefaultUser)
+var kubeconfigPath = fmt.Sprintf("/home/%s/.kube/config", utils.DefaultUser)
 
 // NvoiSelector is the label selector for nvoi-managed resources.
-var NvoiSelector = fmt.Sprintf("%s=%s", core.LabelAppManagedBy, core.LabelManagedBy)
+var NvoiSelector = fmt.Sprintf("%s=%s", utils.LabelAppManagedBy, utils.LabelManagedBy)
 
 func kubectl(ns, command string) string {
 	return fmt.Sprintf("KUBECONFIG=%s kubectl -n %s %s", kubeconfigPath, ns, command)
@@ -29,7 +29,7 @@ func kubectlGlobal(command string) string {
 
 // GetJSON runs a namespaced kubectl get and returns raw JSON bytes.
 // selector is optional (e.g. NvoiSelector or "").
-func GetJSON(ctx context.Context, ssh core.SSHClient, ns, resource, selector string) ([]byte, error) {
+func GetJSON(ctx context.Context, ssh utils.SSHClient, ns, resource, selector string) ([]byte, error) {
 	sel := ""
 	if selector != "" {
 		sel = " -l " + selector
@@ -38,12 +38,12 @@ func GetJSON(ctx context.Context, ssh core.SSHClient, ns, resource, selector str
 }
 
 // GetClusterJSON runs a cluster-wide (non-namespaced) kubectl get and returns raw JSON bytes.
-func GetClusterJSON(ctx context.Context, ssh core.SSHClient, resource string) ([]byte, error) {
+func GetClusterJSON(ctx context.Context, ssh utils.SSHClient, resource string) ([]byte, error) {
 	return ssh.Run(ctx, kubectlGlobal(fmt.Sprintf("get %s -o json", resource)))
 }
 
 // GetNamedJSON runs kubectl get on a specific named resource and returns raw JSON bytes.
-func GetNamedJSON(ctx context.Context, ssh core.SSHClient, ns, resource, name string) ([]byte, error) {
+func GetNamedJSON(ctx context.Context, ssh utils.SSHClient, ns, resource, name string) ([]byte, error) {
 	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get %s %s -o json 2>/dev/null", resource, name)))
 	if err != nil {
 		return nil, err
@@ -52,22 +52,22 @@ func GetNamedJSON(ctx context.Context, ssh core.SSHClient, ns, resource, name st
 }
 
 // RunKubectl runs an arbitrary kubectl command and returns output.
-func RunKubectl(ctx context.Context, ssh core.SSHClient, ns, command string) ([]byte, error) {
+func RunKubectl(ctx context.Context, ssh utils.SSHClient, ns, command string) ([]byte, error) {
 	return ssh.Run(ctx, kubectl(ns, command))
 }
 
 // RunStream runs a kubectl command and streams stdout/stderr to the provided writers.
-func RunStream(ctx context.Context, ssh core.SSHClient, ns, command string, stdout, stderr io.Writer) error {
+func RunStream(ctx context.Context, ssh utils.SSHClient, ns, command string, stdout, stderr io.Writer) error {
 	return ssh.RunStream(ctx, kubectl(ns, command), stdout, stderr)
 }
 
 // PodSelector returns the label selector for pods belonging to a service.
 func PodSelector(service string) string {
-	return fmt.Sprintf("%s=%s", core.LabelAppName, service)
+	return fmt.Sprintf("%s=%s", utils.LabelAppName, service)
 }
 
 // FirstPod returns the name of the first running pod for a service.
-func FirstPod(ctx context.Context, ssh core.SSHClient, ns, service string) (string, error) {
+func FirstPod(ctx context.Context, ssh utils.SSHClient, ns, service string) (string, error) {
 	sel := PodSelector(service)
 	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get pods -l %s -o jsonpath='{.items[0].metadata.name}'", sel)))
 	if err != nil {
@@ -81,11 +81,11 @@ func FirstPod(ctx context.Context, ssh core.SSHClient, ns, service string) (stri
 }
 
 // Apply uploads a YAML manifest and runs kubectl apply.
-func Apply(ctx context.Context, ssh core.SSHClient, ns string, yaml string) error {
-	if err := ssh.Upload(ctx, bytes.NewReader([]byte(yaml)), core.KubeManifestPath(), 0o644); err != nil {
+func Apply(ctx context.Context, ssh utils.SSHClient, ns string, yaml string) error {
+	if err := ssh.Upload(ctx, bytes.NewReader([]byte(yaml)), utils.KubeManifestPath(), 0o644); err != nil {
 		return fmt.Errorf("upload manifest: %w", err)
 	}
-	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply -f %s", core.KubeManifestPath())))
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply -f %s", utils.KubeManifestPath())))
 	if err != nil {
 		return fmt.Errorf("kubectl apply: %s: %w", string(out), err)
 	}
@@ -94,7 +94,7 @@ func Apply(ctx context.Context, ssh core.SSHClient, ns string, yaml string) erro
 
 // DeleteByName removes a workload + service by name. Tries both deployment and statefulset.
 // --ignore-not-found handles "already gone." SSH errors are real failures.
-func DeleteByName(ctx context.Context, ssh core.SSHClient, ns, name string) error {
+func DeleteByName(ctx context.Context, ssh utils.SSHClient, ns, name string) error {
 	if _, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("delete deployment/%s --ignore-not-found", name))); err != nil {
 		return fmt.Errorf("delete deployment/%s: %w", name, err)
 	}
@@ -108,7 +108,7 @@ func DeleteByName(ctx context.Context, ssh core.SSHClient, ns, name string) erro
 }
 
 // ListSecretKeys returns the keys stored in a k8s Secret, or nil if the secret doesn't exist.
-func ListSecretKeys(ctx context.Context, ssh core.SSHClient, ns, secretName string) ([]string, error) {
+func ListSecretKeys(ctx context.Context, ssh utils.SSHClient, ns, secretName string) ([]string, error) {
 	cmd := kubectl(ns, fmt.Sprintf("get secret %s -o jsonpath='{.data}' 2>/dev/null", secretName))
 	out, err := ssh.Run(ctx, cmd)
 	if err != nil {
@@ -139,7 +139,7 @@ func ListSecretKeys(ctx context.Context, ssh core.SSHClient, ns, secretName stri
 // Creates the secret if it doesn't exist. Idempotent.
 // Uses --from-literal for create (shellQuote handles special chars)
 // and uploads a JSON patch file for update (avoids shell injection).
-func UpsertSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, key, value string) error {
+func UpsertSecretKey(ctx context.Context, ssh utils.SSHClient, ns, secretName, key, value string) error {
 	// Check if secret exists
 	_, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get secret %s 2>/dev/null", secretName)))
 	if err != nil {
@@ -160,7 +160,7 @@ func UpsertSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, ke
 	if err != nil {
 		return fmt.Errorf("marshal patch: %w", err)
 	}
-	patchPath := fmt.Sprintf("/home/%s/.nvoi-patch.json", core.DefaultUser)
+	patchPath := fmt.Sprintf("/home/%s/.nvoi-patch.json", utils.DefaultUser)
 	if err := ssh.Upload(ctx, bytes.NewReader(patch), patchPath, 0o600); err != nil {
 		return fmt.Errorf("upload patch: %w", err)
 	}
@@ -175,7 +175,7 @@ func UpsertSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, ke
 
 // DeleteSecretKey removes a single key from a k8s Secret.
 // Idempotent — succeeds if the key or secret doesn't exist.
-func DeleteSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, key string) error {
+func DeleteSecretKey(ctx context.Context, ssh utils.SSHClient, ns, secretName, key string) error {
 	// Check if secret exists
 	_, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get secret %s 2>/dev/null", secretName)))
 	if err != nil {
@@ -210,7 +210,7 @@ func DeleteSecretKey(ctx context.Context, ssh core.SSHClient, ns, secretName, ke
 }
 
 // GetSecretValue returns the decoded value of a single key from a k8s Secret.
-func GetSecretValue(ctx context.Context, ssh core.SSHClient, ns, secretName, key string) (string, error) {
+func GetSecretValue(ctx context.Context, ssh utils.SSHClient, ns, secretName, key string) (string, error) {
 	cmd := kubectl(ns, fmt.Sprintf(
 		"get secret %s -o jsonpath='{.data.%s}'", secretName, key,
 	))
@@ -254,14 +254,14 @@ func base64Decode(s string) (string, error) {
 // LabelNode labels a k8s node with nvoi-role={role}. Idempotent — runs every deploy.
 // Connects to master via SSH since kubectl lives there.
 func LabelNode(ctx context.Context, master infra.Node, sshKey []byte, nodeName, role string) error {
-	ssh, err := infra.ConnectSSH(ctx, master.PublicIP+":22", core.DefaultUser, sshKey)
+	ssh, err := infra.ConnectSSH(ctx, master.PublicIP+":22", utils.DefaultUser, sshKey)
 	if err != nil {
 		return fmt.Errorf("ssh master for node label: %w", err)
 	}
 	defer ssh.Close()
 
 	cmd := fmt.Sprintf("KUBECONFIG=%s kubectl label node %s %s=%s --overwrite",
-		kubeconfigPath, nodeName, core.LabelNvoiRole, role)
+		kubeconfigPath, nodeName, utils.LabelNvoiRole, role)
 	out, err := ssh.Run(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("label node %s: %s: %w", nodeName, string(out), err)
@@ -270,7 +270,7 @@ func LabelNode(ctx context.Context, master infra.Node, sshKey []byte, nodeName, 
 }
 
 // GetServicePort returns the first port of a k8s Service, or error if not found.
-func GetServicePort(ctx context.Context, ssh core.SSHClient, ns, name string) (int, error) {
+func GetServicePort(ctx context.Context, ssh utils.SSHClient, ns, name string) (int, error) {
 	cmd := kubectl(ns, fmt.Sprintf("get service %s -o jsonpath='{.spec.ports[0].port}' 2>/dev/null", name))
 	out, err := ssh.Run(ctx, cmd)
 	if err != nil {
@@ -286,7 +286,7 @@ func GetServicePort(ctx context.Context, ssh core.SSHClient, ns, name string) (i
 }
 
 // EnsureNamespace creates a namespace if it doesn't exist.
-func EnsureNamespace(ctx context.Context, ssh core.SSHClient, ns string) error {
+func EnsureNamespace(ctx context.Context, ssh utils.SSHClient, ns string) error {
 	cmd := fmt.Sprintf("KUBECONFIG=%s kubectl create namespace %s --dry-run=client -o yaml | KUBECONFIG=%s kubectl apply -f -",
 		kubeconfigPath, ns, kubeconfigPath)
 	if _, err := ssh.Run(ctx, cmd); err != nil {

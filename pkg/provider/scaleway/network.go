@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -31,7 +31,7 @@ func (c *Client) ensureNetwork(ctx context.Context, name string, labels map[stri
 		Name:      name,
 		ProjectID: c.projectID,
 		Tags:      labelsToTags(labels),
-		Subnets:   []string{core.PrivateNetworkSubnet},
+		Subnets:   []string{utils.PrivateNetworkSubnet},
 	}
 
 	var resp struct {
@@ -68,7 +68,7 @@ func (c *Client) deleteNetwork(ctx context.Context, name string) error {
 		return nil
 	}
 	err = c.api.Do(ctx, "DELETE", c.vpcPath(fmt.Sprintf("/private-networks/%s", net.ID)), nil, nil)
-	if err != nil && !core.IsNotFound(err) {
+	if err != nil && !utils.IsNotFound(err) {
 		return err
 	}
 	return nil
@@ -102,7 +102,7 @@ func (c *Client) attachPrivateNetwork(ctx context.Context, serverID, networkID s
 
 	err := c.doInstance(ctx, "POST", fmt.Sprintf("/servers/%s/private_nics", serverID), body, nil)
 	if err != nil {
-		if apiErr, ok := err.(*core.APIError); ok && apiErr.Status == 400 {
+		if apiErr, ok := err.(*utils.APIError); ok && apiErr.Status == 400 {
 			return nil // already attached
 		}
 		return fmt.Errorf("attach private network: %w", err)

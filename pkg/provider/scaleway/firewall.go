@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -81,7 +81,7 @@ func (c *Client) deleteFirewall(ctx context.Context, name string) error {
 		return nil
 	}
 	err = c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s", fw.ID), nil, nil)
-	if err != nil && !core.IsNotFound(err) {
+	if err != nil && !utils.IsNotFound(err) {
 		return err
 	}
 	return nil

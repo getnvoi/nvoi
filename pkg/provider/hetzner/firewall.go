@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -66,7 +66,7 @@ func (c *Client) deleteFirewall(ctx context.Context, name string) error {
 	for _, fw := range resp.Firewalls {
 		if fw.Name == name {
 			err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/firewalls/%s", strconv.FormatInt(fw.ID, 10)), nil, nil)
-			if err != nil && !core.IsNotFound(err) {
+			if err != nil && !utils.IsNotFound(err) {
 				return err
 			}
 		}
@@ -104,7 +104,7 @@ func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, er
 // defaultFirewallRules returns the standard nvoi firewall rules.
 func defaultFirewallRules() []fwRule {
 	pub := []string{"0.0.0.0/0", "::/0"}
-	priv := []string{core.PrivateNetworkCIDR}
+	priv := []string{utils.PrivateNetworkCIDR}
 	return []fwRule{
 		{Direction: "in", Protocol: "tcp", Port: "22", SourceIPs: pub},
 		{Direction: "in", Protocol: "tcp", Port: "80", SourceIPs: pub},

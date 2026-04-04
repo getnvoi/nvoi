@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 // DNSClient manages A/AAAA records via the Cloudflare API.
 type DNSClient struct {
-	api    *core.HTTPClient
+	api    *utils.HTTPClient
 	zoneID string
 	zone   string // domain name for FQDN construction
 }
@@ -19,7 +19,7 @@ type DNSClient struct {
 // NewDNS creates a Cloudflare DNS provider.
 func NewDNS(creds map[string]string) *DNSClient {
 	return &DNSClient{
-		api: &core.HTTPClient{
+		api: &utils.HTTPClient{
 			BaseURL: cfBaseURL,
 			SetAuth: func(r *http.Request) {
 				r.Header.Set("Authorization", "Bearer "+creds["api_key"])

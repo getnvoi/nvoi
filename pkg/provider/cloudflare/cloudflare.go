@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -19,7 +19,7 @@ const cfBaseURL = "https://api.cloudflare.com/client/v4"
 
 // Client manages R2 buckets via Cloudflare API + S3-compatible operations.
 type Client struct {
-	api       *core.HTTPClient
+	api       *utils.HTTPClient
 	apiKey    string
 	accountID string
 	creds     *provider.BucketCredentials
@@ -29,7 +29,7 @@ type Client struct {
 func New(creds map[string]string) *Client {
 	apiKey := creds["api_key"]
 	return &Client{
-		api: &core.HTTPClient{
+		api: &utils.HTTPClient{
 			BaseURL: cfBaseURL,
 			SetAuth: func(r *http.Request) {
 				r.Header.Set("Authorization", "Bearer "+apiKey)
@@ -59,7 +59,7 @@ func (c *Client) EnsureBucket(ctx context.Context, name string) error {
 	err := c.api.Do(ctx, "POST", fmt.Sprintf("/accounts/%s/r2/buckets", c.accountID), map[string]string{"name": name}, nil)
 	if err != nil {
 		// 409 = already exists — success
-		if apiErr, ok := err.(*core.APIError); ok && apiErr.HTTPStatus() == 409 {
+		if apiErr, ok := err.(*utils.APIError); ok && apiErr.HTTPStatus() == 409 {
 			return nil
 		}
 		return fmt.Errorf("create bucket %s: %w", name, err)
@@ -79,7 +79,7 @@ func (c *Client) DeleteBucket(ctx context.Context, name string) error {
 	err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/accounts/%s/r2/buckets/%s", c.accountID, name), nil, nil)
 	if err != nil {
 		// 404 = already gone — success
-		if core.IsNotFound(err) {
+		if utils.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("delete bucket %s: %w", name, err)

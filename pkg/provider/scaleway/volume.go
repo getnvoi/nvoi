@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -152,7 +152,7 @@ func (c *Client) DeleteVolume(ctx context.Context, name string) error {
 		}
 	}
 	if err := c.api.Do(ctx, "DELETE", c.blockPath(fmt.Sprintf("/volumes/%s", vol.ID)), nil, nil); err != nil {
-		if !core.IsNotFound(err) {
+		if !utils.IsNotFound(err) {
 			return fmt.Errorf("delete volume: %w", err)
 		}
 	}
@@ -297,7 +297,7 @@ func (c *Client) detachVolumeByID(ctx context.Context, volumeID string) error {
 }
 
 func (c *Client) waitForVolumeAvailable(ctx context.Context, volumeID string) error {
-	return core.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
 		var resp blockVolumeJSON
 		if err := c.api.Do(ctx, "GET", c.blockPath(fmt.Sprintf("/volumes/%s", volumeID)), nil, &resp); err != nil {
 			return false, nil

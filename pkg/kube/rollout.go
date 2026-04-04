@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // podStatus is the subset of pod JSON we parse.
@@ -54,11 +54,11 @@ type ProgressEmitter interface {
 	Progress(msg string)
 }
 
-func WaitRollout(ctx context.Context, ssh core.SSHClient, ns, name, kind string, emitter ProgressEmitter) error {
-	selector := fmt.Sprintf("%s=%s", core.LabelAppName, name)
+func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string, emitter ProgressEmitter) error {
+	selector := fmt.Sprintf("%s=%s", utils.LabelAppName, name)
 	lastStatus := ""
 
-	return core.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
 		cmd := kubectl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
@@ -154,8 +154,8 @@ func WaitRollout(ctx context.Context, ssh core.SSHClient, ns, name, kind string,
 }
 
 // WaitPods polls until all pods in the namespace are Running or Succeeded.
-func WaitPods(ctx context.Context, ssh core.SSHClient, ns string) error {
-	return core.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+func WaitPods(ctx context.Context, ssh utils.SSHClient, ns string) error {
+	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
 		out, err := ssh.Run(ctx, kubectl(ns, "get pods -o json"))
 		if err != nil {
 			return false, nil
@@ -174,7 +174,7 @@ func WaitPods(ctx context.Context, ssh core.SSHClient, ns string) error {
 	})
 }
 
-func recentLogs(ctx context.Context, ssh core.SSHClient, ns, name, kind string) string {
+func recentLogs(ctx context.Context, ssh utils.SSHClient, ns, name, kind string) string {
 	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("logs %s/%s --tail=20", kind, name)))
 	if err != nil {
 		return ""

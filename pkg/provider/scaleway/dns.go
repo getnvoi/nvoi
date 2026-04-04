@@ -5,21 +5,21 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 // DNSClient manages A/AAAA records via the Scaleway DNS API (v2beta1).
 // Uses PATCH-based change API for atomic record operations.
 type DNSClient struct {
-	api  *core.HTTPClient
+	api  *utils.HTTPClient
 	zone string
 }
 
 // NewDNS creates a Scaleway DNS provider.
 func NewDNS(creds map[string]string) *DNSClient {
 	return &DNSClient{
-		api: &core.HTTPClient{
+		api: &utils.HTTPClient{
 			BaseURL: "https://api.scaleway.com/domain/v2beta1",
 			SetAuth: func(r *http.Request) {
 				r.Header.Set("X-Auth-Token", creds["secret_key"])

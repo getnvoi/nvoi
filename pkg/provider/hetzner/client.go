@@ -6,21 +6,21 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 const defaultBaseURL = "https://api.hetzner.cloud/v1"
 
 type Client struct {
-	api   *core.HTTPClient
+	api   *utils.HTTPClient
 	token string
 }
 
 func New(token string) *Client {
 	return &Client{
 		token: token,
-		api: &core.HTTPClient{
+		api: &utils.HTTPClient{
 			BaseURL: defaultBaseURL,
 			SetAuth: func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) },
 			Label:   "hetzner",

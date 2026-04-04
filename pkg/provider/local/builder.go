@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
@@ -20,13 +20,13 @@ type Builder struct{}
 
 func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provider.BuildResult, error) {
 	// SSH tunnel to registry
-	ssh, err := infra.ConnectSSH(ctx, req.RegistrySSH.MasterIP+":22", core.DefaultUser, req.RegistrySSH.PrivKey)
+	ssh, err := infra.ConnectSSH(ctx, req.RegistrySSH.MasterIP+":22", utils.DefaultUser, req.RegistrySSH.PrivKey)
 	if err != nil {
 		return nil, fmt.Errorf("ssh for registry tunnel: %w", err)
 	}
 	defer ssh.Close()
 
-	registryAddr := core.RegistryAddr(req.RegistrySSH.MasterPrivateIP)
+	registryAddr := utils.RegistryAddr(req.RegistrySSH.MasterPrivateIP)
 	tunnelAddr, cleanup, err := infra.LocalForward(ssh, registryAddr)
 	if err != nil {
 		return nil, fmt.Errorf("ssh tunnel to registry: %w", err)

@@ -8,7 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -34,7 +34,7 @@ func (c *Client) ensureVPC(ctx context.Context, name string, labels map[string]s
 
 	// Create VPC
 	vpcResp, err := c.ec2.CreateVpc(ctx, &ec2.CreateVpcInput{
-		CidrBlock:         aws.String(core.PrivateNetworkCIDR),
+		CidrBlock:         aws.String(utils.PrivateNetworkCIDR),
 		TagSpecifications: tagSpec(ec2types.ResourceTypeVpc, name, labels),
 	})
 	if err != nil {
@@ -51,7 +51,7 @@ func (c *Client) ensureVPC(ctx context.Context, name string, labels map[string]s
 	// Create subnet
 	subnetResp, err := c.ec2.CreateSubnet(ctx, &ec2.CreateSubnetInput{
 		VpcId:             aws.String(vpcID),
-		CidrBlock:         aws.String(core.PrivateNetworkSubnet),
+		CidrBlock:         aws.String(utils.PrivateNetworkSubnet),
 		TagSpecifications: tagSpec(ec2types.ResourceTypeSubnet, name+"-subnet", labels),
 	})
 	if err != nil {

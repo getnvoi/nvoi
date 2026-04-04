@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // testEmitter collects Progress messages for assertions.
@@ -232,7 +232,7 @@ func TestWaitRollout_TransientThenReady(t *testing.T) {
 	}
 }
 
-// counterSSH is a minimal core.SSHClient that cycles through canned responses
+// counterSSH is a minimal utils.SSHClient that cycles through canned responses
 // for commands containing "get pods". All other methods are no-op stubs.
 type counterSSH struct {
 	mu        sync.Mutex
@@ -262,7 +262,7 @@ func (c *counterSSH) Upload(_ context.Context, _ io.Reader, _ string, _ fs.FileM
 	return nil
 }
 
-func (c *counterSSH) Stat(_ context.Context, _ string) (*core.RemoteFileInfo, error) {
+func (c *counterSSH) Stat(_ context.Context, _ string) (*utils.RemoteFileInfo, error) {
 	return nil, nil
 }
 
@@ -274,7 +274,7 @@ func (c *counterSSH) Close() error {
 	return nil
 }
 
-var _ core.SSHClient = (*counterSSH)(nil)
+var _ utils.SSHClient = (*counterSSH)(nil)
 
 // --- Helper function tests ---
 

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core/s3"
+	"github.com/getnvoi/nvoi/pkg/utils/s3"
 )
 
 // s3Client is a shared HTTP client with timeout for S3 operations.

@@ -3,7 +3,7 @@ package infra
 import (
 	"fmt"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,7 +27,7 @@ type cloudUser struct {
 // RenderCloudInit produces cloud-init user-data for server provisioning.
 // hostname sets the machine hostname (and therefore the k3s node name).
 func RenderCloudInit(sshPublicKey, hostname string) (string, error) {
-	user := core.DefaultUser
+	user := utils.DefaultUser
 	cfg := cloudConfig{
 		Hostname: hostname,
 		Users: []cloudUser{{

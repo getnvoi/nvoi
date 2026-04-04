@@ -8,12 +8,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	sigsyaml "sigs.k8s.io/yaml"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func mustNames(t *testing.T) *core.Names {
+func mustNames(t *testing.T) *utils.Names {
 	t.Helper()
-	n, err := core.NewNames("myapp", "production")
+	n, err := utils.NewNames("myapp", "production")
 	if err != nil {
 		t.Fatalf("NewNames: %v", err)
 	}
@@ -284,8 +284,8 @@ func TestNodeSelector(t *testing.T) {
 	if nodeSelector == nil {
 		t.Fatal("expected nodeSelector, got nil")
 	}
-	if nodeSelector[core.LabelNvoiRole] != "master" {
-		t.Errorf("expected nodeSelector[%q]=master, got %q", core.LabelNvoiRole, nodeSelector[core.LabelNvoiRole])
+	if nodeSelector[utils.LabelNvoiRole] != "master" {
+		t.Errorf("expected nodeSelector[%q]=master, got %q", utils.LabelNvoiRole, nodeSelector[utils.LabelNvoiRole])
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func TestDeleteByNameSuccess(t *testing.T) {
@@ -138,8 +138,8 @@ func TestApply(t *testing.T) {
 	if len(mock.Uploads) != 1 {
 		t.Fatalf("expected 1 upload, got %d", len(mock.Uploads))
 	}
-	if mock.Uploads[0].Path != core.KubeManifestPath() {
-		t.Fatalf("expected upload path %q, got %q", core.KubeManifestPath(), mock.Uploads[0].Path)
+	if mock.Uploads[0].Path != utils.KubeManifestPath() {
+		t.Fatalf("expected upload path %q, got %q", utils.KubeManifestPath(), mock.Uploads[0].Path)
 	}
 	if string(mock.Uploads[0].Content) != yamlContent {
 		t.Fatalf("expected upload content %q, got %q", yamlContent, string(mock.Uploads[0].Content))
@@ -233,7 +233,7 @@ func TestEscapeJSON(t *testing.T) {
 
 func TestPodSelector(t *testing.T) {
 	got := PodSelector("web")
-	want := core.LabelAppName + "=web"
+	want := utils.LabelAppName + "=web"
 	if got != want {
 		t.Fatalf("PodSelector(%q) = %q, want %q", "web", got, want)
 	}

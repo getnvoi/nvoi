@@ -210,32 +210,36 @@ See `bin/deploy` for the env-var path (compose injects everything) and `bin/depl
 ## Architecture
 
 ```
-cmd/cli/main.go           CLI entrypoint — signal handling, exit codes
+cmd/
+  core/main.go             CLI entrypoint — signal handling, exit codes
+  api/main.go              API server entrypoint (planned)
 
 pkg/                       Public library — importable by external repos (API, SDK, etc.)
-  app/                     Business logic. One file per domain. No cobra, no I/O, no stdout.
+  core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
     cluster.go             Cluster struct + ProviderRef type
-    output.go              Output interface — the contract between app/ and its viewers
+    output.go              Output interface — the contract between core/ and its viewers
   kube/                    K8s YAML generation + kubectl over SSH + Caddy ingress
   infra/                   SSH, server bootstrap, k3s, Docker, volume mounting, WaitHTTPS
   provider/                ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
     hetzner/               Hetzner Cloud (compute + volumes)
-    cloudflare/            Cloudflare (DNS + R2 buckets) — all via core.HTTPClient
+    cloudflare/            Cloudflare (DNS + R2 buckets) — all via utils.HTTPClient
     aws/                   AWS (EC2 + VPC + Route53 + S3) — uses AWS SDK v2, ListResources covers all sub-resources
     daytona/               Daytona remote builds
     github/                GitHub Actions builds
     local/                 Local docker buildx builds
-  core/                    Pure utilities: naming, poll, httpclient (30s default timeout), ssh keys, format
+  utils/                   Pure utilities: naming, poll, httpclient (30s default timeout), ssh keys, format
     s3/                    AWS Signature V4 signing for S3-compatible APIs
 
 internal/                  Private — CLI only
   testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
-  cmd/                     Cobra wrappers. Parse flags → call pkg/app/ → render output.
+  core/                    Cobra wrappers. Parse flags → call pkg/core/ → render output.
     resolve.go             Centralized credential resolution — single generic resolveCredentials()
     output_tui.go          TUI renderer (lipgloss-styled terminal output)
     output_json.go         JSONL renderer (structured JSON, one event per line)
     output_plain.go        Plain text renderer (CI/non-TTY environments)
     table.go               Bordered tables with lipgloss (Table + TableGroup for synchronized widths)
+  api/                     REST API server — handlers, models, auth, encryption (planned)
+  cli/                     Cloud CLI commands — login, projects, deploy via API (planned)
 ```
 
 ## Providers
@@ -266,7 +270,7 @@ All providers follow the same architecture:
 1. **Interface** — `pkg/provider/{kind}.go` defines the interface
 2. **Credential schema** — `pkg/provider/{impl}/register.go` declares required fields with env var mappings
 3. **Registration** — `init()` calls `provider.RegisterX(name, schema, factory)`
-4. **Blank import** — `internal/cmd/{command}.go` imports `_ "pkg/provider/{impl}"` to trigger `init()`
+4. **Blank import** — `internal/core/{command}.go` imports `_ "pkg/provider/{impl}"` to trigger `init()`
 5. **Resolution** — `provider.ResolveX(name, creds)` validates schema + returns instance
 
 ### Provider-owned operations
@@ -281,7 +285,7 @@ Some operations are provider-specific by design. Each provider implements them a
 
 ### Credential resolution
 
-All four provider kinds (compute, build, DNS, storage) resolve credentials through a single generic function in `cmd/resolve.go`:
+All four provider kinds (compute, build, DNS, storage) resolve credentials through a single generic function in `internal/core/resolve.go`:
 
 ```go
 resolveCredentials(cmd, schema, flagName) → map[string]string
@@ -428,22 +432,22 @@ Hard errors before touching k8s.
 
 ## Output contract
 
-**Providers are silent. `app/` narrates. `cmd/` renders. No exceptions.**
+**Providers are silent. `pkg/core/` narrates. `internal/core/` renders. No exceptions.**
 
 Strictly enforced across all layers:
 
 | Layer | Writes to stdout? | `fmt.Printf`? | `os.Stdout`? | `"os"` import? |
 |-------|-------------------|---------------|-------------|---------------|
 | `provider/` | Never | Never | Never | File ops only |
-| `app/` | Never | Never | Never | Never |
+| `pkg/core/` | Never | Never | Never | Never |
 | `infra/` | Never (writes to `io.Writer` param) | Never | Never | File ops only |
 | `kube/` | Never | Never | Never | Never |
-| `core/` | Never | Never | Never | Never |
-| `cmd/` | Yes — it's the viewer | Yes | Yes | Yes |
+| `utils/` | Never | Never | Never | Never |
+| `internal/core/` | Yes — it's the viewer | Yes | Yes | Yes |
 
 ### Output interface
 
-`app/` communicates through the `Output` interface on `Cluster`. Six event types:
+`pkg/core/` communicates through the `Output` interface on `Cluster`. Six event types:
 
 ```go
 type Output interface {
@@ -457,7 +461,7 @@ type Output interface {
 }
 ```
 
-`cmd/` provides three implementations:
+`internal/core/` provides three implementations:
 
 - **TUI** (`output_tui.go`) — lipgloss-styled: bold commands, dimmed progress, green success, yellow warnings, red errors. Default for terminals.
 - **JSONL** (`output_json.go`) — one JSON object per line. `--json` flag.
@@ -476,7 +480,7 @@ type Output interface {
 
 ### Error handling
 
-- `app/` returns errors. It never renders them. It never calls `Output.Error()`.
+- `pkg/core/` returns errors. It never renders them. It never calls `Output.Error()`.
 - Cobra handles all errors. `root.SetErr()` wires cobra's error output through our `Output.Error()` renderer.
 - No `SilenceErrors`. Cobra is the single error path — we style it, not suppress it.
 - Single rendering path. No double-printing. No silent swallowing.
@@ -484,11 +488,11 @@ type Output interface {
 
 ### Streaming
 
-`infra/` functions (k3s install, volume mount) accept `io.Writer` for streaming output. `app/` passes `Output.Writer()`. In TUI mode, lines are dimmed and indented. In JSONL mode, each line becomes a `{"type":"stream","message":"..."}` event. A future API could stream to SSE or websocket through the same interface.
+`infra/` functions (k3s install, volume mount) accept `io.Writer` for streaming output. `pkg/core/` passes `Output.Writer()`. In TUI mode, lines are dimmed and indented. In JSONL mode, each line becomes a `{"type":"stream","message":"..."}` event. The API streams to SSE through the same interface.
 
 ### Cluster struct + ProviderRef
 
-Every `app/` request type embeds `Cluster`:
+Every `pkg/core/` request type embeds `Cluster`:
 
 ```go
 type Cluster struct {
@@ -500,7 +504,7 @@ type Cluster struct {
 }
 ```
 
-`Cluster` provides methods: `Names()`, `Compute()`, `Master()`, `SSH()`, `Log()`. Eliminates the 4-line resolve-connect preamble that was duplicated 22 times. `cmd/` constructs `Cluster` with `resolveOutput(cmd)` to wire TUI or JSONL.
+`Cluster` provides methods: `Names()`, `Compute()`, `Master()`, `SSH()`, `Log()`. Eliminates the 4-line resolve-connect preamble that was duplicated 22 times. `internal/core/` constructs `Cluster` with `resolveOutput(cmd)` to wire TUI or JSONL.
 
 Secondary providers (DNS, storage) use `ProviderRef`:
 
@@ -555,20 +559,20 @@ const (
 5. Provider interfaces scale. Add a provider = implement the interface. Same registration pattern for all four kinds.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 7. SSH is the only transport to remote servers. SSH keys are injected strictly via cloud-init UserData — never via provider SSH key APIs (e.g. Hetzner `ssh_keys`, AWS `KeyName`). `infra.RenderCloudInit` renders the public key into `ssh_authorized_keys`. This is the only key injection path.
-8. **`os.Getenv` lives exclusively in `cmd/`.** Environment variables are a CLI concept. `app/`, `provider/`, `infra/`, `core/` never read env vars. All external values (credentials, SSH key path, app name, env) are resolved in `cmd/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.
-9. **Providers are silent.** Providers are API clients — they do work and return data. They never print, log, or narrate. Progress output belongs in `app/` via the `Output` interface.
-10. **`app/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `app/` is a library — a future API handler calls the same functions.
-11. **`app/` never imports `net/http`.** HTTP calls belong in `infra/` (e.g. `WaitHTTPS`) or `provider/`. `app/` is pure orchestration.
-12. **Errors flow up, render once.** `app/` returns errors. Cobra renders them through `SetErr` → `Output.Error()`. Never double-print. Never swallow silently.
+8. **`os.Getenv` lives exclusively in `internal/core/`.** Environment variables are a CLI concept. `pkg/core/`, `provider/`, `infra/`, `utils/` never read env vars. All external values (credentials, SSH key path, app name, env) are resolved in `internal/core/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.
+9. **Providers are silent.** Providers are API clients — they do work and return data. They never print, log, or narrate. Progress output belongs in `pkg/core/` via the `Output` interface.
+10. **`pkg/core/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `pkg/core/` is a library — the API handlers call the same functions.
+11. **`pkg/core/` never imports `net/http`.** HTTP calls belong in `infra/` (e.g. `WaitHTTPS`) or `provider/`. `pkg/core/` is pure orchestration.
+12. **Errors flow up, render once.** `pkg/core/` returns errors. Cobra renders them through `SetErr` → `Output.Error()`. Never double-print. Never swallow silently.
 13. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
 14. `bin/destroy` is the reverse of `bin/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
 15. **No shell injection.** Secret values flow to kubectl via file upload (`ssh.Upload` + `cat`), not inline `fmt.Sprintf`. `shellQuote` for `--from-literal` args. Never interpolate user values into shell strings.
-16. **All providers use `core.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`. Exception: AWS provider uses AWS SDK v2 (its own HTTP transport).
+16. **All providers use `utils.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`. Exception: AWS provider uses AWS SDK v2 (its own HTTP transport).
 
 ## Known limitations
 
 - **No pagination on provider list operations.** Hetzner uses `per_page=50` for servers, volumes, firewalls, networks. No cursor continuation. If results exceed one page, the list is silently incomplete — it doesn't error, it lies. Fine at current scale (1-5 servers per app). Fix when adding multi-tenant or `resources` across many apps on one Hetzner account.
 - **No retry / backoff on transient HTTP errors.** Provider API calls fail immediately on 500s or connection drops. User re-runs the command. Idempotent `set` design makes this safe. Fix if `bin/deploy` reliability becomes a problem.
-- **`s3ops.go` uses a dedicated `s3Client` (not `core.HTTPClient`).** S3/XML operations need raw HTTP, not JSON. Uses `var s3Client = &http.Client{Timeout: 30 * time.Second}` with all `io.ReadAll` errors checked and context propagated. This is by design — `core.HTTPClient` is JSON-oriented.
+- **`s3ops.go` uses a dedicated `s3Client` (not `utils.HTTPClient`).** S3/XML operations need raw HTTP, not JSON. Uses `var s3Client = &http.Client{Timeout: 30 * time.Second}` with all `io.ReadAll` errors checked and context propagated. This is by design — `utils.HTTPClient` is JSON-oriented.
 - **AWS SDK `LoadDefaultConfig` errors are deferred to `ValidateCredentials`.** Provider factories can't return errors (signature is `func(creds) Provider`). The AWS constructors store the config error on the struct and surface it on the first `ValidateCredentials` call.
 

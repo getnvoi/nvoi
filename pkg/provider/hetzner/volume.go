@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -181,7 +181,7 @@ func (c *Client) DeleteVolume(ctx context.Context, name string) error {
 		}
 	}
 	if err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/volumes/%s", vol.ID), nil, nil); err != nil {
-		if !core.IsNotFound(err) {
+		if !utils.IsNotFound(err) {
 			return fmt.Errorf("delete volume: %w", err)
 		}
 	}
@@ -291,7 +291,7 @@ func (c *Client) getVolume(ctx context.Context, id string) (*provider.Volume, er
 }
 
 func (c *Client) detachVolume(ctx context.Context, volumeID string) error {
-	return core.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
 		var resp struct {
 			Action struct {
 				ID int64 `json:"id"`
@@ -316,14 +316,14 @@ func (c *Client) detachVolume(ctx context.Context, volumeID string) error {
 }
 
 func isLocked(err error) bool {
-	if apiErr, ok := err.(*core.APIError); ok {
+	if apiErr, ok := err.(*utils.APIError); ok {
 		return apiErr.Status == 423
 	}
 	return false
 }
 
 func (c *Client) waitForAction(ctx context.Context, actionID int64) error {
-	return core.Poll(ctx, 2*time.Second, 2*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, 2*time.Second, 2*time.Minute, func() (bool, error) {
 		var resp struct {
 			Action struct {
 				ID     int64 `json:"id"`

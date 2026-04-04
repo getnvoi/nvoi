@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -18,7 +18,7 @@ const defaultBaseURL = "https://api.scaleway.com"
 
 // Client talks to the Scaleway API.
 type Client struct {
-	api       *core.HTTPClient
+	api       *utils.HTTPClient
 	secretKey string
 	projectID string
 	zone      string // e.g. "fr-par-1"
@@ -36,7 +36,7 @@ func New(credentials map[string]string) *Client {
 		secretKey: secretKey,
 		projectID: credentials["project_id"],
 		zone:      zone,
-		api: &core.HTTPClient{
+		api: &utils.HTTPClient{
 			BaseURL: defaultBaseURL,
 			SetAuth: func(r *http.Request) {
 				r.Header.Set("X-Auth-Token", secretKey)
@@ -102,7 +102,7 @@ func (c *Client) doInstance(ctx context.Context, method, path string, body, resu
 }
 
 // doText sends a PATCH with text/plain body (for cloud-init user data).
-// Provider-specific — core.HTTPClient is JSON-only and that's correct.
+// Provider-specific — utils.HTTPClient is JSON-only and that's correct.
 func (c *Client) doText(ctx context.Context, path, text string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.api.BaseURL+c.instancePath(path), strings.NewReader(text))
 	if err != nil {

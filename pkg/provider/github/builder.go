@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -69,7 +69,7 @@ jobs:
           script: |
             Object.keys(process.env)
               .filter(k => k.startsWith('ACTIONS_'))
-              .forEach(k => core.exportVariable(k, process.env[k]));
+              .forEach(k => utils.exportVariable(k, process.env[k]));
 
       - name: Build and push
         run: |
@@ -96,7 +96,7 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 	}
 
 	client := newClient(req.GitToken)
-	registryAddr := core.RegistryAddr(req.RegistrySSH.MasterPrivateIP)
+	registryAddr := utils.RegistryAddr(req.RegistrySSH.MasterPrivateIP)
 	tag := time.Now().UTC().Format("20060102-150405")
 
 	// Runner selection based on platform

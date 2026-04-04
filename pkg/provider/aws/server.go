@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -92,7 +92,7 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 	instanceID := deref(result.Instances[0].InstanceId)
 
 	// Wait for running
-	if err := core.Poll(ctx, 5*time.Second, 5*time.Minute, func() (bool, error) {
+	if err := utils.Poll(ctx, 5*time.Second, 5*time.Minute, func() (bool, error) {
 		resp, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 			InstanceIds: []string{instanceID},
 		})
@@ -139,7 +139,7 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 	}
 
 	// Wait for terminated
-	if err := core.Poll(ctx, 5*time.Second, 2*time.Minute, func() (bool, error) {
+	if err := utils.Poll(ctx, 5*time.Second, 2*time.Minute, func() (bool, error) {
 		resp, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 			InstanceIds: []string{instanceID},
 		})

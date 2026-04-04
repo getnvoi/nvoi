@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // countingSSH wraps MockSSH and fails the first N calls to a specific command.
@@ -53,7 +53,7 @@ func (c *countingSSH) Upload(ctx context.Context, local io.Reader, remotePath st
 	return c.MockSSH.Upload(ctx, local, remotePath, mode)
 }
 
-func (c *countingSSH) Stat(ctx context.Context, remotePath string) (*core.RemoteFileInfo, error) {
+func (c *countingSSH) Stat(ctx context.Context, remotePath string) (*utils.RemoteFileInfo, error) {
 	return c.MockSSH.Stat(ctx, remotePath)
 }
 
@@ -87,11 +87,11 @@ func TestInstallK3sMaster_FreshInstall(t *testing.T) {
 
 	kubeconfigCmd := fmt.Sprintf(
 		`mkdir -p /home/%s/.kube && sudo cp %s /home/%s/.kube/config && sudo sed -i 's/127.0.0.1/%s/g' /home/%s/.kube/config && sudo chown -R %s:%s /home/%s/.kube && chmod 600 /home/%s/.kube/config`,
-		core.DefaultUser, core.KubeconfigPath, core.DefaultUser, privateIP, core.DefaultUser,
-		core.DefaultUser, core.DefaultUser, core.DefaultUser, core.DefaultUser,
+		utils.DefaultUser, utils.KubeconfigPath, utils.DefaultUser, privateIP, utils.DefaultUser,
+		utils.DefaultUser, utils.DefaultUser, utils.DefaultUser, utils.DefaultUser,
 	)
 
-	getNodesCmd := fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config kubectl get nodes", core.DefaultUser)
+	getNodesCmd := fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config kubectl get nodes", utils.DefaultUser)
 
 	mock := testutil.NewMockSSH(map[string]testutil.MockResult{
 		// kubectl check fails — not installed
@@ -110,7 +110,7 @@ func TestInstallK3sMaster_FreshInstall(t *testing.T) {
 
 	mock.Prefixes = []testutil.MockPrefix{
 		// configureK3sRegistry: mkdir + tee heredoc (contains "tee")
-		{Prefix: "sudo mkdir -p " + core.K3sConfigDir, Result: testutil.MockResult{}},
+		{Prefix: "sudo mkdir -p " + utils.K3sConfigDir, Result: testutil.MockResult{}},
 		{Prefix: "tee", Result: testutil.MockResult{}},
 		// k3s restart commands (fire-and-forget in configureK3sRegistry)
 		{Prefix: "sudo systemctl restart k3s", Result: testutil.MockResult{}},
@@ -128,7 +128,7 @@ func TestInstallK3sMaster_FreshInstall(t *testing.T) {
 
 func TestEnsureRegistry_AlreadyRunning(t *testing.T) {
 	privateIP := "10.0.0.1"
-	registryAddr := core.RegistryAddr(privateIP)
+	registryAddr := utils.RegistryAddr(privateIP)
 	curlCmd := fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr)
 
 	mock := testutil.NewMockSSH(map[string]testutil.MockResult{
@@ -148,12 +148,12 @@ func TestEnsureRegistry_AlreadyRunning(t *testing.T) {
 
 func TestEnsureRegistry_StartNew(t *testing.T) {
 	privateIP := "10.0.0.1"
-	registryAddr := core.RegistryAddr(privateIP)
+	registryAddr := utils.RegistryAddr(privateIP)
 	curlCmd := fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr)
 
 	dockerRunCmd := fmt.Sprintf(
 		`sudo mkdir -p /var/lib/nvoi/registry && docker rm -f nvoi-registry 2>/dev/null; docker run -d --name nvoi-registry --restart always -p %d:%d -v /var/lib/nvoi/registry:/var/lib/registry -e REGISTRY_STORAGE_DELETE_ENABLED=true %s`,
-		core.RegistryPort, core.RegistryPort, core.RegistryImage,
+		utils.RegistryPort, utils.RegistryPort, utils.RegistryImage,
 	)
 
 	inner := testutil.NewMockSSH(map[string]testutil.MockResult{

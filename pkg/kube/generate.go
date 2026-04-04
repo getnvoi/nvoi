@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	sigsyaml "sigs.k8s.io/yaml"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // ServiceSpec describes a service to deploy.
@@ -30,12 +30,12 @@ type ServiceSpec struct {
 }
 
 // GenerateYAML produces k8s YAML for a single service: workload + Service.
-func GenerateYAML(spec ServiceSpec, names *core.Names, managedVolPaths map[string]string) (string, string, error) {
+func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[string]string) (string, string, error) {
 	ns := names.KubeNamespace()
 	labels := map[string]string{
-		core.LabelAppName:     spec.Name,
-		core.LabelAppManagedBy: core.LabelManagedBy,
-		core.LabelNvoiService: spec.Name,
+		utils.LabelAppName:     spec.Name,
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiService: spec.Name,
 	}
 
 	// Container
@@ -89,7 +89,7 @@ func GenerateYAML(spec ServiceSpec, names *core.Names, managedVolPaths map[strin
 		Volumes:    volumes,
 	}
 	if spec.Server != "" {
-		podSpec.NodeSelector = map[string]string{core.LabelNvoiRole: spec.Server}
+		podSpec.NodeSelector = map[string]string{utils.LabelNvoiRole: spec.Server}
 	}
 
 	// Workload: StatefulSet or Deployment
@@ -105,7 +105,7 @@ func GenerateYAML(spec ServiceSpec, names *core.Names, managedVolPaths map[strin
 			Spec: appsv1.StatefulSetSpec{
 				ServiceName: spec.Name,
 				Replicas:    &one,
-				Selector:    &metav1.LabelSelector{MatchLabels: map[string]string{core.LabelAppName: spec.Name}},
+				Selector:    &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: spec.Name}},
 				Template:    corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
 			},
 		}
@@ -126,7 +126,7 @@ func GenerateYAML(spec ServiceSpec, names *core.Names, managedVolPaths map[strin
 			Spec: appsv1.DeploymentSpec{
 				Replicas: &replicas,
 				Strategy: appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType},
-				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{core.LabelAppName: spec.Name}},
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: spec.Name}},
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
 			},
 		}
@@ -154,7 +154,7 @@ func GenerateYAML(spec ServiceSpec, names *core.Names, managedVolPaths map[strin
 
 func svcSpec(selector string, port int) corev1.ServiceSpec {
 	spec := corev1.ServiceSpec{
-		Selector: map[string]string{core.LabelAppName: selector},
+		Selector: map[string]string{utils.LabelAppName: selector},
 	}
 	if port > 0 {
 		spec.Ports = []corev1.ServicePort{{
@@ -167,13 +167,13 @@ func svcSpec(selector string, port int) corev1.ServiceSpec {
 	return spec
 }
 
-func buildVolumes(mounts []string, names *core.Names, managedVolPaths map[string]string) ([]corev1.Volume, []corev1.VolumeMount, error) {
+func buildVolumes(mounts []string, names *utils.Names, managedVolPaths map[string]string) ([]corev1.Volume, []corev1.VolumeMount, error) {
 	var volumes []corev1.Volume
 	var vms []corev1.VolumeMount
 	hostPathType := corev1.HostPathDirectoryOrCreate
 
 	for i, mount := range mounts {
-		source, target, named, ok := core.ParseVolumeMount(mount)
+		source, target, named, ok := utils.ParseVolumeMount(mount)
 		if !ok {
 			return nil, nil, fmt.Errorf("invalid volume mount %q", mount)
 		}

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -190,7 +190,7 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 	}
 
 	// Poll until gone
-	if err := core.Poll(ctx, 3*time.Second, 90*time.Second, func() (bool, error) {
+	if err := utils.Poll(ctx, 3*time.Second, 90*time.Second, func() (bool, error) {
 		s, err := c.getServerByName(ctx, req.Name)
 		return s == nil || err != nil, nil
 	}); err != nil {

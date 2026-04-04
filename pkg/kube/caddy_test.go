@@ -8,7 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	sigsyaml "sigs.k8s.io/yaml"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func TestGenerateCaddyfileSingleRoute(t *testing.T) {
@@ -121,7 +121,7 @@ func TestParseCaddyfileEmpty(t *testing.T) {
 }
 
 func TestGenerateCaddyManifest(t *testing.T) {
-	names, err := core.NewNames("myapp", "production")
+	names, err := utils.NewNames("myapp", "production")
 	if err != nil {
 		t.Fatalf("NewNames: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestGenerateCaddyManifest(t *testing.T) {
 
 	// Checksum annotation
 	annotations := dep.Spec.Template.ObjectMeta.Annotations
-	checksum, ok := annotations[core.LabelConfigChecksum]
+	checksum, ok := annotations[utils.LabelConfigChecksum]
 	if !ok || checksum == "" {
 		t.Error("expected non-empty config checksum annotation on pod template")
 	}

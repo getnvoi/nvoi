@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Node identifies a server by its public and private IP addresses.
@@ -20,7 +20,7 @@ type Node struct {
 // InstallK3sMaster installs k3s server on the master node.
 // Idempotent — skips if already installed and Ready.
 func InstallK3sMaster(ctx context.Context, node Node, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, node.PublicIP+":22", core.DefaultUser, privKey)
+	ssh, err := ConnectSSH(ctx, node.PublicIP+":22", utils.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh master: %w", err)
 	}
@@ -29,7 +29,7 @@ func InstallK3sMaster(ctx context.Context, node Node, privKey []byte, w io.Write
 }
 
 // installK3sMaster contains the k3s install logic, testable with a mock SSH client.
-func installK3sMaster(ctx context.Context, ssh core.SSHClient, node Node, w io.Writer) error {
+func installK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.Writer) error {
 	// Already installed?
 	if _, err := ssh.Run(ctx, "command -v kubectl >/dev/null 2>&1 && sudo k3s kubectl get nodes 2>/dev/null | grep -q ' Ready '"); err == nil {
 		fmt.Fprintln(w, "k3s already installed")
@@ -52,7 +52,7 @@ func installK3sMaster(ctx context.Context, ssh core.SSHClient, node Node, w io.W
 	fmt.Fprintln(w, "installing k3s server...")
 	cmd := fmt.Sprintf(
 		`curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server --disable traefik --disable servicelb --write-kubeconfig-mode 644 --node-ip %s --advertise-address %s --tls-san %s --tls-san %s --cluster-cidr %s --service-cidr %s --flannel-backend vxlan --flannel-iface %s' sh -`,
-		node.PrivateIP, node.PrivateIP, node.PrivateIP, node.PublicIP, core.K3sClusterCIDR, core.K3sServiceCIDR, privateIface,
+		node.PrivateIP, node.PrivateIP, node.PrivateIP, node.PublicIP, utils.K3sClusterCIDR, utils.K3sServiceCIDR, privateIface,
 	)
 	if err := ssh.RunStream(ctx, cmd, w, w); err != nil {
 		return fmt.Errorf("install k3s server: %w", err)
@@ -61,7 +61,7 @@ func installK3sMaster(ctx context.Context, ssh core.SSHClient, node Node, w io.W
 	// Setup kubeconfig for deploy user
 	setupKubeconfig := fmt.Sprintf(
 		`mkdir -p /home/%s/.kube && sudo cp %s /home/%s/.kube/config && sudo sed -i 's/127.0.0.1/%s/g' /home/%s/.kube/config && sudo chown -R %s:%s /home/%s/.kube && chmod 600 /home/%s/.kube/config`,
-		core.DefaultUser, core.KubeconfigPath, core.DefaultUser, node.PrivateIP, core.DefaultUser, core.DefaultUser, core.DefaultUser, core.DefaultUser, core.DefaultUser,
+		utils.DefaultUser, utils.KubeconfigPath, utils.DefaultUser, node.PrivateIP, utils.DefaultUser, utils.DefaultUser, utils.DefaultUser, utils.DefaultUser, utils.DefaultUser,
 	)
 	if _, err := ssh.Run(ctx, setupKubeconfig); err != nil {
 		return fmt.Errorf("setup kubeconfig: %w", err)
@@ -69,8 +69,8 @@ func installK3sMaster(ctx context.Context, ssh core.SSHClient, node Node, w io.W
 
 	// Wait for cluster ready
 	fmt.Fprintln(w, "waiting for k3s ready...")
-	if err := core.Poll(ctx, 3*time.Second, 3*time.Minute, func() (bool, error) {
-		out, err := ssh.Run(ctx, fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config kubectl get nodes", core.DefaultUser))
+	if err := utils.Poll(ctx, 3*time.Second, 3*time.Minute, func() (bool, error) {
+		out, err := ssh.Run(ctx, fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config kubectl get nodes", utils.DefaultUser))
 		if err != nil {
 			return false, nil
 		}
@@ -85,7 +85,7 @@ func installK3sMaster(ctx context.Context, ssh core.SSHClient, node Node, w io.W
 // EnsureRegistry starts the Docker registry container on master.
 // Idempotent — skips if already running.
 func EnsureRegistry(ctx context.Context, node Node, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, node.PublicIP+":22", core.DefaultUser, privKey)
+	ssh, err := ConnectSSH(ctx, node.PublicIP+":22", utils.DefaultUser, privKey)
 	if err != nil {
 		return err
 	}
@@ -94,8 +94,8 @@ func EnsureRegistry(ctx context.Context, node Node, privKey []byte, w io.Writer)
 }
 
 // ensureRegistry contains the registry logic, testable with a mock SSH client.
-func ensureRegistry(ctx context.Context, ssh core.SSHClient, node Node, w io.Writer) error {
-	registryAddr := core.RegistryAddr(node.PrivateIP)
+func ensureRegistry(ctx context.Context, ssh utils.SSHClient, node Node, w io.Writer) error {
+	registryAddr := utils.RegistryAddr(node.PrivateIP)
 
 	// Already running?
 	if _, err := ssh.Run(ctx, fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr)); err == nil {
@@ -106,14 +106,14 @@ func ensureRegistry(ctx context.Context, ssh core.SSHClient, node Node, w io.Wri
 	fmt.Fprintln(w, "starting registry...")
 	cmd := fmt.Sprintf(
 		`sudo mkdir -p /var/lib/nvoi/registry && docker rm -f nvoi-registry 2>/dev/null; docker run -d --name nvoi-registry --restart always -p %d:%d -v /var/lib/nvoi/registry:/var/lib/registry -e REGISTRY_STORAGE_DELETE_ENABLED=true %s`,
-		core.RegistryPort, core.RegistryPort, core.RegistryImage,
+		utils.RegistryPort, utils.RegistryPort, utils.RegistryImage,
 	)
 	if _, err := ssh.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("start registry: %w", err)
 	}
 
 	// Wait for ready
-	if err := core.Poll(ctx, 2*time.Second, 30*time.Second, func() (bool, error) {
+	if err := utils.Poll(ctx, 2*time.Second, 30*time.Second, func() (bool, error) {
 		_, err := ssh.Run(ctx, fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr))
 		return err == nil, nil
 	}); err != nil {
@@ -128,11 +128,11 @@ func ensureRegistry(ctx context.Context, ssh core.SSHClient, node Node, w io.Wri
 // Idempotent — skips if k3s-agent is already active.
 func JoinK3sWorker(ctx context.Context, worker, master Node, privKey []byte, w io.Writer) error {
 	// Read token from master
-	masterSSH, err := ConnectSSH(ctx, master.PublicIP+":22", core.DefaultUser, privKey)
+	masterSSH, err := ConnectSSH(ctx, master.PublicIP+":22", utils.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh master for token: %w", err)
 	}
-	tokenBytes, err := masterSSH.Run(ctx, "sudo cat "+core.K3sTokenPath)
+	tokenBytes, err := masterSSH.Run(ctx, "sudo cat "+utils.K3sTokenPath)
 	masterSSH.Close()
 	if err != nil {
 		return fmt.Errorf("read k3s token: %w", err)
@@ -140,7 +140,7 @@ func JoinK3sWorker(ctx context.Context, worker, master Node, privKey []byte, w i
 	token := strings.TrimSpace(string(tokenBytes))
 
 	// SSH to worker
-	workerSSH, err := ConnectSSH(ctx, worker.PublicIP+":22", core.DefaultUser, privKey)
+	workerSSH, err := ConnectSSH(ctx, worker.PublicIP+":22", utils.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh worker: %w", err)
 	}
@@ -178,15 +178,15 @@ func JoinK3sWorker(ctx context.Context, worker, master Node, privKey []byte, w i
 	}
 
 	// Wait for node Ready on master
-	masterSSH2, err := ConnectSSH(ctx, master.PublicIP+":22", core.DefaultUser, privKey)
+	masterSSH2, err := ConnectSSH(ctx, master.PublicIP+":22", utils.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh master to verify worker: %w", err)
 	}
 	defer masterSSH2.Close()
 
-	kubeconfig := fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config", core.DefaultUser)
+	kubeconfig := fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config", utils.DefaultUser)
 	fmt.Fprintln(w, "waiting for worker to be Ready...")
-	if err := core.Poll(ctx, 3*time.Second, 3*time.Minute, func() (bool, error) {
+	if err := utils.Poll(ctx, 3*time.Second, 3*time.Minute, func() (bool, error) {
 		out, err := masterSSH2.Run(ctx, fmt.Sprintf("%s kubectl get nodes -o wide", kubeconfig))
 		if err != nil {
 			return false, nil
@@ -206,14 +206,14 @@ func JoinK3sWorker(ctx context.Context, worker, master Node, privKey []byte, w i
 
 // --- helpers ---
 
-func configureK3sRegistry(ctx context.Context, ssh core.SSHClient, registryHost string) error {
+func configureK3sRegistry(ctx context.Context, ssh utils.SSHClient, registryHost string) error {
 	cmd := fmt.Sprintf(`sudo mkdir -p %s
 cat <<'EOF' | sudo tee %s >/dev/null
 mirrors:
   "%s:%d":
     endpoint:
       - "http://%s:%d"
-EOF`, core.K3sConfigDir, core.K3sRegistriesConfig, registryHost, core.RegistryPort, registryHost, core.RegistryPort)
+EOF`, utils.K3sConfigDir, utils.K3sRegistriesConfig, registryHost, utils.RegistryPort, registryHost, utils.RegistryPort)
 	if _, err := ssh.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("configure k3s registry: %w", err)
 	}
@@ -222,7 +222,7 @@ EOF`, core.K3sConfigDir, core.K3sRegistriesConfig, registryHost, core.RegistryPo
 	return nil
 }
 
-func discoverPrivateInterface(ctx context.Context, ssh core.SSHClient, privateIP string) (string, error) {
+func discoverPrivateInterface(ctx context.Context, ssh utils.SSHClient, privateIP string) (string, error) {
 	cmd := fmt.Sprintf(`ip -o -4 addr show | awk '/%s/{print $2}' | head -1`, privateIP)
 	out, err := ssh.Run(ctx, cmd)
 	if err != nil {

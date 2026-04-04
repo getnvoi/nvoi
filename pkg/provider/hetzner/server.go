@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -115,7 +115,7 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 
 	// Delete server
 	if err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/servers/%s", srv.ID), nil, nil); err != nil {
-		if !core.IsNotFound(err) {
+		if !utils.IsNotFound(err) {
 			return fmt.Errorf("delete server: %w", err)
 		}
 	}

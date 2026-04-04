@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	sigsyaml "sigs.k8s.io/yaml"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // IngressRoute maps a service to its public domains.
@@ -24,7 +24,7 @@ type IngressRoute struct {
 
 // GenerateCaddyManifest produces the Caddy ConfigMap + Deployment YAML.
 // Caddy runs with hostNetwork on the master node, handling TLS via Let's Encrypt.
-func GenerateCaddyManifest(routes []IngressRoute, names *core.Names) (string, error) {
+func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, error) {
 	if len(routes) == 0 {
 		return "", nil
 	}
@@ -49,8 +49,8 @@ func GenerateCaddyManifest(routes []IngressRoute, names *core.Names) (string, er
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	caddyName := names.KubeCaddy()
 	labels := map[string]string{
-		core.LabelAppName:      caddyName,
-		core.LabelAppManagedBy: core.LabelManagedBy,
+		utils.LabelAppName:      caddyName,
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
 	}
 
 	dep := appsv1.Deployment{
@@ -58,21 +58,21 @@ func GenerateCaddyManifest(routes []IngressRoute, names *core.Names) (string, er
 		ObjectMeta: metav1.ObjectMeta{Name: caddyName, Namespace: ns, Labels: labels},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &one,
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{core.LabelAppName: caddyName}},
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: caddyName}},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      labels,
-					Annotations: map[string]string{core.LabelConfigChecksum: checksum},
+					Annotations: map[string]string{utils.LabelConfigChecksum: checksum},
 				},
 				Spec: corev1.PodSpec{
 					HostNetwork: true,
 					DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
 					NodeSelector: map[string]string{
-						core.LabelNvoiRole: core.RoleMaster,
+						utils.LabelNvoiRole: utils.RoleMaster,
 					},
 					Containers: []corev1.Container{{
 						Name:  caddyName,
-						Image: core.CaddyImage,
+						Image: utils.CaddyImage,
 						Ports: []corev1.ContainerPort{
 							{ContainerPort: 80, HostPort: 80},
 							{ContainerPort: 443, HostPort: 443},
@@ -143,7 +143,7 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 
 // GetIngressRoutes reads the current Caddy ConfigMap and extracts the routes.
 // Returns nil if no ConfigMap exists.
-func GetIngressRoutes(ctx context.Context, ssh core.SSHClient, ns, configMapName string) ([]IngressRoute, error) {
+func GetIngressRoutes(ctx context.Context, ssh utils.SSHClient, ns, configMapName string) ([]IngressRoute, error) {
 	cmd := kubectl(ns, fmt.Sprintf("get configmap %s -o jsonpath='{.data.Caddyfile}' 2>/dev/null", configMapName))
 	out, err := ssh.Run(ctx, cmd)
 	if err != nil {

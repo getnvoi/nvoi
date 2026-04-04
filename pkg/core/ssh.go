@@ -2,24 +2,22 @@ package core
 
 import (
 	"context"
-	"io"
-	"io/fs"
-	"net"
+	"strings"
 )
 
-// SSHClient abstracts an SSH connection to a remote server.
-type SSHClient interface {
-	Run(ctx context.Context, cmd string) ([]byte, error)
-	RunStream(ctx context.Context, cmd string, stdout, stderr io.Writer) error
-	Upload(ctx context.Context, local io.Reader, remotePath string, mode fs.FileMode) error
-	Stat(ctx context.Context, remotePath string) (*RemoteFileInfo, error)
-	DialTCP(ctx context.Context, remoteAddr string) (net.Conn, error)
-	Close() error
+type SSHRequest struct {
+	Cluster
+	Command []string
 }
 
-type RemoteFileInfo struct {
-	Path  string
-	Size  int64
-	Mode  fs.FileMode
-	IsDir bool
+func SSH(ctx context.Context, req SSHRequest) error {
+	ssh, _, err := req.Cluster.SSH(ctx)
+	if err != nil {
+		return err
+	}
+	defer ssh.Close()
+
+	out := req.Log()
+	cmd := strings.Join(req.Command, " ")
+	return ssh.RunStream(ctx, cmd, out.Writer(), out.Writer())
 }

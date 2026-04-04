@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // MountVolume mounts a volume on the server at mountPath.
 // devicePath is the OS block device — resolved by the provider via ResolveDevicePath.
 // Idempotent: skips if already mounted at mountPath.
 func MountVolume(ctx context.Context, devicePath string, serverIP string, mountPath string, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, serverIP+":22", core.DefaultUser, privKey)
+	ssh, err := ConnectSSH(ctx, serverIP+":22", utils.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh for volume mount: %w", err)
 	}
@@ -23,7 +23,7 @@ func MountVolume(ctx context.Context, devicePath string, serverIP string, mountP
 }
 
 // mountVolume contains the mount logic, testable with a mock SSH client.
-func mountVolume(ctx context.Context, ssh core.SSHClient, devicePath string, mountPath string, w io.Writer) error {
+func mountVolume(ctx context.Context, ssh utils.SSHClient, devicePath string, mountPath string, w io.Writer) error {
 	// Already mounted? Grow filesystem in case of resize, then return.
 	out, err := ssh.Run(ctx, fmt.Sprintf("mountpoint -q %s && echo mounted || echo not", mountPath))
 	if err == nil && strings.TrimSpace(string(out)) == "mounted" {
@@ -84,7 +84,7 @@ func mountVolume(ctx context.Context, ssh core.SSHClient, devicePath string, mou
 // UnmountVolume unmounts a volume and removes the fstab entry.
 // No-op if not mounted. Non-fatal errors are returned (caller decides severity).
 func UnmountVolume(ctx context.Context, serverIP string, mountPath string, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, serverIP+":22", core.DefaultUser, privKey)
+	ssh, err := ConnectSSH(ctx, serverIP+":22", utils.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh: %w", err)
 	}
@@ -93,7 +93,7 @@ func UnmountVolume(ctx context.Context, serverIP string, mountPath string, privK
 }
 
 // unmountVolume contains the unmount logic, testable with a mock SSH client.
-func unmountVolume(ctx context.Context, ssh core.SSHClient, mountPath string, w io.Writer) error {
+func unmountVolume(ctx context.Context, ssh utils.SSHClient, mountPath string, w io.Writer) error {
 	// Check if mounted
 	out, err := ssh.Run(ctx, fmt.Sprintf("mountpoint -q %s && echo mounted || echo not", mountPath))
 	if err != nil || strings.TrimSpace(string(out)) != "mounted" {
@@ -119,8 +119,8 @@ func unmountVolume(ctx context.Context, ssh core.SSHClient, mountPath string, w 
 }
 
 
-func waitForDevice(ctx context.Context, ssh core.SSHClient, devicePath string) error {
-	return core.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
+func waitForDevice(ctx context.Context, ssh utils.SSHClient, devicePath string) error {
+	return utils.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
 		out, err := ssh.Run(ctx, fmt.Sprintf("test -b %s && echo ready || true", devicePath))
 		if err != nil {
 			return false, nil

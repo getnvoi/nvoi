@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -136,7 +136,7 @@ func (c *SSHClient) Upload(_ context.Context, local io.Reader, remotePath string
 }
 
 // Stat returns file info for a remote path via SFTP.
-func (c *SSHClient) Stat(_ context.Context, remotePath string) (*core.RemoteFileInfo, error) {
+func (c *SSHClient) Stat(_ context.Context, remotePath string) (*utils.RemoteFileInfo, error) {
 	sftpClient, err := sftp.NewClient(c.conn)
 	if err != nil {
 		return nil, fmt.Errorf("sftp client: %w", err)
@@ -148,7 +148,7 @@ func (c *SSHClient) Stat(_ context.Context, remotePath string) (*core.RemoteFile
 		return nil, fmt.Errorf("stat %s: %w", remotePath, err)
 	}
 
-	return &core.RemoteFileInfo{
+	return &utils.RemoteFileInfo{
 		Path:  remotePath,
 		Size:  fi.Size(),
 		Mode:  fi.Mode(),
@@ -170,11 +170,11 @@ func (c *SSHClient) Close() error {
 	return c.conn.Close()
 }
 
-var _ core.SSHClient = (*SSHClient)(nil)
+var _ utils.SSHClient = (*SSHClient)(nil)
 
 // LocalForward opens a local TCP listener that tunnels through SSH to a remote address.
 // Returns the local address (e.g. "localhost:54321") and a cleanup function.
-func LocalForward(client core.SSHClient, remoteAddr string) (localAddr string, cleanup func(), err error) {
+func LocalForward(client utils.SSHClient, remoteAddr string) (localAddr string, cleanup func(), err error) {
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		return "", nil, fmt.Errorf("listen: %w", err)

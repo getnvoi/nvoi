@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// MockSSH implements core.SSHClient with canned command responses.
+// MockSSH implements utils.SSHClient with canned command responses.
 // Commands are matched by prefix — the first matching entry wins.
 type MockSSH struct {
 	mu       sync.Mutex
@@ -83,8 +83,8 @@ func (m *MockSSH) Upload(_ context.Context, local io.Reader, remotePath string, 
 	return nil
 }
 
-func (m *MockSSH) Stat(_ context.Context, remotePath string) (*core.RemoteFileInfo, error) {
-	return &core.RemoteFileInfo{Path: remotePath}, nil
+func (m *MockSSH) Stat(_ context.Context, remotePath string) (*utils.RemoteFileInfo, error) {
+	return &utils.RemoteFileInfo{Path: remotePath}, nil
 }
 
 func (m *MockSSH) DialTCP(_ context.Context, remoteAddr string) (net.Conn, error) {
@@ -98,4 +98,4 @@ func (m *MockSSH) Close() error {
 	return nil
 }
 
-var _ core.SSHClient = (*MockSSH)(nil)
+var _ utils.SSHClient = (*MockSSH)(nil)

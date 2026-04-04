@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -100,10 +100,10 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 	fmt.Fprintf(req.Stdout, "  cloned %s → %s\n", repoURL, repoPath)
 
 	// Start SSH tunnel from sandbox to registry on master
-	registryAddr := core.RegistryAddr(req.RegistrySSH.MasterPrivateIP)
+	registryAddr := utils.RegistryAddr(req.RegistrySSH.MasterPrivateIP)
 	tunnelCmd := fmt.Sprintf(
 		"ssh -N -f -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i %s/.ssh/id_rsa -L %d:%s %s@%s",
-		sandboxHome, core.RegistryPort, registryAddr, core.DefaultUser, req.RegistrySSH.MasterIP,
+		sandboxHome, utils.RegistryPort, registryAddr, utils.DefaultUser, req.RegistrySSH.MasterIP,
 	)
 	out, code, err = sb.Exec(ctx, tunnelCmd, 30*time.Second)
 	if err != nil || code != 0 {
@@ -114,7 +114,7 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 
 	// Build and push
 	tag := time.Now().UTC().Format("20060102-150405")
-	tunnelTag := fmt.Sprintf("localhost:%d/%s:%s", core.RegistryPort, req.ServiceName, tag)
+	tunnelTag := fmt.Sprintf("localhost:%d/%s:%s", utils.RegistryPort, req.ServiceName, tag)
 	registryRef := fmt.Sprintf("%s/%s:%s", registryAddr, req.ServiceName, tag)
 
 	fmt.Fprintf(req.Stdout, "  building %s (platform: %s)...\n", req.ServiceName, req.Platform)

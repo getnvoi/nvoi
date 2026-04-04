@@ -9,7 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -142,7 +142,7 @@ func (c *Client) ResizeVolume(ctx context.Context, id string, sizeGB int) error 
 		return fmt.Errorf("resize volume %s: %w", id, err)
 	}
 	// Wait for modification to complete
-	return core.Poll(ctx, 5*time.Second, 5*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, 5*time.Second, 5*time.Minute, func() (bool, error) {
 		resp, err := c.ec2.DescribeVolumesModifications(ctx, &ec2.DescribeVolumesModificationsInput{
 			VolumeIds: []string{id},
 		})
@@ -244,7 +244,7 @@ func (c *Client) findVolumeByName(ctx context.Context, name string) (*ec2types.V
 }
 
 func (c *Client) waitForVolumeAttached(ctx context.Context, volumeID string) error {
-	return core.Poll(ctx, 2*time.Second, 2*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, 2*time.Second, 2*time.Minute, func() (bool, error) {
 		resp, err := c.ec2.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
 			VolumeIds: []string{volumeID},
 		})
@@ -259,7 +259,7 @@ func (c *Client) waitForVolumeAttached(ctx context.Context, volumeID string) err
 }
 
 func (c *Client) waitForVolumeAvailable(ctx context.Context, volumeID string) error {
-	return core.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
 		resp, err := c.ec2.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
 			VolumeIds: []string{volumeID},
 		})

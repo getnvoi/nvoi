@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -45,11 +45,11 @@ func (c *Client) ensureNetwork(ctx context.Context, name, location string, label
 	// Create
 	body := map[string]any{
 		"name":     name,
-		"ip_range": core.PrivateNetworkCIDR,
+		"ip_range": utils.PrivateNetworkCIDR,
 		"labels":   labels,
 		"subnets": []map[string]any{{
 			"type":         "cloud",
-			"ip_range":     core.PrivateNetworkSubnet,
+			"ip_range":     utils.PrivateNetworkSubnet,
 			"network_zone": zoneForLocation(location),
 		}},
 	}
@@ -94,7 +94,7 @@ func (c *Client) deleteNetwork(ctx context.Context, name string) error {
 	for _, n := range resp.Networks {
 		if n.Name == name {
 			err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/networks/%s", strconv.FormatInt(n.ID, 10)), nil, nil)
-			if err != nil && !core.IsNotFound(err) {
+			if err != nil && !utils.IsNotFound(err) {
 				return err
 			}
 		}
