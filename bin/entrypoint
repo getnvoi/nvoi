@@ -16,7 +16,7 @@ fi
 # Build once, run fast. Binary cached in bin-cache volume.
 BIN=/app/tmp/nvoi
 if [ ! -f "$BIN" ] || [ "$(find /app/pkg /app/internal /app/cmd -newer "$BIN" -print -quit 2>/dev/null)" ]; then
-  go build -o "$BIN" ./cmd/cli >&2
+  go build -o "$BIN" ./cmd/core >&2
 fi
 
 exec "$BIN" "$@"
