@@ -8,14 +8,16 @@ import (
 	"time"
 
 	"github.com/getnvoi/nvoi/pkg/app"
-	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare DNS
+	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register
+	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register
+	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"  // register
 	"github.com/spf13/cobra"
 )
 
 func newResourcesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "resources",
-		Short: "List all resources under the provider account",
+		Short: "List all resources under the provider accounts",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName, err := resolveComputeProvider(cmd)
 			if err != nil {
@@ -26,63 +28,56 @@ func newResourcesCmd() *cobra.Command {
 				return err
 			}
 
-			// DNS is optional — don't fail if not configured
+			// DNS is optional
 			dnsProvider, _ := resolveDNSProvider(cmd)
 			var dnsCreds map[string]string
 			if dnsProvider != "" {
 				dnsCreds, _ = resolveDNSCredentials(cmd, dnsProvider)
 			}
 
+			// Storage is optional
+			storageProvider, _ := resolveStorageProvider(cmd)
+			var storageCreds map[string]string
+			if storageProvider != "" {
+				storageCreds, _ = resolveStorageCredentials(cmd, storageProvider)
+			}
+
 			req := app.ResourcesRequest{
 				Compute: app.ProviderRef{Name: providerName, Creds: creds},
 				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
+				Storage: app.ProviderRef{Name: storageProvider, Creds: storageCreds},
 			}
 
-			jsonOutput, _ := cmd.Flags().GetBool("json")
-			if jsonOutput {
-				out, err := app.ResourcesJSON(cmd.Context(), req)
-				if err != nil {
-					return err
-				}
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(out)
-			}
-
-			res, err := app.Resources(cmd.Context(), req)
+			groups, err := app.Resources(cmd.Context(), req)
 			if err != nil {
 				return err
 			}
 
+			jsonOutput, _ := cmd.Flags().GetBool("json")
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(groups)
+			}
+
 			g := NewTableGroup()
-
-			compute := fmt.Sprintf("SERVERS (%s)", providerName)
-			t := g.Add(compute, "ID", "NAME", "STATUS", "IPv4", "PRIVATE IP")
-			for _, s := range res.Servers {
-				t.Row(s.ID, s.Name, string(s.Status), s.IPv4, s.PrivateIP)
-			}
-
-			t = g.Add(fmt.Sprintf("FIREWALLS (%s)", providerName), "ID", "NAME")
-			for _, fw := range res.Firewalls {
-				t.Row(fw.ID, fw.Name)
-			}
-
-			t = g.Add(fmt.Sprintf("NETWORKS (%s)", providerName), "ID", "NAME")
-			for _, n := range res.Networks {
-				t.Row(n.ID, n.Name)
-			}
-
-			if len(res.DNSRecords) > 0 {
-				t = g.Add(fmt.Sprintf("DNS RECORDS (%s)", dnsProvider), "TYPE", "DOMAIN", "IP")
-				for _, r := range res.DNSRecords {
-					t.Row(r.Type, r.Domain, r.IP)
+			for _, group := range groups {
+				if len(group.Rows) == 0 {
+					continue
+				}
+				t := g.Add(group.Name, group.Columns...)
+				for _, row := range group.Rows {
+					t.Row(row...)
 				}
 			}
-
 			g.Print()
+
 			providers := []string{providerName}
-			if dnsProvider != "" {
+			if dnsProvider != "" && dnsProvider != providerName {
 				providers = append(providers, dnsProvider)
+			}
+			if storageProvider != "" && storageProvider != providerName && storageProvider != dnsProvider {
+				providers = append(providers, storageProvider)
 			}
 			fmt.Println(dimStyle.Render(fmt.Sprintf("  retrieved from %s", strings.Join(providers, ", "))))
 			fmt.Println(dimStyle.Render(fmt.Sprintf("  generated at %s", time.Now().Format("2006-01-02 15:04:05"))))
@@ -92,6 +87,7 @@ func newResourcesCmd() *cobra.Command {
 	}
 	addComputeProviderFlags(cmd)
 	addDNSProviderFlags(cmd)
+	addStorageProviderFlags(cmd)
 	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
 	return cmd
 }

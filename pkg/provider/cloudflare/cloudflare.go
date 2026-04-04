@@ -146,4 +146,22 @@ func (c *Client) tokenVerify(ctx context.Context) (string, error) {
 	return result.Result.ID, nil
 }
 
+func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	var resp struct {
+		Result struct {
+			Buckets []struct {
+				Name string `json:"name"`
+			} `json:"buckets"`
+		} `json:"result"`
+	}
+	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/accounts/%s/r2/buckets", c.accountID), nil, &resp); err != nil {
+		return nil, err
+	}
+	g := provider.ResourceGroup{Name: "R2 Buckets", Columns: []string{"Name"}}
+	for _, b := range resp.Result.Buckets {
+		g.Rows = append(g.Rows, []string{b.Name})
+	}
+	return []provider.ResourceGroup{g}, nil
+}
+
 var _ provider.BucketProvider = (*Client)(nil)

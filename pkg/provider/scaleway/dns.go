@@ -147,4 +147,16 @@ func (d *DNSClient) patchRecords(ctx context.Context, req patchRequest) error {
 	return d.api.Do(ctx, "PATCH", fmt.Sprintf("/dns-zones/%s/records", d.zone), req, nil)
 }
 
+func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	records, err := d.ListARecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	g := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "IP"}}
+	for _, r := range records {
+		g.Rows = append(g.Rows, []string{r.Type, r.Domain, r.IP})
+	}
+	return []provider.ResourceGroup{g}, nil
+}
+
 var _ provider.DNSProvider = (*DNSClient)(nil)

@@ -149,6 +149,12 @@ func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]*
 	return volumes, nil
 }
 
+// ResolveDevicePath returns the OS block device path for a Scaleway SBS volume.
+// SBS volumes appear as /dev/disk/by-id/scsi-0SCW_b_ssd_volume-<id>.
+func (c *Client) ResolveDevicePath(vol *provider.Volume) string {
+	return "/dev/disk/by-id/scsi-0SCW_b_ssd_volume-" + vol.ID
+}
+
 // ── Internal helpers ────────────────────────────────────────────────────────────
 
 func (c *Client) getVolume(ctx context.Context, id string) (*provider.Volume, error) {

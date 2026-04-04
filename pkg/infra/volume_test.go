@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 func TestMountVolume_AlreadyMounted(t *testing.T) {
@@ -22,9 +21,8 @@ func TestMountVolume_AlreadyMounted(t *testing.T) {
 		growfsCmd:     {},
 	})
 
-	vol := &provider.Volume{ID: "vol-1", Name: "data", DevicePath: "/dev/sda1"}
 	var buf bytes.Buffer
-	err := mountVolume(context.Background(), mock, vol, mountPath, &buf)
+	err := mountVolume(context.Background(), mock, "/dev/sda1", mountPath, &buf)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}

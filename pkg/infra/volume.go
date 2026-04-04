@@ -8,35 +8,28 @@ import (
 	"time"
 
 	"github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
-// MountVolume resolves the device path and mounts a volume on the server.
-// The volume must already be attached (via provider API).
+// MountVolume mounts a volume on the server at mountPath.
+// devicePath is the OS block device — resolved by the provider via ResolveDevicePath.
 // Idempotent: skips if already mounted at mountPath.
-func MountVolume(ctx context.Context, vol *provider.Volume, serverIP string, mountPath string, privKey []byte, w io.Writer) error {
+func MountVolume(ctx context.Context, devicePath string, serverIP string, mountPath string, privKey []byte, w io.Writer) error {
 	ssh, err := ConnectSSH(ctx, serverIP+":22", core.DefaultUser, privKey)
 	if err != nil {
 		return fmt.Errorf("ssh for volume mount: %w", err)
 	}
 	defer ssh.Close()
-	return mountVolume(ctx, ssh, vol, mountPath, w)
+	return mountVolume(ctx, ssh, devicePath, mountPath, w)
 }
 
 // mountVolume contains the mount logic, testable with a mock SSH client.
-func mountVolume(ctx context.Context, ssh core.SSHClient, vol *provider.Volume, mountPath string, w io.Writer) error {
+func mountVolume(ctx context.Context, ssh core.SSHClient, devicePath string, mountPath string, w io.Writer) error {
 	// Already mounted? Grow filesystem in case of resize, then return.
 	out, err := ssh.Run(ctx, fmt.Sprintf("mountpoint -q %s && echo mounted || echo not", mountPath))
 	if err == nil && strings.TrimSpace(string(out)) == "mounted" {
 		_, _ = ssh.Run(ctx, fmt.Sprintf("sudo xfs_growfs %s 2>/dev/null || true", mountPath))
 		fmt.Fprintf(w, "already mounted at %s\n", mountPath)
 		return nil
-	}
-
-	// Resolve device path — poll until available
-	devicePath, err := resolveDevicePath(ctx, vol, ssh)
-	if err != nil {
-		return fmt.Errorf("resolve device path for %s: %w", vol.Name, err)
 	}
 
 	// Wait for device node
@@ -125,29 +118,6 @@ func unmountVolume(ctx context.Context, ssh core.SSHClient, mountPath string, w 
 	return nil
 }
 
-func resolveDevicePath(ctx context.Context, vol *provider.Volume, ssh core.SSHClient) (string, error) {
-	if vol.DevicePath != "" {
-		return vol.DevicePath, nil
-	}
-
-	var devicePath string
-	err := core.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
-		out, err := ssh.Run(ctx, fmt.Sprintf("ls /dev/disk/by-id/ 2>/dev/null | grep -i '%s' || true", vol.ID))
-		if err == nil {
-			line := strings.TrimSpace(string(out))
-			if line != "" {
-				lines := strings.Split(line, "\n")
-				devicePath = "/dev/disk/by-id/" + strings.TrimSpace(lines[0])
-				return true, nil
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("device path not available for volume %s: %w", vol.ID, err)
-	}
-	return devicePath, nil
-}
 
 func waitForDevice(ctx context.Context, ssh core.SSHClient, devicePath string) error {
 	return core.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {

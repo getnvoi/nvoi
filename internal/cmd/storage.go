@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/app"
+	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register aws S3
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare R2
 	"github.com/spf13/cobra"
 )

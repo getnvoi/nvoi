@@ -2,24 +2,25 @@
 set -euo pipefail
 
 # ── Provider router ──────────────────────────────────────────────────────────
-# Delegates to bin/deploy-{provider} based on COMPUTE_PROVIDER env var.
+# Reads COMPUTE_PROVIDER from .env and delegates to bin/deploy-{provider}.
+
+# Source .env so the router knows which provider without host exports.
+set -a
+source .env
+set +a
 
 if [ -z "${COMPUTE_PROVIDER:-}" ]; then
-  echo "COMPUTE_PROVIDER is required. Set it in .env or export it."
-  echo "  export COMPUTE_PROVIDER=hetzner"
-  echo "  export COMPUTE_PROVIDER=scaleway"
+  echo "COMPUTE_PROVIDER is required. Set it in .env."
+  echo "  COMPUTE_PROVIDER=hetzner"
+  echo "  COMPUTE_PROVIDER=aws"
+  echo "  COMPUTE_PROVIDER=scaleway"
   exit 1
 fi
 
-case "$COMPUTE_PROVIDER" in
-  hetzner)
-    exec bin/deploy-hetzner "$@"
-    ;;
-  scaleway)
-    exec bin/deploy-scaleway "$@"
-    ;;
-  *)
-    echo "Unknown COMPUTE_PROVIDER: $COMPUTE_PROVIDER (expected: hetzner, scaleway)"
-    exit 1
-    ;;
-esac
+SCRIPT="bin/deploy-${COMPUTE_PROVIDER}"
+if [ ! -x "$SCRIPT" ]; then
+  echo "No deploy script for provider: $COMPUTE_PROVIDER (expected $SCRIPT)"
+  exit 1
+fi
+
+exec "$SCRIPT" "$@"

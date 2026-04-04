@@ -2,15 +2,13 @@
 set -euo pipefail
 
 # ── Scaleway deploy ──────────────────────────────────────────────────────────
-# Injects Scaleway provider selection, then runs the same deploy flow.
-# Credentials come from .env (SCW_SECRET_KEY, SCW_DEFAULT_ORGANIZATION_ID).
-
-export COMPUTE_PROVIDER=scaleway
-export DNS_PROVIDER=scaleway
-export STORAGE_PROVIDER=cloudflare
+# Scaleway compute + DNS. Cloudflare storage (R2).
+# Everything comes from .env — provider selection, credentials, app secrets.
+# Compose loads .env into the container. Source it here too so deploy
+# script vars ($RAILS_MASTER_KEY, $POSTGRES_PASSWORD, etc.) expand on the host.
 
 set -a
-source .env.deploy
+source .env
 set +a
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
@@ -55,9 +53,19 @@ bin/cli service set web \
   --secret RAILS_MASTER_KEY \
   --storage assets
 
+bin/cli service set jobs \
+  --image "$WEB_IMAGE" \
+  --command "bin/jobs" \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --env POSTGRES_USER="$POSTGRES_USER" \
+  --env POSTGRES_DB="$POSTGRES_DB" \
+  --secret POSTGRES_PASSWORD \
+  --secret RAILS_MASTER_KEY
+
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
-bin/cli dns set web final.nvoi.to
+bin/cli dns set web scw.nvoi.to
 
 echo ""
-echo "==> done. https://final.nvoi.to"
+echo "==> done. https://scw.nvoi.to"

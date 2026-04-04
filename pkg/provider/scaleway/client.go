@@ -154,4 +154,50 @@ func volumeTypeForInstance(instanceType string) string {
 	return "sbs_volume"
 }
 
+func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	var groups []provider.ResourceGroup
+
+	servers, err := c.ListServers(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	g := provider.ResourceGroup{Name: "Instances", Columns: []string{"ID", "Name", "Status", "IPv4", "Private IP"}}
+	for _, s := range servers {
+		g.Rows = append(g.Rows, []string{s.ID, s.Name, string(s.Status), s.IPv4, s.PrivateIP})
+	}
+	groups = append(groups, g)
+
+	firewalls, err := c.ListAllFirewalls(ctx)
+	if err != nil {
+		return nil, err
+	}
+	g = provider.ResourceGroup{Name: "Security Groups", Columns: []string{"ID", "Name"}}
+	for _, fw := range firewalls {
+		g.Rows = append(g.Rows, []string{fw.ID, fw.Name})
+	}
+	groups = append(groups, g)
+
+	networks, err := c.ListAllNetworks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	g = provider.ResourceGroup{Name: "Private Networks", Columns: []string{"ID", "Name"}}
+	for _, n := range networks {
+		g.Rows = append(g.Rows, []string{n.ID, n.Name})
+	}
+	groups = append(groups, g)
+
+	volumes, err := c.ListVolumes(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	g = provider.ResourceGroup{Name: "Block Volumes", Columns: []string{"ID", "Name", "Size", "Zone", "Server"}}
+	for _, v := range volumes {
+		g.Rows = append(g.Rows, []string{v.ID, v.Name, fmt.Sprintf("%dGB", v.Size), v.Location, v.ServerID})
+	}
+	groups = append(groups, g)
+
+	return groups, nil
+}
+
 var _ provider.ComputeProvider = (*Client)(nil)

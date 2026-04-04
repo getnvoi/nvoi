@@ -40,7 +40,8 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		return nil, fmt.Errorf("derive public key: %w", err)
 	}
 
-	userData, err := infra.RenderCloudInit(strings.TrimSpace(pubKey))
+	serverName := names.Server(req.Name)
+	userData, err := infra.RenderCloudInit(strings.TrimSpace(pubKey), serverName)
 	if err != nil {
 		return nil, err
 	}

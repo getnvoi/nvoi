@@ -68,6 +68,14 @@ func (m *MockCompute) ListVolumes(ctx context.Context, labels map[string]string)
 	return m.Volumes, nil
 }
 
+func (m *MockCompute) ResolveDevicePath(vol *provider.Volume) string {
+	return vol.DevicePath
+}
+
+func (m *MockCompute) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	return nil, nil
+}
+
 var _ provider.ComputeProvider = (*MockCompute)(nil)
 
 // MockDNS implements provider.DNSProvider for testing.
@@ -91,6 +99,10 @@ func (m *MockDNS) DeleteARecord(ctx context.Context, domain string) error {
 
 func (m *MockDNS) ListARecords(ctx context.Context) ([]provider.DNSRecord, error) {
 	return m.Records, nil
+}
+
+func (m *MockDNS) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	return nil, nil
 }
 
 var _ provider.DNSProvider = (*MockDNS)(nil)
@@ -121,6 +133,10 @@ func (m *MockBucket) SetLifecycle(ctx context.Context, name string, expireDays i
 
 func (m *MockBucket) Credentials(ctx context.Context) (provider.BucketCredentials, error) {
 	return m.CredsResult, nil
+}
+
+func (m *MockBucket) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	return nil, nil
 }
 
 var _ provider.BucketProvider = (*MockBucket)(nil)

@@ -8,6 +8,7 @@ import (
 )
 
 type cloudConfig struct {
+	Hostname    string      `yaml:"hostname,omitempty"`
 	Users       []cloudUser `yaml:"users"`
 	Packages    []string    `yaml:"packages,omitempty"`
 	RunCmd      []string    `yaml:"runcmd,omitempty"`
@@ -24,9 +25,11 @@ type cloudUser struct {
 }
 
 // RenderCloudInit produces cloud-init user-data for server provisioning.
-func RenderCloudInit(sshPublicKey string) (string, error) {
+// hostname sets the machine hostname (and therefore the k3s node name).
+func RenderCloudInit(sshPublicKey, hostname string) (string, error) {
 	user := core.DefaultUser
 	cfg := cloudConfig{
+		Hostname: hostname,
 		Users: []cloudUser{{
 			Name:              user,
 			Sudo:              "ALL=(ALL) NOPASSWD:ALL",
