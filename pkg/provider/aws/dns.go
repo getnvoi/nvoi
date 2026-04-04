@@ -16,17 +16,23 @@ type DNSClient struct {
 	r53          *route53.Client
 	zone         string // domain name (e.g. "myapp.com")
 	hostedZoneID string // resolved lazily from zone
+	configErr    error  // non-nil if LoadDefaultConfig failed
 }
 
 // NewDNS creates an AWS Route53 DNS provider.
 func NewDNS(creds map[string]string) *DNSClient {
+	r53, err := newRoute53Client(creds)
 	return &DNSClient{
-		r53:  newRoute53Client(creds),
-		zone: creds["zone"],
+		r53:       r53,
+		zone:      creds["zone"],
+		configErr: err,
 	}
 }
 
 func (d *DNSClient) ValidateCredentials(ctx context.Context) error {
+	if d.configErr != nil {
+		return d.configErr
+	}
 	if d.zone == "" {
 		return fmt.Errorf("aws dns: zone is required (env: DNS_ZONE)")
 	}
@@ -157,6 +163,18 @@ func (d *DNSClient) resolveHostedZone(ctx context.Context) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("hosted zone %q not found in Route53", d.zone)
+}
+
+func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	records, err := d.ListARecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	g := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "IP"}}
+	for _, r := range records {
+		g.Rows = append(g.Rows, []string{r.Type, r.Domain, r.IP})
+	}
+	return []provider.ResourceGroup{g}, nil
 }
 
 var _ provider.DNSProvider = (*DNSClient)(nil)

@@ -10,7 +10,7 @@ import (
 func TestRenderCloudInit(t *testing.T) {
 	fakeKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@test"
 
-	output, err := RenderCloudInit(fakeKey)
+	output, err := RenderCloudInit(fakeKey, "nvoi-test-master")
 	if err != nil {
 		t.Fatalf("RenderCloudInit returned error: %v", err)
 	}
@@ -69,6 +69,18 @@ func TestRenderCloudInit(t *testing.T) {
 		}
 		if !found {
 			t.Error("no user named 'deploy' found in cloud-config users")
+		}
+	})
+
+	t.Run("sets hostname", func(t *testing.T) {
+		yamlBody := strings.TrimPrefix(output, "#cloud-config\n")
+		var parsed map[string]any
+		if err := yaml.Unmarshal([]byte(yamlBody), &parsed); err != nil {
+			t.Fatalf("output is not valid YAML: %v", err)
+		}
+		hostname, ok := parsed["hostname"].(string)
+		if !ok || hostname != "nvoi-test-master" {
+			t.Errorf("hostname = %q, want %q", hostname, "nvoi-test-master")
 		}
 	})
 }

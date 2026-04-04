@@ -57,13 +57,13 @@ func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string) error 
 	}
 
 	for _, rec := range existing {
-		if rec.Content == ip {
+		if rec.Content == ip && !rec.Proxied {
 			return nil // already correct
 		}
-		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: rtype, Name: fqdn, Content: ip, TTL: 300})
+		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: rtype, Name: fqdn, Content: ip, TTL: 300, Proxied: false})
 	}
 
-	return d.createRecord(ctx, cfDNSRecord{Type: rtype, Name: fqdn, Content: ip, TTL: 300})
+	return d.createRecord(ctx, cfDNSRecord{Type: rtype, Name: fqdn, Content: ip, TTL: 300, Proxied: false})
 }
 
 func (d *DNSClient) DeleteARecord(ctx context.Context, domain string) error {
@@ -106,6 +106,7 @@ type cfDNSRecord struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
 	TTL     int    `json:"ttl,omitempty"`
+	Proxied bool   `json:"proxied"`
 }
 
 // ── API calls ────────────────────────────────────────────────────────────────
@@ -134,6 +135,18 @@ func (d *DNSClient) updateRecord(ctx context.Context, id string, r cfDNSRecord) 
 
 func (d *DNSClient) deleteRecord(ctx context.Context, id string) error {
 	return d.api.Do(ctx, "DELETE", fmt.Sprintf("/zones/%s/dns_records/%s", d.zoneID, id), nil, nil)
+}
+
+func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	records, err := d.ListARecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	g := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "IP"}}
+	for _, r := range records {
+		g.Rows = append(g.Rows, []string{r.Type, r.Domain, r.IP})
+	}
+	return []provider.ResourceGroup{g}, nil
 }
 
 var _ provider.DNSProvider = (*DNSClient)(nil)

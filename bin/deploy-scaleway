@@ -1,0 +1,5 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "error: scaleway provider not yet implemented"
+exit 1

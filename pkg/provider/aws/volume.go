@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -98,9 +99,22 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 		if err != nil {
 			return nil, fmt.Errorf("attach volume: %w", err)
 		}
+
+		// Wait for attachment to complete
+		if err := c.waitForVolumeAttached(ctx, volID); err != nil {
+			return nil, fmt.Errorf("volume %s did not attach: %w", volID, err)
+		}
 	}
 
-	// Refresh
+	// Re-fetch to get attachment info (device path)
+	refreshed, err := c.findVolumeByName(ctx, req.Name)
+	if err != nil {
+		return nil, fmt.Errorf("refresh volume: %w", err)
+	}
+	if refreshed != nil {
+		vol = refreshed
+	}
+
 	result := volumeFromEC2(*vol)
 	result.ServerName = req.ServerName
 	return result, nil
@@ -154,6 +168,14 @@ func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]*
 	return out, nil
 }
 
+// ResolveDevicePath returns the OS block device path for an AWS EBS volume.
+// NVMe instances expose EBS as /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol<id>.
+// The API-returned DevicePath (/dev/xvdf) is just a hint — not the real device.
+func (c *Client) ResolveDevicePath(vol *provider.Volume) string {
+	volID := strings.ReplaceAll(vol.ID, "-", "")
+	return "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_" + volID
+}
+
 // ── Internal helpers ────────────────────────────────────────────────────────────
 
 func (c *Client) findVolumeByName(ctx context.Context, name string) (*ec2types.Volume, error) {
@@ -169,6 +191,21 @@ func (c *Client) findVolumeByName(ctx context.Context, name string) (*ec2types.V
 		return &resp.Volumes[0], nil
 	}
 	return nil, nil
+}
+
+func (c *Client) waitForVolumeAttached(ctx context.Context, volumeID string) error {
+	return core.Poll(ctx, 2*time.Second, 2*time.Minute, func() (bool, error) {
+		resp, err := c.ec2.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
+			VolumeIds: []string{volumeID},
+		})
+		if err != nil {
+			return false, nil
+		}
+		if len(resp.Volumes) > 0 && len(resp.Volumes[0].Attachments) > 0 {
+			return resp.Volumes[0].Attachments[0].State == ec2types.VolumeAttachmentStateAttached, nil
+		}
+		return false, nil
+	})
 }
 
 func (c *Client) waitForVolumeAvailable(ctx context.Context, volumeID string) error {

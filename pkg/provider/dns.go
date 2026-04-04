@@ -9,6 +9,7 @@ type DNSProvider interface {
 	EnsureARecord(ctx context.Context, domain, ip string) error
 	DeleteARecord(ctx context.Context, domain string) error
 	ListARecords(ctx context.Context) ([]DNSRecord, error)
+	ListResources(ctx context.Context) ([]ResourceGroup, error)
 }
 
 type DNSRecord struct {

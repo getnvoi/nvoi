@@ -9,73 +9,46 @@ import (
 type ResourcesRequest struct {
 	Compute ProviderRef
 	DNS     ProviderRef
+	Storage ProviderRef
 }
 
-type ResourcesResult struct {
-	Servers    []*provider.Server
-	Firewalls  []*provider.Firewall
-	Networks   []*provider.Network
-	DNSRecords []provider.DNSRecord
-}
+func Resources(ctx context.Context, req ResourcesRequest) ([]provider.ResourceGroup, error) {
+	var all []provider.ResourceGroup
 
-func Resources(ctx context.Context, req ResourcesRequest) (*ResourcesResult, error) {
-	prov, err := provider.ResolveCompute(req.Compute.Name, req.Compute.Creds)
-	if err != nil {
-		return nil, err
-	}
-
-	servers, err := prov.ListServers(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	firewalls, err := prov.ListAllFirewalls(ctx)
-	if err != nil {
-		return nil, err
-	}
-	networks, err := prov.ListAllNetworks(ctx)
-	if err != nil {
-		return nil, err
+	// Compute resources
+	if req.Compute.Name != "" {
+		prov, err := provider.ResolveCompute(req.Compute.Name, req.Compute.Creds)
+		if err != nil {
+			return nil, err
+		}
+		groups, err := prov.ListResources(ctx)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, groups...)
 	}
 
-	result := &ResourcesResult{
-		Servers:   servers,
-		Firewalls: firewalls,
-		Networks:  networks,
-	}
-
-	// DNS records (optional)
+	// DNS resources
 	if req.DNS.Name != "" {
 		dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)
 		if err == nil {
-			records, err := dns.ListARecords(ctx)
+			groups, err := dns.ListResources(ctx)
 			if err == nil {
-				result.DNSRecords = records
+				all = append(all, groups...)
 			}
 		}
 	}
 
-	return result, nil
-}
-
-// ResourcesJSON returns resources keyed by provider name.
-func ResourcesJSON(ctx context.Context, req ResourcesRequest) (map[string]any, error) {
-	res, err := Resources(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	out := map[string]any{}
-	if req.Compute.Name != "" {
-		out[req.Compute.Name] = map[string]any{
-			"servers":   res.Servers,
-			"firewalls": res.Firewalls,
-			"networks":  res.Networks,
+	// Storage resources
+	if req.Storage.Name != "" {
+		bucket, err := provider.ResolveBucket(req.Storage.Name, req.Storage.Creds)
+		if err == nil {
+			groups, err := bucket.ListResources(ctx)
+			if err == nil {
+				all = append(all, groups...)
+			}
 		}
 	}
-	if req.DNS.Name != "" && len(res.DNSRecords) > 0 {
-		out[req.DNS.Name] = map[string]any{
-			"dns_records": res.DNSRecords,
-		}
-	}
-	return out, nil
+
+	return all, nil
 }

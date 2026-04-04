@@ -205,6 +205,52 @@ func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]*
 	return volumes, nil
 }
 
+// ResolveDevicePath returns the Linux device path for a Hetzner volume.
+// Hetzner API provides this directly as LinuxDevice.
+func (c *Client) ResolveDevicePath(vol *provider.Volume) string {
+	return vol.DevicePath
+}
+
+func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	servers, err := c.ListServers(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	srvGroup := provider.ResourceGroup{Name: "Servers", Columns: []string{"ID", "Name", "Status", "IPv4", "Private IP"}}
+	for _, s := range servers {
+		srvGroup.Rows = append(srvGroup.Rows, []string{s.ID, s.Name, string(s.Status), s.IPv4, s.PrivateIP})
+	}
+
+	firewalls, err := c.ListAllFirewalls(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fwGroup := provider.ResourceGroup{Name: "Firewalls", Columns: []string{"ID", "Name"}}
+	for _, fw := range firewalls {
+		fwGroup.Rows = append(fwGroup.Rows, []string{fw.ID, fw.Name})
+	}
+
+	networks, err := c.ListAllNetworks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	netGroup := provider.ResourceGroup{Name: "Networks", Columns: []string{"ID", "Name"}}
+	for _, n := range networks {
+		netGroup.Rows = append(netGroup.Rows, []string{n.ID, n.Name})
+	}
+
+	volumes, err := c.ListVolumes(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	volGroup := provider.ResourceGroup{Name: "Volumes", Columns: []string{"ID", "Name", "Size", "Server", "Device"}}
+	for _, v := range volumes {
+		volGroup.Rows = append(volGroup.Rows, []string{v.ID, v.Name, fmt.Sprintf("%dGB", v.Size), v.ServerID, v.DevicePath})
+	}
+
+	return []provider.ResourceGroup{srvGroup, fwGroup, netGroup, volGroup}, nil
+}
+
 // --- internal helpers ---
 
 func (c *Client) getVolumeByName(ctx context.Context, name string) (*provider.Volume, error) {

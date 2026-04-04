@@ -12,7 +12,7 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
 - **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`, `storage set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. `bin/deploy` runs end to end, every time, same outcome.
 - **`describe` fetches everything live from the cluster.** Nodes, workloads, pods, services, ingress, secrets, storage — all via kubectl over SSH.
-- **Provider interfaces scale.** Hetzner and Cloudflare first. Interface-first. Add a provider = implement the interface.
+- **Provider interfaces scale.** Hetzner, Cloudflare, AWS. Interface-first. Add a provider = implement the interface.
 - **SSH is the transport.** No agent binary. SSH in, run commands, done.
 - **Secrets are k8s secrets.** Values live in the cluster only.
 - **Storage credentials are k8s secrets.** `storage set` creates the bucket AND stores S3 credentials in the cluster. `--storage` on `service set` injects them.
@@ -20,17 +20,17 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 ## Build & Test
 
 ```bash
-bin/test                                    # vet + 121 tests across 7 packages
+bin/test                                    # vet + 223 tests across 8 packages
 bin/test -v                                 # verbose
 bin/test -run TestWaitRollout               # single test
 bin/test -cover                             # with coverage
 go build ./...                              # build only
 ```
 
-121 tests in three tiers:
-- **Tier 1** — pure functions: naming, YAML generation, Caddyfile, Poll, credential validation, volume parsing, signed URLs, route merging, cloud-init, APIError
+223 tests in three tiers:
+- **Tier 1** — pure functions: naming, YAML generation, Caddyfile, Poll, credential validation, volume parsing, signed URLs, route merging, cloud-init (hostname), APIError, AWS ArchForType, instanceFromEC2, volumeFromEC2, nvoiTags, defaultIngressRules, deref helpers
 - **Tier 2** — mock SSH: WaitRollout terminal errors, kubectl secret ops, Apply, DeleteByName, FirstPod, FindMaster, describe parsers, k3s install, registry, Docker, volume mount/unmount
-- **Tier 3** — httptest: Hetzner API (servers, volumes, firewalls, networks, auth), Cloudflare API (buckets, DNS records, credentials)
+- **Tier 3** — httptest: Hetzner API (servers, volumes, firewalls, networks, auth), Cloudflare API (buckets, DNS records, credentials), AWS provider resolution (compute, DNS, missing creds)
 
 ## CI
 
@@ -46,11 +46,11 @@ Everything runs through Docker Compose. Never run Go on the host — use `bin/cl
 
 ```bash
 bin/cli <command>                       # runs any nvoi command inside compose
-bin/deploy                              # full deploy — env vars, zero provider flags
+bin/deploy                              # router — reads COMPUTE_PROVIDER from .env, delegates
+bin/deploy-hetzner                      # full hetzner deploy
+bin/deploy-aws                          # full AWS deploy
 bin/deploy-full                         # full deploy — explicit flags, zero env vars
 bin/destroy                             # full teardown — reverse order of deploy
-NVOI_ENV=staging bin/deploy             # staging — brand new isolated infra
-NVOI_ENV=staging bin/cli instance list  # list staging instances
 ```
 
 ### How it works
@@ -59,13 +59,24 @@ NVOI_ENV=staging bin/cli instance list  # list staging instances
 
 - Mounts source (`.:/app`) — changes picked up instantly, no rebuild
 - Mounts SSH keys (`~/.ssh:/root/.ssh:ro`)
-- Loads `.env` — provider credentials (`HETZNER_TOKEN`, `CF_API_KEY`, etc.)
-- Hardcodes provider selection (`COMPUTE_PROVIDER=hetzner`, `BUILD_PROVIDER=daytona`, `DNS_PROVIDER=cloudflare`, `STORAGE_PROVIDER=cloudflare`)
-- Passes `NVOI_APP_NAME` + `NVOI_ENV` from host (defaults: `rails` + `production`)
-- Passes `SSH_KEY_PATH=/root/.ssh/id_rsa` — the mounted key
+- Loads `.env` via `env_file` — everything: app identity, provider selection, credentials, app secrets
+- Only overrides container-specific paths: `SSH_KEY_PATH=/root/.ssh/id_rsa`, `GOBIN=/app/tmp`
 - Caches Go modules across runs (Docker volumes)
 
-Provider selection is hardcoded in `docker-compose.yml`, credentials come from `.env`. This is why `bin/deploy` and `bin/cli` need zero provider flags — compose injects everything.
+**`.env` is the single source of truth.** Compose passes it through. No hardcoded providers in compose. No host exports needed. Change provider = edit `.env`.
+
+### Deploy routing
+
+`bin/deploy` reads `COMPUTE_PROVIDER` from `.env` and delegates to `bin/deploy-{provider}`. Each provider script has its own instance types, regions, and service topology:
+
+```bash
+# .env has COMPUTE_PROVIDER=aws → bin/deploy runs bin/deploy-aws
+bin/deploy
+
+# Or run a specific provider script directly
+bin/deploy-hetzner
+bin/deploy-aws
+```
 
 ### First run
 
@@ -78,13 +89,15 @@ bin/cli instance set master --compute-type cx23 --compute-region fsn1
 
 | File | Tracked | Purpose |
 |------|---------|---------|
-| `.env` | No | Provider credentials (`HETZNER_TOKEN`, `CF_API_KEY`, `CF_ACCOUNT_ID`, `CF_ZONE_ID`, `SSH_KEY_PATH`) |
-| `.env.deploy` | No | App secrets for `bin/deploy` (DB creds, Rails master key) |
+| `.env` | No | Everything: app identity, provider selection, credentials, app secrets |
 | `.env.example` | Yes | Template for `.env` |
 | `bin/cli` | Yes | `docker compose run --rm cli "$@"` |
 | `bin/test` | Yes | `go vet ./... && go test ./... "$@"` |
-| `bin/deploy` | Yes | Full deploy — env vars, zero provider flags |
-| `bin/deploy-full` | Yes | Full deploy — all flags inline |
+| `bin/deploy` | Yes | Router — reads `COMPUTE_PROVIDER` from `.env`, delegates to `bin/deploy-{provider}` |
+| `bin/deploy-hetzner` | Yes | Hetzner deploy (cx23 master, cx33 worker, meilisearch, etc.) |
+| `bin/deploy-aws` | Yes | AWS deploy (t3.medium master, single node, etc.) |
+| `bin/deploy-scaleway` | Yes | Stub — not yet implemented |
+| `bin/deploy-full` | Yes | Full deploy — all flags inline (hetzner) |
 | `bin/destroy` | Yes | Full teardown — reverse order of deploy |
 
 ## Namespace
@@ -183,8 +196,9 @@ nvoi logs <service> --timestamps                                                
 nvoi exec <service> -- <command>                                                # run command in first pod
 nvoi ssh <command>
 
-# Inspect
-nvoi resources
+# Inspect — queries all providers, shows every resource they created
+nvoi resources                                                                  # tables per provider
+nvoi resources --json                                                           # JSON output
 
 # ── Fully explicit (no env vars) ──────────────────────────────────────────────
 nvoi instance set master --compute-provider hetzner --compute-credentials HETZNER_TOKEN=xxx \
@@ -207,6 +221,7 @@ pkg/                       Public library — importable by external repos (API,
   provider/                ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
     hetzner/               Hetzner Cloud (compute + volumes)
     cloudflare/            Cloudflare (DNS + R2 buckets) — all via core.HTTPClient
+    aws/                   AWS (EC2 + VPC + Route53 + S3) — uses AWS SDK v2, ListResources covers all sub-resources
     daytona/               Daytona remote builds
     github/                GitHub Actions builds
     local/                 Local docker buildx builds
@@ -236,9 +251,9 @@ provider.RegisterX("name", CredentialSchema{...}, func(creds map[string]string) 
 
 | Kind | Flag | Env var | Interface | Implementations |
 |------|------|---------|-----------|----------------|
-| Compute | `--compute-provider` | `COMPUTE_PROVIDER` | `ComputeProvider` | hetzner |
-| DNS | `--dns-provider` | `DNS_PROVIDER` | `DNSProvider` | cloudflare |
-| Storage | `--storage-provider` | `STORAGE_PROVIDER` | `BucketProvider` | cloudflare (R2) |
+| Compute | `--compute-provider` | `COMPUTE_PROVIDER` | `ComputeProvider` | hetzner, aws |
+| DNS | `--dns-provider` | `DNS_PROVIDER` | `DNSProvider` | cloudflare, aws |
+| Storage | `--storage-provider` | `STORAGE_PROVIDER` | `BucketProvider` | cloudflare (R2), aws (S3) |
 | Build | `--build-provider` | `BUILD_PROVIDER` | `BuildProvider` | local, daytona, github |
 
 `--compute-provider` is on every command that touches infrastructure.
@@ -254,6 +269,16 @@ All providers follow the same architecture:
 4. **Blank import** — `internal/cmd/{command}.go` imports `_ "pkg/provider/{impl}"` to trigger `init()`
 5. **Resolution** — `provider.ResolveX(name, creds)` validates schema + returns instance
 
+### Provider-owned operations
+
+Some operations are provider-specific by design. Each provider implements them according to its own conventions:
+
+- **`ResolveDevicePath(vol) string`** on `ComputeProvider` — returns the OS block device path for an attached volume. Hetzner returns `LinuxDevice` from the API. AWS computes the NVMe symlink (`/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol<id>`). No SSH needed — the provider knows its device naming convention.
+
+- **`ListResources(ctx) ([]ResourceGroup, error)`** on all three provider interfaces (`ComputeProvider`, `DNSProvider`, `BucketProvider`) — returns every resource the provider created as display groups. `ResourceGroup` has `Name`, `Columns`, `Rows`. The `resources` command renders whatever comes back. Hetzner lists servers, firewalls, networks, volumes. AWS lists instances, security groups, VPCs, subnets, IGWs, route tables, EBS volumes. Each provider lists everything — no leftovers go unnoticed.
+
+- **`RenderCloudInit(sshPublicKey, hostname)`** in `infra/` — cloud-init sets the hostname, which becomes the k3s node name. Critical for AWS where the default hostname is the private DNS name (`ip-10-0-1-x`), not the server name. Hetzner sets hostname via its API, but cloud-init is the single path for all providers.
+
 ### Credential resolution
 
 All four provider kinds (compute, build, DNS, storage) resolve credentials through a single generic function in `cmd/resolve.go`:
@@ -263,6 +288,8 @@ resolveCredentials(cmd, schema, flagName) → map[string]string
 ```
 
 Resolution order: `--xxx-credentials KEY=VALUE` flag → direct command flag (e.g. `--zone`) → env var from schema. One pattern for all providers. DNS zone is declared in the Cloudflare DNS schema (`EnvVar: "DNS_ZONE"`, `Flag: "zone"`) — no special-casing.
+
+**Region override:** `--compute-region` overrides `creds["region"]` after credential resolution. This ensures the flag wins over `AWS_REGION` in `.env`. The AWS SDK client is initialized from the creds map, so the override must happen before provider construction.
 
 ### Credential pairs
 
@@ -294,15 +321,36 @@ bin/cli build \
 
 ### .env
 
-Provider credentials + SSH key. Input, not state.
+Single file. Everything. Compose loads it via `env_file`. Deploy scripts source it for host-side variable expansion. No `.env.deploy`, no split.
 
 ```
+# App identity
+NVOI_APP_NAME=rails
+NVOI_ENV=production
+
+# Provider selection
+COMPUTE_PROVIDER=aws          # hetzner | aws
+DNS_PROVIDER=cloudflare       # cloudflare | aws
+STORAGE_PROVIDER=aws          # cloudflare | aws
+BUILD_PROVIDER=daytona        # local | daytona | github
+DNS_ZONE=nvoi.to
+
+# Provider credentials
 HETZNER_TOKEN=...
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=eu-west-3
 CF_API_KEY=...
 CF_ACCOUNT_ID=...
 CF_ZONE_ID=...
 DAYTONA_API_KEY=...
-SSH_KEY_PATH=~/.ssh/id_rsa
+SSH_KEY_PATH=~/.ssh/id_ed25519
+
+# App secrets
+POSTGRES_USER=...
+POSTGRES_PASSWORD=...
+POSTGRES_DB=...
+RAILS_MASTER_KEY=...
 ```
 
 ## Apply guardrails
@@ -343,6 +391,7 @@ Hard errors before touching k8s.
 **Volumes:**
 - Service volume refs must point to volumes that exist (checked via provider API).
 - Service with managed volume → StatefulSet, replicas forced to 1.
+- `volume delete` unmounts on all servers, then calls `DeleteVolume` (which detaches + deletes the cloud volume). Not just detach.
 
 **DNS / Ingress:**
 - `dns set <service> <domain...>` does two things: creates the DNS A record pointing at master, AND deploys Caddy ingress to the cluster.
@@ -352,6 +401,7 @@ Hard errors before touching k8s.
 - Multiple `dns set` calls merge routes into a single Caddy config (ConfigMap). Caddy restarts on config change via annotation checksum.
 - `dns delete` removes the A record AND removes the route from Caddy config. If no routes remain, Caddy is deleted entirely.
 - `dns set` polls until `https://<domain>` returns 200 (or times out after 2 minutes if TLS is still provisioning).
+- **DNS records are DNS-only (not proxied).** Cloudflare records are created with `proxied: false`. Caddy handles TLS directly via Let's Encrypt — Cloudflare proxy in the path breaks certificate issuance. Existing proxied records are updated to DNS-only on next `dns set`.
 - Service must have `port > 0`. Hard error if service has no port.
 
 **Storage:**
@@ -504,7 +554,7 @@ const (
 4. `set` writes directly to infrastructure. No intermediate files.
 5. Provider interfaces scale. Add a provider = implement the interface. Same registration pattern for all four kinds.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
-7. SSH is the only transport to remote servers.
+7. SSH is the only transport to remote servers. SSH keys are injected strictly via cloud-init UserData — never via provider SSH key APIs (e.g. Hetzner `ssh_keys`, AWS `KeyName`). `infra.RenderCloudInit` renders the public key into `ssh_authorized_keys`. This is the only key injection path.
 8. **`os.Getenv` lives exclusively in `cmd/`.** Environment variables are a CLI concept. `app/`, `provider/`, `infra/`, `core/` never read env vars. All external values (credentials, SSH key path, app name, env) are resolved in `cmd/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.
 9. **Providers are silent.** Providers are API clients — they do work and return data. They never print, log, or narrate. Progress output belongs in `app/` via the `Output` interface.
 10. **`app/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `app/` is a library — a future API handler calls the same functions.
@@ -513,11 +563,12 @@ const (
 13. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
 14. `bin/destroy` is the reverse of `bin/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
 15. **No shell injection.** Secret values flow to kubectl via file upload (`ssh.Upload` + `cat`), not inline `fmt.Sprintf`. `shellQuote` for `--from-literal` args. Never interpolate user values into shell strings.
-16. **All providers use `core.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`.
+16. **All providers use `core.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`. Exception: AWS provider uses AWS SDK v2 (its own HTTP transport).
 
 ## Known limitations
 
 - **No pagination on provider list operations.** Hetzner uses `per_page=50` for servers, volumes, firewalls, networks. No cursor continuation. If results exceed one page, the list is silently incomplete — it doesn't error, it lies. Fine at current scale (1-5 servers per app). Fix when adding multi-tenant or `resources` across many apps on one Hetzner account.
 - **No retry / backoff on transient HTTP errors.** Provider API calls fail immediately on 500s or connection drops. User re-runs the command. Idempotent `set` design makes this safe. Fix if `bin/deploy` reliability becomes a problem.
 - **`s3ops.go` uses a dedicated `s3Client` (not `core.HTTPClient`).** S3/XML operations need raw HTTP, not JSON. Uses `var s3Client = &http.Client{Timeout: 30 * time.Second}` with all `io.ReadAll` errors checked and context propagated. This is by design — `core.HTTPClient` is JSON-oriented.
+- **AWS SDK `LoadDefaultConfig` errors are deferred to `ValidateCredentials`.** Provider factories can't return errors (signature is `func(creds) Provider`). The AWS constructors store the config error on the struct and surface it on the first `ValidateCredentials` call.
 

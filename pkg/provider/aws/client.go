@@ -19,14 +19,15 @@ import (
 
 // Client talks to the AWS EC2 API.
 type Client struct {
-	ec2    *ec2.Client
-	region string
+	ec2       *ec2.Client
+	region    string
+	configErr error // non-nil if LoadDefaultConfig failed
 }
 
 // New creates an AWS compute client from a credentials map.
 func New(creds map[string]string) *Client {
 	region := creds["region"]
-	cfg, _ := awsconfig.LoadDefaultConfig(context.Background(),
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			creds["access_key_id"],
@@ -34,6 +35,9 @@ func New(creds map[string]string) *Client {
 			"",
 		)),
 	)
+	if err != nil {
+		return &Client{configErr: fmt.Errorf("aws: load config: %w", err)}
+	}
 	return &Client{
 		ec2:    ec2.NewFromConfig(cfg),
 		region: region,
@@ -42,6 +46,9 @@ func New(creds map[string]string) *Client {
 
 // ValidateCredentials checks the API key by listing regions.
 func (c *Client) ValidateCredentials(ctx context.Context) error {
+	if c.configErr != nil {
+		return c.configErr
+	}
 	_, err := c.ec2.DescribeRegions(ctx, &ec2.DescribeRegionsInput{})
 	if err != nil {
 		return fmt.Errorf("aws: invalid credentials: %w", err)
@@ -84,9 +91,10 @@ func tagSpec(resourceType ec2types.ResourceType, name string, labels map[string]
 }
 
 // newRoute53Client creates a Route53 client from the same credentials.
-func newRoute53Client(creds map[string]string) *route53.Client {
+// Returns (client, error) — caller must store and check the error.
+func newRoute53Client(creds map[string]string) (*route53.Client, error) {
 	region := creds["region"]
-	cfg, _ := awsconfig.LoadDefaultConfig(context.Background(),
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			creds["access_key_id"],
@@ -94,7 +102,10 @@ func newRoute53Client(creds map[string]string) *route53.Client {
 			"",
 		)),
 	)
-	return route53.NewFromConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("aws: load route53 config: %w", err)
+	}
+	return route53.NewFromConfig(cfg), nil
 }
 
 var _ provider.ComputeProvider = (*Client)(nil)

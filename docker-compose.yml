@@ -14,15 +14,8 @@ services:
     privileged: true # DinD — local builder runs docker daemon + SSH tunnel in same namespace
     env_file: .env
     environment:
-      - NVOI_APP_NAME=${NVOI_APP_NAME:-rails}
-      - NVOI_ENV=${NVOI_ENV:-production}
-      - COMPUTE_PROVIDER=hetzner
-      - BUILD_PROVIDER=daytona
-      - DNS_PROVIDER=cloudflare
-      - DNS_ZONE=${DNS_ZONE:-nvoi.to}
-      - STORAGE_PROVIDER=cloudflare
-      - SSH_KEY_PATH=/root/.ssh/id_rsa
-      - GOBIN=/app/tmp
+      - SSH_KEY_PATH=/root/.ssh/id_rsa  # container path — host key mounted above
+      - GOBIN=/app/tmp                  # container path — bin-cache volume
     working_dir: /app
     entrypoint: ["/app/bin/entrypoint"]
 

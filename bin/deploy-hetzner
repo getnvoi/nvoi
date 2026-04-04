@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── AWS deploy ───────────────────────────────────────────────────────────────
-# AWS compute (EC2) + storage (S3). Cloudflare DNS.
+# ── Hetzner deploy ─────────────────────────────────────────────────────────────
+# Hetzner compute. Cloudflare DNS + storage (R2).
 # Everything comes from .env — provider selection, credentials, app secrets.
 # Compose loads .env into the container. Source it here too so deploy
 # script vars ($RAILS_MASTER_KEY, $POSTGRES_PASSWORD, etc.) expand on the host.
@@ -13,8 +13,10 @@ set +a
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/cli instance set master --compute-type t3.medium --compute-region eu-west-3
+bin/cli instance set master --compute-type cx23 --compute-region fsn1
+bin/cli instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
 bin/cli volume set pgdata --size 30 --server master
+bin/cli volume set meili-data --size 20 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
@@ -40,11 +42,16 @@ bin/cli service set db \
   --env POSTGRES_DB="$POSTGRES_DB" \
   --secret POSTGRES_PASSWORD
 
+bin/cli service set meilisearch \
+  --image getmeili/meilisearch:latest \
+  --volume meili-data:/meili_data
+
 bin/cli service set web \
   --image "$WEB_IMAGE" \
   --port 80 \
   --replicas 2 \
   --health-path /up \
+  --server worker-1 \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
   --env POSTGRES_USER="$POSTGRES_USER" \
@@ -56,6 +63,7 @@ bin/cli service set web \
 bin/cli service set jobs \
   --image "$WEB_IMAGE" \
   --command "bin/jobs" \
+  --server worker-1 \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
   --env POSTGRES_USER="$POSTGRES_USER" \

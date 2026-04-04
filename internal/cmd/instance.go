@@ -42,6 +42,12 @@ func newInstanceSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// --compute-region overrides the region in credentials (e.g. AWS_REGION).
+			// The provider SDK client is initialized from creds — this ensures
+			// the flag wins over the env var.
+			if region != "" {
+				creds["region"] = region
+			}
 			sshKey, err := resolveSSHKey()
 			if err != nil {
 				return err

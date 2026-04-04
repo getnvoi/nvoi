@@ -31,11 +31,19 @@ type ComputeProvider interface {
 	ListAllFirewalls(ctx context.Context) ([]*Firewall, error)
 	ListAllNetworks(ctx context.Context) ([]*Network, error)
 
+	// ListResources returns all provider-managed resources as display groups.
+	// Each provider lists everything it created — no leftovers go unnoticed.
+	ListResources(ctx context.Context) ([]ResourceGroup, error)
+
 	// Volume
 	EnsureVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
 	DetachVolume(ctx context.Context, name string) error
 	DeleteVolume(ctx context.Context, name string) error
 	ListVolumes(ctx context.Context, labels map[string]string) ([]*Volume, error)
+
+	// ResolveDevicePath returns the OS block device path for an attached volume.
+	// Provider-specific: Hetzner returns LinuxDevice from API, AWS computes the NVMe symlink.
+	ResolveDevicePath(vol *Volume) string
 }
 
 type Firewall struct {
@@ -67,6 +75,7 @@ type Volume struct {
 	Location   string `json:"location"`
 }
 
+
 type CreateServerRequest struct {
 	Name, ServerType, Image, Location, UserData string
 	FirewallName, NetworkName                   string
@@ -83,6 +92,14 @@ type CreateVolumeRequest struct {
 	Name, ServerName string
 	Size             int
 	Labels           map[string]string
+}
+
+// ResourceGroup is a named table of resources returned by ListResources.
+// Each provider returns its own groups — the provider knows what it created.
+type ResourceGroup struct {
+	Name    string     `json:"name"`
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
 }
 
 type HTTPStatusError interface {

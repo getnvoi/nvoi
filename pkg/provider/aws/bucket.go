@@ -15,10 +15,11 @@ import (
 
 // BucketClient manages S3 buckets via the AWS SDK.
 type BucketClient struct {
-	s3             *s3.Client
-	region         string
-	accessKeyID    string
+	s3              *s3.Client
+	region          string
+	accessKeyID     string
 	secretAccessKey string
+	configErr       error // non-nil if LoadDefaultConfig failed
 }
 
 // NewBucket creates an AWS S3 bucket provider.
@@ -27,12 +28,15 @@ func NewBucket(creds map[string]string) *BucketClient {
 	accessKeyID := creds["access_key_id"]
 	secretAccessKey := creds["secret_access_key"]
 
-	cfg, _ := awsconfig.LoadDefaultConfig(context.Background(),
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			accessKeyID, secretAccessKey, "",
 		)),
 	)
+	if err != nil {
+		return &BucketClient{configErr: fmt.Errorf("aws: load s3 config: %w", err)}
+	}
 	return &BucketClient{
 		s3:              s3.NewFromConfig(cfg),
 		region:          region,
@@ -42,6 +46,9 @@ func NewBucket(creds map[string]string) *BucketClient {
 }
 
 func (b *BucketClient) ValidateCredentials(ctx context.Context) error {
+	if b.configErr != nil {
+		return b.configErr
+	}
 	_, err := b.s3.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err != nil {
 		return fmt.Errorf("aws s3: invalid credentials: %w", err)
@@ -159,6 +166,7 @@ func (b *BucketClient) SetLifecycle(ctx context.Context, name string, expireDays
 			Rules: []s3types.LifecycleRule{{
 				ID:     aws.String("nvoi-expire"),
 				Status: s3types.ExpirationStatusEnabled,
+				Filter: &s3types.LifecycleRuleFilter{Prefix: aws.String("")},
 				Expiration: &s3types.LifecycleExpiration{
 					Days: aws.Int32(int32(expireDays)),
 				},
@@ -196,6 +204,22 @@ func isS3NotFound(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "NoSuchBucket") || strings.Contains(msg, "NotFound") || strings.Contains(msg, "404")
+}
+
+func (b *BucketClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+	resp, err := b.s3.ListBuckets(ctx, &s3.ListBucketsInput{})
+	if err != nil {
+		return nil, fmt.Errorf("list buckets: %w", err)
+	}
+	g := provider.ResourceGroup{Name: "S3 Buckets", Columns: []string{"Name", "Created"}}
+	for _, bucket := range resp.Buckets {
+		created := ""
+		if bucket.CreationDate != nil {
+			created = bucket.CreationDate.Format("2006-01-02")
+		}
+		g.Rows = append(g.Rows, []string{deref(bucket.Name), created})
+	}
+	return []provider.ResourceGroup{g}, nil
 }
 
 var _ provider.BucketProvider = (*BucketClient)(nil)
