@@ -358,6 +358,20 @@ func TestResolveDNS_MissingZone(t *testing.T) {
 	}
 }
 
+// ── Volume shrink rejection ──────────────────────────────────────────────────
+
+func TestVolumeFromEC2_SizeConversion(t *testing.T) {
+	// Verify that deref32 correctly extracts size for resize comparison
+	var size int32 = 30
+	vol := ec2types.Volume{
+		VolumeId: aws.String("vol-test"),
+		Size:     &size,
+	}
+	if got := int(deref32(vol.Size)); got != 30 {
+		t.Errorf("deref32(Size) = %d, want 30", got)
+	}
+}
+
 // --- helpers ---
 
 func contains(s, substr string) bool {

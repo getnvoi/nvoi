@@ -37,6 +37,7 @@ type ComputeProvider interface {
 
 	// Volume
 	EnsureVolume(ctx context.Context, req CreateVolumeRequest) (*Volume, error)
+	ResizeVolume(ctx context.Context, id string, sizeGB int) error
 	DetachVolume(ctx context.Context, name string) error
 	DeleteVolume(ctx context.Context, name string) error
 	ListVolumes(ctx context.Context, labels map[string]string) ([]*Volume, error)

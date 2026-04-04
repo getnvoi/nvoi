@@ -294,6 +294,38 @@ func TestArchForType(t *testing.T) {
 	}
 }
 
+// ── ResizeVolume ─────────────────────────────────────────────────────────────
+
+func TestResizeVolume(t *testing.T) {
+	var resizedTo int
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && contains(r.URL.Path, "/actions/resize") {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			resizedTo = int(body["size"].(float64))
+			json.NewEncoder(w).Encode(map[string]any{
+				"action": map[string]any{"id": 1, "status": "success"},
+			})
+			return
+		}
+		if r.Method == "GET" && contains(r.URL.Path, "/actions/") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"action": map[string]any{"id": 1, "status": "success"},
+			})
+			return
+		}
+		w.WriteHeader(404)
+	}))
+
+	err := c.ResizeVolume(context.Background(), "123", 50)
+	if err != nil {
+		t.Fatalf("ResizeVolume: %v", err)
+	}
+	if resizedTo != 50 {
+		t.Errorf("resized to %d, want 50", resizedTo)
+	}
+}
+
 // --- helpers ---
 
 func contains(s, substr string) bool {

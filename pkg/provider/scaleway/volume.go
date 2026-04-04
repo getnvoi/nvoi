@@ -62,6 +62,18 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 		return nil, err
 	}
 
+	if vol != nil {
+		if req.Size < vol.Size {
+			return nil, fmt.Errorf("volume %s is %dGB, requested %dGB — shrinking not supported", vol.Name, vol.Size, req.Size)
+		}
+		if req.Size > vol.Size {
+			if err := c.ResizeVolume(ctx, vol.ID, req.Size); err != nil {
+				return nil, err
+			}
+			vol.Size = req.Size
+		}
+	}
+
 	if vol == nil {
 		// Create
 		body := struct {
@@ -104,6 +116,18 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 
 	vol.ServerName = req.ServerName
 	return vol, nil
+}
+
+func (c *Client) ResizeVolume(ctx context.Context, id string, sizeGB int) error {
+	body := struct {
+		Size int64 `json:"size"`
+	}{
+		Size: int64(sizeGB) * 1_000_000_000,
+	}
+	if err := c.api.Do(ctx, "PATCH", c.blockPath(fmt.Sprintf("/volumes/%s", id)), body, nil); err != nil {
+		return fmt.Errorf("resize volume %s: %w", id, err)
+	}
+	return nil
 }
 
 func (c *Client) DetachVolume(ctx context.Context, name string) error {

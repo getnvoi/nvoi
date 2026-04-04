@@ -53,6 +53,19 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 		return nil, err
 	}
 
+	if vol != nil {
+		currentSize := int(deref32(vol.Size))
+		if req.Size < currentSize {
+			return nil, fmt.Errorf("volume %s is %dGB, requested %dGB — shrinking not supported", req.Name, currentSize, req.Size)
+		}
+		if req.Size > currentSize {
+			if err := c.ResizeVolume(ctx, deref(vol.VolumeId), req.Size); err != nil {
+				return nil, err
+			}
+			vol.Size = aws.Int32(int32(req.Size))
+		}
+	}
+
 	if vol == nil {
 		// Create in same AZ as server
 		createResp, err := c.ec2.CreateVolume(ctx, &ec2.CreateVolumeInput{
@@ -118,6 +131,30 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 	result := volumeFromEC2(*vol)
 	result.ServerName = req.ServerName
 	return result, nil
+}
+
+func (c *Client) ResizeVolume(ctx context.Context, id string, sizeGB int) error {
+	_, err := c.ec2.ModifyVolume(ctx, &ec2.ModifyVolumeInput{
+		VolumeId: aws.String(id),
+		Size:     aws.Int32(int32(sizeGB)),
+	})
+	if err != nil {
+		return fmt.Errorf("resize volume %s: %w", id, err)
+	}
+	// Wait for modification to complete
+	return core.Poll(ctx, 5*time.Second, 5*time.Minute, func() (bool, error) {
+		resp, err := c.ec2.DescribeVolumesModifications(ctx, &ec2.DescribeVolumesModificationsInput{
+			VolumeIds: []string{id},
+		})
+		if err != nil {
+			return false, nil
+		}
+		if len(resp.VolumesModifications) > 0 {
+			state := resp.VolumesModifications[0].ModificationState
+			return state == ec2types.VolumeModificationStateCompleted || state == ec2types.VolumeModificationStateOptimizing, nil
+		}
+		return false, nil
+	})
 }
 
 func (c *Client) DetachVolume(ctx context.Context, name string) error {

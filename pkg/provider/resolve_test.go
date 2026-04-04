@@ -21,6 +21,7 @@ func (stubCompute) DetachVolume(context.Context, string) error                  
 func (stubCompute) DeleteVolume(context.Context, string) error                         { return nil }
 func (stubCompute) ListVolumes(context.Context, map[string]string) ([]*Volume, error)  { return nil, nil }
 func (stubCompute) GetPrivateIP(context.Context, string) (string, error)               { return "", nil }
+func (stubCompute) ResizeVolume(context.Context, string, int) error                    { return nil }
 func (stubCompute) ResolveDevicePath(vol *Volume) string                               { return vol.DevicePath }
 func (stubCompute) ListResources(context.Context) ([]ResourceGroup, error)             { return nil, nil }
 

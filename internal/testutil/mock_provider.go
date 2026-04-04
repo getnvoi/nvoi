@@ -61,7 +61,8 @@ func (m *MockCompute) EnsureVolume(ctx context.Context, req provider.CreateVolum
 	return &provider.Volume{Name: req.Name, Size: req.Size}, nil
 }
 
-func (m *MockCompute) DetachVolume(ctx context.Context, name string) error { return nil }
+func (m *MockCompute) ResizeVolume(ctx context.Context, id string, sizeGB int) error { return nil }
+func (m *MockCompute) DetachVolume(ctx context.Context, name string) error              { return nil }
 func (m *MockCompute) DeleteVolume(ctx context.Context, name string) error { return nil }
 
 func (m *MockCompute) ListVolumes(ctx context.Context, labels map[string]string) ([]*provider.Volume, error) {

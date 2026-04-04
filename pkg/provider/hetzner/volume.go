@@ -64,20 +64,10 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 			return nil, fmt.Errorf("volume %s is %dGB, requested %dGB — shrinking not supported", req.Name, vol.Size, req.Size)
 		}
 		if req.Size > vol.Size {
-			var resp struct {
-				Action struct{ ID int64 `json:"id"` } `json:"action"`
-			}
-			if err := c.api.Do(ctx, "POST", fmt.Sprintf("/volumes/%s/actions/resize", vol.ID), map[string]any{"size": req.Size}, &resp); err != nil {
-				return nil, fmt.Errorf("resize volume: %w", err)
-			}
-			if resp.Action.ID != 0 {
-				if err := c.waitForAction(ctx, resp.Action.ID); err != nil {
-					return nil, fmt.Errorf("resize action: %w", err)
-				}
+			if err := c.ResizeVolume(ctx, vol.ID, req.Size); err != nil {
+				return nil, err
 			}
 			vol.Size = req.Size
-		} else {
-			// volume exists at requested size — no-op
 		}
 	} else {
 		// Resolve server location before creating volume
@@ -144,6 +134,21 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 
 	vol.ServerName = req.ServerName
 	return vol, nil
+}
+
+func (c *Client) ResizeVolume(ctx context.Context, id string, sizeGB int) error {
+	var resp struct {
+		Action struct{ ID int64 `json:"id"` } `json:"action"`
+	}
+	if err := c.api.Do(ctx, "POST", fmt.Sprintf("/volumes/%s/actions/resize", id), map[string]any{"size": sizeGB}, &resp); err != nil {
+		return fmt.Errorf("resize volume: %w", err)
+	}
+	if resp.Action.ID != 0 {
+		if err := c.waitForAction(ctx, resp.Action.ID); err != nil {
+			return fmt.Errorf("resize action: %w", err)
+		}
+	}
+	return nil
 }
 
 func (c *Client) DetachVolume(ctx context.Context, name string) error {
