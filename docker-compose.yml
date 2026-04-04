@@ -1,5 +1,6 @@
 services:
-  cli:
+  # Direct mode — runs cmd/core, talks to providers directly
+  core:
     build:
       context: .
       dockerfile: Dockerfile.dev
@@ -19,8 +20,76 @@ services:
     working_dir: /app
     entrypoint: ["/app/bin/entrypoint"]
 
+  # API server — runs cmd/api, serves REST endpoints
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - go-cache:/root/go
+      - go-mod-cache:/root/go/pkg/mod
+      - api-bin-cache:/app/tmp
+    env_file: .env
+    environment:
+      - GOBIN=/app/tmp
+      - DATABASE_URL=postgres://nvoi:nvoi@postgres:5432/nvoi?sslmode=disable
+      - JWT_SECRET=dev-jwt-secret-do-not-use-in-production
+      - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    working_dir: /app
+    entrypoint: ["/app/bin/api-entrypoint"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  # Cloud CLI — runs cmd/cli, talks to the API
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - go-cache:/root/go
+      - go-mod-cache:/root/go/pkg/mod
+      - cli-bin-cache:/app/tmp
+      - cli-config:/root/.config/nvoi  # persist auth token across runs
+    env_file: .env
+    environment:
+      - GOBIN=/app/tmp
+      - NVOI_API_BASE=http://api:8080
+    working_dir: /app
+    entrypoint: ["/app/bin/cli-entrypoint"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=nvoi
+      - POSTGRES_PASSWORD=nvoi
+      - POSTGRES_DB=nvoi
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nvoi"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+
 volumes:
   go-cache:
   go-mod-cache:
   bin-cache:
+  api-bin-cache:
+  cli-bin-cache:
   docker-data:
+  cli-config:
+  postgres-data:
