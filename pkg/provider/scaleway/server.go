@@ -95,6 +95,7 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 		}
 		return existing, nil
 	}
+
 	return c.createServer(ctx, req)
 }
 
@@ -239,6 +240,10 @@ func (c *Client) getServerByName(ctx context.Context, name string) (*provider.Se
 		}
 	}
 	return nil, nil
+}
+
+func (c *Client) GetPrivateIP(ctx context.Context, serverID string) (string, error) {
+	return c.getPrivateIP(ctx, serverID)
 }
 
 func (c *Client) getPrivateIP(ctx context.Context, serverID string) (string, error) {

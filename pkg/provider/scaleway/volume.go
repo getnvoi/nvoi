@@ -150,9 +150,9 @@ func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]*
 }
 
 // ResolveDevicePath returns the OS block device path for a Scaleway SBS volume.
-// SBS volumes appear as /dev/disk/by-id/scsi-0SCW_b_ssd_volume-<id>.
+// SBS volumes appear as /dev/disk/by-id/scsi-0SCW_sbs_volume-<id>.
 func (c *Client) ResolveDevicePath(vol *provider.Volume) string {
-	return "/dev/disk/by-id/scsi-0SCW_b_ssd_volume-" + vol.ID
+	return "/dev/disk/by-id/scsi-0SCW_sbs_volume-" + vol.ID
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────────
@@ -278,6 +278,6 @@ func (c *Client) waitForVolumeAvailable(ctx context.Context, volumeID string) er
 		if err := c.api.Do(ctx, "GET", c.blockPath(fmt.Sprintf("/volumes/%s", volumeID)), nil, &resp); err != nil {
 			return false, nil
 		}
-		return resp.Status == "available" || resp.Status == "in_use", nil
+		return resp.Status == "available", nil
 	})
 }

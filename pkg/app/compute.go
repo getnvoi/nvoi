@@ -69,6 +69,19 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		return nil, err
 	}
 
+	// Always resolve private IP via provider — ListServers/EnsureServer
+	// may not populate it (e.g. Scaleway requires IPAM lookup).
+	if srv.PrivateIP == "" {
+		ip, err := prov.GetPrivateIP(ctx, srv.ID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve private IP for %s: %w", srv.Name, err)
+		}
+		if ip == "" {
+			return nil, fmt.Errorf("server %s has no private IP — private network may not be attached", srv.Name)
+		}
+		srv.PrivateIP = ip
+	}
+
 	out.Progress(fmt.Sprintf("waiting for SSH on %s", srv.IPv4))
 	sshCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
@@ -176,5 +189,16 @@ func FindMaster(ctx context.Context, prov provider.ComputeProvider, names *core.
 	if len(masters) == 0 {
 		return nil, fmt.Errorf("no master server found — run 'instance set <name>' first (without --worker)")
 	}
-	return masters[0], nil
+	master := masters[0]
+	if master.PrivateIP == "" {
+		ip, err := prov.GetPrivateIP(ctx, master.ID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve private IP for master: %w", err)
+		}
+		if ip == "" {
+			return nil, fmt.Errorf("master %s has no private IP — private network may not be attached", master.Name)
+		}
+		master.PrivateIP = ip
+	}
+	return master, nil
 }

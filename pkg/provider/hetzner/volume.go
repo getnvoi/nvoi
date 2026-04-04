@@ -205,6 +205,17 @@ func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]*
 	return volumes, nil
 }
 
+func (c *Client) GetPrivateIP(ctx context.Context, serverID string) (string, error) {
+	var resp struct {
+		Server serverJSON `json:"server"`
+	}
+	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/servers/%s", serverID), nil, &resp); err != nil {
+		return "", fmt.Errorf("get server %s: %w", serverID, err)
+	}
+	srv := serverFrom(resp.Server)
+	return srv.PrivateIP, nil
+}
+
 // ResolveDevicePath returns the Linux device path for a Hetzner volume.
 // Hetzner API provides this directly as LinuxDevice.
 func (c *Client) ResolveDevicePath(vol *provider.Volume) string {

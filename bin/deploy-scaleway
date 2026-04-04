@@ -13,7 +13,7 @@ set +a
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/cli instance set master --compute-type DEV1-S --compute-region fr-par-1
+bin/cli instance set master --compute-type DEV1-L --compute-region fr-par-1
 bin/cli volume set pgdata --size 30 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────

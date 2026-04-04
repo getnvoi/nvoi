@@ -163,6 +163,11 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 	}
 	g := provider.ResourceGroup{Name: "Instances", Columns: []string{"ID", "Name", "Status", "IPv4", "Private IP"}}
 	for _, s := range servers {
+		if s.PrivateIP == "" {
+			if ip, _ := c.GetPrivateIP(ctx, s.ID); ip != "" {
+				s.PrivateIP = ip
+			}
+		}
 		g.Rows = append(g.Rows, []string{s.ID, s.Name, string(s.Status), s.IPv4, s.PrivateIP})
 	}
 	groups = append(groups, g)

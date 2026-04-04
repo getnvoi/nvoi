@@ -41,6 +41,11 @@ type ComputeProvider interface {
 	DeleteVolume(ctx context.Context, name string) error
 	ListVolumes(ctx context.Context, labels map[string]string) ([]*Volume, error)
 
+	// GetPrivateIP resolves the private IP of a server from the provider API.
+	// Always queries live state — never trust Server.PrivateIP from ListServers.
+	// Hetzner: re-fetches server. AWS: re-fetches instance. Scaleway: IPAM lookup.
+	GetPrivateIP(ctx context.Context, serverID string) (string, error)
+
 	// ResolveDevicePath returns the OS block device path for an attached volume.
 	// Provider-specific: Hetzner returns LinuxDevice from API, AWS computes the NVMe symlink.
 	ResolveDevicePath(vol *Volume) string

@@ -168,6 +168,19 @@ func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]*
 	return out, nil
 }
 
+func (c *Client) GetPrivateIP(ctx context.Context, serverID string) (string, error) {
+	resp, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{serverID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("get instance %s: %w", serverID, err)
+	}
+	if len(resp.Reservations) > 0 && len(resp.Reservations[0].Instances) > 0 {
+		return deref(resp.Reservations[0].Instances[0].PrivateIpAddress), nil
+	}
+	return "", nil
+}
+
 // ResolveDevicePath returns the OS block device path for an AWS EBS volume.
 // NVMe instances expose EBS as /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol<id>.
 // The API-returned DevicePath (/dev/xvdf) is just a hint — not the real device.

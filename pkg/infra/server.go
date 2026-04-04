@@ -71,8 +71,10 @@ func EnsureDocker(ctx context.Context, ip string, privateKey []byte) error {
 
 // ensureDocker contains the Docker install logic, testable with a mock SSH client.
 func ensureDocker(ctx context.Context, ssh core.SSHClient) error {
-	// Already installed?
+	// Already installed? Still ensure user is in docker group (some images
+	// ship Docker pre-installed but the deploy user isn't in the group).
 	if _, err := ssh.Run(ctx, "sudo docker info >/dev/null 2>&1"); err == nil {
+		_, _ = ssh.Run(ctx, "sudo usermod -aG docker "+core.DefaultUser)
 		return nil
 	}
 

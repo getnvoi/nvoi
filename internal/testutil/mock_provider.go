@@ -68,6 +68,15 @@ func (m *MockCompute) ListVolumes(ctx context.Context, labels map[string]string)
 	return m.Volumes, nil
 }
 
+func (m *MockCompute) GetPrivateIP(ctx context.Context, serverID string) (string, error) {
+	for _, s := range m.Servers {
+		if s.ID == serverID {
+			return s.PrivateIP, nil
+		}
+	}
+	return "", nil
+}
+
 func (m *MockCompute) ResolveDevicePath(vol *provider.Volume) string {
 	return vol.DevicePath
 }
