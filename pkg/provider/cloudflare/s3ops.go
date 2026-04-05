@@ -42,6 +42,9 @@ func s3EmptyBucket(ctx context.Context, endpoint, accessKey, secretKey, region, 
 			return fmt.Errorf("s3 list objects %s: read body: %w", bucket, err)
 		}
 
+		if resp.StatusCode == 404 {
+			return nil // bucket gone — nothing to empty
+		}
 		if resp.StatusCode >= 300 {
 			return fmt.Errorf("s3 list objects %s: %d: %s", bucket, resp.StatusCode, string(body))
 		}

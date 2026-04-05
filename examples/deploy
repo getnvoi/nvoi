@@ -1,0 +1,27 @@
+#!/bin/bash
+set -euo pipefail
+
+MODE="${1:?usage: ./examples/deploy <core|cloud> <hetzner|aws|scaleway>}"
+PROVIDER="${2:?usage: ./examples/deploy <core|cloud> <hetzner|aws|scaleway>}"
+SCRIPT="examples/${MODE}/${PROVIDER}/deploy"
+
+if [ ! -f "$SCRIPT" ]; then
+  echo "no deploy script: $SCRIPT"
+  exit 1
+fi
+
+# Source .env for app secrets ($RAILS_MASTER_KEY, $POSTGRES_PASSWORD, etc.)
+set -a; source .env; set +a
+
+# Per-provider scripts set COMPUTE_PROVIDER etc. via export.
+# We pass them to compose with -e so they override env_file.
+if [ "$MODE" = "core" ]; then
+  export CLI="docker compose run --rm -e COMPUTE_PROVIDER -e DNS_PROVIDER -e STORAGE_PROVIDER -e BUILD_PROVIDER core"
+elif [ "$MODE" = "cloud" ]; then
+  export CLI="docker compose run --rm -e COMPUTE_PROVIDER -e DNS_PROVIDER -e STORAGE_PROVIDER -e BUILD_PROVIDER cli"
+else
+  echo "mode must be core or cloud"
+  exit 1
+fi
+
+exec bash "$SCRIPT"

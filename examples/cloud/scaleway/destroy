@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Example: Scaleway teardown via cloud CLI ────────────────────────────────
+# Dev example using the Makefile (cloud mode).
+
+export COMPUTE_PROVIDER=scaleway
+export DNS_PROVIDER=cloudflare
+export STORAGE_PROVIDER=cloudflare
+
+# nvoi push --config examples/cloud/empty.yaml --env .env --compute-provider scaleway --dns-provider cloudflare --storage-provider cloudflare
+$CLI push --config examples/cloud/empty.yaml --env .env --compute-provider scaleway --dns-provider cloudflare --storage-provider cloudflare
+
+# nvoi deploy
+$CLI deploy

@@ -3,43 +3,49 @@ set -euo pipefail
 
 # ── Example: Hetzner deploy sequence ───────────────────────────────────────────
 # Dev example using the Makefile. Hetzner compute. Cloudflare DNS + storage (R2).
-# Requires NVOI_APP_NAME, NVOI_ENV, and provider credentials as env vars.
+
+set -a; source .env; set +a
+
+export COMPUTE_PROVIDER=hetzner
+export DNS_PROVIDER=cloudflare
+export STORAGE_PROVIDER=cloudflare
+export BUILD_PROVIDER=daytona
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
 # nvoi instance set master --compute-type cx23 --compute-region fsn1
-make cli -- instance set master --compute-type cx23 --compute-region fsn1
+$CLI instance set master --compute-type cx23 --compute-region fsn1
 # nvoi instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
-make cli -- instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
+$CLI instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
 # nvoi volume set pgdata --size 30 --server master
-make cli -- volume set pgdata --size 30 --server master
+$CLI volume set pgdata --size 30 --server master
 # nvoi volume set meili-data --size 20 --server master
-make cli -- volume set meili-data --size 20 --server master
+$CLI volume set meili-data --size 20 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
 # nvoi build --source benbonnet/dummy-rails --name web
-make cli -- build --source benbonnet/dummy-rails --name web
+$CLI build --source benbonnet/dummy-rails --name web
 
 # WEB_IMAGE=$(nvoi build latest web)
-WEB_IMAGE=$(make cli -- build latest web)
+WEB_IMAGE=$($CLI build latest web)
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
 # nvoi secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
-make cli -- secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+$CLI secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
 # nvoi secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
-make cli -- secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+$CLI secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
 # nvoi storage set assets --cors
-make cli -- storage set assets --cors
+$CLI storage set assets --cors
 
 # ── Services ────────────────────────────────────────────────────────────────────
 
 # nvoi service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD
-make cli -- service set db \
+$CLI service set db \
   --image postgres:17 \
   --volume pgdata:/var/lib/postgresql/data \
   --env POSTGRES_USER="$POSTGRES_USER" \
@@ -47,12 +53,12 @@ make cli -- service set db \
   --secret POSTGRES_PASSWORD
 
 # nvoi service set meilisearch --image getmeili/meilisearch:latest --volume meili-data:/meili_data
-make cli -- service set meilisearch \
+$CLI service set meilisearch \
   --image getmeili/meilisearch:latest \
   --volume meili-data:/meili_data
 
 # nvoi service set web --image "$WEB_IMAGE" --port 80 --replicas 2 --health-path /up --server worker-1 --env RAILS_ENV=production --env POSTGRES_HOST=db --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD --secret RAILS_MASTER_KEY --storage assets
-make cli -- service set web \
+$CLI service set web \
   --image "$WEB_IMAGE" \
   --port 80 \
   --replicas 2 \
@@ -67,7 +73,7 @@ make cli -- service set web \
   --storage assets
 
 # nvoi service set jobs --image "$WEB_IMAGE" --command "bin/jobs" --server worker-1 --env RAILS_ENV=production --env POSTGRES_HOST=db --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD --secret RAILS_MASTER_KEY
-make cli -- service set jobs \
+$CLI service set jobs \
   --image "$WEB_IMAGE" \
   --command "bin/jobs" \
   --server worker-1 \
@@ -81,7 +87,7 @@ make cli -- service set jobs \
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
 # nvoi dns set web hz.nvoi.to
-make cli -- dns set web hz.nvoi.to
+$CLI dns set web hz.nvoi.to
 
 echo ""
 echo "==> done. https://hz.nvoi.to"

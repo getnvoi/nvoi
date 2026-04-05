@@ -83,6 +83,9 @@ func (b *BucketClient) EmptyBucket(ctx context.Context, name string) error {
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
+			if isS3NotFound(err) {
+				return nil // bucket gone — nothing to empty
+			}
 			return fmt.Errorf("list objects in %s: %w", name, err)
 		}
 		if len(page.Contents) == 0 {

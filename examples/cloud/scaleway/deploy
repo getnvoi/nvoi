@@ -1,0 +1,33 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Example: Scaleway deploy via cloud CLI ────────────────────────────────────
+# Dev example using the Makefile (cloud mode). Same topology as examples/core/scaleway/deploy, but through the API.
+
+export COMPUTE_PROVIDER=scaleway
+export DNS_PROVIDER=cloudflare
+export STORAGE_PROVIDER=cloudflare
+export BUILD_PROVIDER=daytona
+
+# nvoi login
+$CLI login
+# nvoi workspaces use default
+$CLI workspaces use default
+# nvoi repos create dummy-rails
+$CLI repos create dummy-rails
+# nvoi repos use dummy-rails
+$CLI repos use dummy-rails
+
+# nvoi push --config examples/cloud/scaleway/config.yaml --env .env --compute-provider scaleway --dns-provider cloudflare --storage-provider cloudflare --build-provider daytona
+$CLI push \
+  --config examples/cloud/scaleway/config.yaml \
+  --env .env \
+  --compute-provider scaleway \
+  --dns-provider cloudflare \
+  --storage-provider cloudflare \
+  --build-provider daytona
+
+# nvoi plan
+$CLI plan
+# nvoi deploy
+$CLI deploy

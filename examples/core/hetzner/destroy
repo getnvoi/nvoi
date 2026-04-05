@@ -1,0 +1,40 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Example: Hetzner teardown sequence ───────────────────────────────────────
+# Dev example using the Makefile. Reverse order of deploy.
+
+set -a; source .env; set +a
+
+export COMPUTE_PROVIDER=hetzner
+export DNS_PROVIDER=cloudflare
+export STORAGE_PROVIDER=cloudflare
+
+# ── Teardown (reverse order of deploy) ──────────────────────────────────────
+
+# nvoi dns delete web hz.nvoi.to -y
+$CLI dns delete web hz.nvoi.to -y
+# nvoi storage empty assets -y
+$CLI storage empty assets -y
+# nvoi storage delete assets -y
+$CLI storage delete assets -y
+# nvoi secret delete RAILS_MASTER_KEY
+$CLI secret delete RAILS_MASTER_KEY
+# nvoi secret delete POSTGRES_PASSWORD
+$CLI secret delete POSTGRES_PASSWORD
+# nvoi service delete jobs -y
+$CLI service delete jobs -y
+# nvoi service delete web -y
+$CLI service delete web -y
+# nvoi service delete meilisearch -y
+$CLI service delete meilisearch -y
+# nvoi service delete db -y
+$CLI service delete db -y
+# nvoi volume delete meili-data -y
+$CLI volume delete meili-data -y
+# nvoi volume delete pgdata -y
+$CLI volume delete pgdata -y
+# nvoi instance delete worker-1 -y
+$CLI instance delete worker-1 -y
+# nvoi instance delete master -y
+$CLI instance delete master -y

@@ -5,37 +5,44 @@ set -euo pipefail
 # Dev example using the Makefile. AWS compute (EC2) + storage (S3). Cloudflare DNS.
 # Requires NVOI_APP_NAME, NVOI_ENV, and provider credentials as env vars.
 
+set -a; source .env; set +a
+
+export COMPUTE_PROVIDER=aws
+export DNS_PROVIDER=cloudflare
+export STORAGE_PROVIDER=aws
+export BUILD_PROVIDER=daytona
+
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
 # nvoi instance set master --compute-type t3.medium --compute-region eu-west-3
-make cli -- instance set master --compute-type t3.medium --compute-region eu-west-3
+$CLI instance set master --compute-type t3.medium --compute-region eu-west-3
 # nvoi volume set pgdata --size 30 --server master
-make cli -- volume set pgdata --size 30 --server master
+$CLI volume set pgdata --size 30 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
 # nvoi build --source benbonnet/dummy-rails --name web
-make cli -- build --source benbonnet/dummy-rails --name web
+$CLI build --source benbonnet/dummy-rails --name web
 
 # WEB_IMAGE=$(nvoi build latest web)
-WEB_IMAGE=$(make cli -- build latest web)
+WEB_IMAGE=$($CLI build latest web)
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
 # nvoi secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
-make cli -- secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+$CLI secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
 # nvoi secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
-make cli -- secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+$CLI secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
 # nvoi storage set assets --cors
-make cli -- storage set assets --cors
+$CLI storage set assets --cors
 
 # ── Services ────────────────────────────────────────────────────────────────────
 
 # nvoi service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD
-make cli -- service set db \
+$CLI service set db \
   --image postgres:17 \
   --volume pgdata:/var/lib/postgresql/data \
   --env POSTGRES_USER="$POSTGRES_USER" \
@@ -43,7 +50,7 @@ make cli -- service set db \
   --secret POSTGRES_PASSWORD
 
 # nvoi service set web --image "$WEB_IMAGE" --port 80 --replicas 2 --health-path /up --env RAILS_ENV=production --env POSTGRES_HOST=db --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD --secret RAILS_MASTER_KEY --storage assets
-make cli -- service set web \
+$CLI service set web \
   --image "$WEB_IMAGE" \
   --port 80 \
   --replicas 2 \
@@ -57,7 +64,7 @@ make cli -- service set web \
   --storage assets
 
 # nvoi service set jobs --image "$WEB_IMAGE" --command "bin/jobs" --env RAILS_ENV=production --env POSTGRES_HOST=db --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD --secret RAILS_MASTER_KEY
-make cli -- service set jobs \
+$CLI service set jobs \
   --image "$WEB_IMAGE" \
   --command "bin/jobs" \
   --env RAILS_ENV=production \
@@ -70,7 +77,7 @@ make cli -- service set jobs \
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
 # nvoi dns set web final.nvoi.to
-make cli -- dns set web final.nvoi.to
+$CLI dns set web aws.nvoi.to
 
 echo ""
-echo "==> done. https://final.nvoi.to"
+echo "==> done. https://aws.nvoi.to"

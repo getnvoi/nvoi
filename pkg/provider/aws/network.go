@@ -48,10 +48,11 @@ func (c *Client) ensureVPC(ctx context.Context, name string, labels map[string]s
 		EnableDnsHostnames: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
 	})
 
-	// Create subnet
+	// Create subnet — pinned to {region}a so volumes and instances always share the same AZ.
 	subnetResp, err := c.ec2.CreateSubnet(ctx, &ec2.CreateSubnetInput{
-		VpcId:             aws.String(vpcID),
-		CidrBlock:         aws.String(utils.PrivateNetworkSubnet),
+		VpcId:            aws.String(vpcID),
+		CidrBlock:        aws.String(utils.PrivateNetworkSubnet),
+		AvailabilityZone: aws.String(c.region + "a"),
 		TagSpecifications: tagSpec(ec2types.ResourceTypeSubnet, name+"-subnet", labels),
 	})
 	if err != nil {
