@@ -11,17 +11,19 @@ type GitHubUser struct {
 	Login string `json:"login"`
 }
 
-// GitHubVerifier verifies a GitHub PAT and returns the authenticated user.
+// GitHubVerifier verifies a GitHub token and returns the authenticated user.
 // Abstracted as a function type so tests can swap it out.
-type GitHubVerifier func(pat string) (*GitHubUser, error)
+// The token can be a PAT, OAuth access token, or fine-grained token —
+// GitHub's GET /user treats them all the same.
+type GitHubVerifier func(token string) (*GitHubUser, error)
 
-// VerifyGitHubPAT calls the real GitHub API to verify a personal access token.
-func VerifyGitHubPAT(pat string) (*GitHubUser, error) {
+// VerifyGitHubToken calls the real GitHub API to verify any token type.
+func VerifyGitHubToken(token string) (*GitHubUser, error) {
 	req, err := http.NewRequest("GET", "https://api.github.com/user", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+pat)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
 	resp, err := http.DefaultClient.Do(req)

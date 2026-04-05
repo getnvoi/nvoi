@@ -16,6 +16,9 @@ import (
 
 func init() {
 	os.Setenv("JWT_SECRET", "test-secret")
+	// 32 bytes hex-encoded for AES-256-GCM (RepoConfig env encryption).
+	os.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	_ = api.InitEncryption()
 	gin.SetMode(gin.TestMode)
 }
 

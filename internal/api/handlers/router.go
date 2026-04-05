@@ -37,6 +37,12 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 				repos.GET("/:repo_id", GetRepo(db))
 				repos.PUT("/:repo_id", UpdateRepo(db))
 				repos.DELETE("/:repo_id", DeleteRepo(db))
+
+				// Config (versioned)
+				repos.POST("/:repo_id/config", PushConfig(db))
+				repos.GET("/:repo_id/config", GetConfig(db))
+				repos.GET("/:repo_id/configs", ListConfigs(db))
+				repos.GET("/:repo_id/config/plan", PlanConfig(db))
 			}
 		}
 	}

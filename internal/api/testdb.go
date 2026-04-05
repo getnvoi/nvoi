@@ -20,6 +20,7 @@ func TestDB() *gorm.DB {
 		&Workspace{},
 		&WorkspaceUser{},
 		&Repo{},
+		&RepoConfig{},
 	); err != nil {
 		panic("migrate test db: " + err.Error())
 	}

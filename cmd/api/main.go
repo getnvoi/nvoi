@@ -26,7 +26,7 @@ func main() {
 	}
 
 	slog.Info("api server starting", "port", port)
-	if err := handlers.NewRouter(db, api.VerifyGitHubPAT).Run(":" + port); err != nil {
+	if err := handlers.NewRouter(db, api.VerifyGitHubToken).Run(":" + port); err != nil {
 		slog.Error("fatal", "error", err)
 		os.Exit(1)
 	}

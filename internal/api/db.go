@@ -32,6 +32,7 @@ func OpenDB() (*gorm.DB, error) {
 		&Workspace{},
 		&WorkspaceUser{},
 		&Repo{},
+		&RepoConfig{},
 	); err != nil {
 		return nil, fmt.Errorf("auto-migrate: %w", err)
 	}
