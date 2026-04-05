@@ -2,12 +2,13 @@
 set -euo pipefail
 
 # ── Example: teardown via cloud CLI ───────────────────────────────────────────
-# Push an empty config — the diff will generate delete steps for everything.
+# Dev example using the Makefile (cloud mode). Push an empty config — the diff will generate delete steps for everything.
 # Or simply delete the repo (infrastructure cleanup via the API).
 
 # Option 1: push empty config (generates delete-all plan)
-# nvoi push --config examples/cloud/empty.yaml --env .env --compute-provider hetzner
-# nvoi deploy
+# make cloud -- push --config examples/cloud/empty.yaml --env .env --compute-provider hetzner
+# make cloud -- deploy
 
 # Option 2: delete the repo entirely
-nvoi repos delete <repo-id>
+# nvoi repos delete <repo-id>
+make cloud -- repos delete <repo-id>

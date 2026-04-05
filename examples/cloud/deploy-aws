@@ -2,14 +2,19 @@
 set -euo pipefail
 
 # ── Example: AWS deploy via cloud CLI ─────────────────────────────────────────
-# Same topology as examples/core/deploy-aws, but through the API.
+# Dev example using the Makefile (cloud mode). Same topology as examples/core/deploy-aws, but through the API.
 
-nvoi login
-nvoi workspaces use default
-nvoi repos create dummy-rails
-nvoi repos use dummy-rails
+# nvoi login
+make cloud -- login
+# nvoi workspaces use default
+make cloud -- workspaces use default
+# nvoi repos create dummy-rails
+make cloud -- repos create dummy-rails
+# nvoi repos use dummy-rails
+make cloud -- repos use dummy-rails
 
-nvoi push \
+# nvoi push --config examples/cloud/aws.yaml --env .env --compute-provider aws --dns-provider cloudflare --storage-provider aws --build-provider daytona
+make cloud -- push \
   --config examples/cloud/aws.yaml \
   --env .env \
   --compute-provider aws \
@@ -17,5 +22,7 @@ nvoi push \
   --storage-provider aws \
   --build-provider daytona
 
-nvoi plan
-nvoi deploy
+# nvoi plan
+make cloud -- plan
+# nvoi deploy
+make cloud -- deploy

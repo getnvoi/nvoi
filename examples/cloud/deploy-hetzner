@@ -2,19 +2,24 @@
 set -euo pipefail
 
 # ── Example: Hetzner deploy via cloud CLI ─────────────────────────────────────
-# Same topology as examples/core/deploy-hetzner, but through the API.
+# Dev example using the Makefile (cloud mode). Same topology as examples/core/deploy-hetzner, but through the API.
 # The config YAML + .env replace the imperative command sequence.
 
 # ── Setup (once) ───────────────────────────────────────────────────────────────
 
-nvoi login
-nvoi workspaces use default
-nvoi repos create dummy-rails
-nvoi repos use dummy-rails
+# nvoi login
+make cloud -- login
+# nvoi workspaces use default
+make cloud -- workspaces use default
+# nvoi repos create dummy-rails
+make cloud -- repos create dummy-rails
+# nvoi repos use dummy-rails
+make cloud -- repos use dummy-rails
 
 # ── Push config ────────────────────────────────────────────────────────────────
 
-nvoi push \
+# nvoi push --config examples/cloud/hetzner.yaml --env .env --compute-provider hetzner --dns-provider cloudflare --storage-provider cloudflare --build-provider daytona
+make cloud -- push \
   --config examples/cloud/hetzner.yaml \
   --env .env \
   --compute-provider hetzner \
@@ -24,8 +29,10 @@ nvoi push \
 
 # ── Preview ────────────────────────────────────────────────────────────────────
 
-nvoi plan
+# nvoi plan
+make cloud -- plan
 
 # ── Deploy ─────────────────────────────────────────────────────────────────────
 
-nvoi deploy
+# nvoi deploy
+make cloud -- deploy
