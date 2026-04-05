@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -84,7 +85,7 @@ func (b *BucketClient) EmptyBucket(ctx context.Context, name string) error {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			if isS3NotFound(err) {
-				return nil // bucket gone — nothing to empty
+				return utils.ErrNotFound
 			}
 			return fmt.Errorf("list objects in %s: %w", name, err)
 		}
@@ -117,7 +118,7 @@ func (b *BucketClient) DeleteBucket(ctx context.Context, name string) error {
 	})
 	if err != nil {
 		if isS3NotFound(err) {
-			return nil
+			return utils.ErrNotFound
 		}
 		return fmt.Errorf("delete bucket %s: %w", name, err)
 	}

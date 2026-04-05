@@ -77,8 +77,11 @@ func (c *Client) getFirewallByName(ctx context.Context, name string) (*provider.
 
 func (c *Client) deleteFirewall(ctx context.Context, name string) error {
 	fw, err := c.getFirewallByName(ctx, name)
-	if err != nil || fw == nil {
-		return nil
+	if err != nil {
+		return err
+	}
+	if fw == nil {
+		return utils.ErrNotFound
 	}
 	err = c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s", fw.ID), nil, nil)
 	if err != nil && !utils.IsNotFound(err) {

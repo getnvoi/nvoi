@@ -3,9 +3,12 @@ package cloudflare
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func testBucketClient(t *testing.T, handler http.Handler) *Client {
@@ -88,8 +91,8 @@ func TestDeleteBucket_AlreadyGone(t *testing.T) {
 		w.Write([]byte(`{"errors":[{"code":10007,"message":"bucket not found"}]}`))
 	}))
 
-	if err := c.DeleteBucket(context.Background(), "gone-bucket"); err != nil {
-		t.Fatalf("DeleteBucket should succeed for 404 (already gone), got: %v", err)
+	if err := c.DeleteBucket(context.Background(), "gone-bucket"); !errors.Is(err, utils.ErrNotFound) {
+		t.Fatalf("DeleteBucket should return ErrNotFound for 404 (already gone), got: %v", err)
 	}
 }
 

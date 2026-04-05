@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register aws S3
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare R2
 	"github.com/spf13/cobra"
@@ -127,7 +128,7 @@ func newStorageEmptyCmd() *cobra.Command {
 				return err
 			}
 
-			return app.StorageEmpty(cmd.Context(), app.StorageEmptyRequest{
+			err = app.StorageEmpty(cmd.Context(), app.StorageEmptyRequest{
 				Cluster: app.Cluster{
 					AppName: appName,
 					Env:     env,
@@ -136,6 +137,7 @@ func newStorageEmptyCmd() *cobra.Command {
 				Storage: app.ProviderRef{Name: storageProvider, Creds: storageCreds},
 				Name:    args[0],
 			})
+			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addStorageProviderFlags(cmd)
@@ -193,7 +195,7 @@ Examples:
 				return err
 			}
 
-			return app.StorageDelete(cmd.Context(), app.StorageDeleteRequest{
+			err = app.StorageDelete(cmd.Context(), app.StorageDeleteRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -205,6 +207,7 @@ Examples:
 				Storage: app.ProviderRef{Name: storageProvider, Creds: storageCreds},
 				Name:    args[0],
 			})
+			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addComputeProviderFlags(cmd)

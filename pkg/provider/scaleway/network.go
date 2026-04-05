@@ -64,8 +64,11 @@ func (c *Client) getNetworkByName(ctx context.Context, name string) (*provider.N
 
 func (c *Client) deleteNetwork(ctx context.Context, name string) error {
 	net, err := c.getNetworkByName(ctx, name)
-	if err != nil || net == nil {
-		return nil
+	if err != nil {
+		return err
+	}
+	if net == nil {
+		return utils.ErrNotFound
 	}
 	err = c.api.Do(ctx, "DELETE", c.vpcPath(fmt.Sprintf("/private-networks/%s", net.ID)), nil, nil)
 	if err != nil && !utils.IsNotFound(err) {

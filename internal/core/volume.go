@@ -104,7 +104,7 @@ func newVolumeDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			return app.VolumeDelete(cmd.Context(), app.VolumeDeleteRequest{
+			err = app.VolumeDelete(cmd.Context(), app.VolumeDeleteRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -115,6 +115,7 @@ func newVolumeDeleteCmd() *cobra.Command {
 				},
 				Name: args[0],
 			})
+			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addComputeProviderFlags(cmd)

@@ -91,13 +91,18 @@ func (c *Client) deleteNetwork(ctx context.Context, name string) error {
 	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/networks?name=%s", name), nil, &resp); err != nil {
 		return err
 	}
+	found := false
 	for _, n := range resp.Networks {
 		if n.Name == name {
+			found = true
 			err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/networks/%s", strconv.FormatInt(n.ID, 10)), nil, nil)
 			if err != nil && !utils.IsNotFound(err) {
 				return err
 			}
 		}
+	}
+	if !found {
+		return utils.ErrNotFound
 	}
 	return nil
 }

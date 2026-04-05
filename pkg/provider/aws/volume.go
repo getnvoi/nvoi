@@ -176,8 +176,11 @@ func (c *Client) DetachVolume(ctx context.Context, name string) error {
 
 func (c *Client) DeleteVolume(ctx context.Context, name string) error {
 	vol, err := c.findVolumeByName(ctx, name)
-	if err != nil || vol == nil {
-		return nil
+	if err != nil {
+		return err
+	}
+	if vol == nil {
+		return utils.ErrNotFound
 	}
 	if len(vol.Attachments) > 0 {
 		c.ec2.DetachVolume(ctx, &ec2.DetachVolumeInput{VolumeId: vol.VolumeId})

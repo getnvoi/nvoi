@@ -151,16 +151,12 @@ func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
 
 	serverName := names.Server(req.Name)
 	out.Command("instance", "delete", serverName)
-	if err := prov.DeleteServer(ctx, provider.DeleteServerRequest{
+	return prov.DeleteServer(ctx, provider.DeleteServerRequest{
 		Name:         serverName,
 		FirewallName: names.Firewall(),
 		NetworkName:  names.Network(),
 		Labels:       names.Labels(),
-	}); err != nil {
-		return err
-	}
-	out.Success("deleted")
-	return nil
+	})
 }
 
 type ComputeListRequest struct {

@@ -3,10 +3,12 @@ package hetzner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -139,8 +141,8 @@ func TestDeleteServer_NotFound(t *testing.T) {
 	}))
 
 	err := c.DeleteServer(context.Background(), deleteServerRequest("gone-server"))
-	if err != nil {
-		t.Fatalf("DeleteServer should succeed for non-existent server, got: %v", err)
+	if !errors.Is(err, utils.ErrNotFound) {
+		t.Fatalf("DeleteServer should return ErrNotFound for non-existent server, got: %v", err)
 	}
 }
 

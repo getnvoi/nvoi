@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register aws DNS
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare DNS
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"  // register scaleway DNS
@@ -127,7 +128,7 @@ func newDNSDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			return app.DNSDelete(cmd.Context(), app.DNSDeleteRequest{
+			err = app.DNSDelete(cmd.Context(), app.DNSDeleteRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -140,6 +141,7 @@ func newDNSDeleteCmd() *cobra.Command {
 				Service: service,
 				Domains: domains,
 			})
+			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addComputeProviderFlags(cmd)

@@ -94,7 +94,7 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return err
 	}
 	if srv == nil {
-		return nil // already gone
+		return utils.ErrNotFound
 	}
 
 	// Detach firewall

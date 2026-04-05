@@ -78,9 +78,8 @@ func (c *Client) EmptyBucket(ctx context.Context, name string) error {
 func (c *Client) DeleteBucket(ctx context.Context, name string) error {
 	err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/accounts/%s/r2/buckets/%s", c.accountID, name), nil, nil)
 	if err != nil {
-		// 404 = already gone — success
 		if utils.IsNotFound(err) {
-			return nil
+			return utils.ErrNotFound
 		}
 		return fmt.Errorf("delete bucket %s: %w", name, err)
 	}

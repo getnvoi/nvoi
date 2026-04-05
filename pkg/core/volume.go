@@ -100,11 +100,7 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 		}
 	}
 
-	if err := prov.DeleteVolume(ctx, volumeName); err != nil {
-		return err
-	}
-	out.Success("deleted")
-	return nil
+	return prov.DeleteVolume(ctx, volumeName)
 }
 
 type VolumeListRequest struct {

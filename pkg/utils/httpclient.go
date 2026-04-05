@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,7 +92,14 @@ func (e *APIError) Error() string {
 }
 func (e *APIError) HTTPStatus() int { return e.Status }
 
+// ErrNotFound indicates the resource didn't exist.
+// Returned by delete operations on 404. Callers decide how to present it.
+var ErrNotFound = fmt.Errorf("not found")
+
 func IsNotFound(err error) bool {
+	if errors.Is(err, ErrNotFound) {
+		return true
+	}
 	if apiErr, ok := err.(*APIError); ok {
 		return apiErr.Status == 404
 	}

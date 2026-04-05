@@ -113,7 +113,7 @@ func newInstanceDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			return app.ComputeDelete(cmd.Context(), app.ComputeDeleteRequest{
+			err = app.ComputeDelete(cmd.Context(), app.ComputeDeleteRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -123,6 +123,7 @@ func newInstanceDeleteCmd() *cobra.Command {
 				},
 				Name: args[0],
 			})
+			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addComputeProviderFlags(cmd)

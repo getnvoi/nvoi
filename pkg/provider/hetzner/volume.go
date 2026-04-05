@@ -173,7 +173,7 @@ func (c *Client) DeleteVolume(ctx context.Context, name string) error {
 		return err
 	}
 	if vol == nil {
-		return nil // already gone
+		return utils.ErrNotFound
 	}
 	if vol.ServerID != "" {
 		if err := c.detachVolume(ctx, vol.ID); err != nil {

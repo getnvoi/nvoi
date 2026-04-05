@@ -90,7 +90,7 @@ func newSecretDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			return app.SecretDelete(cmd.Context(), app.SecretDeleteRequest{
+			err = app.SecretDelete(cmd.Context(), app.SecretDeleteRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -101,6 +101,7 @@ func newSecretDeleteCmd() *cobra.Command {
 				},
 				Key: args[0],
 			})
+			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addComputeProviderFlags(cmd)

@@ -111,7 +111,6 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 		if err := dns.DeleteARecord(ctx, domain); err != nil {
 			return fmt.Errorf("dns delete %s: %w", domain, err)
 		}
-		out.Success(domain)
 	}
 
 	// Remove route from Caddy if we have cluster access

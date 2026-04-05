@@ -128,15 +128,13 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 		bucketName := names.Bucket(req.Name)
 		out.Progress(fmt.Sprintf("deleting bucket %s", bucketName))
 		if err := bucket.DeleteBucket(ctx, bucketName); err != nil {
-			return fmt.Errorf("delete bucket: %w", err)
+			return err // ErrNotFound or real error — caller handles both
 		}
-		out.Success("bucket deleted")
 	}
 
 	ssh, names2, err := req.Cluster.SSH(ctx)
 	if errors.Is(err, ErrNoMaster) {
-		out.Success("secrets (cluster gone)")
-		return nil
+		return ErrNoMaster
 	}
 	if err != nil {
 		return err
@@ -156,7 +154,6 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 	for _, key := range keys {
 		_ = kube.DeleteSecretKey(ctx, ssh, ns, secretName, key)
 	}
-	out.Success("secrets removed")
 	return nil
 }
 
@@ -181,11 +178,7 @@ func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
 	bucketName := names.Bucket(req.Name)
 	out.Command("storage", "empty", req.Name)
 	out.Progress(fmt.Sprintf("emptying bucket %s", bucketName))
-	if err := bucket.EmptyBucket(ctx, bucketName); err != nil {
-		return fmt.Errorf("empty bucket: %w", err)
-	}
-	out.Success("bucket emptied")
-	return nil
+	return bucket.EmptyBucket(ctx, bucketName) // nil, ErrNotFound, or real error
 }
 
 type StorageListRequest struct {

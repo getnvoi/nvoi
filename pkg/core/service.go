@@ -169,17 +169,12 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if errors.Is(err, ErrNoMaster) {
-		out.Success(req.Name + " (cluster gone)")
-		return nil
+		return ErrNoMaster
 	}
 	if err != nil {
 		return err
 	}
 	defer ssh.Close()
 
-	if err := kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name); err != nil {
-		return err
-	}
-	out.Success("deleted")
-	return nil
+	return kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name)
 }

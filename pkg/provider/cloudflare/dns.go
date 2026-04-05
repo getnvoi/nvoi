@@ -68,16 +68,21 @@ func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string) error 
 
 func (d *DNSClient) DeleteARecord(ctx context.Context, domain string) error {
 	name := provider.RecordName(domain, d.zone)
+	found := false
 	for _, rtype := range []string{"A", "AAAA"} {
 		records, err := d.listRecords(ctx, name, rtype)
 		if err != nil {
 			return err
 		}
 		for _, rec := range records {
+			found = true
 			if err := d.deleteRecord(ctx, rec.ID); err != nil {
 				return err
 			}
 		}
+	}
+	if !found {
+		return utils.ErrNotFound
 	}
 	return nil
 }

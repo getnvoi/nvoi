@@ -46,19 +46,14 @@ func SecretDelete(ctx context.Context, req SecretDeleteRequest) error {
 
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if errors.Is(err, ErrNoMaster) {
-		out.Success(req.Key + " (cluster gone)")
-		return nil
+		return ErrNoMaster
 	}
 	if err != nil {
 		return err
 	}
 	defer ssh.Close()
 
-	if err := kube.DeleteSecretKey(ctx, ssh, names.KubeNamespace(), names.KubeSecrets(), req.Key); err != nil {
-		return err
-	}
-	out.Success(req.Key + " removed")
-	return nil
+	return kube.DeleteSecretKey(ctx, ssh, names.KubeNamespace(), names.KubeSecrets(), req.Key)
 }
 
 type SecretListRequest struct {

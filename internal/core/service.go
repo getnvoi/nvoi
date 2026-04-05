@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -139,7 +140,7 @@ func newServiceDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			return app.ServiceDelete(cmd.Context(), app.ServiceDeleteRequest{
+			err = app.ServiceDelete(cmd.Context(), app.ServiceDeleteRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -150,6 +151,7 @@ func newServiceDeleteCmd() *cobra.Command {
 				},
 				Name: args[0],
 			})
+			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addComputeProviderFlags(cmd)
