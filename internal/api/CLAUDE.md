@@ -331,8 +331,13 @@ nvoi push                    push config YAML + .env to active repo
 nvoi plan                    show execution plan for latest config
 nvoi deploy                  trigger deploy, stream logs through TUI
 nvoi logs <id>               stream deployment logs through TUI
-nvoi status [id]             show deployment step statuses
+nvoi describe                live cluster state (nodes, workloads, pods, services)
+nvoi resources               list all provider resources
 ```
+
+See [`examples/README.md`](../../examples/README.md) for full deploy workflows (direct + cloud mode).
+See [`examples/cloud/`](../../examples/cloud/) for config YAML examples.
+See [`examples/core/`](../../examples/core/) for imperative command sequences.
 
 ## Key rules
 

@@ -21,23 +21,23 @@ Imperative commands — each line hits real infrastructure.
 
 ```bash
 # Run any nvoi command
-make cli CMD="instance list"
-make cli CMD="describe"
-make cli CMD="resources"
+make cli instance list
+make cli describe
+make cli resources
 
 # Deploy to Hetzner (see examples/core/deploy-hetzner for the full sequence)
-make cli CMD="instance set master --compute-type cx23 --compute-region fsn1"
-make cli CMD="volume set pgdata --size 30 --server master"
-make cli CMD="build --source benbonnet/dummy-rails --name web"
-make cli CMD="secret set RAILS_MASTER_KEY abc123"
-make cli CMD="storage set assets --cors"
-make cli CMD="service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data --secret POSTGRES_PASSWORD"
-make cli CMD="dns set web final.nvoi.to"
+make cli instance set master --compute-type cx23 --compute-region fsn1
+make cli volume set pgdata --size 30 --server master
+make cli build --source benbonnet/dummy-rails --name web
+make cli secret set RAILS_MASTER_KEY abc123
+make cli storage set assets --cors
+make cli service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data --secret POSTGRES_PASSWORD
+make cli dns set web final.nvoi.to
 
 # Teardown
-make cli CMD="dns delete web final.nvoi.to -y"
-make cli CMD="service delete web -y"
-make cli CMD="instance delete master -y"
+make cli dns delete web final.nvoi.to -y
+make cli service delete web -y
+make cli instance delete master -y
 ```
 
 ## Cloud mode
@@ -46,26 +46,26 @@ Declarative config — push YAML, the API plans and executes.
 
 ```bash
 # Login + setup context
-make cloud CMD="login"
-make cloud CMD="workspaces use default"
-make cloud CMD="repos create my-app"
-make cloud CMD="repos use my-app"
+make cloud login
+make cloud workspaces use default
+make cloud repos create my-app
+make cloud repos use my-app
 
 # Push config + env
-make cloud CMD="push --config examples/cloud/hetzner.yaml --env .env --compute-provider hetzner --dns-provider cloudflare --storage-provider cloudflare --build-provider daytona"
+make cloud push --config examples/cloud/hetzner.yaml --env .env --compute-provider hetzner --dns-provider cloudflare --storage-provider cloudflare --build-provider daytona
 
 # Preview the execution plan
-make cloud CMD="plan"
+make cloud plan
 
 # Deploy (streams live output — same TUI as direct mode)
-make cloud CMD="deploy"
+make cloud deploy
 
 # Inspect live cluster
-make cloud CMD="describe"
-make cloud CMD="resources"
+make cloud describe
+make cloud resources
 
 # Stream deployment logs
-make cloud CMD="logs <deployment-id>"
+make cloud logs <deployment-id>
 ```
 
 ## API server
@@ -80,7 +80,7 @@ curl http://localhost:8080/health
 
 ## Example files
 
-### `examples/core/` �� direct mode reference
+### `examples/core/` — direct mode reference
 
 | File | What it does |
 |------|-------------|

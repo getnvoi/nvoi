@@ -1,6 +1,10 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
+# Capture everything after the target as ARGS.
+# Usage: make cli instance list  /  make cloud login  /  make cloud push --config nvoi.yaml
+ARGS = $(filter-out $@,$(MAKECMDGOALS))
+
 # ── Dev ────────────────────────────────────────────────────────────────
 
 .PHONY: test
@@ -14,16 +18,16 @@ build: ## Build all packages
 # ── Direct CLI (core) ─────────────────────────────────────────────────
 
 .PHONY: cli
-cli: ## Run a direct CLI command (make cli -- instance list)
-	docker compose run --rm core $(CMD)
+cli: ## Run direct CLI (make cli instance list)
+	docker compose run --rm core $(ARGS)
 
 # ── Cloud CLI ─────────────────────────────────────────────────────────
 
 .PHONY: cloud
-cloud: ## Run a cloud CLI command (make cloud -- login)
-	docker compose run --rm cli $(CMD)
+cloud: ## Run cloud CLI (make cloud login)
+	docker compose run --rm cli $(ARGS)
 
-# ── API ───────────────────────────────────────────────────────────────
+# ── API ��──────────────────────────────────────────────────────────────
 
 .PHONY: api
 api: ## Start the API server
@@ -33,7 +37,7 @@ api: ## Start the API server
 api-down: ## Stop all services
 	docker compose down
 
-# ── Setup ─────────────────────────────────────────────────────────────
+# ── Setup ─────────────��───────────────────────────────────────────────
 
 .PHONY: provision
 provision: ## Build images, start postgres + api
@@ -43,8 +47,12 @@ provision: ## Build images, start postgres + api
 	@until docker compose exec postgres pg_isready -U nvoi > /dev/null 2>&1; do sleep 1; done
 	docker compose up -d api
 
-# ── Help ──────────────────────────────────────────────────────────────
+# ── Help ──────────────────────��───────────────────────────���───────────
 
 .PHONY: help
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+
+# Swallow extra args so make doesn't treat them as targets.
+%:
+	@:

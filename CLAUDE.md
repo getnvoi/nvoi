@@ -42,20 +42,20 @@ Does not run on every push/sync to a PR. Manual trigger for re-reviews.
 
 ## Local development
 
-Everything runs through Docker Compose. Never run Go on the host — use `bin/cli`.
+Everything runs through Docker Compose via Makefile. Never run Go on the host.
 
 ```bash
-bin/cli <command>                       # runs any nvoi command inside compose
-bin/deploy                              # router — reads COMPUTE_PROVIDER from .env, delegates
-bin/deploy-hetzner                      # full hetzner deploy
-bin/deploy-aws                          # full AWS deploy
-bin/deploy-full                         # full deploy — explicit flags, zero env vars
-bin/destroy                             # full teardown — reverse order of deploy
+make provision                          # build images, start postgres + api
+make test                               # vet + tests
+make build                              # build all packages
+make cli instance list                  # direct CLI (core)
+make cloud login                        # cloud CLI (api)
+make api                                # start API server
 ```
 
 ### How it works
 
-`bin/cli` is `docker compose run --rm cli "$@"`. The compose service:
+`make cli` runs `docker compose run --rm core`. The compose service:
 
 - Mounts source (`.:/app`) — changes picked up instantly, no rebuild
 - Mounts SSH keys (`~/.ssh:/root/.ssh:ro`)
@@ -65,40 +65,25 @@ bin/destroy                             # full teardown — reverse order of dep
 
 **`.env` is the single source of truth.** Compose passes it through. No hardcoded providers in compose. No host exports needed. Change provider = edit `.env`.
 
-### Deploy routing
-
-`bin/deploy` reads `COMPUTE_PROVIDER` from `.env` and delegates to `bin/deploy-{provider}`. Each provider script has its own instance types, regions, and service topology:
-
-```bash
-# .env has COMPUTE_PROVIDER=aws → bin/deploy runs bin/deploy-aws
-bin/deploy
-
-# Or run a specific provider script directly
-bin/deploy-hetzner
-bin/deploy-aws
-```
-
 ### First run
 
 ```bash
 cp .env.example .env                    # fill in provider credentials
-bin/cli instance set master --compute-type cx23 --compute-region fsn1
+make cli instance set master --compute-type cx23 --compute-region fsn1
 ```
 
 ### Files
 
-| File | Tracked | Purpose |
-|------|---------|---------|
-| `.env` | No | Everything: app identity, provider selection, credentials, app secrets |
-| `.env.example` | Yes | Template for `.env` |
-| `bin/cli` | Yes | `docker compose run --rm cli "$@"` |
-| `bin/test` | Yes | `go vet ./... && go test ./... "$@"` |
-| `bin/deploy` | Yes | Router — reads `COMPUTE_PROVIDER` from `.env`, delegates to `bin/deploy-{provider}` |
-| `bin/deploy-hetzner` | Yes | Hetzner deploy (cx23 master, cx33 worker, meilisearch, etc.) |
-| `bin/deploy-aws` | Yes | AWS deploy (t3.medium master, single node, etc.) |
-| `bin/deploy-scaleway` | Yes | Stub — not yet implemented |
-| `bin/deploy-full` | Yes | Full deploy — all flags inline (hetzner) |
-| `bin/destroy` | Yes | Full teardown — reverse order of deploy |
+| File | Purpose |
+|------|---------|
+| `.env` | Everything: app identity, provider selection, credentials, app secrets (not tracked) |
+| `.env.example` | Template for `.env` |
+| `Makefile` | Dev interface — test, build, cli, cloud, api, provision |
+| `bin/entrypoint` | Compose entrypoint for `core` service |
+| `bin/api-entrypoint` | Compose entrypoint for `api` service |
+| `bin/cli-entrypoint` | Compose entrypoint for `cli` service |
+
+See [`examples/README.md`](examples/README.md) for deploy workflows (direct + cloud mode).
 
 ## Namespace
 
