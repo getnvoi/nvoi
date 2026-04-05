@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -116,6 +117,9 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	// Remove route from Caddy if we have cluster access
 	if req.Provider != "" {
 		ssh, names, err := req.Cluster.SSH(ctx)
+		if errors.Is(err, ErrNoMaster) {
+			return nil
+		}
 		if err != nil {
 			return nil
 		}

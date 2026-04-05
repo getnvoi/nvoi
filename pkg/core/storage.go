@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -133,6 +134,10 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 	}
 
 	ssh, names2, err := req.Cluster.SSH(ctx)
+	if errors.Is(err, ErrNoMaster) {
+		out.Success("secrets (cluster gone)")
+		return nil
+	}
 	if err != nil {
 		return err
 	}

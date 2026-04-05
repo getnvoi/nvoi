@@ -179,6 +179,10 @@ func ComputeList(ctx context.Context, req ComputeListRequest) ([]*provider.Serve
 	return prov.ListServers(ctx, names.Labels())
 }
 
+// ErrNoMaster is returned when the master server doesn't exist.
+// Delete functions treat this as idempotent success — no cluster = nothing to delete.
+var ErrNoMaster = fmt.Errorf("no master server found")
+
 func FindMaster(ctx context.Context, prov provider.ComputeProvider, names *utils.Names) (*provider.Server, error) {
 	masterLabels := names.Labels()
 	masterLabels["role"] = "master"
@@ -187,7 +191,7 @@ func FindMaster(ctx context.Context, prov provider.ComputeProvider, names *utils
 		return nil, fmt.Errorf("find master: %w", err)
 	}
 	if len(masters) == 0 {
-		return nil, fmt.Errorf("no master server found — run 'instance set <name>' first (without --worker)")
+		return nil, ErrNoMaster
 	}
 	master := masters[0]
 	if master.PrivateIP == "" {

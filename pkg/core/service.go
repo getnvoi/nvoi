@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -167,6 +168,10 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	out.Command("service", "delete", req.Name)
 
 	ssh, names, err := req.Cluster.SSH(ctx)
+	if errors.Is(err, ErrNoMaster) {
+		out.Success(req.Name + " (cluster gone)")
+		return nil
+	}
 	if err != nil {
 		return err
 	}

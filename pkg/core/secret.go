@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 )
@@ -44,6 +45,10 @@ func SecretDelete(ctx context.Context, req SecretDeleteRequest) error {
 	out.Command("secret", "delete", req.Key)
 
 	ssh, names, err := req.Cluster.SSH(ctx)
+	if errors.Is(err, ErrNoMaster) {
+		out.Success(req.Key + " (cluster gone)")
+		return nil
+	}
 	if err != nil {
 		return err
 	}
