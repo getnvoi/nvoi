@@ -3,3 +3,4 @@
 !.env.example
 *.tmp
 /nvoi
+.DS_Store
