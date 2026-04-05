@@ -232,11 +232,23 @@ pkg/                       Public library — the execution engine
     s3/                    AWS Signature V4 signing for S3-compatible APIs
 
 internal/                  Private
+  render/                  Shared renderers — TUI, Plain, JSON, Table, Resolve, ReplayLine
   testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
-  core/                    Cobra wrappers. Parse flags → call pkg/core/ → render output.
+  core/                    Direct CLI. Cobra wrappers. Parse flags → call pkg/core/ → render via internal/render/
   api/                     REST API server — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
-  cli/                     Cloud CLI — login, talks to API — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
+  cli/                     Cloud CLI — login, deploy, stream logs via internal/render/ — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
 ```
+
+### Shared layers
+
+| Layer | Used by | Purpose |
+|-------|---------|---------|
+| `pkg/core/` | `internal/core/`, `internal/api/` | Business logic — ComputeSet, ServiceSet, DNSSet, etc. |
+| `pkg/core/output.go` | all | Output interface + JSONL event types (Event, MarshalEvent, ParseEvent, ReplayEvent) |
+| `internal/render/` | `internal/core/`, `internal/cli/` | TUI, Plain, JSON renderers + Table + ReplayLine. Same formatting everywhere. |
+| `pkg/utils/` | all | Naming, polling, HTTP client, maps, format |
+
+Both CLIs produce identical output. The direct CLI calls `pkg/core/` → `Output` → `internal/render/`. The cloud CLI reads JSONL from the API → `render.ReplayLine()` → same `internal/render/`. Same lipgloss, same events, same look.
 
 ## Providers
 
@@ -439,11 +451,13 @@ Strictly enforced across all layers:
 | `infra/` | Never (writes to `io.Writer` param) | Never | Never | File ops only |
 | `kube/` | Never | Never | Never | Never |
 | `utils/` | Never | Never | Never | Never |
-| `internal/core/` | Yes — it's the viewer | Yes | Yes | Yes |
+| `internal/render/` | Yes — it's the renderer | Yes | Yes | Yes |
+| `internal/core/` | Via `internal/render/` | Via render | Via render | Via render |
+| `internal/cli/` | Via `internal/render/` | Via render | Via render | Via render |
 
 ### Output interface
 
-`pkg/core/` communicates through the `Output` interface on `Cluster`. Six event types:
+`pkg/core/` communicates through the `Output` interface on `Cluster`. Seven event types:
 
 ```go
 type Output interface {
@@ -457,11 +471,15 @@ type Output interface {
 }
 ```
 
-`internal/core/` provides three implementations:
+`pkg/core/output.go` also defines the shared JSONL event types: `Event`, `MarshalEvent`, `ParseEvent`, `ReplayEvent`. These are the transport format between API and CLI.
 
-- **TUI** (`output_tui.go`) — lipgloss-styled: bold commands, dimmed progress, green success, yellow warnings, red errors. Default for terminals.
-- **JSONL** (`output_json.go`) — one JSON object per line. `--json` flag.
-- **Plain** (`output_plain.go`) — aligned tags `[command]` `[progress]` `[success]` etc., no ANSI codes. `--ci` flag or auto-detected in non-TTY.
+`internal/render/` provides three implementations (shared by both CLIs):
+
+- **TUI** (`tui.go`) — lipgloss-styled: bold commands, dimmed progress, green success, yellow warnings, red errors. Default for terminals.
+- **JSONL** (`json.go`) — one JSON object per line. `--json` flag.
+- **Plain** (`plain.go`) — aligned tags `[command]` `[progress]` `[success]` etc., no ANSI codes. `--ci` flag or auto-detected in non-TTY.
+
+`render.Resolve(jsonFlag, ciFlag)` picks the right renderer. `render.ReplayLine(jsonlLine, output)` bridges JSONL from the API to any renderer.
 
 ### JSONL event format
 
