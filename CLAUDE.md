@@ -42,20 +42,22 @@ Does not run on every push/sync to a PR. Manual trigger for re-reviews.
 
 ## Local development
 
-Everything runs through Docker Compose via Makefile. Never run Go on the host.
+Everything runs through Docker Compose. Never run Go on the host.
 
 ```bash
-make provision                          # build images, start postgres + api
-make test                               # vet + tests
-make build                              # build all packages
-make cli instance list                  # direct CLI (core)
-make cloud login                        # cloud CLI (api)
-make api                                # start API server
+docker compose run --rm core instance list              # direct CLI
+docker compose run --rm core describe                   # live cluster state
+docker compose run --rm cli login                       # cloud CLI (starts postgres + api automatically)
+docker compose run --rm core sh -c 'go test ./...'      # run tests
 ```
+
+**Compose handles the full dependency chain.** `docker compose run --rm cli login` starts postgres → waits healthy → starts api → waits healthy → runs cli. One command. Never start services manually.
+
+See [`examples/README.md`](examples/README.md) for full deploy/destroy workflows across all providers.
 
 ### How it works
 
-`make cli` runs `docker compose run --rm core`. The compose service:
+`docker compose run --rm core` runs the direct CLI. The compose service:
 
 - Mounts source (`.:/app`) — changes picked up instantly, no rebuild
 - Mounts SSH keys (`~/.ssh:/root/.ssh:ro`)

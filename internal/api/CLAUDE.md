@@ -245,7 +245,9 @@ cli       cloud CLI (cmd/cli via bin/cli-entrypoint), depends_on api (healthy)
 postgres  PostgreSQL 17
 ```
 
-`make cli` runs the `core` compose service.
+**Compose handles the full dependency chain.** `docker compose run --rm cli login` starts postgres → waits healthy → starts api → waits healthy → runs cli. One command, no manual startup. Never run `docker compose up -d postgres` separately — `depends_on` with `condition: service_healthy` handles it.
+
+See [`examples/README.md`](../../examples/README.md) for deploy workflows.
 
 ## Deploy flow
 

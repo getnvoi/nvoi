@@ -2,6 +2,8 @@
 
 Two modes, same result. Core runs nvoi commands imperatively via compose. Cloud pushes a config YAML and lets the API orchestrate.
 
+**No manual service startup needed.** Compose `depends_on` with `condition: service_healthy` handles the full chain. Cloud commands automatically start postgres → api → cli.
+
 ## Usage
 
 ```bash
