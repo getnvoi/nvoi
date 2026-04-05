@@ -29,11 +29,13 @@ internal/api/
   github.go              GitHub token verification (PAT, OAuth, fine-grained)
 
   handlers/
-    router.go            Gin routes — /health, /login, /workspaces, /repos, /config
+    router.go            Gin routes — /health, /login, /workspaces, /repos, /config, /deploy
     auth.go              POST /login — verify GitHub token → find/create user → issue JWT
     workspaces.go        CRUD /workspaces — scoped via workspace_users join
     repos.go             CRUD /workspaces/:id/repos — scoped through workspace
     config.go            Config push/get/list/plan — the core deploy pipeline entry point
+    deploy.go            POST deploy, GET deployments, GET deployment, GET deployment/logs (JSONL)
+    output.go            dbOutput — implements pkg/core.Output, writes JSONL to deployment_step_logs
 
   config/
     schema.go            Public config YAML struct — servers, volumes, build, storage, services, domains
@@ -245,6 +247,93 @@ postgres  PostgreSQL 17
 
 `bin/cli` runs the `core` compose service (backward compat with deploy scripts).
 
+## Deploy flow
+
+```
+CLI: nvoi deploy
+  → POST .../deploy
+  → API: load latest RepoConfig + previous version
+  → Expand managed services (load stored creds from repo_managed_service_configs)
+  → FullPlan(prev, current, env) = Diff deletes + Plan sets
+  → Create Deployment + DeploymentSteps rows (all pending)
+  → Return deployment with steps
+
+Executor (walks steps in order):
+  → For each step: status → running → call pkg/core/ function
+  → pkg/core/ emits Output events → dbOutput writes JSONL to deployment_step_logs
+  → Each stdout/stderr line = one row in deployment_step_logs
+  → Step done: status → succeeded | failed
+  → On failure: remaining steps → skipped
+  → Deployment: succeeded | failed
+
+CLI: polls GET .../deployments/:id/logs
+  → API returns raw JSONL (application/x-ndjson)
+  → CLI parses events → render.ReplayLine() → TUI output
+  → Same lipgloss formatting as bin/deploy-hetzner
+```
+
+## Rendering
+
+Renderers live in `internal/render/` — shared by both direct CLI and cloud CLI.
+
+- `internal/render/tui.go` — lipgloss styled (terminal)
+- `internal/render/plain.go` — CI/non-TTY
+- `internal/render/json.go` — JSONL
+- `internal/render/table.go` — bordered tables (describe, resources)
+- `internal/render/resolve.go` — pick renderer (--json, --ci, TTY detect)
+- `internal/render/replay.go` — JSONL line → Output call (bridge between API logs and renderers)
+
+The API's `dbOutput` writes JSONL to DB. The CLI reads JSONL from the API and replays it through the same TUI renderer that `pkg/core/` uses directly. Identical output regardless of direct or cloud mode.
+
+## API routes
+
+```
+POST   /login                                          public — GitHub token → JWT
+GET    /health                                         public — status check
+
+GET    /workspaces                                     list user's workspaces
+POST   /workspaces                                     create workspace
+GET    /workspaces/:id                                 get workspace
+PUT    /workspaces/:id                                 update workspace
+DELETE /workspaces/:id                                 delete workspace
+
+GET    /workspaces/:wid/repos                          list repos
+POST   /workspaces/:wid/repos                          create repo
+GET    /workspaces/:wid/repos/:rid                     get repo
+PUT    /workspaces/:wid/repos/:rid                     update repo
+DELETE /workspaces/:wid/repos/:rid                     delete repo
+
+POST   /workspaces/:wid/repos/:rid/config              push config (versioned)
+GET    /workspaces/:wid/repos/:rid/config               get latest config
+GET    /workspaces/:wid/repos/:rid/configs              list config versions
+GET    /workspaces/:wid/repos/:rid/config/plan          execution plan for latest
+
+POST   /workspaces/:wid/repos/:rid/deploy               trigger deployment
+GET    /workspaces/:wid/repos/:rid/deployments           list deployments
+GET    /workspaces/:wid/repos/:rid/deployments/:did      get deployment + steps + logs
+GET    /workspaces/:wid/repos/:rid/deployments/:did/logs raw JSONL log stream
+```
+
+## Cloud CLI commands (internal/cli/)
+
+```
+nvoi login                   authenticate (gh CLI → GITHUB_TOKEN → prompt)
+nvoi whoami                  show user/workspace/repo context
+nvoi workspaces list         list workspaces (* = active)
+nvoi workspaces create       create workspace
+nvoi workspaces use          set active workspace
+nvoi workspaces delete       delete workspace
+nvoi repos list              list repos in active workspace (* = active)
+nvoi repos create            create repo
+nvoi repos use               set active repo
+nvoi repos delete            delete repo
+nvoi push                    push config YAML + .env to active repo
+nvoi plan                    show execution plan for latest config
+nvoi deploy                  trigger deploy, stream logs through TUI
+nvoi logs <id>               stream deployment logs through TUI
+nvoi status [id]             show deployment step statuses
+```
+
 ## Key rules
 
 1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.** Same functions the direct CLI uses. Same idempotency guarantees.
@@ -254,3 +343,6 @@ postgres  PostgreSQL 17
 5. **Plan is deterministic.** Same config + env always produces the same step sequence. Sorted keys everywhere.
 6. **Diff only handles removals.** Set commands are idempotent — no need to diff for changes. Only need to detect what disappeared between versions.
 7. **Secrets are always secrets.** Managed service passwords use namespaced k8s secret keys with aliased env vars. Never plain text in specs.
+8. **Renderers are shared.** `internal/render/` is the single source for TUI/Plain/JSON output. Both CLIs and the API use the same event types. No duplicate formatting code.
+9. **JSONL is the transport.** API stores raw JSONL in DB. API returns raw JSONL to CLI. CLI renders through shared renderers. API never formats for display.
+10. **One line = one record.** Each Output event = one JSONL line = one `deployment_step_logs` row. No aggregation, no batching.
