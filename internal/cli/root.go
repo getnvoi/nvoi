@@ -18,7 +18,8 @@ func Root() *cobra.Command {
 	root.AddCommand(newPlanCmd())
 	root.AddCommand(newDeployCmd())
 	root.AddCommand(newLogsCmd())
-	root.AddCommand(newStatusCmd())
+	root.AddCommand(newDescribeCmd())
+	root.AddCommand(newResourcesCmd())
 
 	return root
 }
