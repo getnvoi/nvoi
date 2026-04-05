@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
+	"github.com/getnvoi/nvoi/internal/api/managed"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -46,14 +48,25 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Parse and validate config.
+		// Parse config.
 		cfg, err := config.Parse([]byte(req.Config))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid yaml: " + err.Error()})
 			return
 		}
 
-		errs := config.Validate(cfg)
+		// Load stored managed service credentials for this repo.
+		storedCreds := loadManagedCreds(db, repo.ID)
+
+		// Expand managed services (replace with real specs, inject creds, add volumes).
+		expanded, newCreds, err := managed.Expand(cfg, storedCreds)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Validate the expanded config (after managed services are resolved).
+		errs := config.Validate(expanded)
 		if len(errs) > 0 {
 			msgs := make([]string, len(errs))
 			for i, e := range errs {
@@ -63,11 +76,31 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Validate that the plan can be built (env references resolve).
+		// Merge managed service credential secrets into env for plan validation.
 		env := config.ParseEnv(req.Env)
-		if _, err := config.Plan(cfg, env); err != nil {
+		for k, v := range managed.CredentialSecrets(mergeCreds(storedCreds, newCreds), cfg) {
+			env[k] = v
+		}
+
+		// Validate that the plan can be built (env references resolve).
+		if _, err := config.Plan(expanded, env); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+
+		// Persist new managed service credentials.
+		for name, creds := range newCreds {
+			svc := cfg.Services[name]
+			credsJSON, _ := json.Marshal(creds)
+			if err := db.Create(&api.RepoManagedServiceConfig{
+				RepoID:      repo.ID,
+				Name:        name,
+				Kind:        svc.Managed,
+				Credentials: string(credsJSON),
+			}).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save managed credentials"})
+				return
+			}
 		}
 
 		// Next version number.
@@ -184,8 +217,19 @@ func PlanConfig(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		storedCreds := loadManagedCreds(db, repo.ID)
+		expanded, _, err := managed.Expand(cfg, storedCreds)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "expand failed: " + err.Error()})
+			return
+		}
+
 		env := config.ParseEnv(rc.Env)
-		steps, err := config.Plan(cfg, env)
+		for k, v := range managed.CredentialSecrets(storedCreds, cfg) {
+			env[k] = v
+		}
+
+		steps, err := config.Plan(expanded, env)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "plan failed: " + err.Error()})
 			return
@@ -196,4 +240,35 @@ func PlanConfig(db *gorm.DB) gin.HandlerFunc {
 			"steps":   steps,
 		})
 	}
+}
+
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+// loadManagedCreds loads all managed service credentials for a repo
+// into the map format Expand() expects: name → {key: value}.
+func loadManagedCreds(db *gorm.DB, repoID string) map[string]map[string]string {
+	var rows []api.RepoManagedServiceConfig
+	db.Where("repo_id = ?", repoID).Find(&rows)
+
+	creds := make(map[string]map[string]string, len(rows))
+	for _, row := range rows {
+		var m map[string]string
+		if err := json.Unmarshal([]byte(row.Credentials), &m); err != nil {
+			continue
+		}
+		creds[row.Name] = m
+	}
+	return creds
+}
+
+// mergeCreds merges stored and new credential maps. New takes precedence.
+func mergeCreds(stored, newCreds map[string]map[string]string) map[string]map[string]string {
+	merged := make(map[string]map[string]string, len(stored)+len(newCreds))
+	for k, v := range stored {
+		merged[k] = v
+	}
+	for k, v := range newCreds {
+		merged[k] = v
+	}
+	return merged
 }

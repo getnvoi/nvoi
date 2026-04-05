@@ -29,3 +29,5 @@ func (Redis) Credentials(name string) map[string]string {
 }
 
 func (Redis) EnvPrefix() string { return "REDIS" }
+
+func (Redis) InternalSecrets(name string, creds map[string]string) map[string]string { return nil }

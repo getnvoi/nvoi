@@ -2,6 +2,7 @@ package managed
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/getnvoi/nvoi/internal/api/config"
 )
@@ -14,6 +15,7 @@ type Meilisearch struct{}
 func (Meilisearch) Kind() string { return "meilisearch" }
 
 func (Meilisearch) Spec(name string) config.Service {
+	secretKey := "MEILI_MASTER_KEY_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	return config.Service{
 		Image: "getmeili/meilisearch:v1",
 		Port:  7700,
@@ -24,7 +26,7 @@ func (Meilisearch) Spec(name string) config.Service {
 			"MEILI_ENV=production",
 		},
 		Secrets: []string{
-			"MEILI_MASTER_KEY",
+			"MEILI_MASTER_KEY=" + secretKey,
 		},
 	}
 }
@@ -40,3 +42,10 @@ func (Meilisearch) Credentials(name string) map[string]string {
 }
 
 func (Meilisearch) EnvPrefix() string { return "MEILI" }
+
+func (Meilisearch) InternalSecrets(name string, creds map[string]string) map[string]string {
+	key := "MEILI_MASTER_KEY_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	return map[string]string{
+		key: creds["MASTER_KEY"],
+	}
+}

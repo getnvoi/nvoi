@@ -176,10 +176,12 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 }
 
 // collectSecrets deduplicates and sorts all secret key references across services.
+// Handles both "KEY" and "ENV=KEY" formats — extracts the secret key (right side).
 func collectSecrets(cfg *Config) []string {
 	seen := map[string]bool{}
 	for _, svc := range cfg.Services {
-		for _, key := range svc.Secrets {
+		for _, entry := range svc.Secrets {
+			key := secretKey(entry)
 			seen[key] = true
 		}
 	}
@@ -189,6 +191,16 @@ func collectSecrets(cfg *Config) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// secretKey extracts the k8s secret key from a secret entry.
+// "POSTGRES_PASSWORD" → "POSTGRES_PASSWORD" (same name)
+// "POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB" → "POSTGRES_PASSWORD_DB" (aliased)
+func secretKey(entry string) string {
+	if _, key, ok := strings.Cut(entry, "="); ok {
+		return key
+	}
+	return entry
 }
 
 func sortedKeys[V any](m map[string]V) []string {

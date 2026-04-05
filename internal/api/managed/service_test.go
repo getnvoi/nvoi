@@ -47,7 +47,7 @@ func TestPostgres_Spec(t *testing.T) {
 	}
 	assertContains(t, spec.Env, "POSTGRES_USER=postgres")
 	assertContains(t, spec.Env, "POSTGRES_DB=db")
-	assertContains(t, spec.Secrets, "POSTGRES_PASSWORD")
+	assertContains(t, spec.Secrets, "POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB")
 }
 
 func TestPostgres_Credentials(t *testing.T) {
@@ -73,6 +73,32 @@ func TestPostgres_CredentialsUnique(t *testing.T) {
 	if c1["PASSWORD"] == c2["PASSWORD"] {
 		t.Error("passwords should be unique across calls")
 	}
+}
+
+func TestPostgres_InternalSecretsNamespaced(t *testing.T) {
+	ms, _ := Get("postgres")
+	creds := ms.Credentials("db")
+
+	s1 := ms.InternalSecrets("db", creds)
+	s2 := ms.InternalSecrets("analytics", creds)
+
+	// Keys should be namespaced — no collision.
+	if _, ok := s1["POSTGRES_PASSWORD_DB"]; !ok {
+		t.Errorf("db: got keys %v, want POSTGRES_PASSWORD_DB", s1)
+	}
+	if _, ok := s2["POSTGRES_PASSWORD_ANALYTICS"]; !ok {
+		t.Errorf("analytics: got keys %v, want POSTGRES_PASSWORD_ANALYTICS", s2)
+	}
+}
+
+func TestPostgres_SpecSecretsNamespaced(t *testing.T) {
+	ms, _ := Get("postgres")
+	spec1 := ms.Spec("db")
+	spec2 := ms.Spec("analytics")
+
+	// Each spec should reference its own namespaced secret key.
+	assertContains(t, spec1.Secrets, "POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB")
+	assertContains(t, spec2.Secrets, "POSTGRES_PASSWORD=POSTGRES_PASSWORD_ANALYTICS")
 }
 
 func TestPostgres_EnvPrefix(t *testing.T) {
@@ -130,7 +156,7 @@ func TestMeilisearch_Spec(t *testing.T) {
 	if len(spec.Volumes) != 1 || spec.Volumes[0] != "search-data:/meili_data" {
 		t.Errorf("volumes = %v", spec.Volumes)
 	}
-	assertContains(t, spec.Secrets, "MEILI_MASTER_KEY")
+	assertContains(t, spec.Secrets, "MEILI_MASTER_KEY=MEILI_MASTER_KEY_SEARCH")
 }
 
 func TestMeilisearch_Credentials(t *testing.T) {

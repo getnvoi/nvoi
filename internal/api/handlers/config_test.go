@@ -1,9 +1,14 @@
 package handlers_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/api"
+	_ "github.com/getnvoi/nvoi/internal/api/managed" // register managed services
 )
 
 const validYAML = `
@@ -400,6 +405,239 @@ func TestConfig_ProvidersInGetResponse(t *testing.T) {
 	if resp.BuildProvider != "daytona" {
 		t.Errorf("build_provider = %q", resp.BuildProvider)
 	}
+}
+
+// ── Managed services ───────────────────────────────────────────────────────────
+
+const managedYAML = `
+servers:
+  master:
+    type: cx23
+    region: fsn1
+services:
+  db:
+    managed: postgres
+  cache:
+    managed: redis
+  web:
+    image: nginx
+    port: 80
+    uses: [db, cache]
+`
+
+func pushManagedConfig(t *testing.T, r interface{ ServeHTTP(http.ResponseWriter, *http.Request) }, token, wsID, repoID string) (int, string) {
+	t.Helper()
+	body := map[string]any{
+		"compute_provider": "hetzner",
+		"config":           managedYAML,
+	}
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w.Code, w.Body.String()
+}
+
+func TestConfig_ManagedServiceCredsPersisted(t *testing.T) {
+	r, db := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	code, body := pushManagedConfig(t, r, token, wsID, repoID)
+	if code != http.StatusCreated {
+		t.Fatalf("push managed: status = %d, want 201, body: %s", code, body)
+	}
+
+	// Verify rows were created in repo_managed_service_configs.
+	var rows []api.RepoManagedServiceConfig
+	db.Where("repo_id = ?", repoID).Find(&rows)
+	if len(rows) != 2 {
+		t.Fatalf("managed rows = %d, want 2 (db + cache)", len(rows))
+	}
+
+	kinds := map[string]string{}
+	for _, row := range rows {
+		kinds[row.Name] = row.Kind
+	}
+	if kinds["db"] != "postgres" {
+		t.Errorf("db kind = %q, want postgres", kinds["db"])
+	}
+	if kinds["cache"] != "redis" {
+		t.Errorf("cache kind = %q, want redis", kinds["cache"])
+	}
+}
+
+func TestConfig_ManagedCredsReusedAcrossVersions(t *testing.T) {
+	r, db := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	// Push twice.
+	pushManagedConfig(t, r, token, wsID, repoID)
+	pushManagedConfig(t, r, token, wsID, repoID)
+
+	// Should still be exactly 2 rows (not 4). Credentials reused.
+	var count int64
+	db.Model(&api.RepoManagedServiceConfig{}).Where("repo_id = ?", repoID).Count(&count)
+	if count != 2 {
+		t.Fatalf("managed rows = %d, want 2 (reused, not duplicated)", count)
+	}
+}
+
+func TestConfig_ManagedPlanIncludesExpandedServices(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	pushManagedConfig(t, r, token, wsID, repoID)
+
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/config/plan", nil, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("plan: status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Steps []struct {
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"steps"`
+	}
+	decode(t, w, &resp)
+
+	// Should have service.set for db (postgres:17), cache (redis), and web (nginx).
+	serviceNames := map[string]bool{}
+	for _, s := range resp.Steps {
+		if s.Kind == "service.set" {
+			serviceNames[s.Name] = true
+		}
+	}
+	for _, want := range []string{"db", "cache", "web"} {
+		if !serviceNames[want] {
+			t.Errorf("missing service.set for %q in plan", want)
+		}
+	}
+
+	// Should have secret.set steps for managed creds — namespaced.
+	secretNames := map[string]bool{}
+	for _, s := range resp.Steps {
+		if s.Kind == "secret.set" {
+			secretNames[s.Name] = true
+		}
+	}
+	// Postgres password is namespaced: POSTGRES_PASSWORD_DB (not bare POSTGRES_PASSWORD).
+	if !secretNames["POSTGRES_PASSWORD_DB"] {
+		t.Errorf("missing secret.set for POSTGRES_PASSWORD_DB, got: %v", secretNames)
+	}
+}
+
+func TestConfig_ManagedMultipleSameKind(t *testing.T) {
+	r, db := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	multiYAML := `
+servers:
+  master:
+    type: cx23
+    region: fsn1
+services:
+  db:
+    managed: postgres
+  analytics:
+    managed: postgres
+  web:
+    image: nginx
+    port: 80
+    uses: [db, analytics]
+`
+	body := map[string]any{
+		"compute_provider": "hetzner",
+		"config":           multiYAML,
+	}
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("push multi: status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Two separate postgres rows with different names.
+	var rows []api.RepoManagedServiceConfig
+	db.Where("repo_id = ?", repoID).Find(&rows)
+	if len(rows) != 2 {
+		t.Fatalf("managed rows = %d, want 2", len(rows))
+	}
+
+	passwords := map[string]string{}
+	for _, row := range rows {
+		if row.Kind != "postgres" {
+			t.Errorf("%s kind = %q, want postgres", row.Name, row.Kind)
+		}
+		// Parse credentials to check passwords are different.
+		var creds map[string]string
+		if err := json.Unmarshal([]byte(row.Credentials), &creds); err != nil {
+			t.Fatalf("unmarshal creds for %s: %v", row.Name, err)
+		}
+		passwords[row.Name] = creds["PASSWORD"]
+	}
+	if passwords["db"] == passwords["analytics"] {
+		t.Error("db and analytics should have different passwords")
+	}
+}
+
+func TestConfig_ManagedPlanWebGetsAllInjectedSecrets(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	pushManagedConfig(t, r, token, wsID, repoID)
+
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/config/plan", nil, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var resp struct {
+		Steps []struct {
+			Kind   string         `json:"kind"`
+			Name   string         `json:"name"`
+			Params map[string]any `json:"params"`
+		} `json:"steps"`
+	}
+	decode(t, w, &resp)
+
+	// Find the web service step and check its secrets include injected creds.
+	for _, s := range resp.Steps {
+		if s.Kind == "service.set" && s.Name == "web" {
+			secrets, ok := s.Params["secrets"]
+			if !ok {
+				t.Fatal("web service.set has no secrets param")
+			}
+			secretList, ok := secrets.([]any)
+			if !ok {
+				t.Fatalf("secrets is %T, want []any", secrets)
+			}
+			hasDB := false
+			hasRedis := false
+			for _, s := range secretList {
+				str, _ := s.(string)
+				if strings.HasPrefix(str, "DATABASE_DB_") {
+					hasDB = true
+				}
+				if strings.HasPrefix(str, "REDIS_CACHE_") {
+					hasRedis = true
+				}
+			}
+			if !hasDB {
+				t.Error("web secrets missing DATABASE_DB_* from uses: [db]")
+			}
+			if !hasRedis {
+				t.Error("web secrets missing REDIS_CACHE_* from uses: [cache]")
+			}
+			return
+		}
+	}
+	t.Fatal("web service.set step not found in plan")
 }
 
 func TestConfig_CrossUserIsolation(t *testing.T) {
