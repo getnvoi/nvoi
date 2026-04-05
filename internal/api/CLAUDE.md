@@ -245,7 +245,7 @@ cli       cloud CLI (cmd/cli via bin/cli-entrypoint), depends_on api (healthy)
 postgres  PostgreSQL 17
 ```
 
-`bin/cli` runs the `core` compose service (backward compat with deploy scripts).
+`make cli` runs the `core` compose service.
 
 ## Deploy flow
 
@@ -312,6 +312,9 @@ POST   /workspaces/:wid/repos/:rid/deploy               trigger deployment
 GET    /workspaces/:wid/repos/:rid/deployments           list deployments
 GET    /workspaces/:wid/repos/:rid/deployments/:did      get deployment + steps + logs
 GET    /workspaces/:wid/repos/:rid/deployments/:did/logs raw JSONL log stream
+
+GET    /workspaces/:wid/repos/:rid/describe          live cluster state
+GET    /workspaces/:wid/repos/:rid/resources          provider resources
 ```
 
 ## Cloud CLI commands (internal/cli/)

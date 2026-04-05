@@ -10,7 +10,7 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 - **No state files.** No manifest, no database, no local cache. Infrastructure is the source of truth.
 - **Everything is idempotent.** Every command hits real infrastructure — provider APIs over HTTP, servers over SSH, cluster via kubectl. Run twice, same result.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
-- **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`, `storage set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. `bin/deploy` runs end to end, every time, same outcome.
+- **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`, `storage set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. `make cli` commands are idempotent — run end to end, every time, same outcome.
 - **`describe` fetches everything live from the cluster.** Nodes, workloads, pods, services, ingress, secrets, storage — all via kubectl over SSH.
 - **Provider interfaces scale.** Hetzner, Cloudflare, AWS. Interface-first. Add a provider = implement the interface.
 - **SSH is the transport.** No agent binary. SSH in, run commands, done.
@@ -20,14 +20,14 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 ## Build & Test
 
 ```bash
-bin/test                                    # vet + 223 tests across 8 packages
-bin/test -v                                 # verbose
-bin/test -run TestWaitRollout               # single test
-bin/test -cover                             # with coverage
-go build ./...                              # build only
+make test                                   # vet + tests
+make test ARGS="-v"                         # verbose
+make test ARGS="-run TestWaitRollout"       # single test
+make test ARGS="-cover"                     # with coverage
+make build                                  # build only
 ```
 
-223 tests in three tiers:
+Tests in three tiers:
 - **Tier 1** — pure functions: naming, YAML generation, Caddyfile, Poll, credential validation, volume parsing, signed URLs, route merging, cloud-init (hostname), APIError, AWS ArchForType, instanceFromEC2, volumeFromEC2, nvoiTags, defaultIngressRules, deref helpers
 - **Tier 2** — mock SSH: WaitRollout terminal errors, kubectl secret ops, Apply, DeleteByName, FirstPod, FindMaster, describe parsers, k3s install, registry, Docker, volume mount/unmount
 - **Tier 3** — httptest: Hetzner API (servers, volumes, firewalls, networks, auth), Cloudflare API (buckets, DNS records, credentials), AWS provider resolution (compute, DNS, missing creds)
@@ -190,7 +190,7 @@ nvoi instance set master --compute-provider hetzner --compute-credentials HETZNE
   --compute-type cx23 --compute-region fsn1 --app-name rails --environment production
 ```
 
-See `bin/deploy` for the env-var path (compose injects everything) and `bin/deploy-full` for the full inline flags path.
+See `examples/core/` for deploy workflows (env-var path via compose) and `examples/core/deploy-full` for the full inline flags path.
 
 ## Architecture
 
@@ -248,8 +248,8 @@ provider.RegisterX("name", CredentialSchema{...}, func(creds map[string]string) 
 
 | Kind | Flag | Env var | Interface | Implementations |
 |------|------|---------|-----------|----------------|
-| Compute | `--compute-provider` | `COMPUTE_PROVIDER` | `ComputeProvider` | hetzner, aws |
-| DNS | `--dns-provider` | `DNS_PROVIDER` | `DNSProvider` | cloudflare, aws |
+| Compute | `--compute-provider` | `COMPUTE_PROVIDER` | `ComputeProvider` | hetzner, aws, scaleway |
+| DNS | `--dns-provider` | `DNS_PROVIDER` | `DNSProvider` | cloudflare, aws, scaleway |
 | Storage | `--storage-provider` | `STORAGE_PROVIDER` | `BucketProvider` | cloudflare (R2), aws (S3) |
 | Build | `--build-provider` | `BUILD_PROVIDER` | `BuildProvider` | local, daytona, github |
 
@@ -294,17 +294,17 @@ Every provider has a name flag + credentials flag. Always a pair. Credentials ar
 
 ```bash
 # Common: env vars set, no credential flags needed
-bin/cli instance set master --compute-type cx23 --compute-region fsn1
+make cli instance set master --compute-type cx23 --compute-region fsn1
 
 # Override: --compute-credentials takes priority over env var
-bin/cli instance set master \
+make cli instance set master \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$OTHER_TOKEN \
   --compute-type cx23 \
   --compute-region fsn1
 
 # Build uses two providers — compute for registry, builder for building
-bin/cli build \
+make cli build \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=xxx \
   --build-provider daytona \
@@ -553,7 +553,7 @@ const (
 
 1. `NVOI_APP_NAME` + `NVOI_ENV` (or `--app-name` + `--environment`) are required. They're the namespace for everything.
 2. No state files. Infrastructure is the truth. `describe` fetches live from the cluster.
-3. Everything is `set`. Idempotent. Run twice, same result. `bin/deploy` is the whole deploy — runs end to end, always same outcome.
+3. Everything is `set`. Idempotent. Run twice, same result. `make cli` commands are idempotent — run end to end, always same outcome.
 4. `set` writes directly to infrastructure. No intermediate files.
 5. Provider interfaces scale. Add a provider = implement the interface. Same registration pattern for all four kinds.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
@@ -564,14 +564,14 @@ const (
 11. **`pkg/core/` never imports `net/http`.** HTTP calls belong in `infra/` (e.g. `WaitHTTPS`) or `provider/`. `pkg/core/` is pure orchestration.
 12. **Errors flow up, render once.** `pkg/core/` returns errors. Cobra renders them through `SetErr` → `Output.Error()`. Never double-print. Never swallow silently.
 13. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
-14. `bin/destroy` is the reverse of `bin/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
+14. `examples/core/destroy` is the reverse of `examples/core/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
 15. **No shell injection.** Secret values flow to kubectl via file upload (`ssh.Upload` + `cat`), not inline `fmt.Sprintf`. `shellQuote` for `--from-literal` args. Never interpolate user values into shell strings.
 16. **All providers use `utils.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`. Exception: AWS provider uses AWS SDK v2 (its own HTTP transport).
 
 ## Known limitations
 
 - **No pagination on provider list operations.** Hetzner uses `per_page=50` for servers, volumes, firewalls, networks. No cursor continuation. If results exceed one page, the list is silently incomplete — it doesn't error, it lies. Fine at current scale (1-5 servers per app). Fix when adding multi-tenant or `resources` across many apps on one Hetzner account.
-- **No retry / backoff on transient HTTP errors.** Provider API calls fail immediately on 500s or connection drops. User re-runs the command. Idempotent `set` design makes this safe. Fix if `bin/deploy` reliability becomes a problem.
+- **No retry / backoff on transient HTTP errors.** Provider API calls fail immediately on 500s or connection drops. User re-runs the command. Idempotent `set` design makes this safe. Fix if deploy reliability becomes a problem.
 - **`s3ops.go` uses a dedicated `s3Client` (not `utils.HTTPClient`).** S3/XML operations need raw HTTP, not JSON. Uses `var s3Client = &http.Client{Timeout: 30 * time.Second}` with all `io.ReadAll` errors checked and context propagated. This is by design — `utils.HTTPClient` is JSON-oriented.
 - **AWS SDK `LoadDefaultConfig` errors are deferred to `ValidateCredentials`.** Provider factories can't return errors (signature is `func(creds) Provider`). The AWS constructors store the config error on the struct and surface it on the first `ValidateCredentials` call.
 

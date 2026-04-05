@@ -24,7 +24,7 @@ func resolveAppEnv(cmd *cobra.Command) (appName, env string, err error) {
 		env = os.Getenv("NVOI_ENV")
 	}
 	if appName == "" || env == "" {
-		return "", "", fmt.Errorf("app name and env are required.\n  flags:    --app-name rails --env production\n  env vars: export NVOI_APP_NAME=rails NVOI_ENV=production")
+		return "", "", fmt.Errorf("app name and env are required.\n  flags:    --app-name rails --environment production\n  env vars: export NVOI_APP_NAME=rails NVOI_ENV=production")
 	}
 	return appName, env, nil
 }

@@ -7,7 +7,7 @@ import (
 )
 
 // NewRouter creates the API router.
-// verify is the GitHub PAT verifier — pass api.VerifyGitHubPAT in production,
+// verify is the GitHub PAT verifier — pass api.VerifyGitHubToken in production,
 // or a fake in tests.
 func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 	r := gin.Default()

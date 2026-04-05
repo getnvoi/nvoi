@@ -178,29 +178,16 @@ nvoi logs <deployment-id>
 
 Renders the same JSONL events through the TUI — command groups, progress, success/failure, streaming output.
 
-## Status
+## Describe
 
 ```bash
-# Show status of the latest deployment
-nvoi status
-
-# Show status of a specific deployment
-nvoi status <deployment-id>
+# Live cluster state — nodes, workloads, pods, services, ingress, secrets, storage
+nvoi describe
 ```
 
-Output:
+## Resources
 
-```
-deployment abc123: succeeded
-
-  ✓ instance.set master
-  ✓ instance.set worker-1
-  ✓ volume.set pgdata
-  ✓ build web
-  ✓ secret.set RAILS_MASTER_KEY
-  ✓ storage.set assets
-  ✓ service.set db
-  ✓ service.set web
-  ✓ service.set jobs
-  ✓ dns.set web
+```bash
+# List all provider resources
+nvoi resources
 ```

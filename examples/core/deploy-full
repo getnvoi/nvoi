@@ -153,7 +153,7 @@ nvoi dns set web final.nvoi.to \
 
 # ── Verify ──────────────────────────────────────────────────────────────────────
 
-nvoi show \
+nvoi describe \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
