@@ -22,6 +22,9 @@ func TestDB() *gorm.DB {
 		&Repo{},
 		&RepoConfig{},
 		&RepoManagedServiceConfig{},
+		&Deployment{},
+		&DeploymentStep{},
+		&DeploymentStepLog{},
 	); err != nil {
 		panic("migrate test db: " + err.Error())
 	}

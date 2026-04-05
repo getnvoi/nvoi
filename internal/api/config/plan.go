@@ -10,13 +10,19 @@ import (
 type StepKind string
 
 const (
-	StepComputeSet StepKind = "instance.set"
-	StepVolumeSet  StepKind = "volume.set"
-	StepBuild      StepKind = "build"
-	StepSecretSet  StepKind = "secret.set"
-	StepStorageSet StepKind = "storage.set"
-	StepServiceSet StepKind = "service.set"
-	StepDNSSet     StepKind = "dns.set"
+	StepComputeSet    StepKind = "instance.set"
+	StepComputeDelete StepKind = "instance.delete"
+	StepVolumeSet     StepKind = "volume.set"
+	StepVolumeDelete  StepKind = "volume.delete"
+	StepBuild         StepKind = "build"
+	StepSecretSet     StepKind = "secret.set"
+	StepSecretDelete  StepKind = "secret.delete"
+	StepStorageSet    StepKind = "storage.set"
+	StepStorageDelete StepKind = "storage.delete"
+	StepServiceSet    StepKind = "service.set"
+	StepServiceDelete StepKind = "service.delete"
+	StepDNSSet        StepKind = "dns.set"
+	StepDNSDelete     StepKind = "dns.delete"
 )
 
 // Step is one action in the deploy plan.
@@ -201,6 +207,104 @@ func secretKey(entry string) string {
 		return key
 	}
 	return entry
+}
+
+// Diff generates delete steps for resources that existed in prev but are gone
+// from current. Reverse order of deploy: DNS → services → storage → secrets →
+// volumes → compute. Mirrors bin/destroy.
+//
+// prev may be nil (first deploy — no removals).
+func Diff(prev, current *Config) []Step {
+	if prev == nil {
+		return nil
+	}
+
+	var steps []Step
+
+	// DNS: domains removed or service lost its domains.
+	for svcName, domains := range prev.Domains {
+		if _, ok := current.Domains[svcName]; !ok {
+			steps = append(steps, Step{Kind: StepDNSDelete, Name: svcName, Params: map[string]any{
+				"domains": []string(domains),
+			}})
+		}
+	}
+
+	// Services removed.
+	for _, name := range sortedKeys(prev.Services) {
+		if _, ok := current.Services[name]; !ok {
+			steps = append(steps, Step{Kind: StepServiceDelete, Name: name})
+		}
+	}
+
+	// Storage removed.
+	for _, name := range sortedKeys(prev.Storage) {
+		if _, ok := current.Storage[name]; !ok {
+			steps = append(steps, Step{Kind: StepStorageDelete, Name: name})
+		}
+	}
+
+	// Secrets: keys referenced in prev but not in current.
+	prevSecrets := collectSecrets(prev)
+	currentSecrets := map[string]bool{}
+	for _, k := range collectSecrets(current) {
+		currentSecrets[k] = true
+	}
+	for _, key := range prevSecrets {
+		if !currentSecrets[key] {
+			steps = append(steps, Step{Kind: StepSecretDelete, Name: key})
+		}
+	}
+
+	// Volumes removed.
+	for _, name := range sortedKeys(prev.Volumes) {
+		if _, ok := current.Volumes[name]; !ok {
+			steps = append(steps, Step{Kind: StepVolumeDelete, Name: name})
+		}
+	}
+
+	// Compute: servers removed (workers first, master last).
+	for _, name := range reverseSorted(removedKeys(prev.Servers, current.Servers)) {
+		steps = append(steps, Step{Kind: StepComputeDelete, Name: name})
+	}
+
+	return steps
+}
+
+// FullPlan generates the complete deploy plan: delete removed resources first
+// (reverse order), then set everything (forward order, idempotent).
+//
+// prev is the previous config version (nil for first deploy).
+func FullPlan(prev, current *Config, env map[string]string) ([]Step, error) {
+	setSteps, err := Plan(current, env)
+	if err != nil {
+		return nil, err
+	}
+
+	deleteSteps := Diff(prev, current)
+	if len(deleteSteps) == 0 {
+		return setSteps, nil
+	}
+
+	// Deletes first, then sets.
+	return append(deleteSteps, setSteps...), nil
+}
+
+// removedKeys returns keys present in prev but absent in current.
+func removedKeys[V any](prev, current map[string]V) []string {
+	var removed []string
+	for k := range prev {
+		if _, ok := current[k]; !ok {
+			removed = append(removed, k)
+		}
+	}
+	return removed
+}
+
+// reverseSorted sorts strings and returns them in reverse order.
+func reverseSorted(s []string) []string {
+	sort.Sort(sort.Reverse(sort.StringSlice(s)))
+	return s
 }
 
 func sortedKeys[V any](m map[string]V) []string {

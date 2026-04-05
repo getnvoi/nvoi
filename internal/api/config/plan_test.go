@@ -321,6 +321,199 @@ func TestPlan_InvalidConfig(t *testing.T) {
 	}
 }
 
+// ── Diff ───────────────────────────────────────────────────────────────────────
+
+func TestDiff_NilPrev(t *testing.T) {
+	steps := Diff(nil, hetznerConfig())
+	if len(steps) != 0 {
+		t.Errorf("nil prev should produce no deletes, got %d steps", len(steps))
+	}
+}
+
+func TestDiff_NothingRemoved(t *testing.T) {
+	cfg := hetznerConfig()
+	steps := Diff(cfg, cfg)
+	if len(steps) != 0 {
+		t.Errorf("identical configs should produce no deletes, got %d steps", len(steps))
+	}
+}
+
+func TestDiff_ServiceRemoved(t *testing.T) {
+	prev := hetznerConfig()
+	current := hetznerConfig()
+	delete(current.Services, "meilisearch")
+
+	steps := Diff(prev, current)
+	s := findStep(steps, StepServiceDelete, "meilisearch")
+	if s == nil {
+		t.Error("expected service.delete meilisearch")
+	}
+}
+
+func TestDiff_VolumeRemoved(t *testing.T) {
+	prev := hetznerConfig()
+	current := hetznerConfig()
+	delete(current.Volumes, "meili-data")
+
+	steps := Diff(prev, current)
+	s := findStep(steps, StepVolumeDelete, "meili-data")
+	if s == nil {
+		t.Error("expected volume.delete meili-data")
+	}
+}
+
+func TestDiff_StorageRemoved(t *testing.T) {
+	prev := hetznerConfig()
+	current := hetznerConfig()
+	delete(current.Storage, "assets")
+
+	steps := Diff(prev, current)
+	s := findStep(steps, StepStorageDelete, "assets")
+	if s == nil {
+		t.Error("expected storage.delete assets")
+	}
+}
+
+func TestDiff_DNSRemoved(t *testing.T) {
+	prev := hetznerConfig()
+	current := hetznerConfig()
+	delete(current.Domains, "web")
+
+	steps := Diff(prev, current)
+	s := findStep(steps, StepDNSDelete, "web")
+	if s == nil {
+		t.Error("expected dns.delete web")
+	}
+	domains := toStringSlice(s.Params["domains"])
+	assertContains(t, domains, "final.nvoi.to")
+}
+
+func TestDiff_SecretRemoved(t *testing.T) {
+	prev := hetznerConfig()
+	current := hetznerConfig()
+	// Remove RAILS_MASTER_KEY from web and jobs secrets.
+	web := current.Services["web"]
+	web.Secrets = []string{"POSTGRES_PASSWORD"}
+	current.Services["web"] = web
+	jobs := current.Services["jobs"]
+	jobs.Secrets = []string{"POSTGRES_PASSWORD"}
+	current.Services["jobs"] = jobs
+
+	steps := Diff(prev, current)
+	s := findStep(steps, StepSecretDelete, "RAILS_MASTER_KEY")
+	if s == nil {
+		t.Error("expected secret.delete RAILS_MASTER_KEY")
+	}
+	// POSTGRES_PASSWORD still referenced — should NOT be deleted.
+	if findStep(steps, StepSecretDelete, "POSTGRES_PASSWORD") != nil {
+		t.Error("POSTGRES_PASSWORD should not be deleted")
+	}
+}
+
+func TestDiff_ComputeRemoved(t *testing.T) {
+	prev := hetznerConfig()
+	current := hetznerConfig()
+	delete(current.Servers, "worker-1")
+
+	steps := Diff(prev, current)
+	s := findStep(steps, StepComputeDelete, "worker-1")
+	if s == nil {
+		t.Error("expected instance.delete worker-1")
+	}
+	// Master should NOT be deleted.
+	if findStep(steps, StepComputeDelete, "master") != nil {
+		t.Error("master should not be deleted")
+	}
+}
+
+func TestDiff_ReverseOrder(t *testing.T) {
+	// Remove everything — verify delete order is reverse of deploy.
+	prev := hetznerConfig()
+	current := &Config{
+		Servers:  map[string]Server{"master": {Type: "cx23", Region: "fsn1"}},
+		Services: map[string]Service{"web": {Image: "nginx", Port: 80}},
+	}
+
+	steps := Diff(prev, current)
+	var kinds []StepKind
+	for _, s := range steps {
+		kinds = append(kinds, s.Kind)
+	}
+
+	// Should be: dns.delete → service.delete(s) → storage.delete → secret.delete(s) → volume.delete(s) → instance.delete
+	wantOrder := []StepKind{
+		StepDNSDelete,                     // dns first
+		StepServiceDelete,                 // then services (db, jobs, meilisearch — sorted, web still exists)
+		StepServiceDelete,
+		StepServiceDelete,
+		StepStorageDelete,                 // then storage
+		StepSecretDelete,                  // then secrets
+		StepSecretDelete,
+		StepVolumeDelete,                  // then volumes
+		StepVolumeDelete,
+		StepComputeDelete,                 // then compute last
+	}
+
+	if len(kinds) != len(wantOrder) {
+		t.Fatalf("got %d delete steps, want %d:\n  got:  %v\n  want: %v", len(kinds), len(wantOrder), kinds, wantOrder)
+	}
+	for i, want := range wantOrder {
+		if kinds[i] != want {
+			t.Errorf("step[%d] = %s, want %s", i, kinds[i], want)
+		}
+	}
+}
+
+func TestFullPlan_DeletesBeforeSets(t *testing.T) {
+	prev := hetznerConfig()
+	current := hetznerConfig()
+	delete(current.Services, "meilisearch")
+	delete(current.Volumes, "meili-data")
+
+	steps, err := FullPlan(prev, current, hetznerEnv())
+	if err != nil {
+		t.Fatalf("full plan: %v", err)
+	}
+
+	// Find positions of delete and first set.
+	deleteIdx := -1
+	firstSetIdx := -1
+	for i, s := range steps {
+		if s.Kind == StepServiceDelete && s.Name == "meilisearch" {
+			deleteIdx = i
+		}
+		if s.Kind == StepComputeSet && firstSetIdx == -1 {
+			firstSetIdx = i
+		}
+	}
+
+	if deleteIdx == -1 {
+		t.Fatal("expected service.delete meilisearch in plan")
+	}
+	if firstSetIdx == -1 {
+		t.Fatal("expected instance.set in plan")
+	}
+	if deleteIdx >= firstSetIdx {
+		t.Errorf("delete at %d should come before first set at %d", deleteIdx, firstSetIdx)
+	}
+}
+
+func TestFullPlan_FirstDeploy(t *testing.T) {
+	steps, err := FullPlan(nil, hetznerConfig(), hetznerEnv())
+	if err != nil {
+		t.Fatalf("full plan: %v", err)
+	}
+
+	// No deletes — first deploy.
+	for _, s := range steps {
+		if s.Kind == StepServiceDelete || s.Kind == StepComputeDelete ||
+			s.Kind == StepVolumeDelete || s.Kind == StepStorageDelete ||
+			s.Kind == StepDNSDelete || s.Kind == StepSecretDelete {
+			t.Errorf("first deploy should have no deletes, got %s %s", s.Kind, s.Name)
+		}
+	}
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 func findStep(steps []Step, kind StepKind, name string) *Step {
