@@ -1,4 +1,4 @@
-package core
+package render
 
 import (
 	"fmt"
@@ -17,7 +17,7 @@ var (
 	headerStyle = lipgloss.NewStyle().Bold(true).Padding(0, 1)
 	cellStyle   = lipgloss.NewStyle().Padding(0, 1)
 	titleStyle  = lipgloss.NewStyle().Bold(true).MarginLeft(margin)
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	DimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
 // ── Table ───────────────────────────────────────────────────────────────────────

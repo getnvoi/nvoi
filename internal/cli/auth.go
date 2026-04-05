@@ -11,9 +11,11 @@ const authConfigDir = ".config/nvoi"
 const authConfigFile = "auth.json"
 
 type AuthConfig struct {
-	APIBase  string `json:"api_base"`
-	Token    string `json:"token"`
-	Username string `json:"username"`
+	APIBase     string `json:"api_base"`
+	Token       string `json:"token"`
+	Username    string `json:"username"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	RepoID      string `json:"repo_id,omitempty"`
 }
 
 func authConfigPath() string {

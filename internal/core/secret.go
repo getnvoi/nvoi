@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -148,7 +149,7 @@ func newSecretListCmd() *cobra.Command {
 				return nil
 			}
 
-			t := NewTable("KEY")
+			t := render.NewTable("KEY")
 			for _, k := range keys {
 				t.Row(k)
 			}

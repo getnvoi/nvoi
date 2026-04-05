@@ -8,6 +8,7 @@ import (
 	"time"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"  // register
@@ -60,7 +61,7 @@ func newResourcesCmd() *cobra.Command {
 				return enc.Encode(groups)
 			}
 
-			g := NewTableGroup()
+			g := render.NewTableGroup()
 			for _, group := range groups {
 				if len(group.Rows) == 0 {
 					continue
@@ -79,8 +80,8 @@ func newResourcesCmd() *cobra.Command {
 			if storageProvider != "" && storageProvider != providerName && storageProvider != dnsProvider {
 				providers = append(providers, storageProvider)
 			}
-			fmt.Println(dimStyle.Render(fmt.Sprintf("  retrieved from %s", strings.Join(providers, ", "))))
-			fmt.Println(dimStyle.Render(fmt.Sprintf("  generated at %s", time.Now().Format("2006-01-02 15:04:05"))))
+			fmt.Println(render.DimStyle.Render(fmt.Sprintf("  retrieved from %s", strings.Join(providers, ", "))))
+			fmt.Println(render.DimStyle.Render(fmt.Sprintf("  generated at %s", time.Now().Format("2006-01-02 15:04:05"))))
 			fmt.Println()
 			return nil
 		},

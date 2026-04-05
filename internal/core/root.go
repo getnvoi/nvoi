@@ -2,9 +2,9 @@ package core
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
+	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
@@ -74,20 +74,6 @@ func envFilePath(cmd *cobra.Command) string {
 
 func resolveOutput(cmd *cobra.Command) app.Output {
 	j, _ := cmd.Flags().GetBool("json")
-	if j {
-		return NewJSONOutput(os.Stdout)
-	}
 	ci, _ := cmd.Flags().GetBool("ci")
-	if ci || !isTerminal() {
-		return NewPlainOutput()
-	}
-	return NewTUIOutput()
-}
-
-func isTerminal() bool {
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
+	return render.Resolve(j, ci)
 }

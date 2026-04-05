@@ -1,4 +1,4 @@
-package core
+package render
 
 import (
 	"bufio"
@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"charm.land/lipgloss/v2"
-	app "github.com/getnvoi/nvoi/pkg/core"
+	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 )
 
 var (
@@ -22,9 +22,9 @@ var (
 
 type tuiOutput struct{}
 
-var _ app.Output = tuiOutput{}
+var _ pkgcore.Output = tuiOutput{}
 
-func NewTUIOutput() app.Output {
+func NewTUIOutput() pkgcore.Output {
 	return tuiOutput{}
 }
 
@@ -56,7 +56,6 @@ func (tuiOutput) Error(err error) {
 	fmt.Println(tuiError.Render("✗ " + err.Error()))
 }
 
-// Writer returns a writer that dims and indents each line.
 func (tuiOutput) Writer() io.Writer {
 	pr, pw := io.Pipe()
 	go func() {

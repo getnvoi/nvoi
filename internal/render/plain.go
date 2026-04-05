@@ -1,18 +1,18 @@
-package core
+package render
 
 import (
 	"fmt"
 	"io"
 	"os"
 
-	app "github.com/getnvoi/nvoi/pkg/core"
+	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 )
 
 type plainOutput struct{}
 
-var _ app.Output = plainOutput{}
+var _ pkgcore.Output = plainOutput{}
 
-func NewPlainOutput() app.Output {
+func NewPlainOutput() pkgcore.Output {
 	return plainOutput{}
 }
 

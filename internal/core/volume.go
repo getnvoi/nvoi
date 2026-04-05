@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -153,7 +154,7 @@ func newVolumeListCmd() *cobra.Command {
 				return err
 			}
 
-			t := NewTable("NAME", "SIZE", "SERVER", "DEVICE")
+			t := render.NewTable("NAME", "SIZE", "SERVER", "DEVICE")
 			for _, v := range volumes {
 				t.Row(v.Name, fmt.Sprintf("%dGB", v.Size), v.ServerName, v.DevicePath)
 			}

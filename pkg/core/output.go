@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 )
 
@@ -76,4 +77,29 @@ func NewCommandEvent(command, action, name string, extra ...any) Event {
 // NewMessageEvent creates an event with just a type and message.
 func NewMessageEvent(eventType, message string) Event {
 	return Event{Type: eventType, Message: message}
+}
+
+// ReplayEvent dispatches an event through an Output implementation.
+// Used by the CLI to render JSONL logs through TUI/Plain/JSON renderers.
+func ReplayEvent(ev Event, out Output) {
+	switch ev.Type {
+	case EventCommand:
+		extra := make([]any, 0, len(ev.Extra)*2)
+		for k, v := range ev.Extra {
+			extra = append(extra, k, v)
+		}
+		out.Command(ev.Command, ev.Action, ev.Name, extra...)
+	case EventProgress:
+		out.Progress(ev.Message)
+	case EventSuccess:
+		out.Success(ev.Message)
+	case EventWarning:
+		out.Warning(ev.Message)
+	case EventInfo:
+		out.Info(ev.Message)
+	case EventError:
+		out.Error(fmt.Errorf("%s", ev.Message))
+	case EventStream:
+		out.Writer().Write([]byte(ev.Message + "\n"))
+	}
 }

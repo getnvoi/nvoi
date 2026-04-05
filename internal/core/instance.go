@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"      // register
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"  // register
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway" // register
@@ -161,7 +162,7 @@ func newInstanceListCmd() *cobra.Command {
 				return err
 			}
 
-			t := NewTable("NAME", "STATUS", "IPv4", "PRIVATE IP")
+			t := render.NewTable("NAME", "STATUS", "IPv4", "PRIVATE IP")
 			for _, s := range servers {
 				t.Row(s.Name, string(s.Status), s.IPv4, s.PrivateIP)
 			}

@@ -41,6 +41,15 @@ func NewUnauthClient() *APIClient {
 	}
 }
 
+// authedClient loads auth config and returns an authenticated API client.
+func authedClient() (*APIClient, *AuthConfig, error) {
+	cfg, err := LoadAuthConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewAPIClient(cfg), cfg, nil
+}
+
 func (c *APIClient) Do(method, path string, body, out any) error {
 	var bodyReader io.Reader
 	if body != nil {
@@ -77,4 +86,29 @@ func (c *APIClient) Do(method, path string, body, out any) error {
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
+}
+
+// doRaw returns the raw HTTP response — caller must close the body.
+// Used for streaming endpoints (JSONL logs).
+func (c *APIClient) doRaw(method, path string) (*http.Response, error) {
+	req, err := http.NewRequest(method, c.base+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return resp, nil
 }

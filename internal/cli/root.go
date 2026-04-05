@@ -11,6 +11,14 @@ func Root() *cobra.Command {
 	}
 
 	root.AddCommand(newLoginCmd())
+	root.AddCommand(newWhoamiCmd())
+	root.AddCommand(newWorkspacesCmd())
+	root.AddCommand(newReposCmd())
+	root.AddCommand(newPushCmd())
+	root.AddCommand(newPlanCmd())
+	root.AddCommand(newDeployCmd())
+	root.AddCommand(newLogsCmd())
+	root.AddCommand(newStatusCmd())
 
 	return root
 }

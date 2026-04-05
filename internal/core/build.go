@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	_ "github.com/getnvoi/nvoi/pkg/provider/daytona" // register daytona builder
 	_ "github.com/getnvoi/nvoi/pkg/provider/github"  // register github actions builder
 	_ "github.com/getnvoi/nvoi/pkg/provider/local"   // register local builder
@@ -150,7 +151,7 @@ func newBuildListCmd() *cobra.Command {
 				return nil
 			}
 
-			t := NewTable("IMAGE", "TAGS")
+			t := render.NewTable("IMAGE", "TAGS")
 			for _, img := range images {
 				t.Row(img.Name, strings.Join(img.Tags, ", "))
 			}

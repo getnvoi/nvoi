@@ -16,6 +16,10 @@ type loginResponse struct {
 		ID             string `json:"id"`
 		GithubUsername string `json:"github_username"`
 	} `json:"user"`
+	Workspace struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"workspace"`
 	IsNew bool `json:"is_new"`
 }
 
@@ -47,9 +51,10 @@ func runLogin() error {
 	}
 
 	if err := SaveAuthConfig(&AuthConfig{
-		APIBase:  client.base,
-		Token:    resp.Token,
-		Username: resp.User.GithubUsername,
+		APIBase:     client.base,
+		Token:       resp.Token,
+		Username:    resp.User.GithubUsername,
+		WorkspaceID: resp.Workspace.ID,
 	}); err != nil {
 		return fmt.Errorf("save auth: %w", err)
 	}

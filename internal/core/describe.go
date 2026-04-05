@@ -7,6 +7,7 @@ import (
 	"time"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -59,7 +60,7 @@ func newDescribeCmd() *cobra.Command {
 				return err
 			}
 
-			g := NewTableGroup()
+			g := render.NewTableGroup()
 
 			t := g.Add("NODES", "NAME", "STATUS", "ROLE", "IP")
 			for _, n := range res.Nodes {
@@ -103,8 +104,8 @@ func newDescribeCmd() *cobra.Command {
 			}
 
 			g.Print()
-			fmt.Println(dimStyle.Render(fmt.Sprintf("  retrieved from project '%s'", res.Namespace)))
-			fmt.Println(dimStyle.Render(fmt.Sprintf("  generated at %s", time.Now().Format("2006-01-02 15:04:05"))))
+			fmt.Println(render.DimStyle.Render(fmt.Sprintf("  retrieved from project '%s'", res.Namespace)))
+			fmt.Println(render.DimStyle.Render(fmt.Sprintf("  generated at %s", time.Now().Format("2006-01-02 15:04:05"))))
 			fmt.Println()
 			return nil
 		},
