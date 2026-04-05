@@ -1,0 +1,256 @@
+# CLAUDE.md — internal/api
+
+The SaaS layer on top of `pkg/core/`. Users push a config YAML + env, the API validates it, plans the deploy sequence, and executes `pkg/core/` functions in order. Same result as running `bin/deploy-*` scripts by hand.
+
+## How it works
+
+```
+User pushes config YAML + .env
+  → Parse YAML
+  → Expand managed services (postgres, redis, meilisearch → real service specs)
+  → Validate expanded config
+  → Plan: config → ordered []Step sequence
+  → Diff: previous config vs current → delete steps for removed resources
+  → FullPlan: deletes first (reverse order) + sets (forward order, idempotent)
+  → Executor walks steps, calls pkg/core/ functions
+  → Each step tracked in deployment_steps, each output line in deployment_step_logs (JSONL)
+```
+
+## Architecture
+
+```
+internal/api/
+  models.go              All models + provider enums + deployment lifecycle
+  db.go                  PostgreSQL + GORM + AutoMigrate
+  testdb.go              In-memory SQLite for tests
+  encrypt.go             AES-256-GCM for secrets at rest
+  jwt.go                 HS256 JWT, 30-day TTL
+  auth.go                AuthRequired middleware, CurrentUser
+  github.go              GitHub token verification (PAT, OAuth, fine-grained)
+
+  handlers/
+    router.go            Gin routes — /health, /login, /workspaces, /repos, /config
+    auth.go              POST /login — verify GitHub token → find/create user → issue JWT
+    workspaces.go        CRUD /workspaces — scoped via workspace_users join
+    repos.go             CRUD /workspaces/:id/repos — scoped through workspace
+    config.go            Config push/get/list/plan — the core deploy pipeline entry point
+
+  config/
+    schema.go            Public config YAML struct — servers, volumes, build, storage, services, domains
+    validate.go          15 validation rules with cross-reference checks
+    plan.go              Config + env → ordered Step sequence (mirrors bin/deploy-* scripts)
+
+  managed/
+    service.go           ManagedService interface + registry + Expand()
+    postgres.go          PostgreSQL — image, port, volume, credentials, DATABASE_ prefix
+    redis.go             Redis — image, port, REDIS_ prefix
+    meilisearch.go       Meilisearch — image, port, volume, master key, MEILI_ prefix
+```
+
+## Data model
+
+```
+User
+  └── WorkspaceUser (join, role)
+        └── Workspace
+              └── Repo
+                    ├── RepoConfig (versioned)
+                    │     ├── compute_provider   enum: hetzner | aws | scaleway
+                    │     ├── dns_provider       enum: cloudflare | aws (optional)
+                    │     ├── storage_provider   enum: cloudflare | aws (optional)
+                    │     ├── build_provider     enum: local | daytona | github (optional)
+                    │     ├── config             YAML text
+                    │     └── env                encrypted KEY=VALUE (credentials + app secrets)
+                    │
+                    ├── RepoManagedServiceConfig (permanent, not versioned)
+                    │     ├── name               "db", "cache", "search"
+                    │     ├── kind               "postgres", "redis", "meilisearch"
+                    │     └── credentials        encrypted JSON (generated once, stored forever)
+                    │
+                    └── Deployment
+                          ├── status             pending → running → succeeded | failed
+                          └── DeploymentStep
+                                ├── position, kind, name, params (JSON)
+                                ├── status       pending → running → succeeded | failed | skipped
+                                └── DeploymentStepLog
+                                      └── line   JSONL (same format as --json CLI output)
+```
+
+## Config schema (what users write)
+
+```yaml
+servers:
+  master:
+    type: cx23
+    region: fsn1
+  worker-1:
+    type: cx33
+    region: fsn1
+
+volumes:
+  pgdata:
+    size: 30
+    server: master
+
+build:
+  web:
+    source: benbonnet/dummy-rails
+
+storage:
+  assets:
+    cors: true
+
+services:
+  db:
+    managed: postgres          # managed service — auto image, port, volume, credentials
+  web:
+    build: web                 # references build target
+    port: 80
+    replicas: 2
+    health: /up
+    server: worker-1
+    env:
+      - RAILS_ENV=production   # literal
+      - POSTGRES_USER           # resolved from .env
+    secrets:
+      - RAILS_MASTER_KEY       # resolved from .env, stored as k8s secret
+    storage:
+      - assets                 # expands to STORAGE_ASSETS_* secret refs
+    uses:
+      - db                     # injects DATABASE_DB_* credential secrets
+  jobs:
+    build: web
+    command: bin/jobs
+    uses: [db]
+
+domains:
+  web: final.nvoi.to           # single string or list: [a.com, b.com]
+```
+
+### Service source (mutually exclusive)
+
+| Field | Meaning |
+|-------|---------|
+| `image: postgres:17` | Pre-built image |
+| `build: web` | References a build target — image resolved at deploy time |
+| `managed: postgres` | Managed service — Expand() replaces with real spec + generates credentials |
+
+### Env resolution
+
+- `RAILS_ENV=production` → literal, passed through
+- `POSTGRES_USER` (no `=`) → looked up from .env, becomes `POSTGRES_USER=<value>`
+- Missing key → hard error at plan time
+
+### Secret aliasing
+
+- `POSTGRES_PASSWORD` → k8s secret key = env var name (same)
+- `POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB` → container reads `POSTGRES_PASSWORD`, backed by namespaced secret key `POSTGRES_PASSWORD_DB`
+
+Used by managed services to avoid collisions when multiple instances of the same kind exist.
+
+## Managed services
+
+Interface: `Kind()`, `Spec(name)`, `Credentials(name)`, `EnvPrefix()`, `InternalSecrets(name, creds)`.
+
+One file per implementation. Registration via `init()`. Adding a new managed service = one new file, five methods.
+
+`Spec()` returns what the managed service itself consumes (image, port, volumes, its own env/secrets). `InternalSecrets()` returns what other services consume when they `uses:` it (namespaced credential keys).
+
+### Credential lifecycle
+
+1. First config push with `managed: postgres` for `db` → `Credentials("db")` generates random password → stored in `repo_managed_service_configs` (encrypted)
+2. Every subsequent push → `Expand()` loads stored credentials → same password forever
+3. Row deleted → credentials gone, service stops being injected
+
+### Secret namespacing
+
+Multiple instances of the same kind get unique secret keys:
+- `db` (postgres) → `POSTGRES_PASSWORD_DB`
+- `analytics` (postgres) → `POSTGRES_PASSWORD_ANALYTICS`
+
+Spec uses aliased format: `POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB` so the container reads the standard env var while the k8s secret key is namespaced.
+
+### Expand() transformation
+
+```
+Config (public)                    Config (internal)
+services:                          services:
+  db:                                db:
+    managed: postgres        →         image: postgres:17
+                                       port: 5432
+                                       volumes: [db-data:/var/lib/postgresql/data]
+                                       secrets: [POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB]
+  web:                               web:
+    uses: [db]               →         secrets: [DATABASE_DB_HOST, DATABASE_DB_PORT, ...]
+```
+
+Expand also auto-adds volumes required by managed services to the config.
+
+## Plan (config → steps)
+
+Seven phases, same order as `bin/deploy-*`:
+
+| Phase | StepKind | Maps to |
+|-------|----------|---------|
+| 1. Compute | `instance.set` | `pkg/core.ComputeSet` |
+| 2. Volumes | `volume.set` | `pkg/core.VolumeSet` |
+| 3. Build | `build` | `pkg/core.BuildRun` |
+| 4. Secrets | `secret.set` | `pkg/core.SecretSet` |
+| 5. Storage | `storage.set` | `pkg/core.StorageSet` |
+| 6. Services | `service.set` | `pkg/core.ServiceSet` |
+| 7. DNS | `dns.set` | `pkg/core.DNSSet` |
+
+All steps are deterministic (sorted keys). First server alphabetically = master.
+
+## Diff (removals)
+
+`Diff(prev, current)` generates delete steps for resources that disappeared. Reverse order of deploy:
+
+| Phase | StepKind | Maps to |
+|-------|----------|---------|
+| 1. DNS | `dns.delete` | `pkg/core.DNSDelete` |
+| 2. Services | `service.delete` | `pkg/core.ServiceDelete` |
+| 3. Storage | `storage.delete` | `pkg/core.StorageDelete` |
+| 4. Secrets | `secret.delete` | `pkg/core.SecretDelete` |
+| 5. Volumes | `volume.delete` | `pkg/core.VolumeDelete` |
+| 6. Compute | `instance.delete` | `pkg/core.ComputeDelete` |
+
+`FullPlan(prev, current, env)` = delete steps first + set steps. Delete commands are idempotent — deleting something that doesn't exist succeeds silently.
+
+## Authentication
+
+1. CLI resolves GitHub token: `gh auth token` → `GITHUB_TOKEN` env → interactive prompt
+2. `POST /login {"github_token": "..."}` → API calls `api.github.com/user` → verifies identity
+3. Find/create User + default Workspace → issue JWT (30-day TTL)
+4. CLI stores JWT in `~/.config/nvoi/auth.json`
+5. All subsequent requests: `Authorization: Bearer <jwt>`
+
+Token-type agnostic: PAT, OAuth access token, fine-grained token all work.
+
+## Encryption
+
+- `ENCRYPTION_KEY` env var — 32 bytes hex-encoded (AES-256-GCM)
+- `RepoConfig.Env` encrypted at rest (GORM `BeforeCreate` / `AfterFind` hooks)
+- `RepoManagedServiceConfig.Credentials` encrypted at rest (same hooks)
+- Env hidden from JSON by default — `?reveal=true` to show
+
+## Compose
+
+```
+core      direct mode CLI (cmd/core via bin/entrypoint)
+api       REST server (cmd/api via bin/api-entrypoint), depends_on postgres (healthy)
+cli       cloud CLI (cmd/cli via bin/cli-entrypoint), depends_on api (healthy)
+postgres  PostgreSQL 17
+```
+
+`bin/cli` runs the `core` compose service (backward compat with deploy scripts).
+
+## Key rules
+
+1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.** Same functions the direct CLI uses. Same idempotency guarantees.
+2. **Config describes what. Env provides where + credentials.** Provider selection is on `RepoConfig` columns. Provider credentials are in the encrypted env.
+3. **Managed service credentials are permanent.** Generated once, stored forever in `repo_managed_service_configs`. Not versioned. Row exists = inject.
+4. **Expand happens before validation.** Public config (with `managed:`) → internal config (with real specs) → validate the expanded result.
+5. **Plan is deterministic.** Same config + env always produces the same step sequence. Sorted keys everywhere.
+6. **Diff only handles removals.** Set commands are idempotent — no need to diff for changes. Only need to detect what disappeared between versions.
+7. **Secrets are always secrets.** Managed service passwords use namespaced k8s secret keys with aliased env vars. Never plain text in specs.

@@ -211,10 +211,11 @@ See `bin/deploy` for the env-var path (compose injects everything) and `bin/depl
 
 ```
 cmd/
-  core/main.go             CLI entrypoint — signal handling, exit codes
-  api/main.go              API server entrypoint (planned)
+  core/main.go             Direct CLI entrypoint — signal handling, exit codes
+  cli/main.go              Cloud CLI entrypoint — talks to API
+  api/main.go              API server entrypoint
 
-pkg/                       Public library — importable by external repos (API, SDK, etc.)
+pkg/                       Public library — the execution engine
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
     cluster.go             Cluster struct + ProviderRef type
     output.go              Output interface — the contract between core/ and its viewers
@@ -223,23 +224,18 @@ pkg/                       Public library — importable by external repos (API,
   provider/                ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
     hetzner/               Hetzner Cloud (compute + volumes)
     cloudflare/            Cloudflare (DNS + R2 buckets) — all via utils.HTTPClient
-    aws/                   AWS (EC2 + VPC + Route53 + S3) — uses AWS SDK v2, ListResources covers all sub-resources
+    aws/                   AWS (EC2 + VPC + Route53 + S3) — uses AWS SDK v2
     daytona/               Daytona remote builds
     github/                GitHub Actions builds
     local/                 Local docker buildx builds
-  utils/                   Pure utilities: naming, poll, httpclient (30s default timeout), ssh keys, format
+  utils/                   Pure utilities: naming, poll, httpclient, ssh keys, format, maps
     s3/                    AWS Signature V4 signing for S3-compatible APIs
 
-internal/                  Private — CLI only
+internal/                  Private
   testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
   core/                    Cobra wrappers. Parse flags → call pkg/core/ → render output.
-    resolve.go             Centralized credential resolution — single generic resolveCredentials()
-    output_tui.go          TUI renderer (lipgloss-styled terminal output)
-    output_json.go         JSONL renderer (structured JSON, one event per line)
-    output_plain.go        Plain text renderer (CI/non-TTY environments)
-    table.go               Bordered tables with lipgloss (Table + TableGroup for synchronized widths)
-  api/                     REST API server — handlers, models, auth, encryption (planned)
-  cli/                     Cloud CLI commands — login, projects, deploy via API (planned)
+  api/                     REST API server — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
+  cli/                     Cloud CLI — login, talks to API — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
 ```
 
 ## Providers
