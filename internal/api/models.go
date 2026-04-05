@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -135,12 +136,15 @@ func (wu *WorkspaceUser) BeforeCreate(tx *gorm.DB) error {
 // ── Repo ──────────────────────────────────────────────────────────────────────
 
 type Repo struct {
-	ID          string         `gorm:"primaryKey" json:"id"`
-	WorkspaceID string         `gorm:"not null;index" json:"workspace_id"`
-	Name        string         `gorm:"not null" json:"name"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	ID            string         `gorm:"primaryKey" json:"id"`
+	WorkspaceID   string         `gorm:"not null;index" json:"workspace_id"`
+	Name          string         `gorm:"not null" json:"name"`
+	Environment   string         `gorm:"not null;default:'production'" json:"environment"` // production, staging, etc.
+	SSHPrivateKey string         `gorm:"type:text;not null" json:"-"`       // encrypted PEM — auto-generated, never nil
+	SSHPublicKey  string         `gorm:"not null" json:"ssh_public_key"`   // OpenSSH format — visible for deploy key setup
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 
 	Workspace Workspace `gorm:"foreignKey:WorkspaceID" json:"-"`
 }
@@ -149,6 +153,46 @@ func (r *Repo) BeforeCreate(tx *gorm.DB) error {
 	if r.ID == "" {
 		r.ID = newUUID()
 	}
+	if r.Environment == "" {
+		r.Environment = "production"
+	}
+	// Auto-generate SSH keypair — always, never nil.
+	if r.SSHPrivateKey == "" {
+		priv, pub, err := utils.GenerateEd25519Key()
+		if err != nil {
+			return err
+		}
+		r.SSHPrivateKey = string(priv)
+		r.SSHPublicKey = pub
+	}
+	return r.encryptSSHKey()
+}
+
+func (r *Repo) AfterFind(tx *gorm.DB) error {
+	return r.decryptSSHKey()
+}
+
+func (r *Repo) encryptSSHKey() error {
+	if r.SSHPrivateKey == "" {
+		return nil
+	}
+	enc, err := Encrypt(r.SSHPrivateKey)
+	if err != nil {
+		return err
+	}
+	r.SSHPrivateKey = enc
+	return nil
+}
+
+func (r *Repo) decryptSSHKey() error {
+	if r.SSHPrivateKey == "" {
+		return nil
+	}
+	dec, err := Decrypt(r.SSHPrivateKey)
+	if err != nil {
+		return fmt.Errorf("decrypt Repo.SSHPrivateKey: %w", err)
+	}
+	r.SSHPrivateKey = dec
 	return nil
 }
 

@@ -52,6 +52,7 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 				repos.POST("/:repo_id/deploy", Deploy(db))
 				repos.GET("/:repo_id/deployments", ListDeployments(db))
 				repos.GET("/:repo_id/deployments/:deployment_id", GetDeployment(db))
+				repos.POST("/:repo_id/deployments/:deployment_id/run", RunDeployment(db))
 				repos.GET("/:repo_id/deployments/:deployment_id/logs", DeploymentLogs(db))
 			}
 		}

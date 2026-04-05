@@ -514,6 +514,56 @@ func TestFullPlan_FirstDeploy(t *testing.T) {
 	}
 }
 
+func TestFullPlan_EmptyConfigDeletesAll(t *testing.T) {
+	prev := hetznerConfig()
+	empty := &Config{
+		Servers:  map[string]Server{},
+		Services: map[string]Service{},
+	}
+
+	// Empty config can't produce a valid Plan (no servers, no services).
+	// But Diff should generate delete steps for everything in prev.
+	deleteSteps := Diff(prev, empty)
+
+	if len(deleteSteps) == 0 {
+		t.Fatal("empty config should produce delete steps for all previous resources")
+	}
+
+	// Should delete: DNS, services (4), storage, secrets (2), volumes (2), compute (2).
+	deleteKinds := map[StepKind]int{}
+	for _, s := range deleteSteps {
+		deleteKinds[s.Kind]++
+	}
+
+	if deleteKinds[StepDNSDelete] != 1 {
+		t.Errorf("dns deletes = %d, want 1", deleteKinds[StepDNSDelete])
+	}
+	if deleteKinds[StepServiceDelete] != 4 {
+		t.Errorf("service deletes = %d, want 4 (db, jobs, meilisearch, web)", deleteKinds[StepServiceDelete])
+	}
+	if deleteKinds[StepStorageDelete] != 1 {
+		t.Errorf("storage deletes = %d, want 1", deleteKinds[StepStorageDelete])
+	}
+	if deleteKinds[StepSecretDelete] != 2 {
+		t.Errorf("secret deletes = %d, want 2", deleteKinds[StepSecretDelete])
+	}
+	if deleteKinds[StepVolumeDelete] != 2 {
+		t.Errorf("volume deletes = %d, want 2", deleteKinds[StepVolumeDelete])
+	}
+	if deleteKinds[StepComputeDelete] != 2 {
+		t.Errorf("compute deletes = %d, want 2 (master, worker-1)", deleteKinds[StepComputeDelete])
+	}
+
+	// Verify reverse order: DNS first, compute last.
+	if deleteSteps[0].Kind != StepDNSDelete {
+		t.Errorf("first delete = %s, want dns.delete", deleteSteps[0].Kind)
+	}
+	last := deleteSteps[len(deleteSteps)-1]
+	if last.Kind != StepComputeDelete {
+		t.Errorf("last delete = %s, want instance.delete", last.Kind)
+	}
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────────
 
 func findStep(steps []Step, kind StepKind, name string) *Step {

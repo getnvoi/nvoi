@@ -75,20 +75,19 @@ func ListResources(db *gorm.DB) gin.HandlerFunc {
 }
 
 // clusterFromLatestConfig builds a pkg/core.Cluster from the repo's latest config.
+// All fields come from the DB — never from env string lookups.
 func clusterFromLatestConfig(db *gorm.DB, repo *api.Repo) (*pkgcore.Cluster, error) {
 	rc, env, err := latestConfigAndEnv(db, repo)
 	if err != nil {
 		return nil, err
 	}
 
-	sshKey := []byte(env["SSH_KEY"])
-
 	return &pkgcore.Cluster{
-		AppName:     env["NVOI_APP_NAME"],
-		Env:         env["NVOI_ENV"],
+		AppName:     repo.Name,
+		Env:         repo.Environment,
 		Provider:    string(rc.ComputeProvider),
 		Credentials: env,
-		SSHKey:      sshKey,
+		SSHKey:      []byte(repo.SSHPrivateKey),
 	}, nil
 }
 

@@ -1,9 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
@@ -116,6 +116,48 @@ func Deploy(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// RunDeployment starts executing a pending deployment.
+// Separate from Deploy so creation and execution are decoupled.
+//
+// POST /workspaces/:workspace_id/repos/:repo_id/deployments/:deployment_id/run
+func RunDeployment(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		repo, ok := loadRepo(c, db)
+		if !ok {
+			return
+		}
+
+		deploymentID := c.Param("deployment_id")
+		var deployment api.Deployment
+		if err := db.Where("id = ? AND repo_id = ?", deploymentID, repo.ID).First(&deployment).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "deployment not found"})
+			return
+		}
+
+		if deployment.Status != api.DeploymentPending {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "deployment is not pending"})
+			return
+		}
+
+		var rc api.RepoConfig
+		if err := db.First(&rc, "id = ?", deployment.RepoConfigID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "config not found"})
+			return
+		}
+
+		env := config.ParseEnv(rc.Env)
+
+		go Execute(context.Background(), db, ExecuteParams{
+			Deployment: &deployment,
+			Repo:       repo,
+			Config:     &rc,
+			Env:        env,
+		})
+
+		c.JSON(http.StatusOK, gin.H{"status": "running"})
+	}
+}
+
 // GetDeployment returns a deployment with its steps and logs.
 //
 // GET /workspaces/:workspace_id/repos/:repo_id/deployments/:deployment_id
@@ -198,57 +240,3 @@ func DeploymentLogs(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// markStepRunning updates a deployment step's status to running.
-func markStepRunning(db *gorm.DB, step *api.DeploymentStep) {
-	now := time.Now()
-	db.Model(step).Updates(map[string]any{
-		"status":     api.StepStatusRunning,
-		"started_at": &now,
-	})
-}
-
-// markStepDone updates a deployment step's status to succeeded or failed.
-func markStepDone(db *gorm.DB, step *api.DeploymentStep, err error) {
-	now := time.Now()
-	if err != nil {
-		db.Model(step).Updates(map[string]any{
-			"status":      api.StepStatusFailed,
-			"error":       err.Error(),
-			"finished_at": &now,
-		})
-	} else {
-		db.Model(step).Updates(map[string]any{
-			"status":      api.StepStatusSucceeded,
-			"finished_at": &now,
-		})
-	}
-}
-
-// markDeploymentRunning updates the deployment status to running.
-func markDeploymentRunning(db *gorm.DB, deployment *api.Deployment) {
-	now := time.Now()
-	db.Model(deployment).Updates(map[string]any{
-		"status":     api.DeploymentRunning,
-		"started_at": &now,
-	})
-}
-
-// markDeploymentDone updates the deployment status to succeeded or failed.
-func markDeploymentDone(db *gorm.DB, deployment *api.Deployment, err error) {
-	now := time.Now()
-	status := api.DeploymentSucceeded
-	if err != nil {
-		status = api.DeploymentFailed
-	}
-	db.Model(deployment).Updates(map[string]any{
-		"status":      status,
-		"finished_at": &now,
-	})
-}
-
-// skipRemainingSteps marks all pending steps as skipped.
-func skipRemainingSteps(db *gorm.DB, deploymentID string) {
-	db.Model(&api.DeploymentStep{}).
-		Where("deployment_id = ? AND status = ?", deploymentID, api.StepStatusPending).
-		Update("status", api.StepStatusSkipped)
-}
