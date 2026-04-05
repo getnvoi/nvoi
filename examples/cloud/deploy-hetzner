@@ -1,0 +1,31 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Example: Hetzner deploy via cloud CLI ─────────────────────────────────────
+# Same topology as examples/core/deploy-hetzner, but through the API.
+# The config YAML + .env replace the imperative command sequence.
+
+# ── Setup (once) ───────────────────────────────────────────────────────────────
+
+nvoi login
+nvoi workspaces use default
+nvoi repos create dummy-rails
+nvoi repos use dummy-rails
+
+# ── Push config ────────────────────────────────────────────────────────────────
+
+nvoi push \
+  --config examples/cloud/hetzner.yaml \
+  --env .env \
+  --compute-provider hetzner \
+  --dns-provider cloudflare \
+  --storage-provider cloudflare \
+  --build-provider daytona
+
+# ── Preview ────────────────────────────────────────────────────────────────────
+
+nvoi plan
+
+# ── Deploy ─────────────────────────────────────────────────────────────────────
+
+nvoi deploy

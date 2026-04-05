@@ -1,15 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Full inline flags path ────────────────────────────────────────────────────
-# Every command declares all options inline.
-# Showcases the complete CLI interface.
+# ── Example: fully explicit deploy sequence ──────────────────────────────────
+# Every command declares all options inline — no env vars required.
+# Showcases the complete CLI interface for direct binary invocation.
 
 echo "==> deploying rails (production) — fully explicit"
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/cli instance set master \
+nvoi instance set master \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -17,7 +17,7 @@ bin/cli instance set master \
   --compute-type cx23 \
   --compute-region fsn1
 
-bin/cli instance set worker-1 \
+nvoi instance set worker-1 \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -26,7 +26,7 @@ bin/cli instance set worker-1 \
   --compute-region fsn1 \
   --worker
 
-bin/cli volume set pgdata \
+nvoi volume set pgdata \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -34,7 +34,7 @@ bin/cli volume set pgdata \
   --size 30 \
   --server master
 
-bin/cli volume set meili-data \
+nvoi volume set meili-data \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -44,7 +44,7 @@ bin/cli volume set meili-data \
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
-bin/cli build \
+nvoi build \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -55,7 +55,7 @@ bin/cli build \
   --name web \
   --git-token "$GITHUB_TOKEN"
 
-WEB_IMAGE=$(bin/cli build latest web \
+WEB_IMAGE=$(nvoi build latest web \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -65,13 +65,13 @@ echo "image: $WEB_IMAGE"
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
-bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY" \
+nvoi secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY" \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$HETZNER_TOKEN
 
-bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD" \
+nvoi secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD" \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -79,7 +79,7 @@ bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD" \
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
-bin/cli storage set assets \
+nvoi storage set assets \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -89,7 +89,7 @@ bin/cli storage set assets \
 
 # ── Services ────────────────────────────────────────────────────────────────────
 
-bin/cli service set db \
+nvoi service set db \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -100,7 +100,7 @@ bin/cli service set db \
   --env POSTGRES_DB="$POSTGRES_DB" \
   --secret POSTGRES_PASSWORD
 
-bin/cli service set meilisearch \
+nvoi service set meilisearch \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -108,7 +108,7 @@ bin/cli service set meilisearch \
   --image getmeili/meilisearch:latest \
   --volume meili-data:/meili_data
 
-bin/cli service set web \
+nvoi service set web \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -126,7 +126,7 @@ bin/cli service set web \
   --secret RAILS_MASTER_KEY \
   --storage assets
 
-bin/cli service set jobs \
+nvoi service set jobs \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -143,7 +143,7 @@ bin/cli service set jobs \
 
 # ── DNS ─────────────────────────────────────────────────────────────────────────
 
-bin/cli dns set web final.nvoi.to \
+nvoi dns set web final.nvoi.to \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \
@@ -153,7 +153,7 @@ bin/cli dns set web final.nvoi.to \
 
 # ── Verify ──────────────────────────────────────────────────────────────────────
 
-bin/cli show \
+nvoi show \
   --app-name rails \
   --environment production \
   --compute-provider hetzner \

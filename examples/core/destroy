@@ -1,0 +1,27 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Example: teardown sequence ───────────────────────────────────────────────
+# Reverse order of deploy. Every delete is idempotent — tolerates missing resources.
+# Requires NVOI_APP_NAME, NVOI_ENV, and provider credentials as env vars.
+
+echo "==> destroying $NVOI_APP_NAME ($NVOI_ENV)"
+
+# ── Teardown (reverse order of deploy) ──────────────────────────────────────
+
+nvoi dns delete web final.nvoi.to -y
+nvoi storage empty assets -y
+nvoi storage delete assets -y
+nvoi secret delete RAILS_MASTER_KEY
+nvoi secret delete POSTGRES_PASSWORD
+nvoi service delete jobs -y
+nvoi service delete web -y
+nvoi service delete meilisearch -y
+nvoi service delete db -y
+nvoi volume delete meili-data -y
+nvoi volume delete pgdata -y
+nvoi instance delete worker-1 -y
+nvoi instance delete master -y
+
+echo ""
+echo "==> destroyed."

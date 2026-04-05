@@ -1,52 +1,46 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Hetzner deploy ─────────────────────────────────────────────────────────────
+# ── Example: Hetzner deploy sequence ───────────────────────────────────────────
 # Hetzner compute. Cloudflare DNS + storage (R2).
-# Everything comes from .env — provider selection, credentials, app secrets.
-# Compose loads .env into the container. Source it here too so deploy
-# script vars ($RAILS_MASTER_KEY, $POSTGRES_PASSWORD, etc.) expand on the host.
-
-set -a
-source .env
-set +a
+# Requires NVOI_APP_NAME, NVOI_ENV, and provider credentials as env vars.
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/cli instance set master --compute-type cx23 --compute-region fsn1
-bin/cli instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
-bin/cli volume set pgdata --size 30 --server master
-bin/cli volume set meili-data --size 20 --server master
+nvoi instance set master --compute-type cx23 --compute-region fsn1
+nvoi instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
+nvoi volume set pgdata --size 30 --server master
+nvoi volume set meili-data --size 20 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
-bin/cli build --source benbonnet/dummy-rails --name web
+nvoi build --source benbonnet/dummy-rails --name web
 
-WEB_IMAGE=$(bin/cli build latest web)
+WEB_IMAGE=$(nvoi build latest web)
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
-bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
-bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+nvoi secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+nvoi secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
-bin/cli storage set assets --cors
+nvoi storage set assets --cors
 
 # ── Services ────────────────────────────────────────────────────────────────────
 
-bin/cli service set db \
+nvoi service set db \
   --image postgres:17 \
   --volume pgdata:/var/lib/postgresql/data \
   --env POSTGRES_USER="$POSTGRES_USER" \
   --env POSTGRES_DB="$POSTGRES_DB" \
   --secret POSTGRES_PASSWORD
 
-bin/cli service set meilisearch \
+nvoi service set meilisearch \
   --image getmeili/meilisearch:latest \
   --volume meili-data:/meili_data
 
-bin/cli service set web \
+nvoi service set web \
   --image "$WEB_IMAGE" \
   --port 80 \
   --replicas 2 \
@@ -60,7 +54,7 @@ bin/cli service set web \
   --secret RAILS_MASTER_KEY \
   --storage assets
 
-bin/cli service set jobs \
+nvoi service set jobs \
   --image "$WEB_IMAGE" \
   --command "bin/jobs" \
   --server worker-1 \
@@ -73,7 +67,7 @@ bin/cli service set jobs \
 
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
-bin/cli dns set web final.nvoi.to
+nvoi dns set web final.nvoi.to
 
 echo ""
 echo "==> done. https://final.nvoi.to"

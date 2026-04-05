@@ -1,0 +1,51 @@
+# AWS deploy config — equivalent to examples/core/deploy-aws
+servers:
+  master:
+    type: t3.medium
+    region: eu-west-3
+
+volumes:
+  pgdata:
+    size: 30
+    server: master
+
+build:
+  web:
+    source: benbonnet/dummy-rails
+
+storage:
+  assets:
+    cors: true
+
+services:
+  db:
+    managed: postgres
+  web:
+    build: web
+    port: 80
+    replicas: 2
+    health: /up
+    env:
+      - RAILS_ENV=production
+      - POSTGRES_HOST=db
+      - POSTGRES_USER
+      - POSTGRES_DB
+    secrets:
+      - RAILS_MASTER_KEY
+    storage:
+      - assets
+    uses: [db]
+  jobs:
+    build: web
+    command: bin/jobs
+    env:
+      - RAILS_ENV=production
+      - POSTGRES_HOST=db
+      - POSTGRES_USER
+      - POSTGRES_DB
+    secrets:
+      - RAILS_MASTER_KEY
+    uses: [db]
+
+domains:
+  web: final.nvoi.to

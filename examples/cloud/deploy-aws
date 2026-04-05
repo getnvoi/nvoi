@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Example: AWS deploy via cloud CLI ─────────────────────────────────────────
+# Same topology as examples/core/deploy-aws, but through the API.
+
+nvoi login
+nvoi workspaces use default
+nvoi repos create dummy-rails
+nvoi repos use dummy-rails
+
+nvoi push \
+  --config examples/cloud/aws.yaml \
+  --env .env \
+  --compute-provider aws \
+  --dns-provider cloudflare \
+  --storage-provider aws \
+  --build-provider daytona
+
+nvoi plan
+nvoi deploy

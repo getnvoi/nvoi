@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Example: Scaleway deploy via cloud CLI ────────────────────────────────────
+# Same topology as examples/core/deploy-scaleway, but through the API.
+
+nvoi login
+nvoi workspaces use default
+nvoi repos create dummy-rails
+nvoi repos use dummy-rails
+
+nvoi push \
+  --config examples/cloud/scaleway.yaml \
+  --env .env \
+  --compute-provider scaleway \
+  --dns-provider cloudflare \
+  --storage-provider cloudflare \
+  --build-provider daytona
+
+nvoi plan
+nvoi deploy

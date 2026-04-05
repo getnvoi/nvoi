@@ -1,46 +1,40 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Scaleway deploy ──────────────────────────────────────────────────────────
-# Scaleway compute + DNS. Cloudflare storage (R2).
-# Everything comes from .env — provider selection, credentials, app secrets.
-# Compose loads .env into the container. Source it here too so deploy
-# script vars ($RAILS_MASTER_KEY, $POSTGRES_PASSWORD, etc.) expand on the host.
-
-set -a
-source .env
-set +a
+# ── Example: AWS deploy sequence ─────────────────────────────────────────────
+# AWS compute (EC2) + storage (S3). Cloudflare DNS.
+# Requires NVOI_APP_NAME, NVOI_ENV, and provider credentials as env vars.
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/cli instance set master --compute-type DEV1-L --compute-region fr-par-1
-bin/cli volume set pgdata --size 30 --server master
+nvoi instance set master --compute-type t3.medium --compute-region eu-west-3
+nvoi volume set pgdata --size 30 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
-bin/cli build --source benbonnet/dummy-rails --name web
+nvoi build --source benbonnet/dummy-rails --name web
 
-WEB_IMAGE=$(bin/cli build latest web)
+WEB_IMAGE=$(nvoi build latest web)
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
-bin/cli secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
-bin/cli secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+nvoi secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+nvoi secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
-bin/cli storage set assets --cors
+nvoi storage set assets --cors
 
 # ── Services ────────────────────────────────────────────────────────────────────
 
-bin/cli service set db \
+nvoi service set db \
   --image postgres:17 \
   --volume pgdata:/var/lib/postgresql/data \
   --env POSTGRES_USER="$POSTGRES_USER" \
   --env POSTGRES_DB="$POSTGRES_DB" \
   --secret POSTGRES_PASSWORD
 
-bin/cli service set web \
+nvoi service set web \
   --image "$WEB_IMAGE" \
   --port 80 \
   --replicas 2 \
@@ -53,7 +47,7 @@ bin/cli service set web \
   --secret RAILS_MASTER_KEY \
   --storage assets
 
-bin/cli service set jobs \
+nvoi service set jobs \
   --image "$WEB_IMAGE" \
   --command "bin/jobs" \
   --env RAILS_ENV=production \
@@ -65,7 +59,7 @@ bin/cli service set jobs \
 
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
-bin/cli dns set web scw.nvoi.to
+nvoi dns set web final.nvoi.to
 
 echo ""
-echo "==> done. https://scw.nvoi.to"
+echo "==> done. https://final.nvoi.to"

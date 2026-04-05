@@ -1,0 +1,61 @@
+# Hetzner deploy config — equivalent to examples/core/deploy-hetzner
+servers:
+  master:
+    type: cx23
+    region: fsn1
+  worker-1:
+    type: cx33
+    region: fsn1
+
+volumes:
+  pgdata:
+    size: 30
+    server: master
+  meili-data:
+    size: 20
+    server: master
+
+build:
+  web:
+    source: benbonnet/dummy-rails
+
+storage:
+  assets:
+    cors: true
+
+services:
+  db:
+    managed: postgres
+  meilisearch:
+    managed: meilisearch
+  web:
+    build: web
+    port: 80
+    replicas: 2
+    health: /up
+    server: worker-1
+    env:
+      - RAILS_ENV=production
+      - POSTGRES_HOST=db
+      - POSTGRES_USER
+      - POSTGRES_DB
+    secrets:
+      - RAILS_MASTER_KEY
+    storage:
+      - assets
+    uses: [db]
+  jobs:
+    build: web
+    command: bin/jobs
+    server: worker-1
+    env:
+      - RAILS_ENV=production
+      - POSTGRES_HOST=db
+      - POSTGRES_USER
+      - POSTGRES_DB
+    secrets:
+      - RAILS_MASTER_KEY
+    uses: [db]
+
+domains:
+  web: final.nvoi.to
