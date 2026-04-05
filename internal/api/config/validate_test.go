@@ -51,19 +51,52 @@ func TestValidate_NoServices(t *testing.T) {
 	assertHasError(t, errs, "at least one service")
 }
 
-func TestValidate_ServiceNoImageNoBuild(t *testing.T) {
+func TestValidate_ServiceNoSource(t *testing.T) {
 	cfg := validConfig()
 	cfg.Services["web"] = Service{Port: 80}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "must have either image or build")
+	assertHasError(t, errs, "must have one of image, build, or managed")
 }
 
-func TestValidate_ServiceBothImageAndBuild(t *testing.T) {
+func TestValidate_ServiceMultipleSources(t *testing.T) {
 	cfg := validConfig()
 	cfg.Build = map[string]Build{"web": {Source: "org/repo"}}
 	cfg.Services["web"] = Service{Image: "nginx", Build: "web", Port: 80}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "cannot have both image and build")
+	assertHasError(t, errs, "mutually exclusive")
+}
+
+func TestValidate_ServiceManagedValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Services["db"] = Service{Managed: "postgres"}
+	errs := Validate(cfg)
+	if len(errs) > 0 {
+		t.Errorf("managed postgres should be valid, got: %v", errs)
+	}
+}
+
+func TestValidate_ServiceManagedPlusImage(t *testing.T) {
+	cfg := validConfig()
+	cfg.Services["db"] = Service{Managed: "postgres", Image: "postgres:17"}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "mutually exclusive")
+}
+
+func TestValidate_ServiceUsesRefValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Services["db"] = Service{Managed: "postgres"}
+	cfg.Services["web"] = Service{Image: "nginx", Port: 80, Uses: []string{"db"}}
+	errs := Validate(cfg)
+	if len(errs) > 0 {
+		t.Errorf("uses ref to managed service should be valid, got: %v", errs)
+	}
+}
+
+func TestValidate_ServiceUsesRefInvalid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Services["web"] = Service{Image: "nginx", Uses: []string{"nonexistent"}}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "not a managed service")
 }
 
 func TestValidate_ServiceBuildRefMissing(t *testing.T) {

@@ -49,12 +49,31 @@ func Validate(cfg *Config) []error {
 	if len(cfg.Services) == 0 {
 		add("services: at least one service is required")
 	}
+	// Collect managed service names for database ref validation.
+	managedServices := map[string]bool{}
 	for name, svc := range cfg.Services {
-		if svc.Image == "" && svc.Build == "" {
-			add("services.%s: must have either image or build", name)
+		if svc.Managed != "" {
+			managedServices[name] = true
 		}
-		if svc.Image != "" && svc.Build != "" {
-			add("services.%s: cannot have both image and build", name)
+	}
+
+	for name, svc := range cfg.Services {
+		// Exactly one of image, build, managed.
+		sources := 0
+		if svc.Image != "" {
+			sources++
+		}
+		if svc.Build != "" {
+			sources++
+		}
+		if svc.Managed != "" {
+			sources++
+		}
+		if sources == 0 {
+			add("services.%s: must have one of image, build, or managed", name)
+		}
+		if sources > 1 {
+			add("services.%s: image, build, and managed are mutually exclusive", name)
 		}
 		if svc.Build != "" {
 			if _, ok := cfg.Build[svc.Build]; !ok {
@@ -72,6 +91,11 @@ func Validate(cfg *Config) []error {
 		for _, ref := range svc.Storage {
 			if _, ok := cfg.Storage[ref]; !ok {
 				add("services.%s.storage: %q is not a defined storage", name, ref)
+			}
+		}
+		for _, ref := range svc.Uses {
+			if !managedServices[ref] {
+				add("services.%s.uses: %q is not a managed service", name, ref)
 			}
 		}
 		for _, mount := range svc.Volumes {

@@ -45,6 +45,7 @@ type Storage struct {
 type Service struct {
 	Image    string   `json:"image,omitempty" yaml:"image,omitempty"`       // pre-built image (e.g. postgres:17)
 	Build    string   `json:"build,omitempty" yaml:"build,omitempty"`       // references a build target
+	Managed  string   `json:"managed,omitempty" yaml:"managed,omitempty"`   // managed service kind (postgres, redis, meilisearch)
 	Port     int      `json:"port,omitempty" yaml:"port,omitempty"`         // exposed port
 	Replicas int      `json:"replicas,omitempty" yaml:"replicas,omitempty"` // default 1
 	Command  string   `json:"command,omitempty" yaml:"command,omitempty"`   // override entrypoint
@@ -53,7 +54,8 @@ type Service struct {
 	Volumes  []string `json:"volumes,omitempty" yaml:"volumes,omitempty"`   // name:/path
 	Env      []string `json:"env,omitempty" yaml:"env,omitempty"`           // KEY=VALUE or KEY (resolved from .env)
 	Secrets  []string `json:"secrets,omitempty" yaml:"secrets,omitempty"`   // k8s secret key refs (resolved from .env)
-	Storage  []string `json:"storage,omitempty" yaml:"storage,omitempty"`   // storage name refs → STORAGE_{NAME}_*
+	Storage []string `json:"storage,omitempty" yaml:"storage,omitempty"` // storage name refs → STORAGE_{NAME}_*
+	Uses    []string `json:"uses,omitempty" yaml:"uses,omitempty"`       // managed service refs → credentials injected as secrets
 }
 
 // Domains supports both a single string and a list of strings in YAML/JSON.
