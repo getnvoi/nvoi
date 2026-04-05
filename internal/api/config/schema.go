@@ -8,7 +8,9 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 
+	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -102,64 +104,11 @@ func Parse(data []byte) (*Config, error) {
 }
 
 // ParseEnv parses a .env file into a key-value map.
-// Supports KEY=VALUE, KEY="VALUE", KEY='VALUE', comments (#), empty lines.
+// Delegates to godotenv — handles quoting, escaping, multiline, comments.
 func ParseEnv(data string) map[string]string {
-	env := make(map[string]string)
-	for _, line := range splitLines(data) {
-		line = trimSpace(line)
-		if line == "" || line[0] == '#' {
-			continue
-		}
-		k, v, ok := cutString(line, "=")
-		if !ok {
-			continue
-		}
-		v = unquote(v)
-		env[k] = v
+	env, err := godotenv.Parse(strings.NewReader(data))
+	if err != nil {
+		return map[string]string{}
 	}
 	return env
-}
-
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
-}
-
-func trimSpace(s string) string {
-	i, j := 0, len(s)
-	for i < j && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r') {
-		i++
-	}
-	for j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\r') {
-		j--
-	}
-	return s[i:j]
-}
-
-func cutString(s, sep string) (string, string, bool) {
-	for i := 0; i+len(sep) <= len(s); i++ {
-		if s[i:i+len(sep)] == sep {
-			return s[:i], s[i+len(sep):], true
-		}
-	}
-	return s, "", false
-}
-
-func unquote(s string) string {
-	if len(s) >= 2 {
-		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
-			return s[1 : len(s)-1]
-		}
-	}
-	return s
 }

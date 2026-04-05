@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // StepKind identifies the pkg/core/ function to call.
@@ -55,7 +57,7 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 
 	// ── 1. Compute ─────────────────────────────────────────────────────────
 	// First server is master, rest are workers. Deterministic order.
-	serverNames := sortedKeys(cfg.Servers)
+	serverNames := utils.SortedKeys(cfg.Servers)
 	for i, name := range serverNames {
 		srv := cfg.Servers[name]
 		params := map[string]any{
@@ -69,7 +71,7 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 	}
 
 	// ── 2. Volumes ─────────────────────────────────────────────────────────
-	for _, name := range sortedKeys(cfg.Volumes) {
+	for _, name := range utils.SortedKeys(cfg.Volumes) {
 		vol := cfg.Volumes[name]
 		steps = append(steps, Step{Kind: StepVolumeSet, Name: name, Params: map[string]any{
 			"size":   vol.Size,
@@ -78,7 +80,7 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 	}
 
 	// ── 3. Build ───────────────────────────────────────────────────────────
-	for _, name := range sortedKeys(cfg.Build) {
+	for _, name := range utils.SortedKeys(cfg.Build) {
 		b := cfg.Build[name]
 		steps = append(steps, Step{Kind: StepBuild, Name: name, Params: map[string]any{
 			"source": b.Source,
@@ -99,7 +101,7 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 	}
 
 	// ── 5. Storage ─────────────────────────────────────────────────────────
-	for _, name := range sortedKeys(cfg.Storage) {
+	for _, name := range utils.SortedKeys(cfg.Storage) {
 		st := cfg.Storage[name]
 		params := map[string]any{}
 		if st.CORS {
@@ -115,7 +117,7 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 	}
 
 	// ── 6. Services ────────────────────────────────────────────────────────
-	for _, name := range sortedKeys(cfg.Services) {
+	for _, name := range utils.SortedKeys(cfg.Services) {
 		svc := cfg.Services[name]
 		params := map[string]any{}
 
@@ -171,7 +173,7 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 	}
 
 	// ── 7. DNS ─────────────────────────────────────────────────────────────
-	for _, svcName := range sortedKeys(cfg.Domains) {
+	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		domains := cfg.Domains[svcName]
 		steps = append(steps, Step{Kind: StepDNSSet, Name: svcName, Params: map[string]any{
 			"domains": []string(domains),
@@ -231,14 +233,14 @@ func Diff(prev, current *Config) []Step {
 	}
 
 	// Services removed.
-	for _, name := range sortedKeys(prev.Services) {
+	for _, name := range utils.SortedKeys(prev.Services) {
 		if _, ok := current.Services[name]; !ok {
 			steps = append(steps, Step{Kind: StepServiceDelete, Name: name})
 		}
 	}
 
 	// Storage removed.
-	for _, name := range sortedKeys(prev.Storage) {
+	for _, name := range utils.SortedKeys(prev.Storage) {
 		if _, ok := current.Storage[name]; !ok {
 			steps = append(steps, Step{Kind: StepStorageDelete, Name: name})
 		}
@@ -257,14 +259,14 @@ func Diff(prev, current *Config) []Step {
 	}
 
 	// Volumes removed.
-	for _, name := range sortedKeys(prev.Volumes) {
+	for _, name := range utils.SortedKeys(prev.Volumes) {
 		if _, ok := current.Volumes[name]; !ok {
 			steps = append(steps, Step{Kind: StepVolumeDelete, Name: name})
 		}
 	}
 
 	// Compute: servers removed (workers first, master last).
-	for _, name := range reverseSorted(removedKeys(prev.Servers, current.Servers)) {
+	for _, name := range utils.ReverseSorted(utils.RemovedKeys(prev.Servers, current.Servers)) {
 		steps = append(steps, Step{Kind: StepComputeDelete, Name: name})
 	}
 
@@ -290,28 +292,3 @@ func FullPlan(prev, current *Config, env map[string]string) ([]Step, error) {
 	return append(deleteSteps, setSteps...), nil
 }
 
-// removedKeys returns keys present in prev but absent in current.
-func removedKeys[V any](prev, current map[string]V) []string {
-	var removed []string
-	for k := range prev {
-		if _, ok := current[k]; !ok {
-			removed = append(removed, k)
-		}
-	}
-	return removed
-}
-
-// reverseSorted sorts strings and returns them in reverse order.
-func reverseSorted(s []string) []string {
-	sort.Sort(sort.Reverse(sort.StringSlice(s)))
-	return s
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}

@@ -9,8 +9,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"sort"
 	"strings"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 
 	"github.com/getnvoi/nvoi/internal/api/config"
 )
@@ -88,7 +89,7 @@ func Expand(cfg *config.Config, storedCreds map[string]map[string]string) (expan
 
 	// Default server for auto-generated volumes (first alphabetically).
 	defaultServer := ""
-	for _, k := range sortedMapKeys(cfg.Servers) {
+	for _, k := range utils.SortedKeys(cfg.Servers) {
 		defaultServer = k
 		break
 	}
@@ -204,11 +205,3 @@ func RandomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func sortedMapKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
