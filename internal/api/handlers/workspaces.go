@@ -5,7 +5,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
-	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -137,18 +136,6 @@ func DeleteWorkspace(db *gorm.DB) func(context.Context, *DeleteWorkspaceInput) (
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-// loadWorkspace is the Gin-compatible version for handlers not yet migrated to huma.
-// It writes 404 directly to gin.Context on failure.
-func loadWorkspace(c *gin.Context, db *gorm.DB) (*api.Workspace, bool) {
-	user := api.CurrentUser(c)
-	ws, err := findWorkspace(db, user.ID, c.Param("workspace_id"))
-	if err != nil {
-		c.JSON(404, gin.H{"error": "workspace not found"})
-		return nil, false
-	}
-	return ws, true
-}
 
 // findWorkspace fetches a workspace scoped to the given user.
 func findWorkspace(db *gorm.DB, userID, workspaceID string) (*api.Workspace, error) {

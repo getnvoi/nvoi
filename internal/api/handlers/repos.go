@@ -5,7 +5,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
-	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -149,13 +148,3 @@ func findRepo(db *gorm.DB, userID, workspaceID, repoID string) (*api.Repo, error
 	return &repo, nil
 }
 
-// loadRepo is the Gin-compatible version for handlers not yet migrated to huma.
-func loadRepo(c *gin.Context, db *gorm.DB) (*api.Repo, bool) {
-	user := api.CurrentUser(c)
-	repo, err := findRepo(db, user.ID, c.Param("workspace_id"), c.Param("repo_id"))
-	if err != nil {
-		c.JSON(404, gin.H{"error": "repo not found"})
-		return nil, false
-	}
-	return repo, true
-}

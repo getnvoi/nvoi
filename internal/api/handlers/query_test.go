@@ -367,7 +367,7 @@ func TestExec_MissingCommand(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	// Push config so we get past loadRepo.
+	// Push config so we get past findRepo.
 	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"
 	body := map[string]any{"compute_provider": "hetzner", "config": minimalYAML}
 	pushReq := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
