@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/api"
@@ -72,6 +73,7 @@ func Execute(ctx context.Context, db *gorm.DB, p ExecuteParams) {
 }
 
 // run walks steps for a deployment, dispatching each to step().
+// Consecutive service.set steps run in parallel — all others run sequentially.
 func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 	markDeploymentRunning(e.db, deployment)
 
@@ -79,7 +81,21 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 	e.db.Where("deployment_id = ?", deployment.ID).Order("position").Find(&steps)
 
 	var lastErr error
-	for i := range steps {
+	i := 0
+	for i < len(steps) {
+		// Collect consecutive service.set steps for parallel execution.
+		if config.StepKind(steps[i].Kind) == config.StepServiceSet {
+			batch := collectBatch(steps, i)
+			lastErr = e.runParallel(ctx, batch)
+			i += len(batch)
+			if lastErr != nil {
+				skipRemainingSteps(e.db, deployment.ID)
+				break
+			}
+			continue
+		}
+
+		// Sequential execution for all other step kinds.
 		step := &steps[i]
 		e.cluster.Output = newDBOutput(e.db, step.ID)
 		markStepRunning(e.db, step)
@@ -91,6 +107,7 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 
 		err := e.step(ctx, config.StepKind(step.Kind), step.Name, params)
 		markStepDone(e.db, step, err)
+		i++
 
 		if err != nil {
 			lastErr = err
@@ -102,12 +119,66 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 	markDeploymentDone(e.db, deployment, lastErr)
 }
 
-// step dispatches a single step to the corresponding pkg/core/ function.
+// collectBatch returns consecutive service.set steps starting at index i.
+func collectBatch(steps []api.DeploymentStep, i int) []*api.DeploymentStep {
+	var batch []*api.DeploymentStep
+	for i < len(steps) && config.StepKind(steps[i].Kind) == config.StepServiceSet {
+		batch = append(batch, &steps[i])
+		i++
+	}
+	return batch
+}
+
+// runParallel executes a batch of steps concurrently. Each step gets its own
+// cluster copy with its own dbOutput. Returns the first error encountered.
+func (e *executor) runParallel(ctx context.Context, batch []*api.DeploymentStep) error {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	for _, step := range batch {
+		wg.Add(1)
+		go func(s *api.DeploymentStep) {
+			defer wg.Done()
+
+			// Each goroutine gets its own cluster copy with its own Output.
+			c := e.cluster
+			c.Output = newDBOutput(e.db, s.ID)
+			markStepRunning(e.db, s)
+
+			var params map[string]any
+			if s.Params != "" {
+				json.Unmarshal([]byte(s.Params), &params)
+			}
+
+			err := e.stepWithCluster(ctx, c, config.StepKind(s.Kind), s.Name, params)
+			markStepDone(e.db, s, err)
+
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(step)
+	}
+
+	wg.Wait()
+	return firstErr
+}
+
+// step dispatches a single step using e.cluster (sequential path).
 func (e *executor) step(ctx context.Context, kind config.StepKind, name string, params map[string]any) error {
+	return e.stepWithCluster(ctx, e.cluster, kind, name, params)
+}
+
+// stepWithCluster dispatches a single step with an explicit cluster (parallel-safe).
+func (e *executor) stepWithCluster(ctx context.Context, cluster pkgcore.Cluster, kind config.StepKind, name string, params map[string]any) error {
 	switch kind {
 	case config.StepComputeSet:
 		_, err := pkgcore.ComputeSet(ctx, pkgcore.ComputeSetRequest{
-			Cluster:    e.cluster,
+			Cluster:    cluster,
 			Name:       name,
 			ServerType: utils.GetString(params, "type"),
 			Region:     utils.GetString(params, "region"),
@@ -117,13 +188,13 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 
 	case config.StepComputeDelete:
 		return pkgcore.ComputeDelete(ctx, pkgcore.ComputeDeleteRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			Name:    name,
 		})
 
 	case config.StepVolumeSet:
 		_, err := pkgcore.VolumeSet(ctx, pkgcore.VolumeSetRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			Name:    name,
 			Size:    utils.GetInt(params, "size"),
 			Server:  utils.GetString(params, "server"),
@@ -132,7 +203,7 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 
 	case config.StepVolumeDelete:
 		return pkgcore.VolumeDelete(ctx, pkgcore.VolumeDeleteRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			Name:    name,
 		})
 
@@ -153,20 +224,20 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 
 	case config.StepSecretSet:
 		return pkgcore.SecretSet(ctx, pkgcore.SecretSetRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			Key:     name,
 			Value:   utils.GetString(params, "value"),
 		})
 
 	case config.StepSecretDelete:
 		return pkgcore.SecretDelete(ctx, pkgcore.SecretDeleteRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			Key:     name,
 		})
 
 	case config.StepStorageSet:
 		return pkgcore.StorageSet(ctx, pkgcore.StorageSetRequest{
-			Cluster:    e.cluster,
+			Cluster:    cluster,
 			Storage:    e.storage,
 			Name:       name,
 			Bucket:     utils.GetString(params, "bucket"),
@@ -176,7 +247,7 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 
 	case config.StepStorageDelete:
 		return pkgcore.StorageDelete(ctx, pkgcore.StorageDeleteRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			Storage: e.storage,
 			Name:    name,
 		})
@@ -188,7 +259,7 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 				image = ref
 			} else {
 				ref, err := pkgcore.BuildLatest(ctx, pkgcore.BuildLatestRequest{
-					Cluster: e.cluster,
+					Cluster: cluster,
 					Name:    buildRef,
 				})
 				if err != nil {
@@ -200,7 +271,7 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 		}
 
 		return pkgcore.ServiceSet(ctx, pkgcore.ServiceSetRequest{
-			Cluster:    e.cluster,
+			Cluster:    cluster,
 			Name:       name,
 			Image:      image,
 			Port:       utils.GetInt(params, "port"),
@@ -216,13 +287,13 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 
 	case config.StepServiceDelete:
 		return pkgcore.ServiceDelete(ctx, pkgcore.ServiceDeleteRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			Name:    name,
 		})
 
 	case config.StepDNSSet:
 		return pkgcore.DNSSet(ctx, pkgcore.DNSSetRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			DNS:     e.dns,
 			Service: name,
 			Domains: utils.GetStringSlice(params, "domains"),
@@ -230,7 +301,7 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 
 	case config.StepDNSDelete:
 		return pkgcore.DNSDelete(ctx, pkgcore.DNSDeleteRequest{
-			Cluster: e.cluster,
+			Cluster: cluster,
 			DNS:     e.dns,
 			Service: name,
 			Domains: utils.GetStringSlice(params, "domains"),
