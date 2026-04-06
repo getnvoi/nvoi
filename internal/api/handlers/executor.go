@@ -79,6 +79,7 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 	e.db.Where("deployment_id = ?", deployment.ID).Order("position").Find(&steps)
 
 	var lastErr error
+	hadServices := false
 	for i := range steps {
 		step := &steps[i]
 		e.cluster.Output = newDBOutput(e.db, step.ID)
@@ -92,10 +93,25 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 		err := e.step(ctx, config.StepKind(step.Kind), step.Name, params)
 		markStepDone(e.db, step, err)
 
+		if config.StepKind(step.Kind) == config.StepServiceSet {
+			hadServices = true
+		}
+
 		if err != nil {
 			lastErr = err
 			skipRemainingSteps(e.db, deployment.ID)
 			break
+		}
+
+		// After all services applied, wait for all pods to be ready.
+		// This runs once: after the last service.set step, before dns.set.
+		nextIsNotService := i+1 >= len(steps) || config.StepKind(steps[i+1].Kind) != config.StepServiceSet
+		if hadServices && nextIsNotService && config.StepKind(step.Kind) == config.StepServiceSet {
+			if err := pkgcore.WaitAllServices(ctx, pkgcore.WaitAllServicesRequest{Cluster: e.cluster}); err != nil {
+				lastErr = err
+				skipRemainingSteps(e.db, deployment.ID)
+				break
+			}
 		}
 	}
 

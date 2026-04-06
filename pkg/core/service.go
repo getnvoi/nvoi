@@ -140,7 +140,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 
 	out.Command("service", "set", req.Name)
 
-	yaml, workloadKind, err := kube.GenerateYAML(spec, names, managedVolPaths)
+	yaml, _, err := kube.GenerateYAML(spec, names, managedVolPaths)
 	if err != nil {
 		return fmt.Errorf("generate manifest: %w", err)
 	}
@@ -149,12 +149,6 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return err
 	}
 	out.Success("applied")
-
-	out.Progress("waiting for rollout")
-	if err := kube.WaitRollout(ctx, ssh, ns, req.Name, workloadKind, req.HealthPath != "", out); err != nil {
-		return err
-	}
-	out.Success(req.Name + " ready")
 
 	return nil
 }

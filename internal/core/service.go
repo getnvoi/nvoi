@@ -66,15 +66,17 @@ Examples:
 				return err
 			}
 
-			return app.ServiceSet(cmd.Context(), app.ServiceSetRequest{
-				Cluster: app.Cluster{
-					AppName:     appName,
-					Env:         env,
-					Provider:    providerName,
-					Credentials: creds,
-					SSHKey:      sshKey,
-					Output:      resolveOutput(cmd),
-				},
+			cluster := app.Cluster{
+				AppName:     appName,
+				Env:         env,
+				Provider:    providerName,
+				Credentials: creds,
+				SSHKey:      sshKey,
+				Output:      resolveOutput(cmd),
+			}
+
+			if err := app.ServiceSet(cmd.Context(), app.ServiceSetRequest{
+				Cluster:    cluster,
 				Name:       args[0],
 				Image:      image,
 				Port:       port,
@@ -86,6 +88,12 @@ Examples:
 				Volumes:    volumes,
 				HealthPath: healthPath,
 				Server:     server,
+			}); err != nil {
+				return err
+			}
+
+			return app.WaitAllServices(cmd.Context(), app.WaitAllServicesRequest{
+				Cluster: cluster,
 			})
 		},
 	}
