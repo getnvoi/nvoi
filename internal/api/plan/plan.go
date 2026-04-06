@@ -1,12 +1,16 @@
-package config
+package plan
 
 import (
 	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/getnvoi/nvoi/internal/api/config"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// Cfg aliases config.Config for readability.
+type Cfg = config.Config
 
 // StepKind identifies the pkg/core/ function to call.
 type StepKind string
@@ -38,51 +42,47 @@ type Step struct {
 // Plan generates the full ordered deploy sequence: deletes for removed resources
 // first (reverse deploy order), then sets for desired resources (forward deploy order).
 //
-// prev is the previous config version (nil for first deploy).
-// current is the desired state (empty for destroy-all).
+// reality is what's currently deployed (from InfraState, nil for first deploy).
+// desired is the target state (empty for destroy-all).
 // env is the parsed .env map — used to resolve secret values and env var references.
-func Plan(prev, current *Config, env map[string]string) ([]Step, error) {
+func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 	var steps []Step
 
 	// ── Deletes (reverse deploy order) ─────────────────────────────────────
-	steps = append(steps, diffDNS(prev, current)...)
-	steps = append(steps, diffServices(prev, current)...)
-	steps = append(steps, diffStorage(prev, current)...)
-	steps = append(steps, diffSecrets(prev, current)...)
-	steps = append(steps, diffVolumes(prev, current)...)
-	steps = append(steps, diffCompute(prev, current)...)
+	steps = append(steps, diffDNS(reality, desired)...)
+	steps = append(steps, diffServices(reality, desired)...)
+	steps = append(steps, diffStorage(reality, desired)...)
+	steps = append(steps, diffSecrets(reality, desired)...)
+	steps = append(steps, diffVolumes(reality, desired)...)
+	steps = append(steps, diffCompute(reality, desired)...)
 
 	// ── Sets (forward deploy order) ────────────────────────────────────────
-	steps = append(steps, setCompute(current)...)
-	steps = append(steps, setVolumes(current)...)
-	steps = append(steps, setBuild(current)...)
-	setSecrets, err := setSecrets(current, env)
+	steps = append(steps, setCompute(desired)...)
+	steps = append(steps, setVolumes(desired)...)
+	steps = append(steps, setBuild(desired)...)
+	secretSteps, err := setSecrets(desired, env)
 	if err != nil {
 		return nil, err
 	}
-	steps = append(steps, setSecrets...)
-	steps = append(steps, setStorage(current)...)
-	setServices, err := setServices(current, env)
+	steps = append(steps, secretSteps...)
+	steps = append(steps, setStorage(desired)...)
+	serviceSteps, err := setServices(desired, env)
 	if err != nil {
 		return nil, err
 	}
-	steps = append(steps, setServices...)
-	steps = append(steps, setDNS(current)...)
+	steps = append(steps, serviceSteps...)
+	steps = append(steps, setDNS(desired)...)
 
 	return steps, nil
 }
 
 // ── Set phases (forward deploy order) ──────────────────────────────────────
 
-func setCompute(cfg *Config) []Step {
+func setCompute(cfg *Cfg) []Step {
 	var steps []Step
-	serverNames := utils.SortedKeys(cfg.Servers)
-	for i, name := range serverNames {
+	for i, name := range utils.SortedKeys(cfg.Servers) {
 		srv := cfg.Servers[name]
-		params := map[string]any{
-			"type":   srv.Type,
-			"region": srv.Region,
-		}
+		params := map[string]any{"type": srv.Type, "region": srv.Region}
 		if i > 0 {
 			params["worker"] = true
 		}
@@ -91,45 +91,40 @@ func setCompute(cfg *Config) []Step {
 	return steps
 }
 
-func setVolumes(cfg *Config) []Step {
+func setVolumes(cfg *Cfg) []Step {
 	var steps []Step
 	for _, name := range utils.SortedKeys(cfg.Volumes) {
 		vol := cfg.Volumes[name]
 		steps = append(steps, Step{Kind: StepVolumeSet, Name: name, Params: map[string]any{
-			"size":   vol.Size,
-			"server": vol.Server,
+			"size": vol.Size, "server": vol.Server,
 		}})
 	}
 	return steps
 }
 
-func setBuild(cfg *Config) []Step {
+func setBuild(cfg *Cfg) []Step {
 	var steps []Step
 	for _, name := range utils.SortedKeys(cfg.Build) {
-		b := cfg.Build[name]
 		steps = append(steps, Step{Kind: StepBuild, Name: name, Params: map[string]any{
-			"source": b.Source,
+			"source": cfg.Build[name].Source,
 		}})
 	}
 	return steps
 }
 
-func setSecrets(cfg *Config, env map[string]string) ([]Step, error) {
+func setSecrets(cfg *Cfg, env map[string]string) ([]Step, error) {
 	var steps []Step
-	secretKeys := collectSecrets(cfg)
-	for _, key := range secretKeys {
+	for _, key := range collectSecrets(cfg) {
 		val, ok := env[key]
 		if !ok {
 			return nil, fmt.Errorf("secret %q referenced by service but not found in env", key)
 		}
-		steps = append(steps, Step{Kind: StepSecretSet, Name: key, Params: map[string]any{
-			"value": val,
-		}})
+		steps = append(steps, Step{Kind: StepSecretSet, Name: key, Params: map[string]any{"value": val}})
 	}
 	return steps, nil
 }
 
-func setStorage(cfg *Config) []Step {
+func setStorage(cfg *Cfg) []Step {
 	var steps []Step
 	for _, name := range utils.SortedKeys(cfg.Storage) {
 		st := cfg.Storage[name]
@@ -148,12 +143,11 @@ func setStorage(cfg *Config) []Step {
 	return steps
 }
 
-func setServices(cfg *Config, env map[string]string) ([]Step, error) {
+func setServices(cfg *Cfg, env map[string]string) ([]Step, error) {
 	var steps []Step
 	for _, name := range utils.SortedKeys(cfg.Services) {
 		svc := cfg.Services[name]
 		params := map[string]any{}
-
 		if svc.Image != "" {
 			params["image"] = svc.Image
 		}
@@ -184,8 +178,6 @@ func setServices(cfg *Config, env map[string]string) ([]Step, error) {
 		if len(svc.Storage) > 0 {
 			params["storage"] = svc.Storage
 		}
-
-		// Resolve env: KEY=VALUE stays literal, bare KEY resolves from .env.
 		var resolvedEnv []string
 		for _, entry := range svc.Env {
 			if strings.Contains(entry, "=") {
@@ -201,18 +193,16 @@ func setServices(cfg *Config, env map[string]string) ([]Step, error) {
 		if len(resolvedEnv) > 0 {
 			params["env"] = resolvedEnv
 		}
-
 		steps = append(steps, Step{Kind: StepServiceSet, Name: name, Params: params})
 	}
 	return steps, nil
 }
 
-func setDNS(cfg *Config) []Step {
+func setDNS(cfg *Cfg) []Step {
 	var steps []Step
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
-		domains := cfg.Domains[svcName]
 		steps = append(steps, Step{Kind: StepDNSSet, Name: svcName, Params: map[string]any{
-			"domains": []string(domains),
+			"domains": []string(cfg.Domains[svcName]),
 		}})
 	}
 	return steps
@@ -220,13 +210,13 @@ func setDNS(cfg *Config) []Step {
 
 // ── Diff phases (reverse deploy order) ─────────────────────────────────────
 
-func diffDNS(prev, current *Config) []Step {
-	if prev == nil {
+func diffDNS(reality, desired *Cfg) []Step {
+	if reality == nil {
 		return nil
 	}
 	var steps []Step
-	for svcName, domains := range prev.Domains {
-		if _, ok := current.Domains[svcName]; !ok {
+	for svcName, domains := range reality.Domains {
+		if _, ok := desired.Domains[svcName]; !ok {
 			steps = append(steps, Step{Kind: StepDNSDelete, Name: svcName, Params: map[string]any{
 				"domains": []string(domains),
 			}})
@@ -235,69 +225,69 @@ func diffDNS(prev, current *Config) []Step {
 	return steps
 }
 
-func diffServices(prev, current *Config) []Step {
-	if prev == nil {
+func diffServices(reality, desired *Cfg) []Step {
+	if reality == nil {
 		return nil
 	}
 	var steps []Step
-	for _, name := range utils.SortedKeys(prev.Services) {
-		if _, ok := current.Services[name]; !ok {
+	for _, name := range utils.SortedKeys(reality.Services) {
+		if _, ok := desired.Services[name]; !ok {
 			steps = append(steps, Step{Kind: StepServiceDelete, Name: name})
 		}
 	}
 	return steps
 }
 
-func diffStorage(prev, current *Config) []Step {
-	if prev == nil {
+func diffStorage(reality, desired *Cfg) []Step {
+	if reality == nil {
 		return nil
 	}
 	var steps []Step
-	for _, name := range utils.SortedKeys(prev.Storage) {
-		if _, ok := current.Storage[name]; !ok {
+	for _, name := range utils.SortedKeys(reality.Storage) {
+		if _, ok := desired.Storage[name]; !ok {
 			steps = append(steps, Step{Kind: StepStorageDelete, Name: name})
 		}
 	}
 	return steps
 }
 
-func diffSecrets(prev, current *Config) []Step {
-	if prev == nil {
+func diffSecrets(reality, desired *Cfg) []Step {
+	if reality == nil {
 		return nil
 	}
 	var steps []Step
-	prevSecrets := collectSecrets(prev)
-	currentSecrets := map[string]bool{}
-	for _, k := range collectSecrets(current) {
-		currentSecrets[k] = true
+	realitySecrets := collectSecrets(reality)
+	desiredSecrets := map[string]bool{}
+	for _, k := range collectSecrets(desired) {
+		desiredSecrets[k] = true
 	}
-	for _, key := range prevSecrets {
-		if !currentSecrets[key] {
+	for _, key := range realitySecrets {
+		if !desiredSecrets[key] {
 			steps = append(steps, Step{Kind: StepSecretDelete, Name: key})
 		}
 	}
 	return steps
 }
 
-func diffVolumes(prev, current *Config) []Step {
-	if prev == nil {
+func diffVolumes(reality, desired *Cfg) []Step {
+	if reality == nil {
 		return nil
 	}
 	var steps []Step
-	for _, name := range utils.SortedKeys(prev.Volumes) {
-		if _, ok := current.Volumes[name]; !ok {
+	for _, name := range utils.SortedKeys(reality.Volumes) {
+		if _, ok := desired.Volumes[name]; !ok {
 			steps = append(steps, Step{Kind: StepVolumeDelete, Name: name})
 		}
 	}
 	return steps
 }
 
-func diffCompute(prev, current *Config) []Step {
-	if prev == nil {
+func diffCompute(reality, desired *Cfg) []Step {
+	if reality == nil {
 		return nil
 	}
 	var steps []Step
-	for _, name := range utils.ReverseSorted(utils.RemovedKeys(prev.Servers, current.Servers)) {
+	for _, name := range utils.ReverseSorted(utils.RemovedKeys(reality.Servers, desired.Servers)) {
 		steps = append(steps, Step{Kind: StepComputeDelete, Name: name})
 	}
 	return steps
@@ -305,14 +295,11 @@ func diffCompute(prev, current *Config) []Step {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-// collectSecrets deduplicates and sorts all secret key references across services.
-// Handles both "KEY" and "ENV=KEY" formats — extracts the secret key (right side).
-func collectSecrets(cfg *Config) []string {
+func collectSecrets(cfg *Cfg) []string {
 	seen := map[string]bool{}
 	for _, svc := range cfg.Services {
 		for _, entry := range svc.Secrets {
-			key := secretKey(entry)
-			seen[key] = true
+			seen[secretKey(entry)] = true
 		}
 	}
 	keys := make([]string, 0, len(seen))
@@ -323,9 +310,6 @@ func collectSecrets(cfg *Config) []string {
 	return keys
 }
 
-// secretKey extracts the k8s secret key from a secret entry.
-// "POSTGRES_PASSWORD" → "POSTGRES_PASSWORD" (same name)
-// "POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB" → "POSTGRES_PASSWORD_DB" (aliased)
 func secretKey(entry string) string {
 	if _, key, ok := strings.Cut(entry, "="); ok {
 		return key

@@ -8,6 +8,8 @@ import (
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
 	"github.com/getnvoi/nvoi/internal/api/managed"
+	"github.com/getnvoi/nvoi/internal/api/plan"
+	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -83,7 +85,7 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Validate that the plan can be built (env references resolve).
-		if _, err := config.Plan(nil, expanded, env); err != nil {
+		if _, err := plan.Build(nil, expanded, env); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -229,18 +231,24 @@ func PlanConfig(db *gorm.DB) gin.HandlerFunc {
 			env[k] = v
 		}
 
-		// Load previous config for diff.
-		var prev *config.Config
-		if rc.Version > 1 {
-			var prevRC api.RepoConfig
-			if err := db.Where("repo_id = ? AND version = ?", repo.ID, rc.Version-1).First(&prevRC).Error; err == nil {
-				if prevCfg, err := config.Parse([]byte(prevRC.Config)); err == nil {
-					prev, _, _ = managed.Expand(prevCfg, storedCreds)
-				}
-			}
+		// Query reality — what's actually deployed.
+		creds, credErr := resolveAllCredentials(&rc, env)
+		var reality *config.Config
+		if credErr == nil {
+			reality = plan.InfraState(c.Request.Context(), plan.InfraStateRequest{
+				Cluster: pkgcore.Cluster{
+					AppName:     repo.Name,
+					Env:         repo.Environment,
+					Provider:    string(rc.ComputeProvider),
+					Credentials: creds.Compute,
+					SSHKey:      []byte(repo.SSHPrivateKey),
+				},
+				DNS:     pkgcore.ProviderRef{Name: string(rc.DNSProvider), Creds: creds.DNS},
+				Storage: pkgcore.ProviderRef{Name: string(rc.StorageProvider), Creds: creds.Storage},
+			})
 		}
 
-		steps, err := config.Plan(prev, expanded, env)
+		steps, err := plan.Build(reality, expanded, env)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "plan failed: " + err.Error()})
 			return

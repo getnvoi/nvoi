@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/api"
-	"github.com/getnvoi/nvoi/internal/api/config"
+	"github.com/getnvoi/nvoi/internal/api/plan"
 	"gorm.io/gorm"
 
 	// Providers must be registered for newExecutor to map credentials.
@@ -138,7 +138,7 @@ func TestExecutor_Run_FailureSkipsRemaining(t *testing.T) {
 
 	// Two steps: first is an unknown kind (will fail), second should be skipped.
 	db.Create(&api.DeploymentStep{DeploymentID: deployment.ID, Position: 1, Kind: "bogus.fail", Name: "bad"})
-	db.Create(&api.DeploymentStep{DeploymentID: deployment.ID, Position: 2, Kind: string(config.StepSecretSet), Name: "key", Params: `{"value":"v"}`})
+	db.Create(&api.DeploymentStep{DeploymentID: deployment.ID, Position: 2, Kind: string(plan.StepSecretSet), Name: "key", Params: `{"value":"v"}`})
 
 	e := &executor{db: db, builtImages: map[string]string{}}
 	e.run(context.Background(), &deployment)

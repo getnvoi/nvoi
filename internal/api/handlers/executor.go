@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/api"
-	"github.com/getnvoi/nvoi/internal/api/config"
+	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gorm.io/gorm"
@@ -90,10 +90,10 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 			json.Unmarshal([]byte(step.Params), &params)
 		}
 
-		err := e.step(ctx, config.StepKind(step.Kind), step.Name, params)
+		err := e.step(ctx, plan.StepKind(step.Kind), step.Name, params)
 		markStepDone(e.db, step, err)
 
-		if config.StepKind(step.Kind) == config.StepServiceSet {
+		if plan.StepKind(step.Kind) == plan.StepServiceSet {
 			hadServices = true
 		}
 
@@ -105,8 +105,8 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 
 		// After all services applied, wait for all pods to be ready.
 		// This runs once: after the last service.set step, before dns.set.
-		nextIsNotService := i+1 >= len(steps) || config.StepKind(steps[i+1].Kind) != config.StepServiceSet
-		if hadServices && nextIsNotService && config.StepKind(step.Kind) == config.StepServiceSet {
+		nextIsNotService := i+1 >= len(steps) || plan.StepKind(steps[i+1].Kind) != plan.StepServiceSet
+		if hadServices && nextIsNotService && plan.StepKind(step.Kind) == plan.StepServiceSet {
 			if err := pkgcore.WaitAllServices(ctx, pkgcore.WaitAllServicesRequest{Cluster: e.cluster}); err != nil {
 				lastErr = err
 				skipRemainingSteps(e.db, deployment.ID)
@@ -119,9 +119,9 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 }
 
 // step dispatches a single step to the corresponding pkg/core/ function.
-func (e *executor) step(ctx context.Context, kind config.StepKind, name string, params map[string]any) error {
+func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, params map[string]any) error {
 	switch kind {
-	case config.StepComputeSet:
+	case plan.StepComputeSet:
 		_, err := pkgcore.ComputeSet(ctx, pkgcore.ComputeSetRequest{
 			Cluster:    e.cluster,
 			Name:       name,
@@ -131,13 +131,13 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 		})
 		return err
 
-	case config.StepComputeDelete:
+	case plan.StepComputeDelete:
 		return pkgcore.ComputeDelete(ctx, pkgcore.ComputeDeleteRequest{
 			Cluster: e.cluster,
 			Name:    name,
 		})
 
-	case config.StepVolumeSet:
+	case plan.StepVolumeSet:
 		_, err := pkgcore.VolumeSet(ctx, pkgcore.VolumeSetRequest{
 			Cluster: e.cluster,
 			Name:    name,
@@ -146,13 +146,13 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 		})
 		return err
 
-	case config.StepVolumeDelete:
+	case plan.StepVolumeDelete:
 		return pkgcore.VolumeDelete(ctx, pkgcore.VolumeDeleteRequest{
 			Cluster: e.cluster,
 			Name:    name,
 		})
 
-	case config.StepBuild:
+	case plan.StepBuild:
 		result, err := pkgcore.BuildRun(ctx, pkgcore.BuildRunRequest{
 			Cluster:            e.cluster,
 			Builder:            e.buildProvider,
@@ -167,20 +167,20 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 		e.builtImages[name] = result.ImageRef
 		return nil
 
-	case config.StepSecretSet:
+	case plan.StepSecretSet:
 		return pkgcore.SecretSet(ctx, pkgcore.SecretSetRequest{
 			Cluster: e.cluster,
 			Key:     name,
 			Value:   utils.GetString(params, "value"),
 		})
 
-	case config.StepSecretDelete:
+	case plan.StepSecretDelete:
 		return pkgcore.SecretDelete(ctx, pkgcore.SecretDeleteRequest{
 			Cluster: e.cluster,
 			Key:     name,
 		})
 
-	case config.StepStorageSet:
+	case plan.StepStorageSet:
 		return pkgcore.StorageSet(ctx, pkgcore.StorageSetRequest{
 			Cluster:    e.cluster,
 			Storage:    e.storage,
@@ -190,14 +190,14 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 			ExpireDays: utils.GetInt(params, "expire_days"),
 		})
 
-	case config.StepStorageDelete:
+	case plan.StepStorageDelete:
 		return pkgcore.StorageDelete(ctx, pkgcore.StorageDeleteRequest{
 			Cluster: e.cluster,
 			Storage: e.storage,
 			Name:    name,
 		})
 
-	case config.StepServiceSet:
+	case plan.StepServiceSet:
 		image := utils.GetString(params, "image")
 		if buildRef := utils.GetString(params, "build"); buildRef != "" {
 			if ref, ok := e.builtImages[buildRef]; ok {
@@ -230,13 +230,13 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 			Server:     utils.GetString(params, "server"),
 		})
 
-	case config.StepServiceDelete:
+	case plan.StepServiceDelete:
 		return pkgcore.ServiceDelete(ctx, pkgcore.ServiceDeleteRequest{
 			Cluster: e.cluster,
 			Name:    name,
 		})
 
-	case config.StepDNSSet:
+	case plan.StepDNSSet:
 		return pkgcore.DNSSet(ctx, pkgcore.DNSSetRequest{
 			Cluster: e.cluster,
 			DNS:     e.dns,
@@ -244,7 +244,7 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 			Domains: utils.GetStringSlice(params, "domains"),
 		})
 
-	case config.StepDNSDelete:
+	case plan.StepDNSDelete:
 		return pkgcore.DNSDelete(ctx, pkgcore.DNSDeleteRequest{
 			Cluster: e.cluster,
 			DNS:     e.dns,

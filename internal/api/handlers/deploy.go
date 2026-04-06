@@ -8,6 +8,8 @@ import (
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
 	"github.com/getnvoi/nvoi/internal/api/managed"
+	"github.com/getnvoi/nvoi/internal/api/plan"
+	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -31,15 +33,6 @@ func Deploy(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Load previous config (for diff).
-		var prev *api.RepoConfig
-		var prevRC api.RepoConfig
-		if rc.Version > 1 {
-			if err := db.Where("repo_id = ? AND version = ?", repo.ID, rc.Version-1).First(&prevRC).Error; err == nil {
-				prev = &prevRC
-			}
-		}
-
 		// Parse + expand current config.
 		cfg, err := config.Parse([]byte(rc.Config))
 		if err != nil {
@@ -59,17 +52,25 @@ func Deploy(db *gorm.DB) gin.HandlerFunc {
 			env[k] = v
 		}
 
-		// Parse + expand previous config (if any).
-		var prevExpanded *config.Config
-		if prev != nil {
-			prevCfg, err := config.Parse([]byte(prev.Config))
-			if err == nil {
-				prevExpanded, _, _ = managed.Expand(prevCfg, storedCreds)
-			}
+		// Query reality — what's actually deployed.
+		creds, credErr := resolveAllCredentials(&rc, env)
+		var reality *config.Config
+		if credErr == nil {
+			reality = plan.InfraState(c.Request.Context(), plan.InfraStateRequest{
+				Cluster: pkgcore.Cluster{
+					AppName:     repo.Name,
+					Env:         repo.Environment,
+					Provider:    string(rc.ComputeProvider),
+					Credentials: creds.Compute,
+					SSHKey:      []byte(repo.SSHPrivateKey),
+				},
+				DNS:     pkgcore.ProviderRef{Name: string(rc.DNSProvider), Creds: creds.DNS},
+				Storage: pkgcore.ProviderRef{Name: string(rc.StorageProvider), Creds: creds.Storage},
+			})
 		}
 
-		// Build full plan.
-		steps, err := config.Plan(prevExpanded, expanded, env)
+		// Build plan: reality vs desired.
+		steps, err := plan.Build(reality, expanded, env)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "plan failed: " + err.Error()})
 			return

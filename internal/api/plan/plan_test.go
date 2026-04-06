@@ -1,26 +1,28 @@
-package config
+package plan
 
 import (
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/api/config"
 )
 
-func hetznerConfig() *Config {
-	return &Config{
-		Servers: map[string]Server{
+func hetznerConfig() *Cfg {
+	return &Cfg{
+		Servers: map[string]config.Server{
 			"master":   {Type: "cx23", Region: "fsn1"},
 			"worker-1": {Type: "cx33", Region: "fsn1"},
 		},
-		Volumes: map[string]Volume{
+		Volumes: map[string]config.Volume{
 			"meili-data": {Size: 20, Server: "master"},
 			"pgdata":     {Size: 30, Server: "master"},
 		},
-		Build: map[string]Build{
+		Build: map[string]config.Build{
 			"web": {Source: "benbonnet/dummy-rails"},
 		},
-		Storage: map[string]Storage{
+		Storage: map[string]config.Storage{
 			"assets": {CORS: true},
 		},
-		Services: map[string]Service{
+		Services: map[string]config.Service{
 			"db": {
 				Image:   "postgres:17",
 				Volumes: []string{"pgdata:/var/lib/postgresql/data"},
@@ -49,7 +51,7 @@ func hetznerConfig() *Config {
 				Secrets: []string{"POSTGRES_PASSWORD", "RAILS_MASTER_KEY"},
 			},
 		},
-		Domains: map[string]Domains{
+		Domains: map[string]config.Domains{
 			"web": {"final.nvoi.to"},
 		},
 	}
@@ -65,7 +67,7 @@ func hetznerEnv() map[string]string {
 }
 
 func TestPlan_PhaseOrder(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -97,7 +99,7 @@ func TestPlan_PhaseOrder(t *testing.T) {
 }
 
 func TestPlan_ComputeMasterFirst(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -122,7 +124,7 @@ func TestPlan_ComputeMasterFirst(t *testing.T) {
 }
 
 func TestPlan_VolumeParams(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -140,7 +142,7 @@ func TestPlan_VolumeParams(t *testing.T) {
 }
 
 func TestPlan_BuildParams(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -155,7 +157,7 @@ func TestPlan_BuildParams(t *testing.T) {
 }
 
 func TestPlan_SecretsDeduplicated(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -173,7 +175,7 @@ func TestPlan_SecretsDeduplicated(t *testing.T) {
 }
 
 func TestPlan_SecretsResolved(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -188,7 +190,7 @@ func TestPlan_SecretsResolved(t *testing.T) {
 }
 
 func TestPlan_StorageParams(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -203,7 +205,7 @@ func TestPlan_StorageParams(t *testing.T) {
 }
 
 func TestPlan_ServiceEnvResolved(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -229,7 +231,7 @@ func TestPlan_ServiceEnvResolved(t *testing.T) {
 }
 
 func TestPlan_ServiceBuildRef(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -250,7 +252,7 @@ func TestPlan_ServiceBuildRef(t *testing.T) {
 }
 
 func TestPlan_DNSParams(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -266,15 +268,15 @@ func TestPlan_DNSParams(t *testing.T) {
 }
 
 func TestPlan_MinimalConfig(t *testing.T) {
-	cfg := &Config{
-		Servers: map[string]Server{
+	cfg := &Cfg{
+		Servers: map[string]config.Server{
 			"master": {Type: "t3.medium", Region: "eu-west-3"},
 		},
-		Services: map[string]Service{
+		Services: map[string]config.Service{
 			"web": {Image: "nginx:latest", Port: 80},
 		},
 	}
-	steps, err := Plan(nil, cfg, nil)
+	steps, err := Build(nil, cfg, nil)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -292,30 +294,30 @@ func TestPlan_MinimalConfig(t *testing.T) {
 }
 
 func TestPlan_SecretMissingFromEnv(t *testing.T) {
-	cfg := &Config{
-		Servers:  map[string]Server{"master": {Type: "cx23", Region: "fsn1"}},
-		Services: map[string]Service{"web": {Image: "nginx", Secrets: []string{"MISSING_KEY"}}},
+	cfg := &Cfg{
+		Servers:  map[string]config.Server{"master": {Type: "cx23", Region: "fsn1"}},
+		Services: map[string]config.Service{"web": {Image: "nginx", Secrets: []string{"MISSING_KEY"}}},
 	}
-	_, err := Plan(nil, cfg, map[string]string{})
+	_, err := Build(nil, cfg, map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for missing secret")
 	}
 }
 
 func TestPlan_EnvMissingFromEnv(t *testing.T) {
-	cfg := &Config{
-		Servers:  map[string]Server{"master": {Type: "cx23", Region: "fsn1"}},
-		Services: map[string]Service{"web": {Image: "nginx", Env: []string{"MISSING_KEY"}}},
+	cfg := &Cfg{
+		Servers:  map[string]config.Server{"master": {Type: "cx23", Region: "fsn1"}},
+		Services: map[string]config.Service{"web": {Image: "nginx", Env: []string{"MISSING_KEY"}}},
 	}
-	_, err := Plan(nil, cfg, map[string]string{})
+	_, err := Build(nil, cfg, map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for missing env key")
 	}
 }
 
 func TestPlan_EmptyConfig(t *testing.T) {
-	cfg := &Config{Servers: map[string]Server{}, Services: map[string]Service{}}
-	steps, err := Plan(nil, cfg, nil)
+	cfg := &Cfg{Servers: map[string]config.Server{}, Services: map[string]config.Service{}}
+	steps, err := Build(nil, cfg, nil)
 	if err != nil {
 		t.Fatalf("empty config should not error: %v", err)
 	}
@@ -327,7 +329,7 @@ func TestPlan_EmptyConfig(t *testing.T) {
 // ── Diff (delete steps from Plan) ──────────────────────────────────────────────
 
 func TestPlan_NilPrev_NoDeletes(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -340,7 +342,7 @@ func TestPlan_NilPrev_NoDeletes(t *testing.T) {
 
 func TestPlan_IdenticalConfigs_NoDeletes(t *testing.T) {
 	cfg := hetznerConfig()
-	steps, err := Plan(cfg, cfg, hetznerEnv())
+	steps, err := Build(cfg, cfg, hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -356,7 +358,7 @@ func TestPlan_ServiceRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Services, "meilisearch")
 
-	steps, _ := Plan(prev, current, hetznerEnv())
+	steps, _ := Build(prev, current, hetznerEnv())
 	if findStep(steps, StepServiceDelete, "meilisearch") == nil {
 		t.Error("expected service.delete meilisearch")
 	}
@@ -367,7 +369,7 @@ func TestPlan_VolumeRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Volumes, "meili-data")
 
-	steps, _ := Plan(prev, current, hetznerEnv())
+	steps, _ := Build(prev, current, hetznerEnv())
 	if findStep(steps, StepVolumeDelete, "meili-data") == nil {
 		t.Error("expected volume.delete meili-data")
 	}
@@ -378,7 +380,7 @@ func TestPlan_StorageRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Storage, "assets")
 
-	steps, _ := Plan(prev, current, hetznerEnv())
+	steps, _ := Build(prev, current, hetznerEnv())
 	if findStep(steps, StepStorageDelete, "assets") == nil {
 		t.Error("expected storage.delete assets")
 	}
@@ -389,7 +391,7 @@ func TestPlan_DNSRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Domains, "web")
 
-	steps, _ := Plan(prev, current, hetznerEnv())
+	steps, _ := Build(prev, current, hetznerEnv())
 	s := findStep(steps, StepDNSDelete, "web")
 	if s == nil {
 		t.Error("expected dns.delete web")
@@ -408,7 +410,7 @@ func TestPlan_SecretRemoved(t *testing.T) {
 	jobs.Secrets = []string{"POSTGRES_PASSWORD"}
 	current.Services["jobs"] = jobs
 
-	steps, _ := Plan(prev, current, hetznerEnv())
+	steps, _ := Build(prev, current, hetznerEnv())
 	if findStep(steps, StepSecretDelete, "RAILS_MASTER_KEY") == nil {
 		t.Error("expected secret.delete RAILS_MASTER_KEY")
 	}
@@ -422,7 +424,7 @@ func TestPlan_ComputeRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Servers, "worker-1")
 
-	steps, _ := Plan(prev, current, hetznerEnv())
+	steps, _ := Build(prev, current, hetznerEnv())
 	if findStep(steps, StepComputeDelete, "worker-1") == nil {
 		t.Error("expected instance.delete worker-1")
 	}
@@ -437,7 +439,7 @@ func TestPlan_DeletesBeforeSets(t *testing.T) {
 	delete(current.Services, "meilisearch")
 	delete(current.Volumes, "meili-data")
 
-	steps, err := Plan(prev, current, hetznerEnv())
+	steps, err := Build(prev, current, hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -465,7 +467,7 @@ func TestPlan_DeletesBeforeSets(t *testing.T) {
 }
 
 func TestPlan_FirstDeploy_NoDeletes(t *testing.T) {
-	steps, err := Plan(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -478,12 +480,12 @@ func TestPlan_FirstDeploy_NoDeletes(t *testing.T) {
 
 func TestPlan_EmptyConfigDeletesAll(t *testing.T) {
 	prev := hetznerConfig()
-	empty := &Config{
-		Servers:  map[string]Server{},
-		Services: map[string]Service{},
+	empty := &Cfg{
+		Servers:  map[string]config.Server{},
+		Services: map[string]config.Service{},
 	}
 
-	steps, err := Plan(prev, empty, nil)
+	steps, err := Build(prev, empty, nil)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}

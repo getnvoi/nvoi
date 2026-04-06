@@ -182,46 +182,23 @@ func TestDeploy_ListDeployments(t *testing.T) {
 	}
 }
 
-func TestDeploy_DiffDeletesRemovedService(t *testing.T) {
+func TestDeploy_NoInfra_OnlySetSteps(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	// v1: db + web.
 	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Deploy v1.
-	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deploy", nil, token)
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	// v2: only web (db removed).
-	v2YAML := `
-servers:
-  master:
-    type: cx23
-    region: fsn1
-services:
-  web:
-    image: nginx
-    port: 80
-domains:
-  web: example.com
-`
-	body = map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": v2YAML}
-	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	// Deploy v2.
+	// Deploy with no real infrastructure — InfraState returns nil.
+	// Should produce only set steps, no delete steps.
 	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deploy", nil, token)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("deploy v2: status = %d, body: %s", w.Code, w.Body.String())
+		t.Fatalf("deploy: status = %d, body: %s", w.Code, w.Body.String())
 	}
 
 	var deployment struct {
@@ -232,19 +209,10 @@ domains:
 	}
 	decode(t, w, &deployment)
 
-	// Should have a service.delete for db.
-	hasDelete := false
 	for _, s := range deployment.Steps {
-		if s.Kind == "service.delete" && s.Name == "db" {
-			hasDelete = true
+		if strings.HasSuffix(s.Kind, ".delete") {
+			t.Errorf("no infra should produce no deletes, got %s %s", s.Kind, s.Name)
 		}
-	}
-	if !hasDelete {
-		kinds := make([]string, len(deployment.Steps))
-		for i, s := range deployment.Steps {
-			kinds[i] = s.Kind + " " + s.Name
-		}
-		t.Errorf("expected service.delete db in plan, got: %v", kinds)
 	}
 }
 
