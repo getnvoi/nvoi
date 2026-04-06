@@ -66,14 +66,17 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Validate the expanded config (after managed services are resolved).
-		errs := config.Validate(expanded)
-		if len(errs) > 0 {
-			msgs := make([]string, len(errs))
-			for i, e := range errs {
-				msgs[i] = e.Error()
+		// Skip validation for empty configs — they're used for destroy-via-diff.
+		if len(expanded.Servers) > 0 || len(expanded.Services) > 0 {
+			errs := config.Validate(expanded)
+			if len(errs) > 0 {
+				msgs := make([]string, len(errs))
+				for i, e := range errs {
+					msgs[i] = e.Error()
+				}
+				c.JSON(http.StatusBadRequest, gin.H{"errors": msgs})
+				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"errors": msgs})
-			return
 		}
 
 		// Merge managed service credential secrets into env for plan validation.
