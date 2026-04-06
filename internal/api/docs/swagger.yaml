@@ -316,6 +316,20 @@ definitions:
           type: array
         type: array
     type: object
+  internal_api_handlers.buildLatestResponse:
+    properties:
+      image:
+        example: localhost:5000/web:abc123
+        type: string
+    type: object
+  internal_api_handlers.buildPruneRequest:
+    properties:
+      keep:
+        example: 3
+        type: integer
+    required:
+    - keep
+    type: object
   internal_api_handlers.configListItem:
     properties:
       build_provider:
@@ -393,6 +407,18 @@ definitions:
       error:
         example: workspace not found
         type: string
+    type: object
+  internal_api_handlers.execRequest:
+    properties:
+      command:
+        example:
+        - rails
+        - console
+        items:
+          type: string
+        type: array
+    required:
+    - command
     type: object
   internal_api_handlers.loginRequest:
     properties:
@@ -913,6 +939,161 @@ paths:
       summary: Update repo
       tags:
       - repos
+  /workspaces/{workspace_id}/repos/{repo_id}/builds:
+    get:
+      description: Returns all images and their tags from the cluster registry. Same
+        data as `nvoi build list`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Registry images with tags
+          schema:
+            items:
+              type: object
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List builds
+      tags:
+      - builds
+  /workspaces/{workspace_id}/repos/{repo_id}/builds/{name}/latest:
+    get:
+      description: Returns the latest image reference for a build name. Same as `nvoi
+        build latest <name>`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Build name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.buildLatestResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get latest build image
+      tags:
+      - builds
+  /workspaces/{workspace_id}/repos/{repo_id}/builds/{name}/prune:
+    post:
+      consumes:
+      - application/json
+      description: Deletes old image tags for a build name, keeping the most recent
+        N. Same as `nvoi build prune <name> --keep N`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Build name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Prune options
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.buildPruneRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.statusResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Prune build images
+      tags:
+      - builds
   /workspaces/{workspace_id}/repos/{repo_id}/config:
     get:
       description: Returns the latest config version for a repo. Env is hidden unless
@@ -1349,6 +1530,100 @@ paths:
       summary: Describe cluster
       tags:
       - cluster
+  /workspaces/{workspace_id}/repos/{repo_id}/dns:
+    get:
+      description: Returns all A records from the DNS provider. Same data as `nvoi
+        dns list`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: DNS A records
+          schema:
+            items:
+              type: object
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List DNS records
+      tags:
+      - dns
+  /workspaces/{workspace_id}/repos/{repo_id}/instances:
+    get:
+      description: Returns all servers from the compute provider. Same data as `nvoi
+        instance list`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Servers from compute provider
+          schema:
+            items:
+              type: object
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List instances
+      tags:
+      - instances
   /workspaces/{workspace_id}/repos/{repo_id}/resources:
     get:
       description: Returns all resources across configured providers (compute, DNS,
@@ -1396,6 +1671,173 @@ paths:
       summary: List provider resources
       tags:
       - cluster
+  /workspaces/{workspace_id}/repos/{repo_id}/secrets:
+    get:
+      description: Returns all secret key names from the cluster. Same data as `nvoi
+        secret list`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Secret key names
+          schema:
+            items:
+              type: string
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List secrets
+      tags:
+      - secrets
+  /workspaces/{workspace_id}/repos/{repo_id}/services/{service}/exec:
+    post:
+      consumes:
+      - application/json
+      description: Runs a command in the first pod of a service and streams output.
+        Same as `nvoi exec <service> -- <command>`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Service name
+        in: path
+        name: service
+        required: true
+        type: string
+      - description: Command to run
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.execRequest'
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Command output stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Exec in service pod
+      tags:
+      - services
+  /workspaces/{workspace_id}/repos/{repo_id}/services/{service}/logs:
+    get:
+      description: Streams pod logs for a service as plain text. Same as `nvoi logs
+        <service>`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Service name
+        in: path
+        name: service
+        required: true
+        type: string
+      - description: Follow log output
+        in: query
+        name: follow
+        type: boolean
+      - description: Number of lines from the end
+        in: query
+        name: tail
+        type: integer
+      - description: Show logs since duration (e.g. 5m, 1h)
+        in: query
+        name: since
+        type: string
+      - description: Show previous container logs
+        in: query
+        name: previous
+        type: boolean
+      - description: Include timestamps
+        in: query
+        name: timestamps
+        type: boolean
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Log stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Stream service logs
+      tags:
+      - services
   /workspaces/{workspace_id}/repos/{repo_id}/ssh:
     post:
       consumes:
@@ -1445,6 +1887,150 @@ paths:
       summary: Run SSH command
       tags:
       - cluster
+  /workspaces/{workspace_id}/repos/{repo_id}/storage:
+    get:
+      description: Returns all storage buckets discovered from k8s secrets. Same data
+        as `nvoi storage list`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Storage items (name + bucket)
+          schema:
+            items:
+              type: object
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List storage
+      tags:
+      - storage
+  /workspaces/{workspace_id}/repos/{repo_id}/storage/{name}/empty:
+    post:
+      description: Deletes all objects in the named storage bucket. Same as `nvoi
+        storage empty <name>`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Storage name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.statusResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Empty storage bucket
+      tags:
+      - storage
+  /workspaces/{workspace_id}/repos/{repo_id}/volumes:
+    get:
+      description: Returns all volumes from the compute provider. Same data as `nvoi
+        volume list`.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Volumes from compute provider
+          schema:
+            items:
+              type: object
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List volumes
+      tags:
+      - volumes
 securityDefinitions:
   BearerAuth:
     description: 'JWT token from POST /login. Format: "Bearer {token}"'

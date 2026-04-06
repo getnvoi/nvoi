@@ -39,6 +39,16 @@ type runSSHRequest struct {
 	Command []string `json:"command" binding:"required" example:"kubectl,get,pods"`
 }
 
+// execRequest is the body for POST /workspaces/:workspace_id/repos/:repo_id/services/:service/exec.
+type execRequest struct {
+	Command []string `json:"command" binding:"required" example:"rails,console"`
+}
+
+// buildPruneRequest is the body for POST /workspaces/:workspace_id/repos/:repo_id/builds/:name/prune.
+type buildPruneRequest struct {
+	Keep int `json:"keep" binding:"required" example:"3"`
+}
+
 // ── Response types ───────────────────────────────────────────────────────────
 
 // errorResponse is the standard error envelope.
@@ -96,5 +106,10 @@ type configListItem struct {
 type configResponse struct {
 	api.RepoConfig
 	Env string `json:"env,omitempty"`
+}
+
+// buildLatestResponse is returned by GET .../builds/:name/latest.
+type buildLatestResponse struct {
+	Image string `json:"image" example:"localhost:5000/web:abc123"`
 }
 

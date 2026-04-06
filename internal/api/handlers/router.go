@@ -73,6 +73,23 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 				repos.GET("/:repo_id/resources", ListResources(db))
 				repos.POST("/:repo_id/ssh", RunSSH(db))
 
+				// Query — infrastructure
+				repos.GET("/:repo_id/instances", ListInstances(db))
+				repos.GET("/:repo_id/volumes", ListVolumes(db))
+				repos.GET("/:repo_id/dns", ListDNSRecords(db))
+				repos.GET("/:repo_id/secrets", ListSecrets(db))
+				repos.GET("/:repo_id/storage", ListStorageBuckets(db))
+				repos.POST("/:repo_id/storage/:name/empty", EmptyStorage(db))
+
+				// Query — builds
+				repos.GET("/:repo_id/builds", ListBuilds(db))
+				repos.GET("/:repo_id/builds/:name/latest", BuildLatestImage(db))
+				repos.POST("/:repo_id/builds/:name/prune", PruneBuild(db))
+
+				// Query — services
+				repos.GET("/:repo_id/services/:service/logs", ServiceLogs(db))
+				repos.POST("/:repo_id/services/:service/exec", ExecCommand(db))
+
 				// Deploy
 				repos.POST("/:repo_id/deploy", Deploy(db))
 				repos.GET("/:repo_id/deployments", ListDeployments(db))

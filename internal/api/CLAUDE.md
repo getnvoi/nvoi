@@ -363,8 +363,23 @@ GET    /workspaces/:wid/repos/:rid/deployments/:did      get deployment + steps 
 POST   /workspaces/:wid/repos/:rid/deployments/:did/run  start executing a pending deployment
 GET    /workspaces/:wid/repos/:rid/deployments/:did/logs raw JSONL log stream
 
-GET    /workspaces/:wid/repos/:rid/describe          live cluster state
-GET    /workspaces/:wid/repos/:rid/resources          provider resources
+GET    /workspaces/:wid/repos/:rid/describe              live cluster state
+GET    /workspaces/:wid/repos/:rid/resources             provider resources
+POST   /workspaces/:wid/repos/:rid/ssh                   run command on master via SSH
+
+GET    /workspaces/:wid/repos/:rid/instances             list servers from compute provider
+GET    /workspaces/:wid/repos/:rid/volumes               list volumes from compute provider
+GET    /workspaces/:wid/repos/:rid/dns                   list DNS A records
+GET    /workspaces/:wid/repos/:rid/secrets               list secret key names
+GET    /workspaces/:wid/repos/:rid/storage               list storage buckets
+POST   /workspaces/:wid/repos/:rid/storage/:name/empty   delete all objects in bucket
+
+GET    /workspaces/:wid/repos/:rid/builds                list registry images + tags
+GET    /workspaces/:wid/repos/:rid/builds/:name/latest   latest image ref
+POST   /workspaces/:wid/repos/:rid/builds/:name/prune    prune old tags (keep N)
+
+GET    /workspaces/:wid/repos/:rid/services/:svc/logs    stream pod logs (text/plain)
+POST   /workspaces/:wid/repos/:rid/services/:svc/exec    run command in pod (text/plain)
 ```
 
 ## Cloud CLI commands (internal/cli/)

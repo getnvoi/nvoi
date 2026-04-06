@@ -230,8 +230,8 @@ func BuildPrune(ctx context.Context, req BuildPruneRequest) error {
 // ── Build list ────────────────────────────────────────────────────────────────
 
 type RegistryImage struct {
-	Name string
-	Tags []string
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
 }
 
 type BuildListRequest struct {
