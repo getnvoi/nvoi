@@ -1,9 +1,3 @@
 #!/bin/sh
 set -e
-
-BIN=/app/tmp/nvoi-cli
-if [ ! -f "$BIN" ] || [ "$(find /app/pkg /app/internal /app/cmd -newer "$BIN" -print -quit 2>/dev/null)" ]; then
-  go build -o "$BIN" ./cmd/cli >&2
-fi
-
-exec "$BIN" "$@"
+exec go run ./cmd/cli "$@"

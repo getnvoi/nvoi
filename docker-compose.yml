@@ -6,17 +6,17 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - .:/app
-      - go-cache:/root/go
-      - go-mod-cache:/root/go/pkg/mod
-      - bin-cache:/app/tmp
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
       - ${HOME}/.ssh:/root/.ssh:ro
       - ${BUILD_SOURCE:-/dev/null}:/build-source # local build source mount
       - docker-data:/var/lib/docker # persist DinD cache across runs
     privileged: true # DinD — local builder runs docker daemon + SSH tunnel in same namespace
     env_file: .env
     environment:
-      - SSH_KEY_PATH=/root/.ssh/id_rsa  # container path — host key mounted above
-      - GOBIN=/app/tmp                  # container path — bin-cache volume
+      - GOMODCACHE=/go/pkg/mod
+      - GOCACHE=/root/.cache/go-build
+      - SSH_KEY_PATH=/root/.ssh/id_rsa
     working_dir: /app
     entrypoint: ["/app/bin/entrypoint"]
 
@@ -27,12 +27,12 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - .:/app
-      - go-cache:/root/go
-      - go-mod-cache:/root/go/pkg/mod
-      - api-bin-cache:/app/tmp
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
     env_file: .env
     environment:
-      - GOBIN=/app/tmp
+      - GOMODCACHE=/go/pkg/mod
+      - GOCACHE=/root/.cache/go-build
       - DATABASE_URL=postgres://nvoi:nvoi@postgres:5432/nvoi?sslmode=disable
       - JWT_SECRET=dev-jwt-secret-do-not-use-in-production
       - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -56,13 +56,13 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - .:/app
-      - go-cache:/root/go
-      - go-mod-cache:/root/go/pkg/mod
-      - cli-bin-cache:/app/tmp
-      - cli-config:/root/.config/nvoi  # persist auth token across runs
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - cli-config:/root/.config/nvoi
     env_file: .env
     environment:
-      - GOBIN=/app/tmp
+      - GOMODCACHE=/go/pkg/mod
+      - GOCACHE=/root/.cache/go-build
       - NVOI_API_BASE=http://api:8080
     working_dir: /app
     entrypoint: ["/app/bin/cli-entrypoint"]
@@ -85,11 +85,8 @@ services:
       retries: 5
 
 volumes:
-  go-cache:
   go-mod-cache:
-  bin-cache:
-  api-bin-cache:
-  cli-bin-cache:
+  go-build-cache:
   docker-data:
   cli-config:
   postgres-data:

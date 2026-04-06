@@ -64,8 +64,9 @@ See [`examples/README.md`](examples/README.md) for full deploy/destroy workflows
 - Mounts source (`.:/app`) — changes picked up instantly, no rebuild
 - Mounts SSH keys (`~/.ssh:/root/.ssh:ro`)
 - Loads `.env` via `env_file` — everything: app identity, provider selection, credentials, app secrets
-- Only overrides container-specific paths: `SSH_KEY_PATH=/root/.ssh/id_rsa`, `GOBIN=/app/tmp`
+- Only overrides container-specific paths: `SSH_KEY_PATH=/root/.ssh/id_rsa`
 - Caches Go modules across runs (Docker volumes)
+- Entrypoints use `go run` — Go's build cache makes subsequent runs instant when source hasn't changed
 
 **`.env` is the single source of truth.** Compose passes it through. No hardcoded providers in compose. No host exports needed. Change provider = edit `.env`.
 
