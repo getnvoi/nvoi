@@ -371,3 +371,70 @@ func TestDeploy_LogsEndpoint(t *testing.T) {
 		t.Errorf("line[1] = %q", lines[1])
 	}
 }
+
+func TestDeploy_GetDeploymentNotFound(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/nonexistent", nil, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestDeploy_RunNotFound(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/nonexistent/run", nil, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestDeploy_LogsNotFound(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/nonexistent/logs", nil, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestDeploy_LogsEmpty(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deploy", nil, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var created struct{ ID string }
+	decode(t, w, &created)
+
+	// No logs yet — should return 200 with empty body.
+	req = authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/"+created.ID+"/logs", nil, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if w.Header().Get("Content-Type") != "application/x-ndjson" {
+		t.Errorf("content-type = %q", w.Header().Get("Content-Type"))
+	}
+}

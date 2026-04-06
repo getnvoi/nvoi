@@ -88,6 +88,7 @@ bin/core instance set master --compute-type cx23 --compute-region fsn1
 | `bin/cloud` | Cloud CLI — wraps `docker compose run --rm cli` |
 | `bin/test` | Run tests — wraps `docker compose run --rm --entrypoint sh core` |
 | `bin/build` | Build binary — wraps `docker compose run --rm --entrypoint sh core` |
+| `bin/swag` | Regenerate Swagger docs — installs swag CLI + runs `swag init` |
 | `bin/entrypoint` | Compose entrypoint for `core` service |
 | `bin/api-entrypoint` | Compose entrypoint for `api` service |
 | `bin/cli-entrypoint` | Compose entrypoint for `cli` service |

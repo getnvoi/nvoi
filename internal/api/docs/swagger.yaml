@@ -1,0 +1,1454 @@
+basePath: /
+definitions:
+  github_com_getnvoi_nvoi_internal_api.BuildProvider:
+    enum:
+    - local
+    - daytona
+    - github
+    type: string
+    x-enum-varnames:
+    - BuildLocal
+    - BuildDaytona
+    - BuildGitHub
+  github_com_getnvoi_nvoi_internal_api.ComputeProvider:
+    enum:
+    - hetzner
+    - aws
+    - scaleway
+    type: string
+    x-enum-varnames:
+    - ComputeHetzner
+    - ComputeAWS
+    - ComputeScaleway
+  github_com_getnvoi_nvoi_internal_api.DNSProvider:
+    enum:
+    - cloudflare
+    - aws
+    type: string
+    x-enum-varnames:
+    - DNSCloudflare
+    - DNSAWS
+  github_com_getnvoi_nvoi_internal_api.Deployment:
+    properties:
+      created_at:
+        type: string
+      finished_at:
+        type: string
+      id:
+        type: string
+      repo_config_id:
+        type: string
+      repo_id:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.DeploymentStatus'
+      steps:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.DeploymentStep'
+        type: array
+    type: object
+  github_com_getnvoi_nvoi_internal_api.DeploymentStatus:
+    enum:
+    - pending
+    - running
+    - succeeded
+    - failed
+    type: string
+    x-enum-varnames:
+    - DeploymentPending
+    - DeploymentRunning
+    - DeploymentSucceeded
+    - DeploymentFailed
+  github_com_getnvoi_nvoi_internal_api.DeploymentStep:
+    properties:
+      deployment_id:
+        type: string
+      error:
+        type: string
+      finished_at:
+        type: string
+      id:
+        type: string
+      kind:
+        description: '"instance.set", "service.delete", etc.'
+        type: string
+      logs:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.DeploymentStepLog'
+        type: array
+      name:
+        description: '"master", "web", etc.'
+        type: string
+      params:
+        description: JSON
+        type: string
+      position:
+        type: integer
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.StepStatus'
+    type: object
+  github_com_getnvoi_nvoi_internal_api.DeploymentStepLog:
+    properties:
+      created_at:
+        type: string
+      deployment_step_id:
+        type: string
+      id:
+        type: string
+      line:
+        description: JSONL
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_internal_api.Repo:
+    properties:
+      created_at:
+        type: string
+      environment:
+        description: production, staging, etc.
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      ssh_public_key:
+        description: OpenSSH format — visible for deploy key setup
+        type: string
+      updated_at:
+        type: string
+      workspace_id:
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_internal_api.RepoConfig:
+    properties:
+      build_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.BuildProvider'
+      compute_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.ComputeProvider'
+      config:
+        description: YAML
+        type: string
+      created_at:
+        type: string
+      dns_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.DNSProvider'
+      id:
+        type: string
+      repo_id:
+        type: string
+      storage_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.StorageProvider'
+      version:
+        type: integer
+    type: object
+  github_com_getnvoi_nvoi_internal_api.StepStatus:
+    enum:
+    - pending
+    - running
+    - succeeded
+    - failed
+    - skipped
+    type: string
+    x-enum-varnames:
+    - StepStatusPending
+    - StepStatusRunning
+    - StepStatusSucceeded
+    - StepStatusFailed
+    - StepStatusSkipped
+  github_com_getnvoi_nvoi_internal_api.StorageProvider:
+    enum:
+    - cloudflare
+    - aws
+    type: string
+    x-enum-varnames:
+    - StorageCloudflare
+    - StorageAWS
+  github_com_getnvoi_nvoi_internal_api.User:
+    properties:
+      created_at:
+        type: string
+      github_username:
+        type: string
+      id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_internal_api.Workspace:
+    properties:
+      created_at:
+        type: string
+      created_by:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      repos:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Repo'
+        type: array
+      updated_at:
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_pkg_core.DescribeIngress:
+    properties:
+      domain:
+        type: string
+      port:
+        type: integer
+      service:
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_pkg_core.DescribeNode:
+    properties:
+      ip:
+        type: string
+      name:
+        type: string
+      role:
+        type: string
+      status:
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_pkg_core.DescribePod:
+    properties:
+      age:
+        type: string
+      name:
+        type: string
+      node:
+        type: string
+      restarts:
+        type: integer
+      status:
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_pkg_core.DescribeResult:
+    properties:
+      ingress:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeIngress'
+        type: array
+      namespace:
+        type: string
+      nodes:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeNode'
+        type: array
+      pods:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribePod'
+        type: array
+      secrets:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeSecret'
+        type: array
+      services:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeService'
+        type: array
+      storage:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_core.StorageItem'
+        type: array
+      workloads:
+        items:
+          $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeWorkload'
+        type: array
+    type: object
+  github_com_getnvoi_nvoi_pkg_core.DescribeSecret:
+    properties:
+      key:
+        type: string
+      value:
+        description: obfuscated
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_pkg_core.DescribeService:
+    properties:
+      cluster_ip:
+        type: string
+      name:
+        type: string
+      ports:
+        type: string
+      type:
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_pkg_core.DescribeWorkload:
+    properties:
+      age:
+        type: string
+      image:
+        type: string
+      kind:
+        description: '"deployment" or "statefulset"'
+        type: string
+      name:
+        type: string
+      ready:
+        description: '"2/2"'
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_pkg_core.StorageItem:
+    properties:
+      bucket:
+        type: string
+      name:
+        type: string
+    type: object
+  github_com_getnvoi_nvoi_pkg_provider.ResourceGroup:
+    properties:
+      columns:
+        items:
+          type: string
+        type: array
+      name:
+        type: string
+      rows:
+        items:
+          items:
+            type: string
+          type: array
+        type: array
+    type: object
+  internal_api_handlers.configListItem:
+    properties:
+      build_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.BuildProvider'
+      compute_provider:
+        allOf:
+        - $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.ComputeProvider'
+        example: hetzner
+      config:
+        type: string
+      dns_provider:
+        allOf:
+        - $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.DNSProvider'
+        example: cloudflare
+      id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      storage_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.StorageProvider'
+      version:
+        example: 1
+        type: integer
+    type: object
+  internal_api_handlers.configResponse:
+    properties:
+      build_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.BuildProvider'
+      compute_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.ComputeProvider'
+      config:
+        description: YAML
+        type: string
+      created_at:
+        type: string
+      dns_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.DNSProvider'
+      env:
+        type: string
+      id:
+        type: string
+      repo_id:
+        type: string
+      storage_provider:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.StorageProvider'
+      version:
+        type: integer
+    type: object
+  internal_api_handlers.createRepoRequest:
+    properties:
+      name:
+        example: my-app
+        type: string
+    required:
+    - name
+    type: object
+  internal_api_handlers.createWorkspaceRequest:
+    properties:
+      name:
+        example: production
+        type: string
+    required:
+    - name
+    type: object
+  internal_api_handlers.deleteResponse:
+    properties:
+      deleted:
+        example: true
+        type: boolean
+      name:
+        example: production
+        type: string
+    type: object
+  internal_api_handlers.errorResponse:
+    properties:
+      error:
+        example: workspace not found
+        type: string
+    type: object
+  internal_api_handlers.loginRequest:
+    properties:
+      github_token:
+        type: string
+    required:
+    - github_token
+    type: object
+  internal_api_handlers.loginResponse:
+    properties:
+      is_new:
+        type: boolean
+      token:
+        type: string
+      user:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.User'
+      workspace:
+        $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace'
+    type: object
+  internal_api_handlers.planResponse:
+    properties:
+      steps:
+        description: Steps is the ordered deployment sequence.
+        items:
+          $ref: '#/definitions/internal_api_handlers.planStep'
+        type: array
+      version:
+        example: 3
+        type: integer
+    type: object
+  internal_api_handlers.planStep:
+    properties:
+      kind:
+        example: instance.set
+        type: string
+      name:
+        example: master
+        type: string
+      params:
+        additionalProperties: {}
+        type: object
+    type: object
+  internal_api_handlers.pushConfigRequest:
+    properties:
+      build_provider:
+        allOf:
+        - $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.BuildProvider'
+        enum:
+        - local
+        - daytona
+        - github
+        example: github
+      compute_provider:
+        allOf:
+        - $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.ComputeProvider'
+        enum:
+        - hetzner
+        - aws
+        - scaleway
+        example: hetzner
+      config:
+        example: |-
+          servers:
+            master:
+              type: cx23
+              region: fsn1
+        type: string
+      dns_provider:
+        allOf:
+        - $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.DNSProvider'
+        enum:
+        - cloudflare
+        - aws
+        example: cloudflare
+      env:
+        example: |-
+          HETZNER_TOKEN=xxx
+          RAILS_MASTER_KEY=yyy
+        type: string
+      storage_provider:
+        allOf:
+        - $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.StorageProvider'
+        enum:
+        - cloudflare
+        - aws
+        example: cloudflare
+    required:
+    - compute_provider
+    - config
+    type: object
+  internal_api_handlers.runSSHRequest:
+    properties:
+      command:
+        example:
+        - kubectl
+        - get
+        - pods
+        items:
+          type: string
+        type: array
+    required:
+    - command
+    type: object
+  internal_api_handlers.statusResponse:
+    properties:
+      status:
+        example: running
+        type: string
+    type: object
+  internal_api_handlers.updateRepoRequest:
+    properties:
+      name:
+        example: my-app-v2
+        type: string
+    required:
+    - name
+    type: object
+  internal_api_handlers.updateWorkspaceRequest:
+    properties:
+      name:
+        example: staging
+        type: string
+    required:
+    - name
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Deploy containers to cloud servers. Push a config YAML + env, get an
+    ordered deployment plan, execute it.
+  title: nvoi API
+  version: "1.0"
+paths:
+  /login:
+    post:
+      consumes:
+      - application/json
+      description: Verifies a GitHub personal access token and returns a JWT. Creates
+        the user and a default workspace on first login.
+      parameters:
+      - description: GitHub token
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.loginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.loginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      summary: Login with GitHub token
+      tags:
+      - auth
+  /workspaces:
+    get:
+      description: Returns all workspaces the authenticated user is a member of.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List workspaces
+      tags:
+      - workspaces
+    post:
+      consumes:
+      - application/json
+      description: Creates a new workspace and assigns the authenticated user as owner.
+      parameters:
+      - description: Workspace name
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.createWorkspaceRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create workspace
+      tags:
+      - workspaces
+  /workspaces/{workspace_id}:
+    delete:
+      description: Soft-deletes a workspace by ID.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.deleteResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete workspace
+      tags:
+      - workspaces
+    get:
+      description: Returns a workspace by ID, scoped to the authenticated user.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get workspace
+      tags:
+      - workspaces
+    put:
+      consumes:
+      - application/json
+      description: Renames a workspace by ID.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: New name
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.updateWorkspaceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Update workspace
+      tags:
+      - workspaces
+  /workspaces/{workspace_id}/repos:
+    get:
+      description: Returns all repos in the specified workspace.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Repo'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List repos
+      tags:
+      - repos
+    post:
+      consumes:
+      - application/json
+      description: Creates a new repo in the workspace. An Ed25519 SSH keypair is
+        auto-generated for server access.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo name
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.createRepoRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Repo'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create repo
+      tags:
+      - repos
+  /workspaces/{workspace_id}/repos/{repo_id}:
+    delete:
+      description: Soft-deletes a repo by ID.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.deleteResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete repo
+      tags:
+      - repos
+    get:
+      description: Returns a repo by ID, scoped through the workspace.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Repo'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get repo
+      tags:
+      - repos
+    put:
+      consumes:
+      - application/json
+      description: Renames a repo by ID.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: New name
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.updateRepoRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Repo'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Update repo
+      tags:
+      - repos
+  /workspaces/{workspace_id}/repos/{repo_id}/config:
+    get:
+      description: Returns the latest config version for a repo. Env is hidden unless
+        ?reveal=true.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Show env values
+        in: query
+        name: reveal
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.configResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get latest config
+      tags:
+      - config
+    post:
+      consumes:
+      - application/json
+      description: Pushes a new versioned config snapshot. Validates YAML, expands
+        managed services, validates env references, and persists credentials.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Config payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.pushConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.RepoConfig'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Push config
+      tags:
+      - config
+  /workspaces/{workspace_id}/repos/{repo_id}/config/plan:
+    get:
+      description: Returns the ordered deployment plan for the latest config, including
+        both delete and set steps.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.planResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get execution plan
+      tags:
+      - config
+  /workspaces/{workspace_id}/repos/{repo_id}/configs:
+    get:
+      description: Returns all config versions for a repo, newest first. Env is stripped.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/internal_api_handlers.configListItem'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List config versions
+      tags:
+      - config
+  /workspaces/{workspace_id}/repos/{repo_id}/deploy:
+    post:
+      description: Creates a deployment from the latest config. Computes the full
+        plan (deletes + sets) and persists steps as pending.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Deployment'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create deployment
+      tags:
+      - deployments
+  /workspaces/{workspace_id}/repos/{repo_id}/deployments:
+    get:
+      description: Returns all deployments for a repo, newest first.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Deployment'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List deployments
+      tags:
+      - deployments
+  /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}:
+    get:
+      description: Returns a deployment with all steps and their JSONL logs.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Deployment ID
+        format: uuid
+        in: path
+        name: deployment_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_internal_api.Deployment'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get deployment
+      tags:
+      - deployments
+  /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}/logs:
+    get:
+      description: Returns all log lines for a deployment as newline-delimited JSON
+        (JSONL). Each line is a pkg/core.Event.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Deployment ID
+        format: uuid
+        in: path
+        name: deployment_id
+        required: true
+        type: string
+      produces:
+      - application/x-ndjson
+      responses:
+        "200":
+          description: JSONL stream
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Stream deployment logs
+      tags:
+      - deployments
+  /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}/run:
+    post:
+      description: Starts executing a pending deployment in the background. Returns
+        immediately with status "running".
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Deployment ID
+        format: uuid
+        in: path
+        name: deployment_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_api_handlers.statusResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Run deployment
+      tags:
+      - deployments
+  /workspaces/{workspace_id}/repos/{repo_id}/describe:
+    get:
+      description: Returns live cluster state (nodes, workloads, pods, services, ingress,
+        secrets, storage) via SSH. Same data as `nvoi describe` in direct mode.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeResult'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Describe cluster
+      tags:
+      - cluster
+  /workspaces/{workspace_id}/repos/{repo_id}/resources:
+    get:
+      description: Returns all resources across configured providers (compute, DNS,
+        storage). Same data as `nvoi resources` in direct mode.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/github_com_getnvoi_nvoi_pkg_provider.ResourceGroup'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: List provider resources
+      tags:
+      - cluster
+  /workspaces/{workspace_id}/repos/{repo_id}/ssh:
+    post:
+      consumes:
+      - application/json
+      description: Runs a command on the master node via SSH and streams stdout/stderr
+        as plain text.
+      parameters:
+      - description: Workspace ID
+        format: uuid
+        in: path
+        name: workspace_id
+        required: true
+        type: string
+      - description: Repo ID
+        format: uuid
+        in: path
+        name: repo_id
+        required: true
+        type: string
+      - description: Command to run
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_api_handlers.runSSHRequest'
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Command output stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_api_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Run SSH command
+      tags:
+      - cluster
+securityDefinitions:
+  BearerAuth:
+    description: 'JWT token from POST /login. Format: "Bearer {token}"'
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

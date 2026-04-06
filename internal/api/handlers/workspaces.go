@@ -8,6 +8,16 @@ import (
 	"gorm.io/gorm"
 )
 
+// ListWorkspaces returns all workspaces the authenticated user belongs to.
+//
+// @Summary     List workspaces
+// @Description Returns all workspaces the authenticated user is a member of.
+// @Tags        workspaces
+// @Produce     json
+// @Security    BearerAuth
+// @Success     200 {array}  api.Workspace
+// @Failure     401 {object} errorResponse
+// @Router      /workspaces [get]
 func ListWorkspaces(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := api.CurrentUser(c)
@@ -21,13 +31,25 @@ func ListWorkspaces(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// CreateWorkspace creates a new workspace owned by the authenticated user.
+//
+// @Summary     Create workspace
+// @Description Creates a new workspace and assigns the authenticated user as owner.
+// @Tags        workspaces
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       body body     createWorkspaceRequest true "Workspace name"
+// @Success     201  {object} api.Workspace
+// @Failure     400  {object} errorResponse
+// @Failure     401  {object} errorResponse
+// @Failure     500  {object} errorResponse
+// @Router      /workspaces [post]
 func CreateWorkspace(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user := api.CurrentUser(c)
 
-		var req struct {
-			Name string `json:"name" binding:"required"`
-		}
+		var req createWorkspaceRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -57,6 +79,18 @@ func CreateWorkspace(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// GetWorkspace returns a single workspace by ID.
+//
+// @Summary     Get workspace
+// @Description Returns a workspace by ID, scoped to the authenticated user.
+// @Tags        workspaces
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Success     200          {object} api.Workspace
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id} [get]
 func GetWorkspace(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ws, ok := loadWorkspace(c, db)
@@ -67,6 +101,21 @@ func GetWorkspace(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// UpdateWorkspace renames a workspace.
+//
+// @Summary     Update workspace
+// @Description Renames a workspace by ID.
+// @Tags        workspaces
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string                 true "Workspace ID" format(uuid)
+// @Param       body         body     updateWorkspaceRequest true "New name"
+// @Success     200          {object} api.Workspace
+// @Failure     400          {object} errorResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id} [put]
 func UpdateWorkspace(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ws, ok := loadWorkspace(c, db)
@@ -74,9 +123,7 @@ func UpdateWorkspace(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		var req struct {
-			Name string `json:"name" binding:"required"`
-		}
+		var req updateWorkspaceRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -87,6 +134,18 @@ func UpdateWorkspace(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// DeleteWorkspace soft-deletes a workspace.
+//
+// @Summary     Delete workspace
+// @Description Soft-deletes a workspace by ID.
+// @Tags        workspaces
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Success     200          {object} deleteResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id} [delete]
 func DeleteWorkspace(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ws, ok := loadWorkspace(c, db)

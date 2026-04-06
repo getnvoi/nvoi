@@ -17,55 +17,55 @@ type DescribeRequest struct {
 }
 
 type DescribeNode struct {
-	Name   string
-	Status string
-	Role   string
-	IP     string
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Role   string `json:"role"`
+	IP     string `json:"ip"`
 }
 
 type DescribeWorkload struct {
-	Name  string
-	Kind  string // "deployment" or "statefulset"
-	Ready string // "2/2"
-	Image string
-	Age   string
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`   // "deployment" or "statefulset"
+	Ready string `json:"ready"`  // "2/2"
+	Image string `json:"image"`
+	Age   string `json:"age"`
 }
 
 type DescribePod struct {
-	Name     string
-	Status   string
-	Node     string
-	Restarts int
-	Age      string
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Node     string `json:"node"`
+	Restarts int    `json:"restarts"`
+	Age      string `json:"age"`
 }
 
 type DescribeService struct {
-	Name      string
-	Type      string
-	ClusterIP string
-	Ports     string
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	ClusterIP string `json:"cluster_ip"`
+	Ports     string `json:"ports"`
 }
 
 type DescribeIngress struct {
-	Domain  string
-	Service string
-	Port    int
+	Domain  string `json:"domain"`
+	Service string `json:"service"`
+	Port    int    `json:"port"`
 }
 
 type DescribeSecret struct {
-	Key   string
-	Value string // obfuscated
+	Key   string `json:"key"`
+	Value string `json:"value"` // obfuscated
 }
 
 type DescribeResult struct {
-	Namespace string
-	Nodes     []DescribeNode
-	Workloads []DescribeWorkload
-	Pods      []DescribePod
-	Services  []DescribeService
-	Ingress   []DescribeIngress
-	Secrets   []DescribeSecret
-	Storage   []StorageItem
+	Namespace string              `json:"namespace"`
+	Nodes     []DescribeNode      `json:"nodes"`
+	Workloads []DescribeWorkload  `json:"workloads"`
+	Pods      []DescribePod       `json:"pods"`
+	Services  []DescribeService   `json:"services"`
+	Ingress   []DescribeIngress   `json:"ingress"`
+	Secrets   []DescribeSecret    `json:"secrets"`
+	Storage   []StorageItem       `json:"storage"`
 }
 
 // ── Public ──────────────────────────────────────────────────────────────────────

@@ -1,0 +1,2174 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Deploy containers to cloud servers. Push a config YAML + env, get an ordered deployment plan, execute it.",
+        "title": "nvoi API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/",
+    "paths": {
+        "/login": {
+            "post": {
+                "description": "Verifies a GitHub personal access token and returns a JWT. Creates the user and a default workspace on first login.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Login with GitHub token",
+                "parameters": [
+                    {
+                        "description": "GitHub token",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.loginRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.loginResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all workspaces the authenticated user is a member of.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "List workspaces",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates a new workspace and assigns the authenticated user as owner.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Create workspace",
+                "parameters": [
+                    {
+                        "description": "Workspace name",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.createWorkspaceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns a workspace by ID, scoped to the authenticated user.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Get workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Renames a workspace by ID.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Update workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New name",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.updateWorkspaceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Soft-deletes a workspace by ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Delete workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.deleteResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all repos in the specified workspace.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repos"
+                ],
+                "summary": "List repos",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Repo"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates a new repo in the workspace. An Ed25519 SSH keypair is auto-generated for server access.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repos"
+                ],
+                "summary": "Create repo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Repo name",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.createRepoRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Repo"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns a repo by ID, scoped through the workspace.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repos"
+                ],
+                "summary": "Get repo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Repo"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Renames a repo by ID.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repos"
+                ],
+                "summary": "Update repo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New name",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.updateRepoRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Repo"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Soft-deletes a repo by ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repos"
+                ],
+                "summary": "Delete repo",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.deleteResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/config": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the latest config version for a repo. Env is hidden unless ?reveal=true.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Get latest config",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Show env values",
+                        "name": "reveal",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.configResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Pushes a new versioned config snapshot. Validates YAML, expands managed services, validates env references, and persists credentials.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Push config",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Config payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.pushConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.RepoConfig"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/config/plan": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the ordered deployment plan for the latest config, including both delete and set steps.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Get execution plan",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.planResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/configs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all config versions for a repo, newest first. Env is stripped.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "List config versions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/internal_api_handlers.configListItem"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/deploy": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates a deployment from the latest config. Computes the full plan (deletes + sets) and persists steps as pending.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "deployments"
+                ],
+                "summary": "Create deployment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Deployment"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/deployments": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all deployments for a repo, newest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "deployments"
+                ],
+                "summary": "List deployments",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Deployment"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns a deployment with all steps and their JSONL logs.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "deployments"
+                ],
+                "summary": "Get deployment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Deployment ID",
+                        "name": "deployment_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Deployment"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}/logs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all log lines for a deployment as newline-delimited JSON (JSONL). Each line is a pkg/core.Event.",
+                "produces": [
+                    "application/x-ndjson"
+                ],
+                "tags": [
+                    "deployments"
+                ],
+                "summary": "Stream deployment logs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Deployment ID",
+                        "name": "deployment_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "JSONL stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}/run": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Starts executing a pending deployment in the background. Returns immediately with status \"running\".",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "deployments"
+                ],
+                "summary": "Run deployment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Deployment ID",
+                        "name": "deployment_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.statusResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/describe": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns live cluster state (nodes, workloads, pods, services, ingress, secrets, storage) via SSH. Same data as `nvoi describe` in direct mode.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cluster"
+                ],
+                "summary": "Describe cluster",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/resources": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns all resources across configured providers (compute, DNS, storage). Same data as `nvoi resources` in direct mode.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cluster"
+                ],
+                "summary": "List provider resources",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_provider.ResourceGroup"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{workspace_id}/repos/{repo_id}/ssh": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Runs a command on the master node via SSH and streams stdout/stderr as plain text.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "cluster"
+                ],
+                "summary": "Run SSH command",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Workspace ID",
+                        "name": "workspace_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Repo ID",
+                        "name": "repo_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Command to run",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.runSSHRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Command output stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_handlers.errorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "github_com_getnvoi_nvoi_internal_api.BuildProvider": {
+            "type": "string",
+            "enum": [
+                "local",
+                "daytona",
+                "github"
+            ],
+            "x-enum-varnames": [
+                "BuildLocal",
+                "BuildDaytona",
+                "BuildGitHub"
+            ]
+        },
+        "github_com_getnvoi_nvoi_internal_api.ComputeProvider": {
+            "type": "string",
+            "enum": [
+                "hetzner",
+                "aws",
+                "scaleway"
+            ],
+            "x-enum-varnames": [
+                "ComputeHetzner",
+                "ComputeAWS",
+                "ComputeScaleway"
+            ]
+        },
+        "github_com_getnvoi_nvoi_internal_api.DNSProvider": {
+            "type": "string",
+            "enum": [
+                "cloudflare",
+                "aws"
+            ],
+            "x-enum-varnames": [
+                "DNSCloudflare",
+                "DNSAWS"
+            ]
+        },
+        "github_com_getnvoi_nvoi_internal_api.Deployment": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "repo_config_id": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.DeploymentStatus"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.DeploymentStep"
+                    }
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_internal_api.DeploymentStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "running",
+                "succeeded",
+                "failed"
+            ],
+            "x-enum-varnames": [
+                "DeploymentPending",
+                "DeploymentRunning",
+                "DeploymentSucceeded",
+                "DeploymentFailed"
+            ]
+        },
+        "github_com_getnvoi_nvoi_internal_api.DeploymentStep": {
+            "type": "object",
+            "properties": {
+                "deployment_id": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "\"instance.set\", \"service.delete\", etc.",
+                    "type": "string"
+                },
+                "logs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.DeploymentStepLog"
+                    }
+                },
+                "name": {
+                    "description": "\"master\", \"web\", etc.",
+                    "type": "string"
+                },
+                "params": {
+                    "description": "JSON",
+                    "type": "string"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.StepStatus"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_internal_api.DeploymentStepLog": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "deployment_step_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "line": {
+                    "description": "JSONL",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_internal_api.Repo": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "environment": {
+                    "description": "production, staging, etc.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "ssh_public_key": {
+                    "description": "OpenSSH format — visible for deploy key setup",
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "workspace_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_internal_api.RepoConfig": {
+            "type": "object",
+            "properties": {
+                "build_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.BuildProvider"
+                },
+                "compute_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.ComputeProvider"
+                },
+                "config": {
+                    "description": "YAML",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "dns_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.DNSProvider"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "storage_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.StorageProvider"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_internal_api.StepStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "running",
+                "succeeded",
+                "failed",
+                "skipped"
+            ],
+            "x-enum-varnames": [
+                "StepStatusPending",
+                "StepStatusRunning",
+                "StepStatusSucceeded",
+                "StepStatusFailed",
+                "StepStatusSkipped"
+            ]
+        },
+        "github_com_getnvoi_nvoi_internal_api.StorageProvider": {
+            "type": "string",
+            "enum": [
+                "cloudflare",
+                "aws"
+            ],
+            "x-enum-varnames": [
+                "StorageCloudflare",
+                "StorageAWS"
+            ]
+        },
+        "github_com_getnvoi_nvoi_internal_api.User": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "github_username": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_internal_api.Workspace": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "repos": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Repo"
+                    }
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_core.DescribeIngress": {
+            "type": "object",
+            "properties": {
+                "domain": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "service": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_core.DescribeNode": {
+            "type": "object",
+            "properties": {
+                "ip": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_core.DescribePod": {
+            "type": "object",
+            "properties": {
+                "age": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "node": {
+                    "type": "string"
+                },
+                "restarts": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_core.DescribeResult": {
+            "type": "object",
+            "properties": {
+                "ingress": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeIngress"
+                    }
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeNode"
+                    }
+                },
+                "pods": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribePod"
+                    }
+                },
+                "secrets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeSecret"
+                    }
+                },
+                "services": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeService"
+                    }
+                },
+                "storage": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_core.StorageItem"
+                    }
+                },
+                "workloads": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_getnvoi_nvoi_pkg_core.DescribeWorkload"
+                    }
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_core.DescribeSecret": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "value": {
+                    "description": "obfuscated",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_core.DescribeService": {
+            "type": "object",
+            "properties": {
+                "cluster_ip": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "ports": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_core.DescribeWorkload": {
+            "type": "object",
+            "properties": {
+                "age": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "\"deployment\" or \"statefulset\"",
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "ready": {
+                    "description": "\"2/2\"",
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_core.StorageItem": {
+            "type": "object",
+            "properties": {
+                "bucket": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_getnvoi_nvoi_pkg_provider.ResourceGroup": {
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "internal_api_handlers.configListItem": {
+            "type": "object",
+            "properties": {
+                "build_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.BuildProvider"
+                },
+                "compute_provider": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.ComputeProvider"
+                        }
+                    ],
+                    "example": "hetzner"
+                },
+                "config": {
+                    "type": "string"
+                },
+                "dns_provider": {
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.DNSProvider"
+                        }
+                    ],
+                    "example": "cloudflare"
+                },
+                "id": {
+                    "type": "string",
+                    "example": "550e8400-e29b-41d4-a716-446655440000"
+                },
+                "storage_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.StorageProvider"
+                },
+                "version": {
+                    "type": "integer",
+                    "example": 1
+                }
+            }
+        },
+        "internal_api_handlers.configResponse": {
+            "type": "object",
+            "properties": {
+                "build_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.BuildProvider"
+                },
+                "compute_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.ComputeProvider"
+                },
+                "config": {
+                    "description": "YAML",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "dns_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.DNSProvider"
+                },
+                "env": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "storage_provider": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.StorageProvider"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_handlers.createRepoRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "example": "my-app"
+                }
+            }
+        },
+        "internal_api_handlers.createWorkspaceRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "example": "production"
+                }
+            }
+        },
+        "internal_api_handlers.deleteResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "name": {
+                    "type": "string",
+                    "example": "production"
+                }
+            }
+        },
+        "internal_api_handlers.errorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "example": "workspace not found"
+                }
+            }
+        },
+        "internal_api_handlers.loginRequest": {
+            "type": "object",
+            "required": [
+                "github_token"
+            ],
+            "properties": {
+                "github_token": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_api_handlers.loginResponse": {
+            "type": "object",
+            "properties": {
+                "is_new": {
+                    "type": "boolean"
+                },
+                "token": {
+                    "type": "string"
+                },
+                "user": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.User"
+                },
+                "workspace": {
+                    "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.Workspace"
+                }
+            }
+        },
+        "internal_api_handlers.planResponse": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "description": "Steps is the ordered deployment sequence.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_handlers.planStep"
+                    }
+                },
+                "version": {
+                    "type": "integer",
+                    "example": 3
+                }
+            }
+        },
+        "internal_api_handlers.planStep": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "example": "instance.set"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "master"
+                },
+                "params": {
+                    "type": "object",
+                    "additionalProperties": {}
+                }
+            }
+        },
+        "internal_api_handlers.pushConfigRequest": {
+            "type": "object",
+            "required": [
+                "compute_provider",
+                "config"
+            ],
+            "properties": {
+                "build_provider": {
+                    "enum": [
+                        "local",
+                        "daytona",
+                        "github"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.BuildProvider"
+                        }
+                    ],
+                    "example": "github"
+                },
+                "compute_provider": {
+                    "enum": [
+                        "hetzner",
+                        "aws",
+                        "scaleway"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.ComputeProvider"
+                        }
+                    ],
+                    "example": "hetzner"
+                },
+                "config": {
+                    "type": "string",
+                    "example": "servers:\n  master:\n    type: cx23\n    region: fsn1"
+                },
+                "dns_provider": {
+                    "enum": [
+                        "cloudflare",
+                        "aws"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.DNSProvider"
+                        }
+                    ],
+                    "example": "cloudflare"
+                },
+                "env": {
+                    "type": "string",
+                    "example": "HETZNER_TOKEN=xxx\nRAILS_MASTER_KEY=yyy"
+                },
+                "storage_provider": {
+                    "enum": [
+                        "cloudflare",
+                        "aws"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/github_com_getnvoi_nvoi_internal_api.StorageProvider"
+                        }
+                    ],
+                    "example": "cloudflare"
+                }
+            }
+        },
+        "internal_api_handlers.runSSHRequest": {
+            "type": "object",
+            "required": [
+                "command"
+            ],
+            "properties": {
+                "command": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "kubectl",
+                        "get",
+                        "pods"
+                    ]
+                }
+            }
+        },
+        "internal_api_handlers.statusResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "example": "running"
+                }
+            }
+        },
+        "internal_api_handlers.updateRepoRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "example": "my-app-v2"
+                }
+            }
+        },
+        "internal_api_handlers.updateWorkspaceRequest": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "example": "staging"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "JWT token from POST /login. Format: \"Bearer {token}\"",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}

@@ -158,6 +158,32 @@ func TestWorkspaces_NotFoundForOtherUser(t *testing.T) {
 	}
 }
 
+func TestWorkspaces_UpdateMissingName(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+
+	req := authRequest("PUT", "/workspaces/"+wsID, map[string]string{}, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestWorkspaces_GetNotFound(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, _ := doLogin(t, r, "octocat")
+
+	req := authRequest("GET", "/workspaces/nonexistent-id", nil, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
 func TestWorkspaces_CreateMissingName(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, _ := doLogin(t, r, "octocat")

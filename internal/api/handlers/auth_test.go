@@ -117,3 +117,33 @@ func TestAuth_InvalidToken(t *testing.T) {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
 }
+
+func TestHealth(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp struct{ Status string }
+	decode(t, w, &resp)
+	if resp.Status != "ok" {
+		t.Errorf("status = %q, want ok", resp.Status)
+	}
+}
+
+func TestSwagger_UI(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+
+	req := httptest.NewRequest("GET", "/swagger/index.html", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("swagger UI: status = %d, want 200", w.Code)
+	}
+}

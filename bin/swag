@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+exec docker compose run --rm --entrypoint sh core -c \
+  "go install github.com/swaggo/swag/cmd/swag@latest && \
+   /go/bin/swag init \
+     -g internal/api/handlers/router.go \
+     -o internal/api/docs \
+     --parseDependency \
+     --parseInternal \
+     --dir ./,./pkg/core,./pkg/provider"

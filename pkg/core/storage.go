@@ -186,8 +186,8 @@ type StorageListRequest struct {
 }
 
 type StorageItem struct {
-	Name   string
-	Bucket string
+	Name   string `json:"name"`
+	Bucket string `json:"bucket"`
 }
 
 func StorageList(ctx context.Context, req StorageListRequest) ([]StorageItem, error) {

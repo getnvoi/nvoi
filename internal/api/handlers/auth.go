@@ -19,6 +19,19 @@ type loginResponse struct {
 	IsNew     bool          `json:"is_new"`
 }
 
+// LoginHandler exchanges a GitHub token for a JWT.
+//
+// @Summary     Login with GitHub token
+// @Description Verifies a GitHub personal access token and returns a JWT. Creates the user and a default workspace on first login.
+// @Tags        auth
+// @Accept      json
+// @Produce     json
+// @Param       body body     loginRequest  true "GitHub token"
+// @Success     200  {object} loginResponse
+// @Failure     400  {object} errorResponse
+// @Failure     401  {object} errorResponse
+// @Failure     500  {object} errorResponse
+// @Router      /login [post]
 func LoginHandler(db *gorm.DB, verify api.GitHubVerifier) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req loginRequest

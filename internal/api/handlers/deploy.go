@@ -16,9 +16,20 @@ import (
 
 // Deploy creates a deployment from the latest config, computes the full plan
 // (diff + set), persists steps, and returns the deployment.
-// Execution is synchronous for now — the caller can poll step statuses.
 //
-// POST /workspaces/:workspace_id/repos/:repo_id/deploy
+// @Summary     Create deployment
+// @Description Creates a deployment from the latest config. Computes the full plan (deletes + sets) and persists steps as pending.
+// @Tags        deployments
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true "Repo ID"      format(uuid)
+// @Success     201          {object} api.Deployment
+// @Failure     400          {object} errorResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Failure     500          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deploy [post]
 func Deploy(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -117,10 +128,22 @@ func Deploy(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// RunDeployment starts executing a pending deployment.
-// Separate from Deploy so creation and execution are decoupled.
+// RunDeployment starts executing a pending deployment asynchronously.
 //
-// POST /workspaces/:workspace_id/repos/:repo_id/deployments/:deployment_id/run
+// @Summary     Run deployment
+// @Description Starts executing a pending deployment in the background. Returns immediately with status "running".
+// @Tags        deployments
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id  path     string true "Workspace ID"  format(uuid)
+// @Param       repo_id       path     string true "Repo ID"       format(uuid)
+// @Param       deployment_id path     string true "Deployment ID" format(uuid)
+// @Success     200           {object} statusResponse
+// @Failure     400           {object} errorResponse
+// @Failure     401           {object} errorResponse
+// @Failure     404           {object} errorResponse
+// @Failure     500           {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}/run [post]
 func RunDeployment(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -165,7 +188,18 @@ func RunDeployment(db *gorm.DB) gin.HandlerFunc {
 
 // GetDeployment returns a deployment with its steps and logs.
 //
-// GET /workspaces/:workspace_id/repos/:repo_id/deployments/:deployment_id
+// @Summary     Get deployment
+// @Description Returns a deployment with all steps and their JSONL logs.
+// @Tags        deployments
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id  path     string true "Workspace ID"  format(uuid)
+// @Param       repo_id       path     string true "Repo ID"       format(uuid)
+// @Param       deployment_id path     string true "Deployment ID" format(uuid)
+// @Success     200           {object} api.Deployment
+// @Failure     401           {object} errorResponse
+// @Failure     404           {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id} [get]
 func GetDeployment(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -194,7 +228,17 @@ func GetDeployment(db *gorm.DB) gin.HandlerFunc {
 
 // ListDeployments returns all deployments for a repo.
 //
-// GET /workspaces/:workspace_id/repos/:repo_id/deployments
+// @Summary     List deployments
+// @Description Returns all deployments for a repo, newest first.
+// @Tags        deployments
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true "Repo ID"      format(uuid)
+// @Success     200          {array}  api.Deployment
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deployments [get]
 func ListDeployments(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -208,10 +252,20 @@ func ListDeployments(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// DeploymentLogs returns all log lines for a deployment as JSONL.
-// Each line is a raw event from pkg/core.Event — the CLI renders it.
+// DeploymentLogs streams all log lines for a deployment as JSONL.
 //
-// GET /workspaces/:workspace_id/repos/:repo_id/deployments/:deployment_id/logs
+// @Summary     Stream deployment logs
+// @Description Returns all log lines for a deployment as newline-delimited JSON (JSONL). Each line is a pkg/core.Event.
+// @Tags        deployments
+// @Produce     application/x-ndjson
+// @Security    BearerAuth
+// @Param       workspace_id  path   string true "Workspace ID"  format(uuid)
+// @Param       repo_id       path   string true "Repo ID"       format(uuid)
+// @Param       deployment_id path   string true "Deployment ID" format(uuid)
+// @Success     200           {string} string "JSONL stream"
+// @Failure     401           {object} errorResponse
+// @Failure     404           {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}/logs [get]
 func DeploymentLogs(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)

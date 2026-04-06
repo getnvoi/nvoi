@@ -8,6 +8,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// ListRepos returns all repos in a workspace.
+//
+// @Summary     List repos
+// @Description Returns all repos in the specified workspace.
+// @Tags        repos
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Success     200          {array}  api.Repo
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos [get]
 func ListRepos(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ws, ok := loadWorkspace(c, db)
@@ -21,6 +33,22 @@ func ListRepos(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// CreateRepo creates a new repo with an auto-generated SSH keypair.
+//
+// @Summary     Create repo
+// @Description Creates a new repo in the workspace. An Ed25519 SSH keypair is auto-generated for server access.
+// @Tags        repos
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string            true "Workspace ID" format(uuid)
+// @Param       body         body     createRepoRequest true "Repo name"
+// @Success     201          {object} api.Repo
+// @Failure     400          {object} errorResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Failure     500          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos [post]
 func CreateRepo(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ws, ok := loadWorkspace(c, db)
@@ -28,9 +56,7 @@ func CreateRepo(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		var req struct {
-			Name string `json:"name" binding:"required"`
-		}
+		var req createRepoRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -49,6 +75,19 @@ func CreateRepo(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// GetRepo returns a single repo by ID.
+//
+// @Summary     Get repo
+// @Description Returns a repo by ID, scoped through the workspace.
+// @Tags        repos
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true "Repo ID"      format(uuid)
+// @Success     200          {object} api.Repo
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id} [get]
 func GetRepo(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -59,6 +98,22 @@ func GetRepo(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// UpdateRepo renames a repo.
+//
+// @Summary     Update repo
+// @Description Renames a repo by ID.
+// @Tags        repos
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string            true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string            true "Repo ID"      format(uuid)
+// @Param       body         body     updateRepoRequest true "New name"
+// @Success     200          {object} api.Repo
+// @Failure     400          {object} errorResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id} [put]
 func UpdateRepo(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -66,9 +121,7 @@ func UpdateRepo(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		var req struct {
-			Name string `json:"name" binding:"required"`
-		}
+		var req updateRepoRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -79,6 +132,19 @@ func UpdateRepo(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// DeleteRepo soft-deletes a repo.
+//
+// @Summary     Delete repo
+// @Description Soft-deletes a repo by ID.
+// @Tags        repos
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true "Repo ID"      format(uuid)
+// @Success     200          {object} deleteResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id} [delete]
 func DeleteRepo(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)

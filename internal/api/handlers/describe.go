@@ -10,10 +10,21 @@ import (
 	"gorm.io/gorm"
 )
 
-// Describe returns the live cluster state for a repo's latest config.
-// Calls pkg/core.Describe() over SSH — same data as `nvoi describe` in direct mode.
+// DescribeCluster returns the live cluster state for a repo's latest config.
 //
-// GET /workspaces/:workspace_id/repos/:repo_id/describe
+// @Summary     Describe cluster
+// @Description Returns live cluster state (nodes, workloads, pods, services, ingress, secrets, storage) via SSH. Same data as `nvoi describe` in direct mode.
+// @Tags        cluster
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true "Repo ID"      format(uuid)
+// @Success     200          {object} github_com_getnvoi_nvoi_pkg_core.DescribeResult
+// @Failure     400          {object} errorResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Failure     500          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/describe [get]
 func DescribeCluster(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -38,9 +49,20 @@ func DescribeCluster(db *gorm.DB) gin.HandlerFunc {
 }
 
 // ListResources returns all provider resources for a repo's config.
-// Calls pkg/core.Resources() — same data as `nvoi resources` in direct mode.
 //
-// GET /workspaces/:workspace_id/repos/:repo_id/resources
+// @Summary     List provider resources
+// @Description Returns all resources across configured providers (compute, DNS, storage). Same data as `nvoi resources` in direct mode.
+// @Tags        cluster
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true "Repo ID"      format(uuid)
+// @Success     200          {array}  github_com_getnvoi_nvoi_pkg_provider.ResourceGroup
+// @Failure     400          {object} errorResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Failure     500          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/resources [get]
 func ListResources(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)

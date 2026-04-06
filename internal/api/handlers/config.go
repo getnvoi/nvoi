@@ -15,9 +15,23 @@ import (
 )
 
 // PushConfig stores a new versioned config snapshot for a repo.
-// Validates the YAML config and optionally validates env references.
+// Validates the YAML config, expands managed services, and validates env references.
 //
-// POST /workspaces/:workspace_id/repos/:repo_id/config
+// @Summary     Push config
+// @Description Pushes a new versioned config snapshot. Validates YAML, expands managed services, validates env references, and persists credentials.
+// @Tags        config
+// @Accept      json
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string            true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string            true "Repo ID"      format(uuid)
+// @Param       body         body     pushConfigRequest true "Config payload"
+// @Success     201          {object} api.RepoConfig
+// @Failure     400          {object} errorResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Failure     500          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/config [post]
 func PushConfig(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -25,14 +39,7 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		var req struct {
-			ComputeProvider api.ComputeProvider `json:"compute_provider" binding:"required"`
-			DNSProvider     api.DNSProvider     `json:"dns_provider,omitempty"`
-			StorageProvider api.StorageProvider  `json:"storage_provider,omitempty"`
-			BuildProvider   api.BuildProvider    `json:"build_provider,omitempty"`
-			Config          string               `json:"config" binding:"required"` // YAML
-			Env             string               `json:"env,omitempty"`             // KEY=VALUE pairs
-		}
+		var req pushConfigRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -127,7 +134,18 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 
 // GetConfig returns the latest config for a repo.
 //
-// GET /workspaces/:workspace_id/repos/:repo_id/config
+// @Summary     Get latest config
+// @Description Returns the latest config version for a repo. Env is hidden unless ?reveal=true.
+// @Tags        config
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true  "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true  "Repo ID"      format(uuid)
+// @Param       reveal       query    bool   false "Show env values"
+// @Success     200          {object} configResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/config [get]
 func GetConfig(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -159,7 +177,17 @@ func GetConfig(db *gorm.DB) gin.HandlerFunc {
 
 // ListConfigs returns all config versions for a repo.
 //
-// GET /workspaces/:workspace_id/repos/:repo_id/configs
+// @Summary     List config versions
+// @Description Returns all config versions for a repo, newest first. Env is stripped.
+// @Tags        config
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true "Repo ID"      format(uuid)
+// @Success     200          {array}  configListItem
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/configs [get]
 func ListConfigs(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -196,9 +224,20 @@ func ListConfigs(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// PlanConfig returns the execution plan for the latest (or specified) config.
+// PlanConfig returns the execution plan for the latest config.
 //
-// GET /workspaces/:workspace_id/repos/:repo_id/config/plan
+// @Summary     Get execution plan
+// @Description Returns the ordered deployment plan for the latest config, including both delete and set steps.
+// @Tags        config
+// @Produce     json
+// @Security    BearerAuth
+// @Param       workspace_id path     string true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string true "Repo ID"      format(uuid)
+// @Success     200          {object} planResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Failure     500          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/config/plan [get]
 func PlanConfig(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)

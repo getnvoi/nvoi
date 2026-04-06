@@ -123,6 +123,49 @@ func TestRepos_OtherUserCantAccess(t *testing.T) {
 	}
 }
 
+func TestRepos_UpdateMissingName(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	req := authRequest("PUT", "/workspaces/"+wsID+"/repos/"+repoID, map[string]string{}, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestRepos_GetNotFound(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/nonexistent", nil, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestRepos_SSHKeyGenerated(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID, nil, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var repo struct {
+		SSHPublicKey string `json:"ssh_public_key"`
+	}
+	decode(t, w, &repo)
+	if repo.SSHPublicKey == "" {
+		t.Error("ssh_public_key should be auto-generated")
+	}
+}
+
 func TestRepos_CreateMissingName(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")

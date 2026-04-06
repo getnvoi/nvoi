@@ -11,7 +11,20 @@ import (
 
 // RunSSH runs a command on the master node via SSH and streams output.
 //
-// POST /workspaces/:workspace_id/repos/:repo_id/ssh
+// @Summary     Run SSH command
+// @Description Runs a command on the master node via SSH and streams stdout/stderr as plain text.
+// @Tags        cluster
+// @Accept      json
+// @Produce     text/plain
+// @Security    BearerAuth
+// @Param       workspace_id path     string        true "Workspace ID" format(uuid)
+// @Param       repo_id      path     string        true "Repo ID"      format(uuid)
+// @Param       body         body     runSSHRequest true "Command to run"
+// @Success     200          {string} string        "Command output stream"
+// @Failure     400          {object} errorResponse
+// @Failure     401          {object} errorResponse
+// @Failure     404          {object} errorResponse
+// @Router      /workspaces/{workspace_id}/repos/{repo_id}/ssh [post]
 func RunSSH(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		repo, ok := loadRepo(c, db)
@@ -19,9 +32,7 @@ func RunSSH(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		var req struct {
-			Command []string `json:"command" binding:"required"`
-		}
+		var req runSSHRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
