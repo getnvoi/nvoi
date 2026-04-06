@@ -433,7 +433,8 @@ Hard errors before touching k8s.
 
 **Secrets:**
 - `--secret KEY` on `service set` references a pre-existing secret. Must exist (validated via kubectl before apply). Hard error if not found.
-- `--secret KEY=VALUE` is rejected — use `secret set KEY VALUE` first.
+- `--secret KEY=VALUE` is rejected in the direct CLI — use `secret set KEY VALUE` first.
+- **Secret aliasing:** `--secret ENV_VAR=SECRET_KEY` mounts k8s secret key `SECRET_KEY` as env var `ENV_VAR`. Without `=`, both are the same. `kube.ParseSecretRef()` handles the split — used by both YAML generation and validation. Convention used by managed services for namespaced credentials (e.g. `POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB`).
 - Injected as `env.valueFrom.secretKeyRef` — value never in the manifest.
 - `secret delete` is idempotent — no error if key or secret doesn't exist.
 

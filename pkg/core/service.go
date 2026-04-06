@@ -108,16 +108,17 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		if err != nil {
 			return fmt.Errorf("cannot verify secrets — run 'secret set' first: %w", err)
 		}
-		for _, key := range req.Secrets {
+		for _, ref := range req.Secrets {
+			_, secretKey := kube.ParseSecretRef(ref)
 			found := false
 			for _, k := range existing {
-				if k == key {
+				if k == secretKey {
 					found = true
 					break
 				}
 			}
 			if !found {
-				return fmt.Errorf("secret %q not found — run 'nvoi secret set %s <value>' first", key, key)
+				return fmt.Errorf("secret %q not found — run 'nvoi secret set %s <value>' first", secretKey, secretKey)
 			}
 		}
 	}

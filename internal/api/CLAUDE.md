@@ -149,7 +149,7 @@ domains:
 - `POSTGRES_PASSWORD` → k8s secret key = env var name (same)
 - `POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB` → container reads `POSTGRES_PASSWORD`, backed by namespaced secret key `POSTGRES_PASSWORD_DB`
 
-Used by managed services to avoid collisions when multiple instances of the same kind exist.
+Convention parsed by `kube.ParseSecretRef()` — shared by YAML generation (`pkg/kube/generate.go`) and validation (`pkg/core/service.go`). Used by managed services to avoid collisions when multiple instances of the same kind exist.
 
 ## Managed services
 

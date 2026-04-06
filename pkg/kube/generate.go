@@ -13,6 +13,16 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// ParseSecretRef splits a secret reference into env var name and k8s secret key.
+// "RAILS_MASTER_KEY" → ("RAILS_MASTER_KEY", "RAILS_MASTER_KEY")
+// "POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB" → ("POSTGRES_PASSWORD", "POSTGRES_PASSWORD_DB")
+func ParseSecretRef(ref string) (envName, secretKey string) {
+	if envName, secretKey, ok := strings.Cut(ref, "="); ok {
+		return envName, secretKey
+	}
+	return ref, ref
+}
+
 // ServiceSpec describes a service to deploy.
 type ServiceSpec struct {
 	Name       string
@@ -40,13 +50,14 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 
 	// Container
 	envVars := append([]corev1.EnvVar{}, spec.Env...)
-	for _, key := range spec.Secrets {
+	for _, ref := range spec.Secrets {
+		envName, secretKey := ParseSecretRef(ref)
 		envVars = append(envVars, corev1.EnvVar{
-			Name: key,
+			Name: envName,
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: spec.SecretName},
-					Key:                  key,
+					Key:                  secretKey,
 				},
 			},
 		})

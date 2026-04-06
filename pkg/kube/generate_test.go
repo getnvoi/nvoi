@@ -224,6 +224,67 @@ func TestSecretReferences(t *testing.T) {
 	}
 }
 
+func TestParseSecretRef_Plain(t *testing.T) {
+	envName, secretKey := ParseSecretRef("RAILS_MASTER_KEY")
+	if envName != "RAILS_MASTER_KEY" {
+		t.Errorf("envName = %q, want RAILS_MASTER_KEY", envName)
+	}
+	if secretKey != "RAILS_MASTER_KEY" {
+		t.Errorf("secretKey = %q, want RAILS_MASTER_KEY", secretKey)
+	}
+}
+
+func TestParseSecretRef_Alias(t *testing.T) {
+	envName, secretKey := ParseSecretRef("POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB")
+	if envName != "POSTGRES_PASSWORD" {
+		t.Errorf("envName = %q, want POSTGRES_PASSWORD", envName)
+	}
+	if secretKey != "POSTGRES_PASSWORD_DB" {
+		t.Errorf("secretKey = %q, want POSTGRES_PASSWORD_DB", secretKey)
+	}
+}
+
+func TestSecretAliasInYAML(t *testing.T) {
+	names := mustNames(t)
+	spec := ServiceSpec{
+		Name:       "db",
+		Image:      "postgres:17",
+		Secrets:    []string{"POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB", "PLAIN_KEY"},
+		SecretName: "secrets",
+	}
+
+	yamlStr, _, err := GenerateYAML(spec, names, nil)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
+
+	docs := splitDocs(yamlStr)
+	var dep appsv1.Deployment
+	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	envVars := dep.Spec.Template.Spec.Containers[0].Env
+	for _, ev := range envVars {
+		if ev.ValueFrom == nil || ev.ValueFrom.SecretKeyRef == nil {
+			continue
+		}
+		ref := ev.ValueFrom.SecretKeyRef
+		switch ev.Name {
+		case "POSTGRES_PASSWORD":
+			if ref.Key != "POSTGRES_PASSWORD_DB" {
+				t.Errorf("alias: env POSTGRES_PASSWORD should ref key POSTGRES_PASSWORD_DB, got %q", ref.Key)
+			}
+		case "PLAIN_KEY":
+			if ref.Key != "PLAIN_KEY" {
+				t.Errorf("plain: env PLAIN_KEY should ref key PLAIN_KEY, got %q", ref.Key)
+			}
+		default:
+			// skip non-secret env vars
+		}
+	}
+}
+
 func TestHealthCheck(t *testing.T) {
 	names := mustNames(t)
 	spec := ServiceSpec{
