@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils/s3"
 )
 
@@ -20,16 +21,16 @@ var s3Client = &http.Client{Timeout: 30 * time.Second}
 
 // s3EmptyBucket lists and deletes all objects in a bucket via S3 API.
 // Loops until the bucket is empty.
-func s3EmptyBucket(ctx context.Context, endpoint, accessKey, secretKey, region, bucket string) error {
+func s3EmptyBucket(ctx context.Context, creds provider.BucketCredentials, bucket string) error {
 	for {
 		// List objects
-		url := fmt.Sprintf("%s/%s?list-type=2&max-keys=1000", endpoint, bucket)
+		url := fmt.Sprintf("%s/%s?list-type=2&max-keys=1000", creds.Endpoint, bucket)
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/xml")
-		s3.Sign(req, nil, accessKey, secretKey, region)
+		s3.Sign(req, nil, creds.AccessKeyID, creds.SecretAccessKey, creds.Region)
 
 		resp, err := s3Client.Do(req)
 		if err != nil {
@@ -72,13 +73,13 @@ func s3EmptyBucket(ctx context.Context, endpoint, accessKey, secretKey, region, 
 		sb.WriteString("</Delete>")
 
 		deleteBody := []byte(sb.String())
-		deleteURL := fmt.Sprintf("%s/%s?delete", endpoint, bucket)
+		deleteURL := fmt.Sprintf("%s/%s?delete", creds.Endpoint, bucket)
 		deleteReq, err := http.NewRequestWithContext(ctx, "POST", deleteURL, bytes.NewReader(deleteBody))
 		if err != nil {
 			return err
 		}
 		deleteReq.Header.Set("Content-Type", "application/xml")
-		s3.Sign(deleteReq, deleteBody, accessKey, secretKey, region)
+		s3.Sign(deleteReq, deleteBody, creds.AccessKeyID, creds.SecretAccessKey, creds.Region)
 
 		deleteResp, err := s3Client.Do(deleteReq)
 		if err != nil {
@@ -97,7 +98,7 @@ func s3EmptyBucket(ctx context.Context, endpoint, accessKey, secretKey, region, 
 }
 
 // s3SetCORS sets CORS configuration on a bucket via the S3 PutBucketCors API.
-func s3SetCORS(ctx context.Context, endpoint, accessKey, secretKey, region, bucket string, origins, methods []string) error {
+func s3SetCORS(ctx context.Context, creds provider.BucketCredentials, bucket string, origins, methods []string) error {
 	var sb strings.Builder
 	sb.WriteString("<CORSConfiguration><CORSRule>")
 	for _, o := range origins {
@@ -115,13 +116,13 @@ func s3SetCORS(ctx context.Context, endpoint, accessKey, secretKey, region, buck
 	sb.WriteString("</CORSRule></CORSConfiguration>")
 
 	body := []byte(sb.String())
-	url := fmt.Sprintf("%s/%s?cors", endpoint, bucket)
+	url := fmt.Sprintf("%s/%s?cors", creds.Endpoint, bucket)
 	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/xml")
-	s3.Sign(req, body, accessKey, secretKey, region)
+	s3.Sign(req, body, creds.AccessKeyID, creds.SecretAccessKey, creds.Region)
 
 	resp, err := s3Client.Do(req)
 	if err != nil {
@@ -141,14 +142,14 @@ func s3SetCORS(ctx context.Context, endpoint, accessKey, secretKey, region, buck
 
 // s3ClearCORS removes CORS configuration from a bucket.
 // Idempotent — succeeds even if no CORS config exists.
-func s3ClearCORS(ctx context.Context, endpoint, accessKey, secretKey, region, bucket string) error {
-	url := fmt.Sprintf("%s/%s?cors", endpoint, bucket)
+func s3ClearCORS(ctx context.Context, creds provider.BucketCredentials, bucket string) error {
+	url := fmt.Sprintf("%s/%s?cors", creds.Endpoint, bucket)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/xml")
-	s3.Sign(req, nil, accessKey, secretKey, region)
+	s3.Sign(req, nil, creds.AccessKeyID, creds.SecretAccessKey, creds.Region)
 
 	resp, err := s3Client.Do(req)
 	if err != nil {
@@ -168,7 +169,7 @@ func s3ClearCORS(ctx context.Context, endpoint, accessKey, secretKey, region, bu
 }
 
 // s3SetLifecycle sets an expiration lifecycle rule on a bucket.
-func s3SetLifecycle(ctx context.Context, endpoint, accessKey, secretKey, region, bucket string, expireDays int) error {
+func s3SetLifecycle(ctx context.Context, creds provider.BucketCredentials, bucket string, expireDays int) error {
 	body := []byte(fmt.Sprintf(`<LifecycleConfiguration>
   <Rule>
     <ID>nvoi-expire</ID>
@@ -177,13 +178,13 @@ func s3SetLifecycle(ctx context.Context, endpoint, accessKey, secretKey, region,
   </Rule>
 </LifecycleConfiguration>`, expireDays))
 
-	url := fmt.Sprintf("%s/%s?lifecycle", endpoint, bucket)
+	url := fmt.Sprintf("%s/%s?lifecycle", creds.Endpoint, bucket)
 	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/xml")
-	s3.Sign(req, body, accessKey, secretKey, region)
+	s3.Sign(req, body, creds.AccessKeyID, creds.SecretAccessKey, creds.Region)
 
 	resp, err := s3Client.Do(req)
 	if err != nil {

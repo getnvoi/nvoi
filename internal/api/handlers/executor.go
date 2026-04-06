@@ -21,63 +21,80 @@ type ExecuteParams struct {
 	Env        map[string]string // decrypted RepoConfig.Env — provider credentials + app secrets only
 }
 
+// executor holds deployment-scoped state: provider refs constructed once,
+// builtImages accumulated across steps. Per-step args stay on the method.
+type executor struct {
+	db            *gorm.DB
+	cluster       pkgcore.Cluster
+	dns           pkgcore.ProviderRef
+	storage       pkgcore.ProviderRef
+	buildProvider string
+	creds         map[string]string
+	builtImages   map[string]string
+}
+
+func newExecutor(db *gorm.DB, p ExecuteParams) *executor {
+	return &executor{
+		db: db,
+		cluster: pkgcore.Cluster{
+			AppName:     p.Repo.Name,
+			Env:         p.Repo.Environment,
+			Provider:    string(p.Config.ComputeProvider),
+			Credentials: p.Env,
+			SSHKey:      []byte(p.Repo.SSHPrivateKey),
+		},
+		dns:           pkgcore.ProviderRef{Name: string(p.Config.DNSProvider), Creds: p.Env},
+		storage:       pkgcore.ProviderRef{Name: string(p.Config.StorageProvider), Creds: p.Env},
+		buildProvider: string(p.Config.BuildProvider),
+		creds:         p.Env,
+		builtImages:   map[string]string{},
+	}
+}
+
 // Execute runs a deployment: walks steps in order, calls pkg/core/ functions,
 // writes JSONL logs, updates statuses. Blocking — runs in a goroutine from the handler.
 func Execute(ctx context.Context, db *gorm.DB, p ExecuteParams) {
-	markDeploymentRunning(db, p.Deployment)
+	e := newExecutor(db, p)
+	e.run(ctx, p.Deployment)
+}
 
-	// Build Cluster from DB fields — never from env string lookups.
-	cluster := pkgcore.Cluster{
-		AppName:     p.Repo.Name,
-		Env:         p.Repo.Environment,
-		Provider:    string(p.Config.ComputeProvider),
-		Credentials: p.Env,
-		SSHKey:      []byte(p.Repo.SSHPrivateKey),
-	}
+// run walks steps for a deployment, dispatching each to step().
+func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
+	markDeploymentRunning(e.db, deployment)
 
-	// Provider refs from typed RepoConfig columns. Credentials from encrypted env.
-	dnsRef := pkgcore.ProviderRef{Name: string(p.Config.DNSProvider), Creds: p.Env}
-	storageRef := pkgcore.ProviderRef{Name: string(p.Config.StorageProvider), Creds: p.Env}
-	buildProvider := string(p.Config.BuildProvider)
-
-	// Load steps in order.
 	var steps []api.DeploymentStep
-	db.Where("deployment_id = ?", p.Deployment.ID).Order("position").Find(&steps)
+	e.db.Where("deployment_id = ?", deployment.ID).Order("position").Find(&steps)
 
 	var lastErr error
-	builtImages := map[string]string{}
-
 	for i := range steps {
 		step := &steps[i]
-		out := newDBOutput(db, step.ID)
-		markStepRunning(db, step)
+		e.cluster.Output = newDBOutput(e.db, step.ID)
+		markStepRunning(e.db, step)
 
 		var params map[string]any
 		if step.Params != "" {
 			json.Unmarshal([]byte(step.Params), &params)
 		}
 
-		err := executeStep(ctx, cluster, dnsRef, storageRef, buildProvider, p.Env, config.StepKind(step.Kind), step.Name, params, out, builtImages)
-		markStepDone(db, step, err)
+		err := e.step(ctx, config.StepKind(step.Kind), step.Name, params)
+		markStepDone(e.db, step, err)
 
 		if err != nil {
 			lastErr = err
-			skipRemainingSteps(db, p.Deployment.ID)
+			skipRemainingSteps(e.db, deployment.ID)
 			break
 		}
 	}
 
-	markDeploymentDone(db, p.Deployment, lastErr)
+	markDeploymentDone(e.db, deployment, lastErr)
 }
 
-// executeStep dispatches a single step to the corresponding pkg/core/ function.
-func executeStep(ctx context.Context, cluster pkgcore.Cluster, dnsRef, storageRef pkgcore.ProviderRef, buildProvider string, creds map[string]string, kind config.StepKind, name string, params map[string]any, out pkgcore.Output, builtImages map[string]string) error {
-	cluster.Output = out
-
+// step dispatches a single step to the corresponding pkg/core/ function.
+func (e *executor) step(ctx context.Context, kind config.StepKind, name string, params map[string]any) error {
 	switch kind {
 	case config.StepComputeSet:
 		_, err := pkgcore.ComputeSet(ctx, pkgcore.ComputeSetRequest{
-			Cluster:    cluster,
+			Cluster:    e.cluster,
 			Name:       name,
 			ServerType: utils.GetString(params, "type"),
 			Region:     utils.GetString(params, "region"),
@@ -87,13 +104,13 @@ func executeStep(ctx context.Context, cluster pkgcore.Cluster, dnsRef, storageRe
 
 	case config.StepComputeDelete:
 		return pkgcore.ComputeDelete(ctx, pkgcore.ComputeDeleteRequest{
-			Cluster: cluster,
+			Cluster: e.cluster,
 			Name:    name,
 		})
 
 	case config.StepVolumeSet:
 		_, err := pkgcore.VolumeSet(ctx, pkgcore.VolumeSetRequest{
-			Cluster: cluster,
+			Cluster: e.cluster,
 			Name:    name,
 			Size:    utils.GetInt(params, "size"),
 			Server:  utils.GetString(params, "server"),
@@ -102,42 +119,42 @@ func executeStep(ctx context.Context, cluster pkgcore.Cluster, dnsRef, storageRe
 
 	case config.StepVolumeDelete:
 		return pkgcore.VolumeDelete(ctx, pkgcore.VolumeDeleteRequest{
-			Cluster: cluster,
+			Cluster: e.cluster,
 			Name:    name,
 		})
 
 	case config.StepBuild:
 		result, err := pkgcore.BuildRun(ctx, pkgcore.BuildRunRequest{
-			Cluster:            cluster,
-			Builder:            buildProvider,
-			BuilderCredentials: creds,
+			Cluster:            e.cluster,
+			Builder:            e.buildProvider,
+			BuilderCredentials: e.creds,
 			Source:             utils.GetString(params, "source"),
 			Name:               name,
-			GitToken:           creds["GITHUB_TOKEN"],
+			GitToken:           e.creds["GITHUB_TOKEN"],
 		})
 		if err != nil {
 			return err
 		}
-		builtImages[name] = result.ImageRef
+		e.builtImages[name] = result.ImageRef
 		return nil
 
 	case config.StepSecretSet:
 		return pkgcore.SecretSet(ctx, pkgcore.SecretSetRequest{
-			Cluster: cluster,
+			Cluster: e.cluster,
 			Key:     name,
 			Value:   utils.GetString(params, "value"),
 		})
 
 	case config.StepSecretDelete:
 		return pkgcore.SecretDelete(ctx, pkgcore.SecretDeleteRequest{
-			Cluster: cluster,
+			Cluster: e.cluster,
 			Key:     name,
 		})
 
 	case config.StepStorageSet:
 		return pkgcore.StorageSet(ctx, pkgcore.StorageSetRequest{
-			Cluster:    cluster,
-			Storage:    storageRef,
+			Cluster:    e.cluster,
+			Storage:    e.storage,
 			Name:       name,
 			Bucket:     utils.GetString(params, "bucket"),
 			CORS:       utils.GetBool(params, "cors"),
@@ -146,31 +163,31 @@ func executeStep(ctx context.Context, cluster pkgcore.Cluster, dnsRef, storageRe
 
 	case config.StepStorageDelete:
 		return pkgcore.StorageDelete(ctx, pkgcore.StorageDeleteRequest{
-			Cluster: cluster,
-			Storage: storageRef,
+			Cluster: e.cluster,
+			Storage: e.storage,
 			Name:    name,
 		})
 
 	case config.StepServiceSet:
 		image := utils.GetString(params, "image")
 		if buildRef := utils.GetString(params, "build"); buildRef != "" {
-			if ref, ok := builtImages[buildRef]; ok {
+			if ref, ok := e.builtImages[buildRef]; ok {
 				image = ref
 			} else {
 				ref, err := pkgcore.BuildLatest(ctx, pkgcore.BuildLatestRequest{
-					Cluster: cluster,
+					Cluster: e.cluster,
 					Name:    buildRef,
 				})
 				if err != nil {
 					return fmt.Errorf("resolve image for build %q: %w", buildRef, err)
 				}
 				image = ref
-				builtImages[buildRef] = ref
+				e.builtImages[buildRef] = ref
 			}
 		}
 
 		return pkgcore.ServiceSet(ctx, pkgcore.ServiceSetRequest{
-			Cluster:    cluster,
+			Cluster:    e.cluster,
 			Name:       name,
 			Image:      image,
 			Port:       utils.GetInt(params, "port"),
@@ -186,22 +203,22 @@ func executeStep(ctx context.Context, cluster pkgcore.Cluster, dnsRef, storageRe
 
 	case config.StepServiceDelete:
 		return pkgcore.ServiceDelete(ctx, pkgcore.ServiceDeleteRequest{
-			Cluster: cluster,
+			Cluster: e.cluster,
 			Name:    name,
 		})
 
 	case config.StepDNSSet:
 		return pkgcore.DNSSet(ctx, pkgcore.DNSSetRequest{
-			Cluster: cluster,
-			DNS:     dnsRef,
+			Cluster: e.cluster,
+			DNS:     e.dns,
 			Service: name,
 			Domains: utils.GetStringSlice(params, "domains"),
 		})
 
 	case config.StepDNSDelete:
 		return pkgcore.DNSDelete(ctx, pkgcore.DNSDeleteRequest{
-			Cluster: cluster,
-			DNS:     dnsRef,
+			Cluster: e.cluster,
+			DNS:     e.dns,
 			Service: name,
 			Domains: utils.GetStringSlice(params, "domains"),
 		})

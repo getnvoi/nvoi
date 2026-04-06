@@ -72,7 +72,7 @@ func (c *Client) EmptyBucket(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	return s3EmptyBucket(ctx, cr.Endpoint, cr.AccessKeyID, cr.SecretAccessKey, cr.Region, name)
+	return s3EmptyBucket(ctx, cr, name)
 }
 
 func (c *Client) DeleteBucket(ctx context.Context, name string) error {
@@ -91,7 +91,7 @@ func (c *Client) SetCORS(ctx context.Context, name string, origins, methods []st
 	if err != nil {
 		return err
 	}
-	return s3SetCORS(ctx, cr.Endpoint, cr.AccessKeyID, cr.SecretAccessKey, cr.Region, name, origins, methods)
+	return s3SetCORS(ctx, cr, name, origins, methods)
 }
 
 func (c *Client) ClearCORS(ctx context.Context, name string) error {
@@ -99,7 +99,7 @@ func (c *Client) ClearCORS(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	return s3ClearCORS(ctx, cr.Endpoint, cr.AccessKeyID, cr.SecretAccessKey, cr.Region, name)
+	return s3ClearCORS(ctx, cr, name)
 }
 
 func (c *Client) SetLifecycle(ctx context.Context, name string, expireDays int) error {
@@ -107,7 +107,7 @@ func (c *Client) SetLifecycle(ctx context.Context, name string, expireDays int) 
 	if err != nil {
 		return err
 	}
-	return s3SetLifecycle(ctx, cr.Endpoint, cr.AccessKeyID, cr.SecretAccessKey, cr.Region, name, expireDays)
+	return s3SetLifecycle(ctx, cr, name, expireDays)
 }
 
 // Credentials returns S3-compatible access details derived from the CF API token.
