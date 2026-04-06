@@ -291,13 +291,22 @@ Some operations are provider-specific by design. Each provider implements them a
 
 ### Credential resolution
 
-All four provider kinds (compute, build, DNS, storage) resolve credentials through a single generic function in `internal/core/resolve.go`:
+Two layers. The pure mapping lives in `pkg/provider/resolve.go` — shared by both CLIs and the API:
+
+```go
+provider.MapCredentials(schema, env) → map[string]string  // HETZNER_TOKEN=xxx → token=xxx
+provider.MapComputeCredentials("hetzner", env) → map[string]string  // convenience wrapper
+```
+
+The direct CLI adds flag resolution on top in `internal/core/resolve.go`:
 
 ```go
 resolveCredentials(cmd, schema, flagName) → map[string]string
 ```
 
-Resolution order: `--xxx-credentials KEY=VALUE` flag → direct command flag (e.g. `--zone`) → env var from schema. One pattern for all providers. DNS zone is declared in the Cloudflare DNS schema (`EnvVar: "DNS_ZONE"`, `Flag: "zone"`) — no special-casing.
+Resolution order: `--xxx-credentials KEY=VALUE` flag → direct command flag (e.g. `--zone`) → env var from schema → `MapCredentials` for the env-var-to-key translation. One pattern for all providers. DNS zone is declared in the Cloudflare DNS schema (`EnvVar: "DNS_ZONE"`, `Flag: "zone"`) — no special-casing.
+
+The API executor uses `MapCredentials` directly — no flags, env comes from the DB.
 
 **Region override:** `--compute-region` overrides `creds["region"]` after credential resolution. This ensures the flag wins over `AWS_REGION` in `.env`. The AWS SDK client is initialized from the creds map, so the override must happen before provider construction.
 

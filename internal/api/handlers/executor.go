@@ -9,6 +9,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gorm.io/gorm"
 )
@@ -33,28 +34,69 @@ type executor struct {
 	builtImages   map[string]string
 }
 
-func newExecutor(db *gorm.DB, p ExecuteParams) *executor {
+func newExecutor(db *gorm.DB, p ExecuteParams) (*executor, error) {
+	computeName := string(p.Config.ComputeProvider)
+	dnsName := string(p.Config.DNSProvider)
+	storageName := string(p.Config.StorageProvider)
+	buildName := string(p.Config.BuildProvider)
+
+	// Map raw env vars (HETZNER_TOKEN=xxx) to schema keys (token=xxx).
+	// Each provider kind has its own schema — credentials are mapped per-provider.
+	computeCreds, err := provider.MapComputeCredentials(computeName, p.Env)
+	if err != nil {
+		return nil, err
+	}
+
+	var dnsCreds map[string]string
+	if dnsName != "" {
+		dnsCreds, err = provider.MapDNSCredentials(dnsName, p.Env)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var storageCreds map[string]string
+	if storageName != "" {
+		storageCreds, err = provider.MapBucketCredentials(storageName, p.Env)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var buildCreds map[string]string
+	if buildName != "" {
+		buildCreds, err = provider.MapBuildCredentials(buildName, p.Env)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &executor{
 		db: db,
 		cluster: pkgcore.Cluster{
 			AppName:     p.Repo.Name,
 			Env:         p.Repo.Environment,
-			Provider:    string(p.Config.ComputeProvider),
-			Credentials: p.Env,
+			Provider:    computeName,
+			Credentials: computeCreds,
 			SSHKey:      []byte(p.Repo.SSHPrivateKey),
 		},
-		dns:           pkgcore.ProviderRef{Name: string(p.Config.DNSProvider), Creds: p.Env},
-		storage:       pkgcore.ProviderRef{Name: string(p.Config.StorageProvider), Creds: p.Env},
-		buildProvider: string(p.Config.BuildProvider),
-		creds:         p.Env,
+		dns:           pkgcore.ProviderRef{Name: dnsName, Creds: dnsCreds},
+		storage:       pkgcore.ProviderRef{Name: storageName, Creds: storageCreds},
+		buildProvider: buildName,
+		creds:         buildCreds,
 		builtImages:   map[string]string{},
-	}
+	}, nil
 }
 
 // Execute runs a deployment: walks steps in order, calls pkg/core/ functions,
 // writes JSONL logs, updates statuses. Blocking — runs in a goroutine from the handler.
 func Execute(ctx context.Context, db *gorm.DB, p ExecuteParams) {
-	e := newExecutor(db, p)
+	e, err := newExecutor(db, p)
+	if err != nil {
+		markDeploymentRunning(db, p.Deployment)
+		markDeploymentDone(db, p.Deployment, err)
+		return
+	}
 	e.run(ctx, p.Deployment)
 }
 

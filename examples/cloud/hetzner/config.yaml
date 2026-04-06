@@ -1,4 +1,4 @@
-# Hetzner deploy config — equivalent to examples/core/deploy-hetzner
+# Hetzner deploy config — equivalent to examples/core/hetzner/deploy
 servers:
   master:
     type: cx23
@@ -6,14 +6,6 @@ servers:
   worker-1:
     type: cx33
     region: fsn1
-
-volumes:
-  pgdata:
-    size: 30
-    server: master
-  meili-data:
-    size: 20
-    server: master
 
 build:
   web:
@@ -36,9 +28,6 @@ services:
     server: worker-1
     env:
       - RAILS_ENV=production
-      - POSTGRES_HOST=db
-      - POSTGRES_USER
-      - POSTGRES_DB
     secrets:
       - RAILS_MASTER_KEY
     storage:
@@ -50,12 +39,9 @@ services:
     server: worker-1
     env:
       - RAILS_ENV=production
-      - POSTGRES_HOST=db
-      - POSTGRES_USER
-      - POSTGRES_DB
     secrets:
       - RAILS_MASTER_KEY
     uses: [db]
 
 domains:
-  web: final.nvoi.to
+  web: hz-cloud.nvoi.to

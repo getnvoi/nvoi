@@ -254,12 +254,22 @@ See [`examples/README.md`](../../examples/README.md) for deploy workflows.
 
 ```
 CLI: nvoi deploy
-  → POST .../deploy
-  → API: load latest RepoConfig + previous version
+  → POST .../deploy → creates Deployment + Steps (all pending)
+  → POST .../deployments/:id/run → starts executor in goroutine
+  → Poll GET .../deployments/:id (status) + GET .../deployments/:id/logs (JSONL)
+  → Render logs through TUI — same output as examples/core/hetzner/deploy
+
+API: POST .../deploy
+  → Load latest RepoConfig + previous version
   → Expand managed services (load stored creds from repo_managed_service_configs)
   → FullPlan(prev, current, env) = Diff deletes + Plan sets
   → Create Deployment + DeploymentSteps rows (all pending)
   → Return deployment with steps
+
+API: POST .../deployments/:id/run
+  → Load Deployment + RepoConfig + Repo
+  → Build executor: map raw env vars to provider schema keys via provider.MapCredentials()
+  → Start Execute() in goroutine
 
 Executor (walks steps in order):
   → For each step: status → running → call pkg/core/ function
@@ -268,12 +278,11 @@ Executor (walks steps in order):
   → Step done: status → succeeded | failed
   → On failure: remaining steps → skipped
   → Deployment: succeeded | failed
-
-CLI: polls GET .../deployments/:id/logs
-  → API returns raw JSONL (application/x-ndjson)
-  → CLI parses events → render.ReplayLine() → TUI output
-  → Same lipgloss formatting as examples/core/hetzner/deploy
 ```
+
+### Credential mapping
+
+The executor receives raw `.env` content (parsed from DB). Provider schemas expect internal keys (`token`, not `HETZNER_TOKEN`). `provider.MapCredentials(schema, env)` translates env var names → schema keys. This is the same function the direct CLI uses — single source of truth in `pkg/provider/resolve.go`.
 
 ## Rendering
 

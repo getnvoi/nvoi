@@ -87,6 +87,59 @@ func GetBuildSchema(name string) (CredentialSchema, error) {
 	return entry.schema, nil
 }
 
+// ── Credential mapping ────────────────────────────────────────────────────────
+
+// MapCredentials translates a raw env map (e.g. {"HETZNER_TOKEN": "xxx"}) into
+// schema-keyed credentials (e.g. {"token": "xxx"}) using the schema's EnvVar mappings.
+// Both the direct CLI and the API executor use this as the single source of truth
+// for env-var-to-key translation.
+func MapCredentials(schema CredentialSchema, env map[string]string) map[string]string {
+	creds := make(map[string]string, len(schema.Fields))
+	for _, f := range schema.Fields {
+		if v, ok := env[f.EnvVar]; ok && v != "" {
+			creds[f.Key] = v
+		}
+	}
+	return creds
+}
+
+// MapComputeCredentials is a convenience wrapper: looks up the schema by provider name,
+// then maps credentials. Returns an error if the provider is not registered.
+func MapComputeCredentials(providerName string, env map[string]string) (map[string]string, error) {
+	schema, err := GetComputeSchema(providerName)
+	if err != nil {
+		return nil, err
+	}
+	return MapCredentials(schema, env), nil
+}
+
+// MapDNSCredentials maps env vars to DNS provider schema keys.
+func MapDNSCredentials(providerName string, env map[string]string) (map[string]string, error) {
+	schema, err := GetDNSSchema(providerName)
+	if err != nil {
+		return nil, err
+	}
+	return MapCredentials(schema, env), nil
+}
+
+// MapBucketCredentials maps env vars to bucket provider schema keys.
+func MapBucketCredentials(providerName string, env map[string]string) (map[string]string, error) {
+	schema, err := GetBucketSchema(providerName)
+	if err != nil {
+		return nil, err
+	}
+	return MapCredentials(schema, env), nil
+}
+
+// MapBuildCredentials maps env vars to build provider schema keys.
+func MapBuildCredentials(providerName string, env map[string]string) (map[string]string, error) {
+	schema, err := GetBuildSchema(providerName)
+	if err != nil {
+		return nil, err
+	}
+	return MapCredentials(schema, env), nil
+}
+
 // ── Resolve ────────────────────────────────────────────────────────────────────
 
 // ResolveCompute creates a compute provider with pre-resolved credentials.

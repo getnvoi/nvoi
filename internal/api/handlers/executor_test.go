@@ -7,6 +7,13 @@ import (
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
 	"gorm.io/gorm"
+
+	// Providers must be registered for newExecutor to map credentials.
+	_ "github.com/getnvoi/nvoi/pkg/provider/aws"
+	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare"
+	_ "github.com/getnvoi/nvoi/pkg/provider/daytona"
+	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
+	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
 )
 
 func TestNewExecutor_BuildsFromParams(t *testing.T) {
@@ -19,10 +26,22 @@ func TestNewExecutor_BuildsFromParams(t *testing.T) {
 			StorageProvider: api.StorageAWS,
 			BuildProvider:   api.BuildDaytona,
 		},
-		Env: map[string]string{"HETZNER_TOKEN": "tok123"},
+		Env: map[string]string{
+			"HETZNER_TOKEN":      "tok123",
+			"CF_API_KEY":         "cfkey",
+			"CF_ZONE_ID":        "zone1",
+			"DNS_ZONE":           "example.com",
+			"AWS_ACCESS_KEY_ID":  "awskey",
+			"AWS_SECRET_ACCESS_KEY": "awssecret",
+			"CF_ACCOUNT_ID":     "cfacct",
+			"DAYTONA_API_KEY":   "daykey",
+		},
 	}
 
-	e := newExecutor(db, p)
+	e, err := newExecutor(db, p)
+	if err != nil {
+		t.Fatalf("newExecutor: %v", err)
+	}
 
 	if e.cluster.AppName != "rails" {
 		t.Errorf("AppName = %q, want rails", e.cluster.AppName)
@@ -33,6 +52,10 @@ func TestNewExecutor_BuildsFromParams(t *testing.T) {
 	if e.cluster.Provider != "hetzner" {
 		t.Errorf("Provider = %q, want hetzner", e.cluster.Provider)
 	}
+	// Compute creds should be schema-mapped: HETZNER_TOKEN → token
+	if e.cluster.Credentials["token"] != "tok123" {
+		t.Errorf("compute creds[token] = %q, want tok123", e.cluster.Credentials["token"])
+	}
 	if e.dns.Name != "cloudflare" {
 		t.Errorf("DNS = %q, want cloudflare", e.dns.Name)
 	}
@@ -42,11 +65,22 @@ func TestNewExecutor_BuildsFromParams(t *testing.T) {
 	if e.buildProvider != "daytona" {
 		t.Errorf("BuildProvider = %q, want daytona", e.buildProvider)
 	}
-	if e.creds["HETZNER_TOKEN"] != "tok123" {
-		t.Errorf("creds missing HETZNER_TOKEN")
-	}
 	if e.builtImages == nil {
 		t.Error("builtImages should be initialized")
+	}
+}
+
+func TestNewExecutor_UnknownProviderFails(t *testing.T) {
+	db := api.TestDB()
+	p := ExecuteParams{
+		Repo:   &api.Repo{Name: "app"},
+		Config: &api.RepoConfig{ComputeProvider: "nonexistent"},
+		Env:    map[string]string{},
+	}
+
+	_, err := newExecutor(db, p)
+	if err == nil {
+		t.Fatal("expected error for unknown provider")
 	}
 }
 
@@ -145,14 +179,11 @@ func TestExecutor_Run_WritesLogs(t *testing.T) {
 	deployment := api.Deployment{RepoID: repo.ID, RepoConfigID: rc.ID}
 	db.Create(&deployment)
 
-	// One step that will fail (unknown kind) — the executor should still write
-	// logs via the dbOutput before recording the failure.
 	db.Create(&api.DeploymentStep{DeploymentID: deployment.ID, Position: 1, Kind: "bogus.kind", Name: "test"})
 
 	e := &executor{db: db, builtImages: map[string]string{}}
 	e.run(context.Background(), &deployment)
 
-	// The step failed, but check that the step has timestamps.
 	var step api.DeploymentStep
 	db.Where("deployment_id = ?", deployment.ID).First(&step)
 	if step.StartedAt == nil {

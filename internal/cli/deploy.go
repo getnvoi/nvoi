@@ -24,7 +24,7 @@ func newDeployCmd() *cobra.Command {
 				return err
 			}
 
-			// Trigger deploy.
+			// Create deployment (pending).
 			var deployment struct {
 				ID     string `json:"id"`
 				Status string `json:"status"`
@@ -36,8 +36,13 @@ func newDeployCmd() *cobra.Command {
 
 			fmt.Printf("deployment %s\n\n", deployment.ID)
 
-			// Poll logs until deployment finishes — render as they come,
-			// same output as running bin/deploy-hetzner.
+			// Start execution.
+			runPath := "/workspaces/" + wsID + "/repos/" + repoID + "/deployments/" + deployment.ID + "/run"
+			if err := client.Do("POST", runPath, nil, nil); err != nil {
+				return fmt.Errorf("start deployment: %w", err)
+			}
+
+			// Poll logs until deployment finishes — render as they come.
 			out := render.Resolve(false, false)
 			basePath := "/workspaces/" + wsID + "/repos/" + repoID + "/deployments/" + deployment.ID
 			lastLines := 0
@@ -59,11 +64,12 @@ func newDeployCmd() *cobra.Command {
 					fmt.Println("\ndeploy succeeded")
 					return nil
 				case "failed":
-					fmt.Println("\ndeploy failed")
 					return fmt.Errorf("deploy failed")
+				case "pending", "running":
+					time.Sleep(2 * time.Second)
+				default:
+					return fmt.Errorf("unexpected deployment status: %s", status.Status)
 				}
-
-				time.Sleep(2 * time.Second)
 			}
 		},
 	}

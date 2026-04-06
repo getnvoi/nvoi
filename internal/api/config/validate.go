@@ -113,6 +113,25 @@ func Validate(cfg *Config) []error {
 		}
 	}
 
+	// ── Orphan volumes ─────────────────────────────────────────────────────────
+	// A volume that no service mounts is likely a mistake.
+	if len(cfg.Volumes) > 0 {
+		referencedVolumes := map[string]bool{}
+		for _, svc := range cfg.Services {
+			for _, mount := range svc.Volumes {
+				source, _, ok := strings.Cut(mount, ":")
+				if ok {
+					referencedVolumes[source] = true
+				}
+			}
+		}
+		for name := range cfg.Volumes {
+			if !referencedVolumes[name] {
+				add("volumes.%s: defined but not mounted by any service", name)
+			}
+		}
+	}
+
 	// ── Domains ────────────────────────────────────────────────────────────────
 	for svcName, domains := range cfg.Domains {
 		svc, ok := cfg.Services[svcName]

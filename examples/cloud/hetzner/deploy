@@ -12,7 +12,6 @@ export BUILD_PROVIDER=daytona
 bin/cloud login
 bin/cloud workspaces use default
 bin/cloud repos create dummy-rails
-bin/cloud repos use dummy-rails
 
 bin/cloud push \
   --config examples/cloud/hetzner/config.yaml \

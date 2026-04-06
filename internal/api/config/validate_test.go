@@ -186,6 +186,26 @@ func TestValidate_DomainEmpty(t *testing.T) {
 	assertHasError(t, errs, "at least one domain")
 }
 
+func TestValidate_OrphanVolume(t *testing.T) {
+	cfg := validConfig()
+	cfg.Volumes = map[string]Volume{"pgdata": {Size: 30, Server: "master"}}
+	// No service mounts pgdata.
+	errs := Validate(cfg)
+	assertHasError(t, errs, "volumes.pgdata: defined but not mounted")
+}
+
+func TestValidate_VolumeUsedByService(t *testing.T) {
+	cfg := validConfig()
+	cfg.Volumes = map[string]Volume{"pgdata": {Size: 30, Server: "master"}}
+	cfg.Services["db"] = Service{Image: "postgres:17", Volumes: []string{"pgdata:/var/lib/postgresql/data"}}
+	errs := Validate(cfg)
+	for _, err := range errs {
+		if strings.Contains(err.Error(), "not mounted") {
+			t.Errorf("pgdata is mounted by db, should not be orphan: %v", err)
+		}
+	}
+}
+
 func TestValidate_FullConfig(t *testing.T) {
 	cfg := &Config{
 		Servers: map[string]Server{

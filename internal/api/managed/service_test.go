@@ -147,7 +147,7 @@ func TestMeilisearch_Spec(t *testing.T) {
 	ms, _ := Get("meilisearch")
 	spec := ms.Spec("search")
 
-	if spec.Image != "getmeili/meilisearch:v1" {
+	if spec.Image != "getmeili/meilisearch:latest" {
 		t.Errorf("image = %q", spec.Image)
 	}
 	if spec.Port != 7700 {

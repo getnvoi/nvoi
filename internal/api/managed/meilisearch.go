@@ -17,7 +17,7 @@ func (Meilisearch) Kind() string { return "meilisearch" }
 func (Meilisearch) Spec(name string) config.Service {
 	secretKey := "MEILI_MASTER_KEY_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	return config.Service{
-		Image: "getmeili/meilisearch:v1",
+		Image: "getmeili/meilisearch:latest",
 		Port:  7700,
 		Volumes: []string{
 			name + "-data:/meili_data",

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getnvoi/nvoi/internal/api"
 )
@@ -272,6 +273,79 @@ func TestDeploy_CrossUserIsolation(t *testing.T) {
 	rB.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("cross-user: status = %d, want 404", w.Code)
+	}
+}
+
+func TestRunDeployment_StartsPending(t *testing.T) {
+	r, db := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	// Create deployment (pending).
+	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deploy", nil, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var created struct{ ID string }
+	decode(t, w, &created)
+
+	// Run it.
+	runPath := "/workspaces/" + wsID + "/repos/" + repoID + "/deployments/" + created.ID + "/run"
+	req = authRequest("POST", runPath, nil, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("run: status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Give the goroutine time to start — poll until status changes from pending.
+	// The executor will fail (no real provider) but it should at least start.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var d api.Deployment
+		db.First(&d, "id = ?", created.ID)
+		if d.Status != api.DeploymentPending {
+			return // success — deployment started
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var d api.Deployment
+	db.First(&d, "id = ?", created.ID)
+	if d.Status == api.DeploymentPending {
+		t.Errorf("deployment still pending after /run — executor never started")
+	}
+}
+
+func TestRunDeployment_RejectsNonPending(t *testing.T) {
+	r, db := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deploy", nil, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var created struct{ ID string }
+	decode(t, w, &created)
+
+	// Manually mark as running.
+	db.Model(&api.Deployment{}).Where("id = ?", created.ID).Update("status", api.DeploymentRunning)
+
+	// /run should reject.
+	runPath := "/workspaces/" + wsID + "/repos/" + repoID + "/deployments/" + created.ID + "/run"
+	req = authRequest("POST", runPath, nil, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("run non-pending: status = %d, want 400", w.Code)
 	}
 }
 

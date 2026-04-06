@@ -87,11 +87,37 @@ func newReposCreateCmd() *cobra.Command {
 				return err
 			}
 
+			name := args[0]
+
+			// Idempotent: if repo already exists, just use it.
+			var existing []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			}
+			if err := client.Do("GET", "/workspaces/"+wsID+"/repos", nil, &existing); err != nil {
+				return err
+			}
+			for _, r := range existing {
+				if r.Name == name {
+					cfg.RepoID = r.ID
+					if err := SaveAuthConfig(cfg); err != nil {
+						return err
+					}
+					fmt.Printf("repo %s already exists (%s)\n", r.Name, r.ID)
+					return nil
+				}
+			}
+
 			var repo struct {
 				ID   string `json:"id"`
 				Name string `json:"name"`
 			}
-			if err := client.Do("POST", "/workspaces/"+wsID+"/repos", map[string]string{"name": args[0]}, &repo); err != nil {
+			if err := client.Do("POST", "/workspaces/"+wsID+"/repos", map[string]string{"name": name}, &repo); err != nil {
+				return err
+			}
+
+			cfg.RepoID = repo.ID
+			if err := SaveAuthConfig(cfg); err != nil {
 				return err
 			}
 
