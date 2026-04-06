@@ -245,27 +245,6 @@ func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, s
 	return nil
 }
 
-// WaitPods polls until all pods in the namespace are Running or Succeeded.
-func WaitPods(ctx context.Context, ssh utils.SSHClient, ns string) error {
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
-		out, err := ssh.Run(ctx, kubectl(ns, "get pods -o json"))
-		if err != nil {
-			return false, nil
-		}
-		var pods podList
-		if err := json.Unmarshal(out, &pods); err != nil {
-			return false, nil
-		}
-		for _, pod := range pods.Items {
-			phase := pod.Status.Phase
-			if phase != "Running" && phase != "Succeeded" {
-				return false, nil
-			}
-		}
-		return true, nil
-	})
-}
-
 func recentLogs(ctx context.Context, ssh utils.SSHClient, ns, name, kind string) string {
 	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("logs %s/%s --tail=20", kind, name)))
 	if err != nil {

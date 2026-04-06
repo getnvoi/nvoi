@@ -11,7 +11,7 @@ User pushes config YAML + .env
   → Validate expanded config
   → Plan: config → ordered []Step sequence
   → Diff: previous config vs current → delete steps for removed resources
-  → FullPlan: deletes first (reverse order) + sets (forward order, idempotent)
+  → Plan(prev, current, env): deletes first (reverse order) + sets (forward order, idempotent)
   → Executor walks steps, calls pkg/core/ functions
   → Each step tracked in deployment_steps, each output line in deployment_step_logs (JSONL)
 ```
@@ -189,9 +189,22 @@ services:                          services:
 
 Expand also auto-adds volumes required by managed services to the config.
 
-## Plan (config → steps)
+## Plan
 
-Seven phases, same order as `examples/core/{provider}/deploy`:
+`Plan(prev, current, env)` is the single function that produces the full deploy sequence. Phase ordering is explicit — declared at the top of the function, one line per phase:
+
+**Deletes first (reverse deploy order):**
+
+| Phase | StepKind | Maps to |
+|-------|----------|---------|
+| 1. DNS | `dns.delete` | `pkg/core.DNSDelete` |
+| 2. Services | `service.delete` | `pkg/core.ServiceDelete` |
+| 3. Storage | `storage.delete` | `pkg/core.StorageDelete` |
+| 4. Secrets | `secret.delete` | `pkg/core.SecretDelete` |
+| 5. Volumes | `volume.delete` | `pkg/core.VolumeDelete` |
+| 6. Compute | `instance.delete` | `pkg/core.ComputeDelete` |
+
+**Then sets (forward deploy order):**
 
 | Phase | StepKind | Maps to |
 |-------|----------|---------|
@@ -203,22 +216,7 @@ Seven phases, same order as `examples/core/{provider}/deploy`:
 | 6. Services | `service.set` | `pkg/core.ServiceSet` |
 | 7. DNS | `dns.set` | `pkg/core.DNSSet` |
 
-All steps are deterministic (sorted keys). First server alphabetically = master.
-
-## Diff (removals)
-
-`Diff(prev, current)` generates delete steps for resources that disappeared. Reverse order of deploy:
-
-| Phase | StepKind | Maps to |
-|-------|----------|---------|
-| 1. DNS | `dns.delete` | `pkg/core.DNSDelete` |
-| 2. Services | `service.delete` | `pkg/core.ServiceDelete` |
-| 3. Storage | `storage.delete` | `pkg/core.StorageDelete` |
-| 4. Secrets | `secret.delete` | `pkg/core.SecretDelete` |
-| 5. Volumes | `volume.delete` | `pkg/core.VolumeDelete` |
-| 6. Compute | `instance.delete` | `pkg/core.ComputeDelete` |
-
-`FullPlan(prev, current, env)` = delete steps first + set steps. Delete commands are idempotent — deleting something that doesn't exist succeeds silently.
+All steps are deterministic (sorted keys). First server alphabetically = master. Empty config = only delete steps (destroy-via-diff). First deploy (nil prev) = only set steps. Delete commands are idempotent — deleting something that doesn't exist succeeds silently.
 
 ## Authentication
 
@@ -262,7 +260,7 @@ CLI: nvoi deploy
 API: POST .../deploy
   → Load latest RepoConfig + previous version
   → Expand managed services (load stored creds from repo_managed_service_configs)
-  → FullPlan(prev, current, env) = Diff deletes + Plan sets
+  → Plan(prev, current, env) = deletes for removed resources + sets for desired state
   → Create Deployment + DeploymentSteps rows (all pending)
   → Return deployment with steps
 
@@ -362,7 +360,7 @@ See [`examples/core/`](../../examples/core/) for imperative command sequences.
 3. **Managed service credentials are permanent.** Generated once, stored forever in `repo_managed_service_configs`. Not versioned. Row exists = inject.
 4. **Expand happens before validation.** Public config (with `managed:`) → internal config (with real specs) → validate the expanded result.
 5. **Plan is deterministic.** Same config + env always produces the same step sequence. Sorted keys everywhere.
-6. **Diff only handles removals.** Set commands are idempotent — no need to diff for changes. Only need to detect what disappeared between versions.
+6. **Plan handles both sets and removals.** `Plan(prev, current, env)` generates delete steps for resources that disappeared between versions, then set steps for the desired state. Set commands are idempotent — no need to diff for changes, only for removals.
 7. **Secrets are always secrets.** Managed service passwords use namespaced k8s secret keys with aliased env vars. Never plain text in specs.
 8. **Renderers are shared.** `internal/render/` is the single source for TUI/Plain/JSON output. Both CLIs and the API use the same event types. No duplicate formatting code.
 9. **JSONL is the transport.** API stores raw JSONL in DB. API returns raw JSONL to CLI. CLI renders through shared renderers. API never formats for display.
