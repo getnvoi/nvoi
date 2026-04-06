@@ -54,11 +54,19 @@ type ProgressEmitter interface {
 	Progress(msg string)
 }
 
-func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string, emitter ProgressEmitter) error {
+// stabilityDelay is the pause between "all ready" and the verification poll.
+// Exported as a variable so tests can shorten it.
+var stabilityDelay = 4 * time.Second
+
+func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string, hasHealthCheck bool, emitter ProgressEmitter) error {
 	selector := fmt.Sprintf("%s=%s", utils.LabelAppName, name)
 	lastStatus := ""
 
-	return utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
+	// Track the initial restart count for each pod so we can detect crashes
+	// that happen after the pod briefly reaches Ready.
+	initialRestarts := map[string]int{}
+
+	err := utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
 		cmd := kubectl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
@@ -72,6 +80,17 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 
 		if len(pods.Items) == 0 {
 			return false, nil
+		}
+
+		// Record initial restart counts the first time we see each pod.
+		for _, pod := range pods.Items {
+			if _, tracked := initialRestarts[pod.Metadata.Name]; !tracked {
+				total := 0
+				for _, cs := range pod.Status.ContainerStatuses {
+					total += cs.RestartCount
+				}
+				initialRestarts[pod.Metadata.Name] = total
+			}
 		}
 
 		ready := 0
@@ -151,6 +170,79 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 
 		return ready == total, nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Services with a health check (readiness probe) don't need the extra
+	// stability check — k8s won't mark the pod Ready until the probe passes,
+	// so CrashLoopBackOff is detected naturally during polling above.
+	if hasHealthCheck {
+		return nil
+	}
+
+	// No health check: wait briefly and re-check for post-startup crashes.
+	// Apps without a readiness probe can briefly reach Ready then crash.
+	emitter.Progress(name + ": verifying stability")
+
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-time.After(stabilityDelay):
+	}
+
+	return verifyStability(ctx, ssh, ns, name, kind, selector, initialRestarts, emitter)
+}
+
+// verifyStability re-polls pods after the stability delay and fails if any
+// pod's restart count increased since tracking began — indicating a post-startup crash.
+func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, selector string, initialRestarts map[string]int, emitter ProgressEmitter) error {
+	cmd := kubectl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
+	out, err := ssh.Run(ctx, cmd)
+	if err != nil {
+		return fmt.Errorf("%s: stability check failed: %w", name, err)
+	}
+
+	var pods podList
+	if err := json.Unmarshal(out, &pods); err != nil {
+		return fmt.Errorf("%s: stability check failed: %w", name, err)
+	}
+
+	for _, pod := range pods.Items {
+		// Detect crash-after-ready: total restart count increased for this pod.
+		currentTotal := 0
+		for _, cs := range pod.Status.ContainerStatuses {
+			currentTotal += cs.RestartCount
+		}
+		initial, tracked := initialRestarts[pod.Metadata.Name]
+		if tracked && currentTotal > initial {
+			logs := recentLogs(ctx, ssh, ns, name, kind)
+			return fmt.Errorf("%s: pod crashed after becoming ready (restarts: %d)\nlogs:\n%s", name, currentTotal, indent(logs, "  "))
+		}
+
+		// Also check for terminal states that appeared after the ready window.
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Ready {
+				continue
+			}
+			if cs.State.Waiting != nil {
+				reason := cs.State.Waiting.Reason
+				switch reason {
+				case "CrashLoopBackOff":
+					logs := recentLogs(ctx, ssh, ns, name, kind)
+					return fmt.Errorf("%s: CrashLoopBackOff (restarts: %d)\nlogs:\n%s", name, cs.RestartCount, indent(logs, "  "))
+				case "ImagePullBackOff", "ErrImagePull", "InvalidImageName",
+					"CreateContainerConfigError":
+					return fmt.Errorf("%s: %s — %s", name, reason, cs.State.Waiting.Message)
+				}
+			}
+			if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+				return fmt.Errorf("%s: OOMKilled — container ran out of memory", name)
+			}
+		}
+	}
+
+	return nil
 }
 
 // WaitPods polls until all pods in the namespace are Running or Succeeded.

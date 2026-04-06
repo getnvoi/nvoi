@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -28,6 +29,10 @@ func (e *testEmitter) Progress(msg string) {
 // --- WaitRollout tests ---
 
 func TestWaitRollout_AllReady(t *testing.T) {
+	orig := stabilityDelay
+	stabilityDelay = 10 * time.Millisecond
+	defer func() { stabilityDelay = orig }()
+
 	podsJSON := `{
 		"items": [
 			{
@@ -53,7 +58,7 @@ func TestWaitRollout_AllReady(t *testing.T) {
 	}
 
 	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", emitter)
+	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -82,7 +87,7 @@ func TestWaitRollout_ImagePullBackOff(t *testing.T) {
 	}
 
 	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", emitter)
+	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -115,7 +120,7 @@ func TestWaitRollout_CrashLoopBackOff(t *testing.T) {
 	}
 
 	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", emitter)
+	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -150,7 +155,7 @@ func TestWaitRollout_OOMKilled(t *testing.T) {
 	}
 
 	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", emitter)
+	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -181,7 +186,7 @@ func TestWaitRollout_Unschedulable(t *testing.T) {
 	}
 
 	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", emitter)
+	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -191,6 +196,10 @@ func TestWaitRollout_Unschedulable(t *testing.T) {
 }
 
 func TestWaitRollout_TransientThenReady(t *testing.T) {
+	orig := stabilityDelay
+	stabilityDelay = 10 * time.Millisecond
+	defer func() { stabilityDelay = orig }()
+
 	containerCreatingJSON := `{
 		"items": [
 			{
@@ -226,9 +235,137 @@ func TestWaitRollout_TransientThenReady(t *testing.T) {
 	}
 
 	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), counter, "default", "web", "deployment", emitter)
+	err := WaitRollout(context.Background(), counter, "default", "web", "deployment", false, emitter)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
+	}
+}
+
+func TestWaitRollout_CrashAfterReady(t *testing.T) {
+	orig := stabilityDelay
+	stabilityDelay = 10 * time.Millisecond
+	defer func() { stabilityDelay = orig }()
+
+	// First poll: pod is running and ready, restartCount 0.
+	readyJSON := `{
+		"items": [
+			{
+				"metadata": {"name": "web-abc"},
+				"status": {
+					"phase": "Running",
+					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
+				}
+			}
+		]
+	}`
+
+	// Stability check: pod crashed — restartCount went from 0 to 1.
+	crashedJSON := `{
+		"items": [
+			{
+				"metadata": {"name": "web-abc"},
+				"status": {
+					"phase": "Running",
+					"containerStatuses": [{
+						"ready": false,
+						"restartCount": 1,
+						"state": {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off restarting"}}
+					}]
+				}
+			}
+		]
+	}`
+
+	counter := &counterSSH{
+		responses: []testutil.MockResult{
+			{Output: []byte(readyJSON)},
+			{Output: []byte(crashedJSON)},
+		},
+	}
+
+	emitter := &testEmitter{}
+	err := WaitRollout(context.Background(), counter, "default", "web", "deployment", false, emitter)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "crashed after becoming ready") {
+		t.Fatalf("expected 'crashed after becoming ready' in error, got: %v", err)
+	}
+}
+
+func TestWaitRollout_StableAfterReady(t *testing.T) {
+	orig := stabilityDelay
+	stabilityDelay = 10 * time.Millisecond
+	defer func() { stabilityDelay = orig }()
+
+	// Both polls return the same thing: pod ready, restartCount 0.
+	readyJSON := `{
+		"items": [
+			{
+				"metadata": {"name": "web-abc"},
+				"status": {
+					"phase": "Running",
+					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
+				}
+			}
+		]
+	}`
+
+	counter := &counterSSH{
+		responses: []testutil.MockResult{
+			{Output: []byte(readyJSON)},
+			{Output: []byte(readyJSON)},
+		},
+	}
+
+	emitter := &testEmitter{}
+	err := WaitRollout(context.Background(), counter, "default", "web", "deployment", false, emitter)
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+
+	// Verify "verifying stability" message was emitted
+	found := false
+	for _, msg := range emitter.messages {
+		if strings.Contains(msg, "verifying stability") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'verifying stability' progress message, got: %v", emitter.messages)
+	}
+}
+
+func TestWaitRollout_SkipsStabilityWithHealthCheck(t *testing.T) {
+	readyJSON := `{
+		"items": [
+			{
+				"metadata": {"name": "web-abc"},
+				"status": {
+					"phase": "Running",
+					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
+				}
+			}
+		]
+	}`
+
+	ssh := testutil.NewMockSSH(nil)
+	ssh.Prefixes = []testutil.MockPrefix{
+		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(readyJSON)}},
+	}
+
+	emitter := &testEmitter{}
+	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", true, emitter)
+	if err != nil {
+		t.Fatalf("expected nil error, got: %v", err)
+	}
+
+	// Verify NO "verifying stability" message — health check skips it
+	for _, msg := range emitter.messages {
+		if strings.Contains(msg, "verifying stability") {
+			t.Fatalf("did not expect 'verifying stability' with hasHealthCheck=true, got: %v", emitter.messages)
+		}
 	}
 }
 

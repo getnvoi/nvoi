@@ -75,7 +75,7 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	}
 
 	out.Progress("waiting for caddy rollout")
-	if err := kube.WaitRollout(ctx, ssh, ns, names.KubeCaddy(), "deployment", out); err != nil {
+	if err := kube.WaitRollout(ctx, ssh, ns, names.KubeCaddy(), "deployment", false, out); err != nil {
 		return fmt.Errorf("caddy rollout: %w", err)
 	}
 	out.Success("caddy ready")

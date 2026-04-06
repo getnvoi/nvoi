@@ -54,14 +54,20 @@ func ListResources(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		creds, err := resolveAllCredentials(rc, env)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
 		req := pkgcore.ResourcesRequest{
-			Compute: pkgcore.ProviderRef{Name: string(rc.ComputeProvider), Creds: env},
+			Compute: pkgcore.ProviderRef{Name: string(rc.ComputeProvider), Creds: creds.Compute},
 		}
 		if rc.DNSProvider != "" {
-			req.DNS = pkgcore.ProviderRef{Name: string(rc.DNSProvider), Creds: env}
+			req.DNS = pkgcore.ProviderRef{Name: string(rc.DNSProvider), Creds: creds.DNS}
 		}
 		if rc.StorageProvider != "" {
-			req.Storage = pkgcore.ProviderRef{Name: string(rc.StorageProvider), Creds: env}
+			req.Storage = pkgcore.ProviderRef{Name: string(rc.StorageProvider), Creds: creds.Storage}
 		}
 
 		groups, err := pkgcore.Resources(c.Request.Context(), req)
@@ -82,11 +88,16 @@ func clusterFromLatestConfig(db *gorm.DB, repo *api.Repo) (*pkgcore.Cluster, err
 		return nil, err
 	}
 
+	creds, err := resolveAllCredentials(rc, env)
+	if err != nil {
+		return nil, err
+	}
+
 	return &pkgcore.Cluster{
 		AppName:     repo.Name,
 		Env:         repo.Environment,
 		Provider:    string(rc.ComputeProvider),
-		Credentials: env,
+		Credentials: creds.Compute,
 		SSHKey:      []byte(repo.SSHPrivateKey),
 	}, nil
 }

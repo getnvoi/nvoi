@@ -9,7 +9,6 @@ import (
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gorm.io/gorm"
 )
@@ -37,40 +36,9 @@ type executor struct {
 }
 
 func newExecutor(db *gorm.DB, p ExecuteParams) (*executor, error) {
-	computeName := string(p.Config.ComputeProvider)
-	dnsName := string(p.Config.DNSProvider)
-	storageName := string(p.Config.StorageProvider)
-	buildName := string(p.Config.BuildProvider)
-
-	// Map raw env vars (HETZNER_TOKEN=xxx) to schema keys (token=xxx).
-	// Each provider kind has its own schema — credentials are mapped per-provider.
-	computeCreds, err := provider.MapComputeCredentials(computeName, p.Env)
+	creds, err := resolveAllCredentials(p.Config, p.Env)
 	if err != nil {
 		return nil, err
-	}
-
-	var dnsCreds map[string]string
-	if dnsName != "" {
-		dnsCreds, err = provider.MapDNSCredentials(dnsName, p.Env)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	var storageCreds map[string]string
-	if storageName != "" {
-		storageCreds, err = provider.MapBucketCredentials(storageName, p.Env)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	var buildCreds map[string]string
-	if buildName != "" {
-		buildCreds, err = provider.MapBuildCredentials(buildName, p.Env)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return &executor{
@@ -78,14 +46,14 @@ func newExecutor(db *gorm.DB, p ExecuteParams) (*executor, error) {
 		cluster: pkgcore.Cluster{
 			AppName:     p.Repo.Name,
 			Env:         p.Repo.Environment,
-			Provider:    computeName,
-			Credentials: computeCreds,
+			Provider:    string(p.Config.ComputeProvider),
+			Credentials: creds.Compute,
 			SSHKey:      []byte(p.Repo.SSHPrivateKey),
 		},
-		dns:           pkgcore.ProviderRef{Name: dnsName, Creds: dnsCreds},
-		storage:       pkgcore.ProviderRef{Name: storageName, Creds: storageCreds},
-		buildProvider: buildName,
-		creds:         buildCreds,
+		dns:           pkgcore.ProviderRef{Name: string(p.Config.DNSProvider), Creds: creds.DNS},
+		storage:       pkgcore.ProviderRef{Name: string(p.Config.StorageProvider), Creds: creds.Storage},
+		buildProvider: string(p.Config.BuildProvider),
+		creds:         creds.Build,
 		gitToken:      p.GitToken,
 		builtImages:   map[string]string{},
 	}, nil

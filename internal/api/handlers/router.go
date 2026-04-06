@@ -47,6 +47,7 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 				// Live cluster
 				repos.GET("/:repo_id/describe", DescribeCluster(db))
 				repos.GET("/:repo_id/resources", ListResources(db))
+				repos.POST("/:repo_id/ssh", RunSSH(db))
 
 				// Deploy
 				repos.POST("/:repo_id/deploy", Deploy(db))

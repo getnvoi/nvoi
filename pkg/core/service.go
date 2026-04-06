@@ -151,7 +151,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 	out.Success("applied")
 
 	out.Progress("waiting for rollout")
-	if err := kube.WaitRollout(ctx, ssh, ns, req.Name, workloadKind, out); err != nil {
+	if err := kube.WaitRollout(ctx, ssh, ns, req.Name, workloadKind, req.HealthPath != "", out); err != nil {
 		return err
 	}
 	out.Success(req.Name + " ready")

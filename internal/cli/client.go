@@ -112,3 +112,40 @@ func (c *APIClient) doRaw(method, path string) (*http.Response, error) {
 
 	return resp, nil
 }
+
+// doRawWithBody sends a request with a JSON body and returns the raw response.
+// Caller must close the body. Used for streaming POST endpoints (SSH).
+func (c *APIClient) doRawWithBody(method, path string, body any) (*http.Response, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		bodyReader = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequest(method, c.base+path, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return resp, nil
+}
