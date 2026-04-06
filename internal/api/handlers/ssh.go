@@ -1,66 +1,57 @@
 package handlers
 
 import (
+	"context"
 	"io"
-	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/getnvoi/nvoi/internal/api"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-// RunSSH runs a command on the master node via SSH and streams output.
-//
-// @Summary     Run SSH command
-// @Description Runs a command on the master node via SSH and streams stdout/stderr as plain text.
-// @Tags        cluster
-// @Accept      json
-// @Produce     text/plain
-// @Security    BearerAuth
-// @Param       workspace_id path     string        true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string        true "Repo ID"      format(uuid)
-// @Param       body         body     runSSHRequest true "Command to run"
-// @Success     200          {string} string        "Command output stream"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/ssh [post]
-func RunSSH(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
+// ── Input / Output types ─────────────────────────────────────────────────────
 
-		var req runSSHRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+type RunSSHInput struct {
+	RepoScopedInput
+	Body struct {
+		Command []string `json:"command" required:"true" doc:"Command to run on master node"`
+	}
+}
+
+// ── Handler ──────────────────────────────────────────────────────────────────
+
+func RunSSH(db *gorm.DB) func(context.Context, *RunSSHInput) (*huma.StreamResponse, error) {
+	return func(ctx context.Context, input *RunSSHInput) (*huma.StreamResponse, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
 		cluster, err := clusterFromLatestConfig(db, repo)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
-		// Stream output as plain text.
-		c.Header("Content-Type", "text/plain")
-		c.Writer.WriteHeader(http.StatusOK)
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				ctx.SetHeader("Content-Type", "text/plain")
+				cluster.Output = &streamOutput{w: ctx.BodyWriter()}
 
-		cluster.Output = &streamOutput{w: c.Writer}
-
-		sshErr := pkgcore.SSH(c.Request.Context(), pkgcore.SSHRequest{
-			Cluster: *cluster,
-			Command: req.Command,
-		})
-		if sshErr != nil {
-			c.Writer.Write([]byte("\nerror: " + sshErr.Error() + "\n"))
-		}
+				sshErr := pkgcore.SSH(ctx.Context(), pkgcore.SSHRequest{
+					Cluster: *cluster,
+					Command: input.Body.Command,
+				})
+				if sshErr != nil {
+					ctx.BodyWriter().Write([]byte("\nerror: " + sshErr.Error() + "\n"))
+				}
+			},
+		}, nil
 	}
 }
 
-// streamOutput implements pkgcore.Output, writing directly to the HTTP response.
+// streamOutput implements pkgcore.Output, writing directly to a writer.
 type streamOutput struct {
 	w io.Writer
 }

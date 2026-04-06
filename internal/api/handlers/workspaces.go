@@ -1,64 +1,83 @@
 package handlers
 
 import (
-	"net/http"
+	"context"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-// ListWorkspaces returns all workspaces the authenticated user belongs to.
-//
-// @Summary     List workspaces
-// @Description Returns all workspaces the authenticated user is a member of.
-// @Tags        workspaces
-// @Produce     json
-// @Security    BearerAuth
-// @Success     200 {array}  api.Workspace
-// @Failure     401 {object} errorResponse
-// @Router      /workspaces [get]
-func ListWorkspaces(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user := api.CurrentUser(c)
+// ── Input / Output types ─────────────────────────────────────────────────────
+
+type ListWorkspacesOutput struct {
+	Body []api.Workspace
+}
+
+type CreateWorkspaceInput struct {
+	Body struct {
+		Name string `json:"name" required:"true" minLength:"1" doc:"Workspace name"`
+	}
+}
+
+type CreateWorkspaceOutput struct {
+	Body api.Workspace
+}
+
+type GetWorkspaceInput struct {
+	WorkspaceScopedInput
+}
+
+type GetWorkspaceOutput struct {
+	Body api.Workspace
+}
+
+type UpdateWorkspaceInput struct {
+	WorkspaceScopedInput
+	Body struct {
+		Name string `json:"name" required:"true" minLength:"1" doc:"New workspace name"`
+	}
+}
+
+type UpdateWorkspaceOutput struct {
+	Body api.Workspace
+}
+
+type DeleteWorkspaceInput struct {
+	WorkspaceScopedInput
+}
+
+type DeleteWorkspaceOutput struct {
+	Body struct {
+		Deleted bool   `json:"deleted"`
+		Name    string `json:"name,omitempty"`
+	}
+}
+
+// ── Handlers ─────────────────────────────────────────────────────────────────
+
+func ListWorkspaces(db *gorm.DB) func(context.Context, *struct{}) (*ListWorkspacesOutput, error) {
+	return func(ctx context.Context, _ *struct{}) (*ListWorkspacesOutput, error) {
+		user := api.UserFromContext(ctx)
 
 		var workspaces []api.Workspace
 		db.Joins("JOIN workspace_users ON workspace_users.workspace_id = workspaces.id").
 			Where("workspace_users.user_id = ?", user.ID).
 			Find(&workspaces)
 
-		c.JSON(http.StatusOK, workspaces)
+		return &ListWorkspacesOutput{Body: workspaces}, nil
 	}
 }
 
-// CreateWorkspace creates a new workspace owned by the authenticated user.
-//
-// @Summary     Create workspace
-// @Description Creates a new workspace and assigns the authenticated user as owner.
-// @Tags        workspaces
-// @Accept      json
-// @Produce     json
-// @Security    BearerAuth
-// @Param       body body     createWorkspaceRequest true "Workspace name"
-// @Success     201  {object} api.Workspace
-// @Failure     400  {object} errorResponse
-// @Failure     401  {object} errorResponse
-// @Failure     500  {object} errorResponse
-// @Router      /workspaces [post]
-func CreateWorkspace(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user := api.CurrentUser(c)
-
-		var req createWorkspaceRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
+func CreateWorkspace(db *gorm.DB) func(context.Context, *CreateWorkspaceInput) (*CreateWorkspaceOutput, error) {
+	return func(ctx context.Context, input *CreateWorkspaceInput) (*CreateWorkspaceOutput, error) {
+		user := api.UserFromContext(ctx)
 
 		var workspace api.Workspace
 		err := db.Transaction(func(tx *gorm.DB) error {
 			workspace = api.Workspace{
-				Name:      req.Name,
+				Name:      input.Body.Name,
 				CreatedBy: user.ID,
 			}
 			if err := tx.Create(&workspace).Error; err != nil {
@@ -71,106 +90,76 @@ func CreateWorkspace(db *gorm.DB) gin.HandlerFunc {
 			}).Error
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create workspace"})
-			return
+			return nil, huma.Error500InternalServerError("failed to create workspace")
 		}
 
-		c.JSON(http.StatusCreated, workspace)
+		return &CreateWorkspaceOutput{Body: workspace}, nil
 	}
 }
 
-// GetWorkspace returns a single workspace by ID.
-//
-// @Summary     Get workspace
-// @Description Returns a workspace by ID, scoped to the authenticated user.
-// @Tags        workspaces
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Success     200          {object} api.Workspace
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id} [get]
-func GetWorkspace(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ws, ok := loadWorkspace(c, db)
-		if !ok {
-			return
+func GetWorkspace(db *gorm.DB) func(context.Context, *GetWorkspaceInput) (*GetWorkspaceOutput, error) {
+	return func(ctx context.Context, input *GetWorkspaceInput) (*GetWorkspaceOutput, error) {
+		user := api.UserFromContext(ctx)
+		ws, err := findWorkspace(db, user.ID, input.WorkspaceID)
+		if err != nil {
+			return nil, err
 		}
-		c.JSON(http.StatusOK, ws)
+		return &GetWorkspaceOutput{Body: *ws}, nil
 	}
 }
 
-// UpdateWorkspace renames a workspace.
-//
-// @Summary     Update workspace
-// @Description Renames a workspace by ID.
-// @Tags        workspaces
-// @Accept      json
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string                 true "Workspace ID" format(uuid)
-// @Param       body         body     updateWorkspaceRequest true "New name"
-// @Success     200          {object} api.Workspace
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id} [put]
-func UpdateWorkspace(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ws, ok := loadWorkspace(c, db)
-		if !ok {
-			return
+func UpdateWorkspace(db *gorm.DB) func(context.Context, *UpdateWorkspaceInput) (*UpdateWorkspaceOutput, error) {
+	return func(ctx context.Context, input *UpdateWorkspaceInput) (*UpdateWorkspaceOutput, error) {
+		user := api.UserFromContext(ctx)
+		ws, err := findWorkspace(db, user.ID, input.WorkspaceID)
+		if err != nil {
+			return nil, err
 		}
 
-		var req updateWorkspaceRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-
-		db.Model(ws).Update("name", req.Name)
-		c.JSON(http.StatusOK, ws)
+		db.Model(ws).Update("name", input.Body.Name)
+		return &UpdateWorkspaceOutput{Body: *ws}, nil
 	}
 }
 
-// DeleteWorkspace soft-deletes a workspace.
-//
-// @Summary     Delete workspace
-// @Description Soft-deletes a workspace by ID.
-// @Tags        workspaces
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Success     200          {object} deleteResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id} [delete]
-func DeleteWorkspace(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		ws, ok := loadWorkspace(c, db)
-		if !ok {
-			return
+func DeleteWorkspace(db *gorm.DB) func(context.Context, *DeleteWorkspaceInput) (*DeleteWorkspaceOutput, error) {
+	return func(ctx context.Context, input *DeleteWorkspaceInput) (*DeleteWorkspaceOutput, error) {
+		user := api.UserFromContext(ctx)
+		ws, err := findWorkspace(db, user.ID, input.WorkspaceID)
+		if err != nil {
+			return nil, err
 		}
 		db.Delete(ws)
-		c.JSON(http.StatusOK, gin.H{"deleted": true, "name": ws.Name})
+		return &DeleteWorkspaceOutput{Body: struct {
+			Deleted bool   `json:"deleted"`
+			Name    string `json:"name,omitempty"`
+		}{Deleted: true, Name: ws.Name}}, nil
 	}
 }
 
-// loadWorkspace fetches the workspace scoped to the current user.
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+// loadWorkspace is the Gin-compatible version for handlers not yet migrated to huma.
+// It writes 404 directly to gin.Context on failure.
 func loadWorkspace(c *gin.Context, db *gorm.DB) (*api.Workspace, bool) {
 	user := api.CurrentUser(c)
-	id := c.Param("workspace_id")
+	ws, err := findWorkspace(db, user.ID, c.Param("workspace_id"))
+	if err != nil {
+		c.JSON(404, gin.H{"error": "workspace not found"})
+		return nil, false
+	}
+	return ws, true
+}
 
+// findWorkspace fetches a workspace scoped to the given user.
+func findWorkspace(db *gorm.DB, userID, workspaceID string) (*api.Workspace, error) {
 	var ws api.Workspace
 	result := db.
 		Joins("JOIN workspace_users ON workspace_users.workspace_id = workspaces.id").
-		Where("workspaces.id = ? AND workspace_users.user_id = ?", id, user.ID).
+		Where("workspaces.id = ? AND workspace_users.user_id = ?", workspaceID, userID).
 		First(&ws)
 
 	if result.Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
-		return nil, false
+		return nil, huma.Error404NotFound("workspace not found")
 	}
-	return &ws, true
+	return &ws, nil
 }

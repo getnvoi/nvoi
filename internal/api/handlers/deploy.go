@@ -3,59 +3,83 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
 	"github.com/getnvoi/nvoi/internal/api/managed"
 	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-// Deploy creates a deployment from the latest config, computes the full plan
-// (diff + set), persists steps, and returns the deployment.
-//
-// @Summary     Create deployment
-// @Description Creates a deployment from the latest config. Computes the full plan (deletes + sets) and persists steps as pending.
-// @Tags        deployments
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     201          {object} api.Deployment
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deploy [post]
-func Deploy(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+// ── Input / Output types ─────────────────────────────────────────────────────
+
+type DeployInput struct {
+	RepoScopedInput
+}
+
+type DeployOutput struct {
+	Body api.Deployment
+}
+
+type ListDeploymentsInput struct {
+	RepoScopedInput
+}
+
+type ListDeploymentsOutput struct {
+	Body []api.Deployment
+}
+
+type GetDeploymentInput struct {
+	RepoScopedInput
+	DeploymentID string `path:"deployment_id" format:"uuid" doc:"Deployment ID"`
+}
+
+type GetDeploymentOutput struct {
+	Body api.Deployment
+}
+
+type RunDeploymentInput struct {
+	RepoScopedInput
+	DeploymentID string `path:"deployment_id" format:"uuid" doc:"Deployment ID"`
+}
+
+type RunDeploymentOutput struct {
+	Body struct {
+		Status string `json:"status"`
+	}
+}
+
+type DeploymentLogsInput struct {
+	RepoScopedInput
+	DeploymentID string `path:"deployment_id" format:"uuid" doc:"Deployment ID"`
+}
+
+// ── Handlers ─────────────────────────────────────────────────────────────────
+
+func Deploy(db *gorm.DB) func(context.Context, *DeployInput) (*DeployOutput, error) {
+	return func(ctx context.Context, input *DeployInput) (*DeployOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
-		// Load latest config.
 		var rc api.RepoConfig
 		if err := db.Where("repo_id = ?", repo.ID).Order("version DESC").First(&rc).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "no config found — push a config first"})
-			return
+			return nil, huma.Error400BadRequest("no config found — push a config first")
 		}
 
-		// Parse + expand current config.
 		cfg, err := config.Parse([]byte(rc.Config))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "corrupt config: " + err.Error()})
-			return
+			return nil, huma.Error500InternalServerError("corrupt config: " + err.Error())
 		}
 
 		storedCreds := loadManagedCreds(db, repo.ID)
 		expanded, _, err := managed.Expand(cfg, storedCreds)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "expand failed: " + err.Error()})
-			return
+			return nil, huma.Error500InternalServerError("expand failed: " + err.Error())
 		}
 
 		env := config.ParseEnv(rc.Env)
@@ -67,7 +91,7 @@ func Deploy(db *gorm.DB) gin.HandlerFunc {
 		creds, credErr := resolveAllCredentials(&rc, env)
 		var reality *config.Config
 		if credErr == nil {
-			reality = plan.InfraState(c.Request.Context(), plan.InfraStateRequest{
+			reality = plan.InfraState(ctx, plan.InfraStateRequest{
 				Cluster: pkgcore.Cluster{
 					AppName:     repo.Name,
 					Env:         repo.Environment,
@@ -80,14 +104,11 @@ func Deploy(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 
-		// Build plan: reality vs desired.
 		steps, err := plan.Build(reality, expanded, env)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "plan failed: " + err.Error()})
-			return
+			return nil, huma.Error500InternalServerError("plan failed: " + err.Error())
 		}
 
-		// Create deployment + steps in a transaction.
 		var deployment api.Deployment
 		err = db.Transaction(func(tx *gorm.DB) error {
 			deployment = api.Deployment{
@@ -115,62 +136,38 @@ func Deploy(db *gorm.DB) gin.HandlerFunc {
 			return nil
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create deployment"})
-			return
+			return nil, huma.Error500InternalServerError("failed to create deployment")
 		}
 
-		// Load back with steps.
 		db.Preload("Steps", func(db *gorm.DB) *gorm.DB {
 			return db.Order("position")
 		}).First(&deployment, "id = ?", deployment.ID)
 
-		c.JSON(http.StatusCreated, deployment)
+		return &DeployOutput{Body: deployment}, nil
 	}
 }
 
-// RunDeployment starts executing a pending deployment asynchronously.
-//
-// @Summary     Run deployment
-// @Description Starts executing a pending deployment in the background. Returns immediately with status "running".
-// @Tags        deployments
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id  path     string true "Workspace ID"  format(uuid)
-// @Param       repo_id       path     string true "Repo ID"       format(uuid)
-// @Param       deployment_id path     string true "Deployment ID" format(uuid)
-// @Success     200           {object} statusResponse
-// @Failure     400           {object} errorResponse
-// @Failure     401           {object} errorResponse
-// @Failure     404           {object} errorResponse
-// @Failure     500           {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}/run [post]
-func RunDeployment(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+func RunDeployment(db *gorm.DB) func(context.Context, *RunDeploymentInput) (*RunDeploymentOutput, error) {
+	return func(ctx context.Context, input *RunDeploymentInput) (*RunDeploymentOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
-		deploymentID := c.Param("deployment_id")
 		var deployment api.Deployment
-		if err := db.Where("id = ? AND repo_id = ?", deploymentID, repo.ID).First(&deployment).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "deployment not found"})
-			return
+		if err := db.Where("id = ? AND repo_id = ?", input.DeploymentID, repo.ID).First(&deployment).Error; err != nil {
+			return nil, huma.Error404NotFound("deployment not found")
 		}
 
 		if deployment.Status != api.DeploymentPending {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "deployment is not pending"})
-			return
+			return nil, huma.Error400BadRequest("deployment is not pending")
 		}
 
 		var rc api.RepoConfig
 		if err := db.First(&rc, "id = ?", deployment.RepoConfigID).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "config not found"})
-			return
+			return nil, huma.Error500InternalServerError("config not found")
 		}
-
-		// Load user for git token.
-		user := api.CurrentUser(c)
 
 		env := config.ParseEnv(rc.Env)
 
@@ -182,120 +179,80 @@ func RunDeployment(db *gorm.DB) gin.HandlerFunc {
 			GitToken:   user.GithubToken,
 		})
 
-		c.JSON(http.StatusOK, gin.H{"status": "running"})
+		return &RunDeploymentOutput{Body: struct {
+			Status string `json:"status"`
+		}{Status: "running"}}, nil
 	}
 }
 
-// GetDeployment returns a deployment with its steps and logs.
-//
-// @Summary     Get deployment
-// @Description Returns a deployment with all steps and their JSONL logs.
-// @Tags        deployments
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id  path     string true "Workspace ID"  format(uuid)
-// @Param       repo_id       path     string true "Repo ID"       format(uuid)
-// @Param       deployment_id path     string true "Deployment ID" format(uuid)
-// @Success     200           {object} api.Deployment
-// @Failure     401           {object} errorResponse
-// @Failure     404           {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id} [get]
-func GetDeployment(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+func GetDeployment(db *gorm.DB) func(context.Context, *GetDeploymentInput) (*GetDeploymentOutput, error) {
+	return func(ctx context.Context, input *GetDeploymentInput) (*GetDeploymentOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
-		deploymentID := c.Param("deployment_id")
 		var deployment api.Deployment
 		result := db.
 			Preload("Steps", func(db *gorm.DB) *gorm.DB {
 				return db.Order("position")
 			}).
 			Preload("Steps.Logs").
-			Where("id = ? AND repo_id = ?", deploymentID, repo.ID).
+			Where("id = ? AND repo_id = ?", input.DeploymentID, repo.ID).
 			First(&deployment)
 
 		if result.Error != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "deployment not found"})
-			return
+			return nil, huma.Error404NotFound("deployment not found")
 		}
 
-		c.JSON(http.StatusOK, deployment)
+		return &GetDeploymentOutput{Body: deployment}, nil
 	}
 }
 
-// ListDeployments returns all deployments for a repo.
-//
-// @Summary     List deployments
-// @Description Returns all deployments for a repo, newest first.
-// @Tags        deployments
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {array}  api.Deployment
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deployments [get]
-func ListDeployments(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+func ListDeployments(db *gorm.DB) func(context.Context, *ListDeploymentsInput) (*ListDeploymentsOutput, error) {
+	return func(ctx context.Context, input *ListDeploymentsInput) (*ListDeploymentsOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
 		var deployments []api.Deployment
 		db.Where("repo_id = ?", repo.ID).Order("created_at DESC").Find(&deployments)
-		c.JSON(http.StatusOK, deployments)
+		return &ListDeploymentsOutput{Body: deployments}, nil
 	}
 }
 
-// DeploymentLogs streams all log lines for a deployment as JSONL.
-//
-// @Summary     Stream deployment logs
-// @Description Returns all log lines for a deployment as newline-delimited JSON (JSONL). Each line is a pkg/core.Event.
-// @Tags        deployments
-// @Produce     application/x-ndjson
-// @Security    BearerAuth
-// @Param       workspace_id  path   string true "Workspace ID"  format(uuid)
-// @Param       repo_id       path   string true "Repo ID"       format(uuid)
-// @Param       deployment_id path   string true "Deployment ID" format(uuid)
-// @Success     200           {string} string "JSONL stream"
-// @Failure     401           {object} errorResponse
-// @Failure     404           {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/deployments/{deployment_id}/logs [get]
-func DeploymentLogs(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+func DeploymentLogs(db *gorm.DB) func(context.Context, *DeploymentLogsInput) (*huma.StreamResponse, error) {
+	return func(ctx context.Context, input *DeploymentLogsInput) (*huma.StreamResponse, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
-		deploymentID := c.Param("deployment_id")
 		var deployment api.Deployment
-		if err := db.Where("id = ? AND repo_id = ?", deploymentID, repo.ID).First(&deployment).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "deployment not found"})
-			return
+		if err := db.Where("id = ? AND repo_id = ?", input.DeploymentID, repo.ID).First(&deployment).Error; err != nil {
+			return nil, huma.Error404NotFound("deployment not found")
 		}
 
-		// Load steps in order with their logs.
 		var steps []api.DeploymentStep
 		db.Where("deployment_id = ?", deployment.ID).
 			Order("position").
 			Preload("Logs").
 			Find(&steps)
 
-		// Stream as JSONL — one line per log entry, in step order.
-		c.Header("Content-Type", "application/x-ndjson")
-		c.Writer.WriteHeader(http.StatusOK)
-		for _, step := range steps {
-			for _, log := range step.Logs {
-				c.Writer.Write([]byte(log.Line))
-				c.Writer.Write([]byte("\n"))
-			}
-		}
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				ctx.SetHeader("Content-Type", "application/x-ndjson")
+				for _, step := range steps {
+					for _, log := range step.Logs {
+						ctx.BodyWriter().Write([]byte(log.Line))
+						ctx.BodyWriter().Write([]byte("\n"))
+					}
+				}
+			},
+		}, nil
 	}
 }
-

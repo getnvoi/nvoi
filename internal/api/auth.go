@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -8,7 +9,9 @@ import (
 	"gorm.io/gorm"
 )
 
-const contextKeyUser = "user"
+type contextKey string
+
+const contextKeyUser contextKey = "user"
 
 // AuthRequired verifies the JWT Bearer token and loads the user.
 func AuthRequired(db *gorm.DB) gin.HandlerFunc {
@@ -37,12 +40,22 @@ func AuthRequired(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		c.Set(contextKeyUser, &user)
+		c.Set(string(contextKeyUser), &user)
+		// Also store on request context so huma handlers can access it.
+		ctx := context.WithValue(c.Request.Context(), contextKeyUser, &user)
+		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
 }
 
+// CurrentUser returns the authenticated user from a gin.Context (for Gin handlers).
 func CurrentUser(c *gin.Context) *User {
-	u, _ := c.Get(contextKeyUser)
+	u, _ := c.Get(string(contextKeyUser))
 	return u.(*User)
+}
+
+// UserFromContext returns the authenticated user from a context.Context (for huma handlers).
+func UserFromContext(ctx context.Context) *User {
+	u, _ := ctx.Value(contextKeyUser).(*User)
+	return u
 }

@@ -377,7 +377,7 @@ func TestDeploy_GetDeploymentNotFound(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/nonexistent", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/00000000-0000-0000-0000-000000000000", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -390,7 +390,7 @@ func TestDeploy_RunNotFound(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/nonexistent/run", nil, token)
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/00000000-0000-0000-0000-000000000000/run", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -403,7 +403,7 @@ func TestDeploy_LogsNotFound(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/nonexistent/logs", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/deployments/00000000-0000-0000-0000-000000000000/logs", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {

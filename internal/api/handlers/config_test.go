@@ -306,8 +306,8 @@ func TestConfig_PushInvalidComputeProvider(t *testing.T) {
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("invalid provider: status = %d, want 400, body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid provider: status = %d, want 422, body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -325,8 +325,8 @@ func TestConfig_PushInvalidDNSProvider(t *testing.T) {
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("invalid dns provider: status = %d, want 400", w.Code)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid dns provider: status = %d, want 422", w.Code)
 	}
 }
 
@@ -342,8 +342,8 @@ func TestConfig_PushMissingComputeProvider(t *testing.T) {
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("missing compute provider: status = %d, want 400", w.Code)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing compute provider: status = %d, want 422", w.Code)
 	}
 }
 

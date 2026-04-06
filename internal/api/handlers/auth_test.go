@@ -88,8 +88,8 @@ func TestLogin_MissingToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", w.Code)
 	}
 }
 
@@ -136,14 +136,26 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-func TestSwagger_UI(t *testing.T) {
+func TestDocs_UI(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 
-	req := httptest.NewRequest("GET", "/swagger/index.html", nil)
+	req := httptest.NewRequest("GET", "/docs", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("swagger UI: status = %d, want 200", w.Code)
+		t.Fatalf("docs UI: status = %d, want 200", w.Code)
+	}
+}
+
+func TestOpenAPI_Spec(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+
+	req := httptest.NewRequest("GET", "/openapi.json", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("openapi: status = %d, want 200", w.Code)
 	}
 }

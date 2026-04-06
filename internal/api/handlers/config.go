@@ -1,67 +1,107 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
-	"net/http"
 	"strings"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
 	"github.com/getnvoi/nvoi/internal/api/managed"
 	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-// PushConfig stores a new versioned config snapshot for a repo.
-// Validates the YAML config, expands managed services, and validates env references.
-//
-// @Summary     Push config
-// @Description Pushes a new versioned config snapshot. Validates YAML, expands managed services, validates env references, and persists credentials.
-// @Tags        config
-// @Accept      json
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string            true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string            true "Repo ID"      format(uuid)
-// @Param       body         body     pushConfigRequest true "Config payload"
-// @Success     201          {object} api.RepoConfig
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/config [post]
-func PushConfig(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
+// ── Input / Output types ─────────────────────────────────────────────────────
 
-		var req pushConfigRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+type PushConfigInput struct {
+	RepoScopedInput
+	Body struct {
+		ComputeProvider api.ComputeProvider `json:"compute_provider" required:"true" enum:"hetzner,aws,scaleway" doc:"Compute provider"`
+		DNSProvider     api.DNSProvider     `json:"dns_provider,omitempty" enum:"cloudflare,aws" doc:"DNS provider"`
+		StorageProvider api.StorageProvider `json:"storage_provider,omitempty" enum:"cloudflare,aws" doc:"Storage provider"`
+		BuildProvider   api.BuildProvider   `json:"build_provider,omitempty" enum:"local,daytona,github" doc:"Build provider"`
+		Config          string              `json:"config" required:"true" doc:"YAML config"`
+		Env             string              `json:"env,omitempty" doc:"KEY=VALUE pairs (encrypted at rest)"`
+	}
+}
+
+type PushConfigOutput struct {
+	Body api.RepoConfig
+}
+
+type GetConfigInput struct {
+	RepoScopedInput
+	Reveal bool `query:"reveal" default:"false" doc:"Show env values"`
+}
+
+type GetConfigOutput struct {
+	Body getConfigResponseBody
+}
+
+type getConfigResponseBody struct {
+	api.RepoConfig
+	Env string `json:"env,omitempty"`
+}
+
+type ListConfigsInput struct {
+	RepoScopedInput
+}
+
+type ListConfigsOutput struct {
+	Body []configListItem
+}
+
+type configListItem struct {
+	ID              string              `json:"id"`
+	Version         int                 `json:"version"`
+	ComputeProvider api.ComputeProvider `json:"compute_provider"`
+	DNSProvider     api.DNSProvider     `json:"dns_provider,omitempty"`
+	StorageProvider api.StorageProvider `json:"storage_provider,omitempty"`
+	BuildProvider   api.BuildProvider   `json:"build_provider,omitempty"`
+	Config          string              `json:"config"`
+}
+
+type PlanConfigInput struct {
+	RepoScopedInput
+}
+
+type PlanConfigOutput struct {
+	Body planResponseBody
+}
+
+type planResponseBody struct {
+	Version int         `json:"version"`
+	Steps   []plan.Step `json:"steps"`
+}
+
+// ── Handlers ─────────────────────────────────────────────────────────────────
+
+func PushConfig(db *gorm.DB) func(context.Context, *PushConfigInput) (*PushConfigOutput, error) {
+	return func(ctx context.Context, input *PushConfigInput) (*PushConfigOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
 		// Validate provider enums.
 		rc := api.RepoConfig{
-			ComputeProvider: req.ComputeProvider,
-			DNSProvider:     req.DNSProvider,
-			StorageProvider: req.StorageProvider,
-			BuildProvider:   req.BuildProvider,
+			ComputeProvider: input.Body.ComputeProvider,
+			DNSProvider:     input.Body.DNSProvider,
+			StorageProvider: input.Body.StorageProvider,
+			BuildProvider:   input.Body.BuildProvider,
 		}
 		if err := rc.ValidateProviders(); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		// Parse config.
-		cfg, err := config.Parse([]byte(req.Config))
+		cfg, err := config.Parse([]byte(input.Body.Config))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid yaml: " + err.Error()})
-			return
+			return nil, huma.Error400BadRequest("invalid yaml: " + err.Error())
 		}
 
 		// Load stored managed service credentials for this repo.
@@ -70,8 +110,7 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 		// Expand managed services (replace with real specs, inject creds, add volumes).
 		expanded, newCreds, err := managed.Expand(cfg, storedCreds)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		// Validate the expanded config (after managed services are resolved).
@@ -81,20 +120,18 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 			for i, e := range errs {
 				msgs[i] = e.Error()
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"errors": msgs})
-			return
+			return nil, huma.Error400BadRequest(strings.Join(msgs, "; "))
 		}
 
 		// Merge managed service credential secrets into env for plan validation.
-		env := config.ParseEnv(req.Env)
+		env := config.ParseEnv(input.Body.Env)
 		for k, v := range managed.CredentialSecrets(mergeCreds(storedCreds, newCreds), cfg) {
 			env[k] = v
 		}
 
 		// Validate that the plan can be built (env references resolve).
 		if _, err := plan.Build(nil, expanded, env); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		// Persist new managed service credentials.
@@ -107,8 +144,7 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 				Kind:        svc.Managed,
 				Credentials: string(credsJSON),
 			}).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save managed credentials"})
-				return
+				return nil, huma.Error500InternalServerError("failed to save managed credentials")
 			}
 		}
 
@@ -121,96 +157,52 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 
 		rc.RepoID = repo.ID
 		rc.Version = maxVersion + 1
-		rc.Config = req.Config
-		rc.Env = req.Env
+		rc.Config = input.Body.Config
+		rc.Env = input.Body.Env
 		if err := db.Create(&rc).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save config"})
-			return
+			return nil, huma.Error500InternalServerError("failed to save config")
 		}
 
-		c.JSON(http.StatusCreated, rc)
+		return &PushConfigOutput{Body: rc}, nil
 	}
 }
 
-// GetConfig returns the latest config for a repo.
-//
-// @Summary     Get latest config
-// @Description Returns the latest config version for a repo. Env is hidden unless ?reveal=true.
-// @Tags        config
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true  "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true  "Repo ID"      format(uuid)
-// @Param       reveal       query    bool   false "Show env values"
-// @Success     200          {object} configResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/config [get]
-func GetConfig(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+func GetConfig(db *gorm.DB) func(context.Context, *GetConfigInput) (*GetConfigOutput, error) {
+	return func(ctx context.Context, input *GetConfigInput) (*GetConfigOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
 		var rc api.RepoConfig
-		result := db.Where("repo_id = ?", repo.ID).Order("version DESC").First(&rc)
-		if result.Error != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "no config found"})
-			return
+		if err := db.Where("repo_id = ?", repo.ID).Order("version DESC").First(&rc).Error; err != nil {
+			return nil, huma.Error404NotFound("no config found")
 		}
 
-		// Reveal env only if ?reveal=true.
-		reveal := strings.ToLower(c.DefaultQuery("reveal", "")) == "true"
-		type response struct {
-			api.RepoConfig
-			Env string `json:"env,omitempty"`
-		}
-		resp := response{RepoConfig: rc}
-		if reveal {
+		resp := getConfigResponseBody{RepoConfig: rc}
+		if input.Reveal {
 			resp.Env = rc.Env
 		}
 
-		c.JSON(http.StatusOK, resp)
+		return &GetConfigOutput{Body: resp}, nil
 	}
 }
 
-// ListConfigs returns all config versions for a repo.
-//
-// @Summary     List config versions
-// @Description Returns all config versions for a repo, newest first. Env is stripped.
-// @Tags        config
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {array}  configListItem
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/configs [get]
-func ListConfigs(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+func ListConfigs(db *gorm.DB) func(context.Context, *ListConfigsInput) (*ListConfigsOutput, error) {
+	return func(ctx context.Context, input *ListConfigsInput) (*ListConfigsOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
 		var configs []api.RepoConfig
 		db.Where("repo_id = ?", repo.ID).Order("version DESC").Find(&configs)
 
-		// Strip env from list response.
-		type item struct {
-			ID              string              `json:"id"`
-			Version         int                 `json:"version"`
-			ComputeProvider api.ComputeProvider `json:"compute_provider"`
-			DNSProvider     api.DNSProvider     `json:"dns_provider,omitempty"`
-			StorageProvider api.StorageProvider  `json:"storage_provider,omitempty"`
-			BuildProvider   api.BuildProvider    `json:"build_provider,omitempty"`
-			Config          string               `json:"config"`
-		}
-		out := make([]item, len(configs))
+		out := make([]configListItem, len(configs))
 		for i, rc := range configs {
-			out[i] = item{
+			out[i] = configListItem{
 				ID: rc.ID, Version: rc.Version,
 				ComputeProvider: rc.ComputeProvider,
 				DNSProvider:     rc.DNSProvider,
@@ -220,49 +212,32 @@ func ListConfigs(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		c.JSON(http.StatusOK, out)
+		return &ListConfigsOutput{Body: out}, nil
 	}
 }
 
-// PlanConfig returns the execution plan for the latest config.
-//
-// @Summary     Get execution plan
-// @Description Returns the ordered deployment plan for the latest config, including both delete and set steps.
-// @Tags        config
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {object} planResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/config/plan [get]
-func PlanConfig(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+func PlanConfig(db *gorm.DB) func(context.Context, *PlanConfigInput) (*PlanConfigOutput, error) {
+	return func(ctx context.Context, input *PlanConfigInput) (*PlanConfigOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
 		var rc api.RepoConfig
-		result := db.Where("repo_id = ?", repo.ID).Order("version DESC").First(&rc)
-		if result.Error != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "no config found"})
-			return
+		if err := db.Where("repo_id = ?", repo.ID).Order("version DESC").First(&rc).Error; err != nil {
+			return nil, huma.Error404NotFound("no config found")
 		}
 
 		cfg, err := config.Parse([]byte(rc.Config))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "corrupt config: " + err.Error()})
-			return
+			return nil, huma.Error500InternalServerError("corrupt config: " + err.Error())
 		}
 
 		storedCreds := loadManagedCreds(db, repo.ID)
 		expanded, _, err := managed.Expand(cfg, storedCreds)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "expand failed: " + err.Error()})
-			return
+			return nil, huma.Error500InternalServerError("expand failed: " + err.Error())
 		}
 
 		env := config.ParseEnv(rc.Env)
@@ -274,7 +249,7 @@ func PlanConfig(db *gorm.DB) gin.HandlerFunc {
 		creds, credErr := resolveAllCredentials(&rc, env)
 		var reality *config.Config
 		if credErr == nil {
-			reality = plan.InfraState(c.Request.Context(), plan.InfraStateRequest{
+			reality = plan.InfraState(ctx, plan.InfraStateRequest{
 				Cluster: pkgcore.Cluster{
 					AppName:     repo.Name,
 					Env:         repo.Environment,
@@ -289,21 +264,18 @@ func PlanConfig(db *gorm.DB) gin.HandlerFunc {
 
 		steps, err := plan.Build(reality, expanded, env)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "plan failed: " + err.Error()})
-			return
+			return nil, huma.Error500InternalServerError("plan failed: " + err.Error())
 		}
 
-		c.JSON(http.StatusOK, gin.H{
-			"version": rc.Version,
-			"steps":   steps,
-		})
+		return &PlanConfigOutput{Body: planResponseBody{
+			Version: rc.Version,
+			Steps:   steps,
+		}}, nil
 	}
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
-// loadManagedCreds loads all managed service credentials for a repo
-// into the map format Expand() expects: name → {key: value}.
 func loadManagedCreds(db *gorm.DB, repoID string) map[string]map[string]string {
 	var rows []api.RepoManagedServiceConfig
 	db.Where("repo_id = ?", repoID).Find(&rows)
@@ -319,7 +291,6 @@ func loadManagedCreds(db *gorm.DB, repoID string) map[string]map[string]string {
 	return creds
 }
 
-// mergeCreds merges stored and new credential maps. New takes precedence.
 func mergeCreds(stored, newCreds map[string]map[string]string) map[string]map[string]string {
 	merged := make(map[string]map[string]string, len(stored)+len(newCreds))
 	for k, v := range stored {

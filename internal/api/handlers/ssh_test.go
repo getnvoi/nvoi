@@ -33,8 +33,8 @@ func TestSSH_RequiresCommand(t *testing.T) {
 	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/ssh", map[string]any{}, token)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400, body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want 422, body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -43,7 +43,7 @@ func TestSSH_RepoNotFound(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 
 	body := map[string]any{"command": []string{"echo", "hi"}}
-	req := authRequest("POST", "/workspaces/"+wsID+"/repos/nonexistent/ssh", body, token)
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000/ssh", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {

@@ -166,8 +166,9 @@ func TestWorkspaces_UpdateMissingName(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	// Huma returns 422 for validation failures (missing required field).
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", w.Code)
 	}
 }
 
@@ -175,12 +176,13 @@ func TestWorkspaces_GetNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, _ := doLogin(t, r, "octocat")
 
-	req := authRequest("GET", "/workspaces/nonexistent-id", nil, token)
+	// Use a valid UUID that doesn't exist (not "nonexistent-id" which fails UUID format validation).
+	req := authRequest("GET", "/workspaces/00000000-0000-0000-0000-000000000000", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", w.Code)
+		t.Fatalf("status = %d, want 404, body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -192,7 +194,8 @@ func TestWorkspaces_CreateMissingName(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	// Huma returns 422 for validation failures (missing required field).
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", w.Code)
 	}
 }

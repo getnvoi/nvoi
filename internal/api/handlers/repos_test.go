@@ -131,8 +131,8 @@ func TestRepos_UpdateMissingName(t *testing.T) {
 	req := authRequest("PUT", "/workspaces/"+wsID+"/repos/"+repoID, map[string]string{}, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", w.Code)
 	}
 }
 
@@ -140,7 +140,7 @@ func TestRepos_GetNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/nonexistent", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -173,7 +173,7 @@ func TestRepos_CreateMissingName(t *testing.T) {
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos", map[string]string{}, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", w.Code)
 	}
 }

@@ -22,7 +22,7 @@ func TestDescribe_RepoNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/nonexistent/describe", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000/describe", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -59,7 +59,7 @@ func TestResources_RepoNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/nonexistent/resources", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000/resources", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {

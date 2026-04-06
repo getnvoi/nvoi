@@ -1,516 +1,340 @@
 package handlers
 
 import (
-	"net/http"
+	"context"
 	"strconv"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/getnvoi/nvoi/internal/api"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/gin-gonic/gin"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"gorm.io/gorm"
 )
 
-// ListInstances returns all servers for a repo's compute provider.
-//
-// @Summary     List instances
-// @Description Returns all servers from the compute provider. Same data as `nvoi instance list`.
-// @Tags        instances
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {array}  object "Servers from compute provider"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/instances [get]
-func ListInstances(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
+// ── Input / Output types ─────────────────────────────────────────────────────
 
-		cluster, err := clusterFromLatestConfig(db, repo)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
+type ListInstancesInput struct{ RepoScopedInput }
+type ListInstancesOutput struct{ Body []*provider.Server }
 
-		servers, err := pkgcore.ComputeList(c.Request.Context(), pkgcore.ComputeListRequest{Cluster: *cluster})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
+type ListVolumesInput struct{ RepoScopedInput }
+type ListVolumesOutput struct{ Body []*provider.Volume }
 
-		c.JSON(http.StatusOK, servers)
+type ListDNSInput struct{ RepoScopedInput }
+type ListDNSOutput struct{ Body []provider.DNSRecord }
+
+type ListSecretsInput struct{ RepoScopedInput }
+type ListSecretsOutput struct{ Body []string }
+
+type ListStorageInput struct{ RepoScopedInput }
+type ListStorageOutput struct{ Body []pkgcore.StorageItem }
+
+type EmptyStorageInput struct {
+	RepoScopedInput
+	Name string `path:"name" doc:"Storage name"`
+}
+type EmptyStorageOutput struct {
+	Body struct {
+		Status string `json:"status"`
 	}
 }
 
-// ListVolumes returns all volumes for a repo's compute provider.
-//
-// @Summary     List volumes
-// @Description Returns all volumes from the compute provider. Same data as `nvoi volume list`.
-// @Tags        volumes
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {array}  object "Volumes from compute provider"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/volumes [get]
-func ListVolumes(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
+type ListBuildsInput struct{ RepoScopedInput }
+type ListBuildsOutput struct{ Body []pkgcore.RegistryImage }
 
-		cluster, err := clusterFromLatestConfig(db, repo)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-
-		volumes, err := pkgcore.VolumeList(c.Request.Context(), pkgcore.VolumeListRequest{Cluster: *cluster})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, volumes)
+type BuildLatestInput struct {
+	RepoScopedInput
+	Name string `path:"name" doc:"Build name"`
+}
+type BuildLatestOutput struct {
+	Body struct {
+		Image string `json:"image"`
 	}
 }
 
-// ListDNSRecords returns all DNS A records for a repo's DNS provider.
-//
-// @Summary     List DNS records
-// @Description Returns all A records from the DNS provider. Same data as `nvoi dns list`.
-// @Tags        dns
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {array}  object "DNS A records"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/dns [get]
-func ListDNSRecords(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+type BuildPruneInput struct {
+	RepoScopedInput
+	Name string `path:"name" doc:"Build name"`
+	Body struct {
+		Keep int `json:"keep" required:"true" minimum:"1" doc:"Number of tags to keep"`
+	}
+}
+type BuildPruneOutput struct {
+	Body struct {
+		Status string `json:"status"`
+	}
+}
+
+type ServiceLogsInput struct {
+	RepoScopedInput
+	Service    string `path:"service" doc:"Service name"`
+	Follow     string `query:"follow" default:"false" doc:"Follow log output"`
+	Tail       string `query:"tail" default:"50" doc:"Lines from end"`
+	Since      string `query:"since" doc:"Show logs since duration (e.g. 5m)"`
+	Previous   string `query:"previous" default:"false" doc:"Previous container logs"`
+	Timestamps string `query:"timestamps" default:"false" doc:"Include timestamps"`
+}
+
+type ExecInput struct {
+	RepoScopedInput
+	Service string `path:"service" doc:"Service name"`
+	Body    struct {
+		Command []string `json:"command" required:"true" doc:"Command to run"`
+	}
+}
+
+// ── Handlers ─────────────────────────────────────────────────────────────────
+
+func ListInstances(db *gorm.DB) func(context.Context, *ListInstancesInput) (*ListInstancesOutput, error) {
+	return func(ctx context.Context, input *ListInstancesInput) (*ListInstancesOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
+		if err != nil {
+			return nil, err
+		}
+		servers, err := pkgcore.ComputeList(ctx, pkgcore.ComputeListRequest{Cluster: *cluster})
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		return &ListInstancesOutput{Body: servers}, nil
+	}
+}
+
+func ListVolumes(db *gorm.DB) func(context.Context, *ListVolumesInput) (*ListVolumesOutput, error) {
+	return func(ctx context.Context, input *ListVolumesInput) (*ListVolumesOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
+		if err != nil {
+			return nil, err
+		}
+		volumes, err := pkgcore.VolumeList(ctx, pkgcore.VolumeListRequest{Cluster: *cluster})
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		return &ListVolumesOutput{Body: volumes}, nil
+	}
+}
+
+func ListDNSRecords(db *gorm.DB) func(context.Context, *ListDNSInput) (*ListDNSOutput, error) {
+	return func(ctx context.Context, input *ListDNSInput) (*ListDNSOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
 
 		rc, env, err := latestConfigAndEnv(db, repo)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		creds, err := resolveAllCredentials(rc, env)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		if rc.DNSProvider == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "no dns_provider configured"})
-			return
+			return nil, huma.Error400BadRequest("no dns_provider configured")
 		}
 
-		records, err := pkgcore.DNSList(c.Request.Context(), pkgcore.DNSListRequest{
+		records, err := pkgcore.DNSList(ctx, pkgcore.DNSListRequest{
 			DNS: pkgcore.ProviderRef{Name: string(rc.DNSProvider), Creds: creds.DNS},
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
 
-		c.JSON(http.StatusOK, records)
+		return &ListDNSOutput{Body: records}, nil
 	}
 }
 
-// ListSecrets returns all secret key names in the cluster.
-//
-// @Summary     List secrets
-// @Description Returns all secret key names from the cluster. Same data as `nvoi secret list`.
-// @Tags        secrets
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {array}  string "Secret key names"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/secrets [get]
-func ListSecrets(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
-
-		cluster, err := clusterFromLatestConfig(db, repo)
+func ListSecrets(db *gorm.DB) func(context.Context, *ListSecretsInput) (*ListSecretsOutput, error) {
+	return func(ctx context.Context, input *ListSecretsInput) (*ListSecretsOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, err
 		}
-
-		keys, err := pkgcore.SecretList(c.Request.Context(), pkgcore.SecretListRequest{Cluster: *cluster})
+		keys, err := pkgcore.SecretList(ctx, pkgcore.SecretListRequest{Cluster: *cluster})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
-
-		c.JSON(http.StatusOK, keys)
+		return &ListSecretsOutput{Body: keys}, nil
 	}
 }
 
-// ListStorageBuckets returns all storage buckets configured in the cluster.
-//
-// @Summary     List storage
-// @Description Returns all storage buckets discovered from k8s secrets. Same data as `nvoi storage list`.
-// @Tags        storage
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {array}  object "Storage items (name + bucket)"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/storage [get]
-func ListStorageBuckets(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
-
-		cluster, err := clusterFromLatestConfig(db, repo)
+func ListStorageBuckets(db *gorm.DB) func(context.Context, *ListStorageInput) (*ListStorageOutput, error) {
+	return func(ctx context.Context, input *ListStorageInput) (*ListStorageOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, err
 		}
-
-		items, err := pkgcore.StorageList(c.Request.Context(), pkgcore.StorageListRequest{Cluster: *cluster})
+		items, err := pkgcore.StorageList(ctx, pkgcore.StorageListRequest{Cluster: *cluster})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
-
-		c.JSON(http.StatusOK, items)
+		return &ListStorageOutput{Body: items}, nil
 	}
 }
 
-// EmptyStorage deletes all objects in a storage bucket.
-//
-// @Summary     Empty storage bucket
-// @Description Deletes all objects in the named storage bucket. Same as `nvoi storage empty <name>`.
-// @Tags        storage
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Param       name         path     string true "Storage name"
-// @Success     200          {object} statusResponse
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/storage/{name}/empty [post]
-func EmptyStorage(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
+func EmptyStorage(db *gorm.DB) func(context.Context, *EmptyStorageInput) (*EmptyStorageOutput, error) {
+	return func(ctx context.Context, input *EmptyStorageInput) (*EmptyStorageOutput, error) {
+		user := api.UserFromContext(ctx)
+		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
 		}
-
-		name := c.Param("name")
 
 		rc, env, err := latestConfigAndEnv(db, repo)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		creds, err := resolveAllCredentials(rc, env)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		cluster, err := clusterFromLatestConfig(db, repo)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 
-		err = pkgcore.StorageEmpty(c.Request.Context(), pkgcore.StorageEmptyRequest{
+		err = pkgcore.StorageEmpty(ctx, pkgcore.StorageEmptyRequest{
 			Cluster: *cluster,
 			Storage: pkgcore.ProviderRef{Name: string(rc.StorageProvider), Creds: creds.Storage},
-			Name:    name,
+			Name:    input.Name,
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
 
-		c.JSON(http.StatusOK, gin.H{"status": "emptied"})
+		return &EmptyStorageOutput{Body: struct {
+			Status string `json:"status"`
+		}{Status: "emptied"}}, nil
 	}
 }
 
-// ListBuilds returns all images in the cluster registry.
-//
-// @Summary     List builds
-// @Description Returns all images and their tags from the cluster registry. Same data as `nvoi build list`.
-// @Tags        builds
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Success     200          {array}  object "Registry images with tags"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/builds [get]
-func ListBuilds(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
-
-		cluster, err := clusterFromLatestConfig(db, repo)
+func ListBuilds(db *gorm.DB) func(context.Context, *ListBuildsInput) (*ListBuildsOutput, error) {
+	return func(ctx context.Context, input *ListBuildsInput) (*ListBuildsOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, err
 		}
-
-		images, err := pkgcore.BuildList(c.Request.Context(), pkgcore.BuildListRequest{Cluster: *cluster})
+		images, err := pkgcore.BuildList(ctx, pkgcore.BuildListRequest{Cluster: *cluster})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
-
-		c.JSON(http.StatusOK, images)
+		return &ListBuildsOutput{Body: images}, nil
 	}
 }
 
-// BuildLatestImage returns the latest image ref for a build name.
-//
-// @Summary     Get latest build image
-// @Description Returns the latest image reference for a build name. Same as `nvoi build latest <name>`.
-// @Tags        builds
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true "Repo ID"      format(uuid)
-// @Param       name         path     string true "Build name"
-// @Success     200          {object} buildLatestResponse
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/builds/{name}/latest [get]
-func BuildLatestImage(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
-
-		name := c.Param("name")
-
-		cluster, err := clusterFromLatestConfig(db, repo)
+func BuildLatestImage(db *gorm.DB) func(context.Context, *BuildLatestInput) (*BuildLatestOutput, error) {
+	return func(ctx context.Context, input *BuildLatestInput) (*BuildLatestOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, err
 		}
-
-		ref, err := pkgcore.BuildLatest(c.Request.Context(), pkgcore.BuildLatestRequest{
+		ref, err := pkgcore.BuildLatest(ctx, pkgcore.BuildLatestRequest{
 			Cluster: *cluster,
-			Name:    name,
+			Name:    input.Name,
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
-
-		c.JSON(http.StatusOK, gin.H{"image": ref})
+		return &BuildLatestOutput{Body: struct {
+			Image string `json:"image"`
+		}{Image: ref}}, nil
 	}
 }
 
-// PruneBuild deletes old image tags, keeping the most recent N.
-//
-// @Summary     Prune build images
-// @Description Deletes old image tags for a build name, keeping the most recent N. Same as `nvoi build prune <name> --keep N`.
-// @Tags        builds
-// @Accept      json
-// @Produce     json
-// @Security    BearerAuth
-// @Param       workspace_id path     string            true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string            true "Repo ID"      format(uuid)
-// @Param       name         path     string            true "Build name"
-// @Param       body         body     buildPruneRequest true "Prune options"
-// @Success     200          {object} statusResponse
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Failure     500          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/builds/{name}/prune [post]
-func PruneBuild(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
-
-		name := c.Param("name")
-
-		var req buildPruneRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-
-		cluster, err := clusterFromLatestConfig(db, repo)
+func PruneBuild(db *gorm.DB) func(context.Context, *BuildPruneInput) (*BuildPruneOutput, error) {
+	return func(ctx context.Context, input *BuildPruneInput) (*BuildPruneOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, err
 		}
-
-		err = pkgcore.BuildPrune(c.Request.Context(), pkgcore.BuildPruneRequest{
+		err = pkgcore.BuildPrune(ctx, pkgcore.BuildPruneRequest{
 			Cluster: *cluster,
-			Name:    name,
-			Keep:    req.Keep,
+			Name:    input.Name,
+			Keep:    input.Body.Keep,
 		})
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+			return nil, huma.Error500InternalServerError(err.Error())
 		}
-
-		c.JSON(http.StatusOK, gin.H{"status": "pruned"})
+		return &BuildPruneOutput{Body: struct {
+			Status string `json:"status"`
+		}{Status: "pruned"}}, nil
 	}
 }
 
-// ServiceLogs streams pod logs for a service.
-//
-// @Summary     Stream service logs
-// @Description Streams pod logs for a service as plain text. Same as `nvoi logs <service>`.
-// @Tags        services
-// @Produce     text/plain
-// @Security    BearerAuth
-// @Param       workspace_id path     string true  "Workspace ID" format(uuid)
-// @Param       repo_id      path     string true  "Repo ID"      format(uuid)
-// @Param       service      path     string true  "Service name"
-// @Param       follow       query    bool   false "Follow log output"
-// @Param       tail         query    int    false "Number of lines from the end"
-// @Param       since        query    string false "Show logs since duration (e.g. 5m, 1h)"
-// @Param       previous     query    bool   false "Show previous container logs"
-// @Param       timestamps   query    bool   false "Include timestamps"
-// @Success     200          {string} string "Log stream"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/services/{service}/logs [get]
-func ServiceLogs(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
-
-		service := c.Param("service")
-
-		cluster, err := clusterFromLatestConfig(db, repo)
+func ServiceLogs(db *gorm.DB) func(context.Context, *ServiceLogsInput) (*huma.StreamResponse, error) {
+	return func(ctx context.Context, input *ServiceLogsInput) (*huma.StreamResponse, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, err
 		}
 
-		tail, _ := strconv.Atoi(c.DefaultQuery("tail", "50"))
-
-		c.Header("Content-Type", "text/plain")
-		c.Writer.WriteHeader(http.StatusOK)
-
-		cluster.Output = &streamOutput{w: c.Writer}
-
-		logsErr := pkgcore.Logs(c.Request.Context(), pkgcore.LogsRequest{
-			Cluster:    *cluster,
-			Service:    service,
-			Follow:     c.DefaultQuery("follow", "") == "true",
-			Tail:       tail,
-			Since:      c.DefaultQuery("since", ""),
-			Previous:   c.DefaultQuery("previous", "") == "true",
-			Timestamps: c.DefaultQuery("timestamps", "") == "true",
-		})
-		if logsErr != nil {
-			c.Writer.Write([]byte("\nerror: " + logsErr.Error() + "\n"))
+		tail, _ := strconv.Atoi(input.Tail)
+		if tail == 0 {
+			tail = 50
 		}
+
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				ctx.SetHeader("Content-Type", "text/plain")
+				cluster.Output = &streamOutput{w: ctx.BodyWriter()}
+
+				logsErr := pkgcore.Logs(ctx.Context(), pkgcore.LogsRequest{
+					Cluster:    *cluster,
+					Service:    input.Service,
+					Follow:     input.Follow == "true",
+					Tail:       tail,
+					Since:      input.Since,
+					Previous:   input.Previous == "true",
+					Timestamps: input.Timestamps == "true",
+				})
+				if logsErr != nil {
+					ctx.BodyWriter().Write([]byte("\nerror: " + logsErr.Error() + "\n"))
+				}
+			},
+		}, nil
 	}
 }
 
-// ExecCommand runs a command in a service pod and streams output.
-//
-// @Summary     Exec in service pod
-// @Description Runs a command in the first pod of a service and streams output. Same as `nvoi exec <service> -- <command>`.
-// @Tags        services
-// @Accept      json
-// @Produce     text/plain
-// @Security    BearerAuth
-// @Param       workspace_id path     string        true "Workspace ID" format(uuid)
-// @Param       repo_id      path     string        true "Repo ID"      format(uuid)
-// @Param       service      path     string        true "Service name"
-// @Param       body         body     execRequest   true "Command to run"
-// @Success     200          {string} string        "Command output stream"
-// @Failure     400          {object} errorResponse
-// @Failure     401          {object} errorResponse
-// @Failure     404          {object} errorResponse
-// @Router      /workspaces/{workspace_id}/repos/{repo_id}/services/{service}/exec [post]
-func ExecCommand(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		repo, ok := loadRepo(c, db)
-		if !ok {
-			return
-		}
-
-		service := c.Param("service")
-
-		var req execRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-
-		cluster, err := clusterFromLatestConfig(db, repo)
+func ExecCommand(db *gorm.DB) func(context.Context, *ExecInput) (*huma.StreamResponse, error) {
+	return func(ctx context.Context, input *ExecInput) (*huma.StreamResponse, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
+			return nil, err
 		}
 
-		c.Header("Content-Type", "text/plain")
-		c.Writer.WriteHeader(http.StatusOK)
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				ctx.SetHeader("Content-Type", "text/plain")
+				cluster.Output = &streamOutput{w: ctx.BodyWriter()}
 
-		cluster.Output = &streamOutput{w: c.Writer}
-
-		execErr := pkgcore.Exec(c.Request.Context(), pkgcore.ExecRequest{
-			Cluster: *cluster,
-			Service: service,
-			Command: req.Command,
-		})
-		if execErr != nil {
-			c.Writer.Write([]byte("\nerror: " + execErr.Error() + "\n"))
-		}
+				execErr := pkgcore.Exec(ctx.Context(), pkgcore.ExecRequest{
+					Cluster: *cluster,
+					Service: input.Service,
+					Command: input.Body.Command,
+				})
+				if execErr != nil {
+					ctx.BodyWriter().Write([]byte("\nerror: " + execErr.Error() + "\n"))
+				}
+			},
+		}, nil
 	}
+}
+
+// ── Shared helper ────────────────────────────────────────────────────────────
+
+// repoCluster resolves user → repo → cluster from a RepoScopedInput.
+func repoCluster(ctx context.Context, db *gorm.DB, input RepoScopedInput) (*pkgcore.Cluster, error) {
+	user := api.UserFromContext(ctx)
+	repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	cluster, err := clusterFromLatestConfig(db, repo)
+	if err != nil {
+		return nil, huma.Error400BadRequest(err.Error())
+	}
+	return cluster, nil
 }

@@ -22,7 +22,7 @@ func TestInstances_RequiresAuth(t *testing.T) {
 func TestInstances_RepoNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/nonexistent/instances", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000/instances", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -58,7 +58,7 @@ func TestVolumes_RequiresAuth(t *testing.T) {
 func TestVolumes_RepoNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/nonexistent/volumes", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000/volumes", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -94,7 +94,7 @@ func TestDNS_RequiresAuth(t *testing.T) {
 func TestDNS_RepoNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/nonexistent/dns", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000/dns", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -296,8 +296,8 @@ func TestBuildPrune_MissingKeep(t *testing.T) {
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/builds/web/prune", map[string]any{}, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (missing keep)", w.Code)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (missing keep)", w.Code)
 	}
 }
 
@@ -317,7 +317,7 @@ func TestServiceLogs_RequiresAuth(t *testing.T) {
 func TestServiceLogs_RepoNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/nonexistent/services/web/logs", nil, token)
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000/services/web/logs", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -354,7 +354,7 @@ func TestExec_RepoNotFound(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	body := map[string]any{"command": []string{"echo", "hi"}}
-	req := authRequest("POST", "/workspaces/"+wsID+"/repos/nonexistent/services/web/exec", body, token)
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/00000000-0000-0000-0000-000000000000/services/web/exec", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -377,8 +377,8 @@ func TestExec_MissingCommand(t *testing.T) {
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/services/web/exec", map[string]any{}, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (missing command)", w.Code)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (missing command)", w.Code)
 	}
 }
 
