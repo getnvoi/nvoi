@@ -40,8 +40,11 @@ internal/api/
 
   config/
     schema.go            Public config YAML struct — servers, volumes, build, storage, services, domains
-    validate.go          15 validation rules with cross-reference checks
-    plan.go              Config + env → ordered Step sequence (mirrors examples/core/{provider}/deploy)
+    validate.go          Structural validation rules with cross-reference checks
+
+  plan/
+    plan.go              Build(reality, desired, env) → ordered Step sequence
+    state.go             InfraState() — queries providers + cluster to build reality picture
 
   managed/
     service.go           ManagedService interface + registry + Expand()
