@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Example: AWS teardown sequence ──────────────────────────────────────────
-# Dev example using the Makefile. Reverse order of deploy.
+# ── AWS teardown ──────────────────────────────────────────────────────────────
+# Reverse order of deploy.
 
 set -a; source .env; set +a
 
@@ -10,25 +10,13 @@ export COMPUTE_PROVIDER=aws
 export DNS_PROVIDER=cloudflare
 export STORAGE_PROVIDER=aws
 
-# ── Teardown (reverse order of deploy) ──────────────────────────────────────
-
-# nvoi dns delete web final.nvoi.to -y
-$CLI dns delete web final.nvoi.to -y
-# nvoi storage empty assets -y
-$CLI storage empty assets -y
-# nvoi storage delete assets -y
-$CLI storage delete assets -y
-# nvoi secret delete RAILS_MASTER_KEY
-$CLI secret delete RAILS_MASTER_KEY
-# nvoi secret delete POSTGRES_PASSWORD
-$CLI secret delete POSTGRES_PASSWORD
-# nvoi service delete jobs -y
-$CLI service delete jobs -y
-# nvoi service delete web -y
-$CLI service delete web -y
-# nvoi service delete db -y
-$CLI service delete db -y
-# nvoi volume delete pgdata -y
-$CLI volume delete pgdata -y
-# nvoi instance delete master -y
-$CLI instance delete master -y
+bin/core dns delete web final.nvoi.to -y
+bin/core storage empty assets -y
+bin/core storage delete assets -y
+bin/core secret delete RAILS_MASTER_KEY
+bin/core secret delete POSTGRES_PASSWORD
+bin/core service delete jobs -y
+bin/core service delete web -y
+bin/core service delete db -y
+bin/core volume delete pgdata -y
+bin/core instance delete master -y

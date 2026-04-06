@@ -1,15 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Example: AWS teardown via cloud CLI ─────────────────────────────────────
-# Dev example using the Makefile (cloud mode).
+# ── AWS teardown via cloud CLI ────────────────────────────────────────────────
+# Push empty config — the diff generates delete steps for everything.
 
 export COMPUTE_PROVIDER=aws
 export DNS_PROVIDER=cloudflare
 export STORAGE_PROVIDER=aws
 
-# nvoi push --config examples/cloud/empty.yaml --env .env --compute-provider aws --dns-provider cloudflare --storage-provider aws
-$CLI push --config examples/cloud/empty.yaml --env .env --compute-provider aws --dns-provider cloudflare --storage-provider aws
+bin/cloud push --config examples/cloud/empty.yaml --env .env \
+  --compute-provider aws --dns-provider cloudflare --storage-provider aws
 
-# nvoi deploy
-$CLI deploy
+bin/cloud deploy

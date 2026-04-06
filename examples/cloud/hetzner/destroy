@@ -1,16 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Example: Hetzner teardown via cloud CLI ─────────────────────────────────
-# Dev example using the Makefile (cloud mode).
+# ── Hetzner teardown via cloud CLI ────────────────────────────────────────────
+# Push empty config — the diff generates delete steps for everything.
 
 export COMPUTE_PROVIDER=hetzner
 export DNS_PROVIDER=cloudflare
 export STORAGE_PROVIDER=cloudflare
 
-# Push empty config — the diff generates delete steps for everything.
-# nvoi push --config examples/cloud/empty.yaml --env .env --compute-provider hetzner --dns-provider cloudflare --storage-provider cloudflare
-$CLI push --config examples/cloud/empty.yaml --env .env --compute-provider hetzner --dns-provider cloudflare --storage-provider cloudflare
+bin/cloud push --config examples/cloud/empty.yaml --env .env \
+  --compute-provider hetzner --dns-provider cloudflare --storage-provider cloudflare
 
-# nvoi deploy
-$CLI deploy
+bin/cloud deploy

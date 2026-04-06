@@ -1,30 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Example: Hetzner deploy via cloud CLI ─────────────────────────────────────
-# Dev example using the Makefile (cloud mode). Same topology as examples/core/hetzner/deploy, but through the API.
-# The config YAML + .env replace the imperative command sequence.
+# ── Hetzner deploy via cloud CLI ──────────────────────────────────────────────
+# Same topology as examples/core/hetzner/deploy, but through the API.
 
 export COMPUTE_PROVIDER=hetzner
 export DNS_PROVIDER=cloudflare
 export STORAGE_PROVIDER=cloudflare
 export BUILD_PROVIDER=daytona
 
-# ── Setup (once) ───────────────────────────────────────────────────────────────
+bin/cloud login
+bin/cloud workspaces use default
+bin/cloud repos create dummy-rails
+bin/cloud repos use dummy-rails
 
-# nvoi login
-$CLI login
-# nvoi workspaces use default
-$CLI workspaces use default
-# nvoi repos create dummy-rails
-$CLI repos create dummy-rails
-# nvoi repos use dummy-rails
-$CLI repos use dummy-rails
-
-# ── Push config ────────────────────────────────────────────────────────────────
-
-# nvoi push --config examples/cloud/hetzner/config.yaml --env .env --compute-provider hetzner --dns-provider cloudflare --storage-provider cloudflare --build-provider daytona
-$CLI push \
+bin/cloud push \
   --config examples/cloud/hetzner/config.yaml \
   --env .env \
   --compute-provider hetzner \
@@ -32,12 +22,5 @@ $CLI push \
   --storage-provider cloudflare \
   --build-provider daytona
 
-# ── Preview ────────────────────────────────────────────────────────────────────
-
-# nvoi plan
-$CLI plan
-
-# ── Deploy ─────────────────────────────────────────────────────────────────────
-
-# nvoi deploy
-$CLI deploy
+bin/cloud plan
+bin/cloud deploy

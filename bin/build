@@ -1,0 +1,3 @@
+#!/bin/sh
+set -e
+exec docker compose run --rm --entrypoint sh core -c "go build -o /app/tmp/nvoi ./cmd/core"

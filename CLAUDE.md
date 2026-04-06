@@ -10,7 +10,7 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 - **No state files.** No manifest, no database, no local cache. Infrastructure is the source of truth.
 - **Everything is idempotent.** Every command hits real infrastructure — provider APIs over HTTP, servers over SSH, cluster via kubectl. Run twice, same result.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
-- **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`, `storage set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. `make cli` commands are idempotent — run end to end, every time, same outcome.
+- **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`, `storage set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. Run end to end, every time, same outcome.
 - **`describe` fetches everything live from the cluster.** Nodes, workloads, pods, services, ingress, secrets, storage — all via kubectl over SSH.
 - **Provider interfaces scale.** Hetzner, Cloudflare, AWS. Interface-first. Add a provider = implement the interface.
 - **SSH is the transport.** No agent binary. SSH in, run commands, done.
@@ -20,12 +20,14 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 ## Build & Test
 
 ```bash
-make test                                   # vet + tests
-make test ARGS="-v"                         # verbose
-make test ARGS="-run TestWaitRollout"       # single test
-make test ARGS="-cover"                     # with coverage
-make build                                  # build only
+bin/test                                    # all tests
+bin/test -v                                 # verbose
+bin/test -run TestWaitRollout               # single test
+bin/test -cover                             # with coverage
+bin/build                                   # build only
 ```
+
+`bin/test` and `bin/build` wrap `docker compose run --rm --entrypoint sh core -c '...'`.
 
 Tests in three tiers:
 - **Tier 1** — pure functions: naming, YAML generation, Caddyfile, Poll, credential validation, volume parsing, signed URLs, route merging, cloud-init (hostname), APIError, AWS ArchForType, instanceFromEC2, volumeFromEC2, nvoiTags, defaultIngressRules, deref helpers
@@ -45,19 +47,19 @@ Does not run on every push/sync to a PR. Manual trigger for re-reviews.
 Everything runs through Docker Compose. Never run Go on the host.
 
 ```bash
-docker compose run --rm core instance list              # direct CLI
-docker compose run --rm core describe                   # live cluster state
-docker compose run --rm cli login                       # cloud CLI (starts postgres + api automatically)
-docker compose run --rm core sh -c 'go test ./...'      # run tests
+bin/core instance list                           # direct CLI
+bin/core describe                                # live cluster state
+bin/cloud login                                  # cloud CLI (starts postgres + api automatically)
+bin/test                                         # run tests
 ```
 
-**Compose handles the full dependency chain.** `docker compose run --rm cli login` starts postgres → waits healthy → starts api → waits healthy → runs cli. One command. Never start services manually.
+**Compose handles the full dependency chain.** `bin/cloud login` starts postgres → waits healthy → starts api → waits healthy → runs cli. One command. Never start services manually.
 
 See [`examples/README.md`](examples/README.md) for full deploy/destroy workflows across all providers.
 
 ### How it works
 
-`docker compose run --rm core` runs the direct CLI. The compose service:
+`bin/core` runs the direct CLI (wraps `docker compose run --rm core`). The compose service:
 
 - Mounts source (`.:/app`) — changes picked up instantly, no rebuild
 - Mounts SSH keys (`~/.ssh:/root/.ssh:ro`)
@@ -71,7 +73,7 @@ See [`examples/README.md`](examples/README.md) for full deploy/destroy workflows
 
 ```bash
 cp .env.example .env                    # fill in provider credentials
-make cli instance set master --compute-type cx23 --compute-region fsn1
+bin/core instance set master --compute-type cx23 --compute-region fsn1
 ```
 
 ### Files
@@ -80,7 +82,11 @@ make cli instance set master --compute-type cx23 --compute-region fsn1
 |------|---------|
 | `.env` | Everything: app identity, provider selection, credentials, app secrets (not tracked) |
 | `.env.example` | Template for `.env` |
-| `Makefile` | Dev interface — test, build, cli, cloud, api, provision |
+| `docker-compose.yml` | Four services: `core`, `api`, `cli`, `postgres` |
+| `bin/core` | Direct CLI — wraps `docker compose run --rm core` |
+| `bin/cloud` | Cloud CLI — wraps `docker compose run --rm cli` |
+| `bin/test` | Run tests — wraps `docker compose run --rm --entrypoint sh core` |
+| `bin/build` | Build binary — wraps `docker compose run --rm --entrypoint sh core` |
 | `bin/entrypoint` | Compose entrypoint for `core` service |
 | `bin/api-entrypoint` | Compose entrypoint for `api` service |
 | `bin/cli-entrypoint` | Compose entrypoint for `cli` service |
@@ -192,7 +198,7 @@ nvoi instance set master --compute-provider hetzner --compute-credentials HETZNE
   --compute-type cx23 --compute-region fsn1 --app-name rails --environment production
 ```
 
-See `examples/core/` for deploy workflows (env-var path via compose) and `examples/core/deploy-full` for the full inline flags path.
+See [`examples/README.md`](examples/README.md) for deploy/destroy workflows across all providers (direct + cloud mode).
 
 ## Architecture
 
@@ -215,15 +221,19 @@ pkg/                       Public library — the execution engine
     daytona/               Daytona remote builds
     github/                GitHub Actions builds
     local/                 Local docker buildx builds
-  utils/                   Pure utilities: naming, poll, httpclient, ssh keys, format, maps
+  utils/                   Pure utilities: naming, poll, httpclient, ssh keys, format, maps, params
+    ssh.go                 SSHClient interface + RemoteFileInfo
+    sshutil.go             Ed25519 key generation (GenerateEd25519Key) + DerivePublicKey
+    params.go              Typed extractors for map[string]any (GetString, GetInt, GetBool, GetStringSlice)
+    maps.go                SortedKeys, RemovedKeys, ReverseSorted
     s3/                    AWS Signature V4 signing for S3-compatible APIs
 
 internal/                  Private
-  render/                  Shared renderers — TUI, Plain, JSON, Table, Resolve, ReplayLine
+  render/                  Shared renderers — TUI, Plain, JSON, Table, Resolve, ReplayLine, Delete, Describe, Resources
   testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
   core/                    Direct CLI. Cobra wrappers. Parse flags → call pkg/core/ → render via internal/render/
   api/                     REST API server — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
-  cli/                     Cloud CLI — login, deploy, stream logs via internal/render/ — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
+  cli/                     Cloud CLI — login, deploy, stream logs via internal/render/ — see [internal/cli/README.md](internal/cli/README.md)
 ```
 
 ### Shared layers
@@ -296,17 +306,17 @@ Every provider has a name flag + credentials flag. Always a pair. Credentials ar
 
 ```bash
 # Common: env vars set, no credential flags needed
-make cli instance set master --compute-type cx23 --compute-region fsn1
+bin/core instance set master --compute-type cx23 --compute-region fsn1
 
 # Override: --compute-credentials takes priority over env var
-make cli instance set master \
+bin/core instance set master \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=$OTHER_TOKEN \
   --compute-type cx23 \
   --compute-region fsn1
 
 # Build uses two providers — compute for registry, builder for building
-make cli build \
+bin/core build \
   --compute-provider hetzner \
   --compute-credentials HETZNER_TOKEN=xxx \
   --build-provider daytona \
@@ -328,8 +338,8 @@ NVOI_APP_NAME=rails
 NVOI_ENV=production
 
 # Provider selection
-COMPUTE_PROVIDER=aws          # hetzner | aws
-DNS_PROVIDER=cloudflare       # cloudflare | aws
+COMPUTE_PROVIDER=aws          # hetzner | aws | scaleway
+DNS_PROVIDER=cloudflare       # cloudflare | aws | scaleway
 STORAGE_PROVIDER=aws          # cloudflare | aws
 BUILD_PROVIDER=daytona        # local | daytona | github
 DNS_ZONE=nvoi.to
@@ -555,7 +565,7 @@ const (
 
 1. `NVOI_APP_NAME` + `NVOI_ENV` (or `--app-name` + `--environment`) are required. They're the namespace for everything.
 2. No state files. Infrastructure is the truth. `describe` fetches live from the cluster.
-3. Everything is `set`. Idempotent. Run twice, same result. `make cli` commands are idempotent — run end to end, always same outcome.
+3. Everything is `set`. Idempotent. Run twice, same result. Deploy scripts run end to end, always same outcome.
 4. `set` writes directly to infrastructure. No intermediate files.
 5. Provider interfaces scale. Add a provider = implement the interface. Same registration pattern for all four kinds.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
@@ -565,7 +575,7 @@ const (
 10. **`pkg/core/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `pkg/core/` is a library — the API handlers call the same functions.
 11. **`pkg/core/` never imports `net/http`.** HTTP calls belong in `infra/` (e.g. `WaitHTTPS`) or `provider/`. `pkg/core/` is pure orchestration.
 12. **Errors flow up, render once.** `pkg/core/` returns errors. Cobra renders them through `SetErr` → `Output.Error()`. Never double-print. Never swallow silently.
-13. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently.
+13. Every `delete` command is idempotent. Deleting something that doesn't exist succeeds silently. Typed sentinel errors drive the rendering: `utils.ErrNotFound` (resource gone at provider) → "already gone", `core.ErrNoMaster` (no cluster to clean up) → "cluster gone". `internal/render/delete.go` `HandleDeleteResult()` dispatches these. All 14 provider delete functions return `ErrNotFound` on 404 (not nil).
 14. `examples/core/destroy` is the reverse of `examples/core/deploy`. Same commands, `delete` instead of `set`, reverse order. Tolerates missing resources — always runs to completion.
 15. **No shell injection.** Secret values flow to kubectl via file upload (`ssh.Upload` + `cat`), not inline `fmt.Sprintf`. `shellQuote` for `--from-literal` args. Never interpolate user values into shell strings.
 16. **All providers use `utils.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`. Exception: AWS provider uses AWS SDK v2 (its own HTTP transport).

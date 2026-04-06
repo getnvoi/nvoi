@@ -1,6 +1,6 @@
 # CLAUDE.md — internal/api
 
-The SaaS layer on top of `pkg/core/`. Users push a config YAML + env, the API validates it, plans the deploy sequence, and executes `pkg/core/` functions in order. Same result as running `bin/deploy-*` scripts by hand.
+The SaaS layer on top of `pkg/core/`. Users push a config YAML + env, the API validates it, plans the deploy sequence, and executes `pkg/core/` functions in order. Same result as running `examples/core/{provider}/deploy` scripts by hand.
 
 ## How it works
 
@@ -34,13 +34,14 @@ internal/api/
     workspaces.go        CRUD /workspaces — scoped via workspace_users join
     repos.go             CRUD /workspaces/:id/repos — scoped through workspace
     config.go            Config push/get/list/plan — the core deploy pipeline entry point
-    deploy.go            POST deploy, GET deployments, GET deployment, GET deployment/logs (JSONL)
+    deploy.go            POST deploy, POST run, GET deployments, GET deployment, GET logs (JSONL)
+    executor.go          Execute() — walks deployment steps, calls pkg/core/ functions, writes JSONL logs
     output.go            dbOutput — implements pkg/core.Output, writes JSONL to deployment_step_logs
 
   config/
     schema.go            Public config YAML struct — servers, volumes, build, storage, services, domains
     validate.go          15 validation rules with cross-reference checks
-    plan.go              Config + env → ordered Step sequence (mirrors bin/deploy-* scripts)
+    plan.go              Config + env → ordered Step sequence (mirrors examples/core/{provider}/deploy)
 
   managed/
     service.go           ManagedService interface + registry + Expand()
@@ -190,7 +191,7 @@ Expand also auto-adds volumes required by managed services to the config.
 
 ## Plan (config → steps)
 
-Seven phases, same order as `bin/deploy-*`:
+Seven phases, same order as `examples/core/{provider}/deploy`:
 
 | Phase | StepKind | Maps to |
 |-------|----------|---------|
@@ -245,7 +246,7 @@ cli       cloud CLI (cmd/cli via bin/cli-entrypoint), depends_on api (healthy)
 postgres  PostgreSQL 17
 ```
 
-**Compose handles the full dependency chain.** `docker compose run --rm cli login` starts postgres → waits healthy → starts api → waits healthy → runs cli. One command, no manual startup. Never run `docker compose up -d postgres` separately — `depends_on` with `condition: service_healthy` handles it.
+**Compose handles the full dependency chain.** `bin/cloud login` starts postgres → waits healthy → starts api → waits healthy → runs cli. One command, no manual startup. Never run `docker compose up -d postgres` separately — `depends_on` with `condition: service_healthy` handles it.
 
 See [`examples/README.md`](../../examples/README.md) for deploy workflows.
 
@@ -271,7 +272,7 @@ Executor (walks steps in order):
 CLI: polls GET .../deployments/:id/logs
   → API returns raw JSONL (application/x-ndjson)
   → CLI parses events → render.ReplayLine() → TUI output
-  → Same lipgloss formatting as bin/deploy-hetzner
+  → Same lipgloss formatting as examples/core/hetzner/deploy
 ```
 
 ## Rendering
@@ -313,6 +314,7 @@ GET    /workspaces/:wid/repos/:rid/config/plan          execution plan for lates
 POST   /workspaces/:wid/repos/:rid/deploy               trigger deployment
 GET    /workspaces/:wid/repos/:rid/deployments           list deployments
 GET    /workspaces/:wid/repos/:rid/deployments/:did      get deployment + steps + logs
+POST   /workspaces/:wid/repos/:rid/deployments/:did/run  start executing a pending deployment
 GET    /workspaces/:wid/repos/:rid/deployments/:did/logs raw JSONL log stream
 
 GET    /workspaces/:wid/repos/:rid/describe          live cluster state

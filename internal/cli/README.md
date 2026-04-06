@@ -167,7 +167,7 @@ plan for config v3 (12 steps):
 nvoi deploy
 ```
 
-Output is identical to running `bin/deploy-hetzner` directly — same lipgloss TUI formatting, same events. The deploy triggers on the API, logs stream back as JSONL, and the CLI renders them through the shared TUI renderer.
+Output is identical to running `examples/core/hetzner/deploy` directly — same lipgloss TUI formatting, same events. The deploy triggers on the API, logs stream back as JSONL, and the CLI renders them through the shared TUI renderer.
 
 ## Logs
 

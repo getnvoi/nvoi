@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+exec docker compose run --rm \
+  -e COMPUTE_PROVIDER -e DNS_PROVIDER -e STORAGE_PROVIDER -e BUILD_PROVIDER \
+  core "$@"

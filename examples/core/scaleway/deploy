@@ -1,9 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Example: Scaleway deploy sequence ────────────────────────────────────────
-# Dev example using the Makefile. Scaleway compute + DNS. Cloudflare storage (R2).
-# Requires NVOI_APP_NAME, NVOI_ENV, and provider credentials as env vars.
+# ── Scaleway deploy ───────────────────────────────────────────────────────────
+# 1 server, postgres, web, jobs. Scaleway compute + DNS. Cloudflare R2.
 
 set -a; source .env; set +a
 
@@ -14,43 +13,33 @@ export BUILD_PROVIDER=daytona
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-# nvoi instance set master --compute-type DEV1-L --compute-region fr-par-1
-$CLI instance set master --compute-type DEV1-L --compute-region fr-par-1
-# nvoi volume set pgdata --size 30 --server master
-$CLI volume set pgdata --size 30 --server master
+bin/core instance set master --compute-type DEV1-L --compute-region fr-par-1
+bin/core volume set pgdata --size 30 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
-# nvoi build --source benbonnet/dummy-rails --name web
-$CLI build --source benbonnet/dummy-rails --name web
-
-# WEB_IMAGE=$(nvoi build latest web)
-WEB_IMAGE=$($CLI build latest web)
+bin/core build --source benbonnet/dummy-rails --name web
+WEB_IMAGE=$(bin/core build latest web)
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────
 
-# nvoi secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
-$CLI secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
-# nvoi secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
-$CLI secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+bin/core secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+bin/core secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
-# nvoi storage set assets --cors
-$CLI storage set assets --cors
+bin/core storage set assets --cors
 
 # ── Services ────────────────────────────────────────────────────────────────────
 
-# nvoi service set db --image postgres:17 --volume pgdata:/var/lib/postgresql/data --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD
-$CLI service set db \
+bin/core service set db \
   --image postgres:17 \
   --volume pgdata:/var/lib/postgresql/data \
   --env POSTGRES_USER="$POSTGRES_USER" \
   --env POSTGRES_DB="$POSTGRES_DB" \
   --secret POSTGRES_PASSWORD
 
-# nvoi service set web --image "$WEB_IMAGE" --port 80 --replicas 2 --health-path /up --env RAILS_ENV=production --env POSTGRES_HOST=db --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD --secret RAILS_MASTER_KEY --storage assets
-$CLI service set web \
+bin/core service set web \
   --image "$WEB_IMAGE" \
   --port 80 \
   --replicas 2 \
@@ -63,8 +52,7 @@ $CLI service set web \
   --secret RAILS_MASTER_KEY \
   --storage assets
 
-# nvoi service set jobs --image "$WEB_IMAGE" --command "bin/jobs" --env RAILS_ENV=production --env POSTGRES_HOST=db --env POSTGRES_USER="$POSTGRES_USER" --env POSTGRES_DB="$POSTGRES_DB" --secret POSTGRES_PASSWORD --secret RAILS_MASTER_KEY
-$CLI service set jobs \
+bin/core service set jobs \
   --image "$WEB_IMAGE" \
   --command "bin/jobs" \
   --env RAILS_ENV=production \
@@ -76,8 +64,7 @@ $CLI service set jobs \
 
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
-# nvoi dns set web scw.nvoi.to
-$CLI dns set web scw.nvoi.to
+bin/core dns set web scw.nvoi.to
 
 echo ""
 echo "==> done. https://scw.nvoi.to"
