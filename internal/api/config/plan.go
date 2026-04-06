@@ -35,28 +35,47 @@ type Step struct {
 	Params map[string]any `json:"params,omitempty"`
 }
 
-// Plan generates the ordered deploy sequence from a config + env.
-// The sequence mirrors bin/deploy-* scripts:
+// Plan generates the full ordered deploy sequence: deletes for removed resources
+// first (reverse deploy order), then sets for desired resources (forward deploy order).
 //
-//  1. Compute (servers)
-//  2. Volumes
-//  3. Build
-//  4. Secrets
-//  5. Storage
-//  6. Services
-//  7. DNS
-//
-// env is the parsed .env map — used to resolve secret values and
-// env var references (entries without =).
-func Plan(cfg *Config, env map[string]string) ([]Step, error) {
-	if errs := Validate(cfg); len(errs) > 0 {
-		return nil, errs[0]
-	}
-
+// prev is the previous config version (nil for first deploy).
+// current is the desired state (empty for destroy-all).
+// env is the parsed .env map — used to resolve secret values and env var references.
+func Plan(prev, current *Config, env map[string]string) ([]Step, error) {
 	var steps []Step
 
-	// ── 1. Compute ─────────────────────────────────────────────────────────
-	// First server is master, rest are workers. Deterministic order.
+	// ── Deletes (reverse deploy order) ─────────────────────────────────────
+	steps = append(steps, diffDNS(prev, current)...)
+	steps = append(steps, diffServices(prev, current)...)
+	steps = append(steps, diffStorage(prev, current)...)
+	steps = append(steps, diffSecrets(prev, current)...)
+	steps = append(steps, diffVolumes(prev, current)...)
+	steps = append(steps, diffCompute(prev, current)...)
+
+	// ── Sets (forward deploy order) ────────────────────────────────────────
+	steps = append(steps, setCompute(current)...)
+	steps = append(steps, setVolumes(current)...)
+	steps = append(steps, setBuild(current)...)
+	setSecrets, err := setSecrets(current, env)
+	if err != nil {
+		return nil, err
+	}
+	steps = append(steps, setSecrets...)
+	steps = append(steps, setStorage(current)...)
+	setServices, err := setServices(current, env)
+	if err != nil {
+		return nil, err
+	}
+	steps = append(steps, setServices...)
+	steps = append(steps, setDNS(current)...)
+
+	return steps, nil
+}
+
+// ── Set phases (forward deploy order) ──────────────────────────────────────
+
+func setCompute(cfg *Config) []Step {
+	var steps []Step
 	serverNames := utils.SortedKeys(cfg.Servers)
 	for i, name := range serverNames {
 		srv := cfg.Servers[name]
@@ -69,8 +88,11 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 		}
 		steps = append(steps, Step{Kind: StepComputeSet, Name: name, Params: params})
 	}
+	return steps
+}
 
-	// ── 2. Volumes ─────────────────────────────────────────────────────────
+func setVolumes(cfg *Config) []Step {
+	var steps []Step
 	for _, name := range utils.SortedKeys(cfg.Volumes) {
 		vol := cfg.Volumes[name]
 		steps = append(steps, Step{Kind: StepVolumeSet, Name: name, Params: map[string]any{
@@ -78,17 +100,22 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 			"server": vol.Server,
 		}})
 	}
+	return steps
+}
 
-	// ── 3. Build ───────────────────────────────────────────────────────────
+func setBuild(cfg *Config) []Step {
+	var steps []Step
 	for _, name := range utils.SortedKeys(cfg.Build) {
 		b := cfg.Build[name]
 		steps = append(steps, Step{Kind: StepBuild, Name: name, Params: map[string]any{
 			"source": b.Source,
 		}})
 	}
+	return steps
+}
 
-	// ── 4. Secrets ─────────────────────────────────────────────────────────
-	// Collect all secret keys referenced by any service. Dedupe + sort.
+func setSecrets(cfg *Config, env map[string]string) ([]Step, error) {
+	var steps []Step
 	secretKeys := collectSecrets(cfg)
 	for _, key := range secretKeys {
 		val, ok := env[key]
@@ -99,8 +126,11 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 			"value": val,
 		}})
 	}
+	return steps, nil
+}
 
-	// ── 5. Storage ─────────────────────────────────────────────────────────
+func setStorage(cfg *Config) []Step {
+	var steps []Step
 	for _, name := range utils.SortedKeys(cfg.Storage) {
 		st := cfg.Storage[name]
 		params := map[string]any{}
@@ -115,8 +145,11 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 		}
 		steps = append(steps, Step{Kind: StepStorageSet, Name: name, Params: params})
 	}
+	return steps
+}
 
-	// ── 6. Services ────────────────────────────────────────────────────────
+func setServices(cfg *Config, env map[string]string) ([]Step, error) {
+	var steps []Step
 	for _, name := range utils.SortedKeys(cfg.Services) {
 		svc := cfg.Services[name]
 		params := map[string]any{}
@@ -171,17 +204,106 @@ func Plan(cfg *Config, env map[string]string) ([]Step, error) {
 
 		steps = append(steps, Step{Kind: StepServiceSet, Name: name, Params: params})
 	}
+	return steps, nil
+}
 
-	// ── 7. DNS ─────────────────────────────────────────────────────────────
+func setDNS(cfg *Config) []Step {
+	var steps []Step
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		domains := cfg.Domains[svcName]
 		steps = append(steps, Step{Kind: StepDNSSet, Name: svcName, Params: map[string]any{
 			"domains": []string(domains),
 		}})
 	}
-
-	return steps, nil
+	return steps
 }
+
+// ── Diff phases (reverse deploy order) ─────────────────────────────────────
+
+func diffDNS(prev, current *Config) []Step {
+	if prev == nil {
+		return nil
+	}
+	var steps []Step
+	for svcName, domains := range prev.Domains {
+		if _, ok := current.Domains[svcName]; !ok {
+			steps = append(steps, Step{Kind: StepDNSDelete, Name: svcName, Params: map[string]any{
+				"domains": []string(domains),
+			}})
+		}
+	}
+	return steps
+}
+
+func diffServices(prev, current *Config) []Step {
+	if prev == nil {
+		return nil
+	}
+	var steps []Step
+	for _, name := range utils.SortedKeys(prev.Services) {
+		if _, ok := current.Services[name]; !ok {
+			steps = append(steps, Step{Kind: StepServiceDelete, Name: name})
+		}
+	}
+	return steps
+}
+
+func diffStorage(prev, current *Config) []Step {
+	if prev == nil {
+		return nil
+	}
+	var steps []Step
+	for _, name := range utils.SortedKeys(prev.Storage) {
+		if _, ok := current.Storage[name]; !ok {
+			steps = append(steps, Step{Kind: StepStorageDelete, Name: name})
+		}
+	}
+	return steps
+}
+
+func diffSecrets(prev, current *Config) []Step {
+	if prev == nil {
+		return nil
+	}
+	var steps []Step
+	prevSecrets := collectSecrets(prev)
+	currentSecrets := map[string]bool{}
+	for _, k := range collectSecrets(current) {
+		currentSecrets[k] = true
+	}
+	for _, key := range prevSecrets {
+		if !currentSecrets[key] {
+			steps = append(steps, Step{Kind: StepSecretDelete, Name: key})
+		}
+	}
+	return steps
+}
+
+func diffVolumes(prev, current *Config) []Step {
+	if prev == nil {
+		return nil
+	}
+	var steps []Step
+	for _, name := range utils.SortedKeys(prev.Volumes) {
+		if _, ok := current.Volumes[name]; !ok {
+			steps = append(steps, Step{Kind: StepVolumeDelete, Name: name})
+		}
+	}
+	return steps
+}
+
+func diffCompute(prev, current *Config) []Step {
+	if prev == nil {
+		return nil
+	}
+	var steps []Step
+	for _, name := range utils.ReverseSorted(utils.RemovedKeys(prev.Servers, current.Servers)) {
+		steps = append(steps, Step{Kind: StepComputeDelete, Name: name})
+	}
+	return steps
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 // collectSecrets deduplicates and sorts all secret key references across services.
 // Handles both "KEY" and "ENV=KEY" formats — extracts the secret key (right side).
@@ -210,85 +332,3 @@ func secretKey(entry string) string {
 	}
 	return entry
 }
-
-// Diff generates delete steps for resources that existed in prev but are gone
-// from current. Reverse order of deploy: DNS → services → storage → secrets →
-// volumes → compute. Mirrors bin/destroy.
-//
-// prev may be nil (first deploy — no removals).
-func Diff(prev, current *Config) []Step {
-	if prev == nil {
-		return nil
-	}
-
-	var steps []Step
-
-	// DNS: domains removed or service lost its domains.
-	for svcName, domains := range prev.Domains {
-		if _, ok := current.Domains[svcName]; !ok {
-			steps = append(steps, Step{Kind: StepDNSDelete, Name: svcName, Params: map[string]any{
-				"domains": []string(domains),
-			}})
-		}
-	}
-
-	// Services removed.
-	for _, name := range utils.SortedKeys(prev.Services) {
-		if _, ok := current.Services[name]; !ok {
-			steps = append(steps, Step{Kind: StepServiceDelete, Name: name})
-		}
-	}
-
-	// Storage removed.
-	for _, name := range utils.SortedKeys(prev.Storage) {
-		if _, ok := current.Storage[name]; !ok {
-			steps = append(steps, Step{Kind: StepStorageDelete, Name: name})
-		}
-	}
-
-	// Secrets: keys referenced in prev but not in current.
-	prevSecrets := collectSecrets(prev)
-	currentSecrets := map[string]bool{}
-	for _, k := range collectSecrets(current) {
-		currentSecrets[k] = true
-	}
-	for _, key := range prevSecrets {
-		if !currentSecrets[key] {
-			steps = append(steps, Step{Kind: StepSecretDelete, Name: key})
-		}
-	}
-
-	// Volumes removed.
-	for _, name := range utils.SortedKeys(prev.Volumes) {
-		if _, ok := current.Volumes[name]; !ok {
-			steps = append(steps, Step{Kind: StepVolumeDelete, Name: name})
-		}
-	}
-
-	// Compute: servers removed (workers first, master last).
-	for _, name := range utils.ReverseSorted(utils.RemovedKeys(prev.Servers, current.Servers)) {
-		steps = append(steps, Step{Kind: StepComputeDelete, Name: name})
-	}
-
-	return steps
-}
-
-// FullPlan generates the complete deploy plan: delete removed resources first
-// (reverse order), then set everything (forward order, idempotent).
-//
-// prev is the previous config version (nil for first deploy).
-func FullPlan(prev, current *Config, env map[string]string) ([]Step, error) {
-	setSteps, err := Plan(current, env)
-	if err != nil {
-		return nil, err
-	}
-
-	deleteSteps := Diff(prev, current)
-	if len(deleteSteps) == 0 {
-		return setSteps, nil
-	}
-
-	// Deletes first, then sets.
-	return append(deleteSteps, setSteps...), nil
-}
-

@@ -14,9 +14,7 @@ func Validate(cfg *Config) []error {
 	}
 
 	// ── Servers ────────────────────────────────────────────────────────────────
-	if len(cfg.Servers) == 0 {
-		add("servers: at least one server is required")
-	}
+	// Empty config is valid — used for destroy-via-diff.
 	for name, srv := range cfg.Servers {
 		if srv.Type == "" {
 			add("servers.%s.type: required", name)
@@ -46,9 +44,7 @@ func Validate(cfg *Config) []error {
 	}
 
 	// ── Services ───────────────────────────────────────────────────────────────
-	if len(cfg.Services) == 0 {
-		add("services: at least one service is required")
-	}
+	// Empty services is valid — used for destroy-via-diff.
 	// Collect managed service names for database ref validation.
 	managedServices := map[string]bool{}
 	for name, svc := range cfg.Services {

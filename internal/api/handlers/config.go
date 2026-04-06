@@ -66,17 +66,14 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Validate the expanded config (after managed services are resolved).
-		// Skip validation for empty configs — they're used for destroy-via-diff.
-		if len(expanded.Servers) > 0 || len(expanded.Services) > 0 {
-			errs := config.Validate(expanded)
-			if len(errs) > 0 {
-				msgs := make([]string, len(errs))
-				for i, e := range errs {
-					msgs[i] = e.Error()
-				}
-				c.JSON(http.StatusBadRequest, gin.H{"errors": msgs})
-				return
+		errs := config.Validate(expanded)
+		if len(errs) > 0 {
+			msgs := make([]string, len(errs))
+			for i, e := range errs {
+				msgs[i] = e.Error()
 			}
+			c.JSON(http.StatusBadRequest, gin.H{"errors": msgs})
+			return
 		}
 
 		// Merge managed service credential secrets into env for plan validation.
@@ -86,7 +83,7 @@ func PushConfig(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Validate that the plan can be built (env references resolve).
-		if _, err := config.Plan(expanded, env); err != nil {
+		if _, err := config.Plan(nil, expanded, env); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -232,7 +229,18 @@ func PlanConfig(db *gorm.DB) gin.HandlerFunc {
 			env[k] = v
 		}
 
-		steps, err := config.Plan(expanded, env)
+		// Load previous config for diff.
+		var prev *config.Config
+		if rc.Version > 1 {
+			var prevRC api.RepoConfig
+			if err := db.Where("repo_id = ? AND version = ?", repo.ID, rc.Version-1).First(&prevRC).Error; err == nil {
+				if prevCfg, err := config.Parse([]byte(prevRC.Config)); err == nil {
+					prev, _, _ = managed.Expand(prevCfg, storedCreds)
+				}
+			}
+		}
+
+		steps, err := config.Plan(prev, expanded, env)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "plan failed: " + err.Error()})
 			return

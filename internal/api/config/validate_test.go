@@ -26,8 +26,12 @@ func TestValidate_ValidMinimal(t *testing.T) {
 func TestValidate_NoServers(t *testing.T) {
 	cfg := validConfig()
 	cfg.Servers = nil
+	cfg.Services = nil
 	errs := Validate(cfg)
-	assertHasError(t, errs, "at least one server")
+	// Empty config is valid — used for destroy-via-diff.
+	if len(errs) != 0 {
+		t.Errorf("empty config should be valid, got: %v", errs)
+	}
 }
 
 func TestValidate_ServerMissingType(t *testing.T) {
@@ -47,8 +51,12 @@ func TestValidate_ServerMissingRegion(t *testing.T) {
 func TestValidate_NoServices(t *testing.T) {
 	cfg := validConfig()
 	cfg.Services = nil
+	cfg.Servers = nil
 	errs := Validate(cfg)
-	assertHasError(t, errs, "at least one service")
+	// Empty config is valid — used for destroy-via-diff.
+	if len(errs) != 0 {
+		t.Errorf("empty config should be valid, got: %v", errs)
+	}
 }
 
 func TestValidate_ServiceNoSource(t *testing.T) {
@@ -240,8 +248,12 @@ func TestValidate_FullConfig(t *testing.T) {
 
 func TestValidate_MultipleErrors(t *testing.T) {
 	cfg := &Config{
-		Servers:  map[string]Server{},
-		Services: map[string]Service{},
+		Servers: map[string]Server{
+			"master": {Type: "", Region: ""},  // missing both
+		},
+		Services: map[string]Service{
+			"web": {Port: 80},  // missing image/build/managed
+		},
 	}
 	errs := Validate(cfg)
 	if len(errs) < 2 {

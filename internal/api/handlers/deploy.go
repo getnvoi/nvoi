@@ -69,7 +69,7 @@ func Deploy(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Build full plan.
-		steps, err := config.FullPlan(prevExpanded, expanded, env)
+		steps, err := config.Plan(prevExpanded, expanded, env)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "plan failed: " + err.Error()})
 			return

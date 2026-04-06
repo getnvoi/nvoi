@@ -197,10 +197,22 @@ func TestConfig_PushValidationErrors(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	// No servers, no services.
-	code := pushConfig(t, r, token, wsID, repoID, "servers: {}\nservices: {}", "")
+	// Server missing type — should fail validation.
+	code := pushConfig(t, r, token, wsID, repoID, "servers:\n  master:\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n", "")
 	if code != http.StatusBadRequest {
 		t.Fatalf("validation: status = %d, want 400", code)
+	}
+}
+
+func TestConfig_PushEmptyConfigForDestroy(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	// Empty config is valid — used for destroy-via-diff.
+	code := pushConfig(t, r, token, wsID, repoID, "servers: {}\nservices: {}", "")
+	if code != http.StatusCreated {
+		t.Fatalf("empty config push: status = %d, want 201", code)
 	}
 }
 
