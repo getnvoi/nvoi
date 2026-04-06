@@ -211,7 +211,7 @@ func TestExecutor_BuiltImagesAccumulates(t *testing.T) {
 // seedData creates a user + workspace for executor tests. Returns workspace ID.
 func seedData(t *testing.T, db *gorm.DB) string {
 	t.Helper()
-	user := api.User{GithubUsername: "test-executor"}
+	user := api.User{GithubUsername: "test-executor", GithubToken: "ghp_test"}
 	db.Create(&user)
 	ws := api.Workspace{Name: "default", CreatedBy: user.ID}
 	db.Create(&ws)

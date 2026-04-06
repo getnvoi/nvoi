@@ -41,13 +41,19 @@ func LoginHandler(db *gorm.DB, verify api.GitHubVerifier) gin.HandlerFunc {
 			// Find or create user.
 			result := tx.Where("github_username = ?", ghUser.Login).First(&user)
 			if result.Error == gorm.ErrRecordNotFound {
-				user = api.User{GithubUsername: ghUser.Login}
+				user = api.User{GithubUsername: ghUser.Login, GithubToken: req.GithubToken}
 				isNew = true
 				if err := tx.Create(&user).Error; err != nil {
 					return err
 				}
 			} else if result.Error != nil {
 				return result.Error
+			} else {
+				// Existing user — update token (may have been refreshed).
+				user.GithubToken = req.GithubToken
+				if err := tx.Save(&user).Error; err != nil {
+					return err
+				}
 			}
 
 			// Find or create default workspace.

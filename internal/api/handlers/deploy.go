@@ -145,6 +145,9 @@ func RunDeployment(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Load user for git token.
+		user := api.CurrentUser(c)
+
 		env := config.ParseEnv(rc.Env)
 
 		go Execute(context.Background(), db, ExecuteParams{
@@ -152,6 +155,7 @@ func RunDeployment(db *gorm.DB) gin.HandlerFunc {
 			Repo:       repo,
 			Config:     &rc,
 			Env:        env,
+			GitToken:   user.GithubToken,
 		})
 
 		c.JSON(http.StatusOK, gin.H{"status": "running"})

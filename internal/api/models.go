@@ -78,6 +78,7 @@ func (p BuildProvider) Valid() bool { return validBuildProviders[p] }
 type User struct {
 	ID             string         `gorm:"primaryKey" json:"id"`
 	GithubUsername string         `gorm:"uniqueIndex;not null" json:"github_username"`
+	GithubToken    string         `gorm:"type:text;not null" json:"-"` // encrypted, never in JSON
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
@@ -87,6 +88,38 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 	if u.ID == "" {
 		u.ID = newUUID()
 	}
+	return u.encryptToken()
+}
+
+func (u *User) BeforeUpdate(tx *gorm.DB) error {
+	return u.encryptToken()
+}
+
+func (u *User) AfterFind(tx *gorm.DB) error {
+	return u.decryptToken()
+}
+
+func (u *User) encryptToken() error {
+	if u.GithubToken == "" {
+		return nil
+	}
+	enc, err := Encrypt(u.GithubToken)
+	if err != nil {
+		return err
+	}
+	u.GithubToken = enc
+	return nil
+}
+
+func (u *User) decryptToken() error {
+	if u.GithubToken == "" {
+		return nil
+	}
+	dec, err := Decrypt(u.GithubToken)
+	if err != nil {
+		return fmt.Errorf("decrypt User.GithubToken: %w", err)
+	}
+	u.GithubToken = dec
 	return nil
 }
 

@@ -19,7 +19,8 @@ type ExecuteParams struct {
 	Deployment *api.Deployment
 	Repo       *api.Repo
 	Config     *api.RepoConfig
-	Env        map[string]string // decrypted RepoConfig.Env — provider credentials + app secrets only
+	Env        map[string]string // decrypted RepoConfig.Env — provider credentials + app secrets
+	GitToken   string            // user's GitHub token — from User.GithubToken, not from env
 }
 
 // executor holds deployment-scoped state: provider refs constructed once,
@@ -30,7 +31,8 @@ type executor struct {
 	dns           pkgcore.ProviderRef
 	storage       pkgcore.ProviderRef
 	buildProvider string
-	creds         map[string]string
+	creds         map[string]string // build provider credentials (schema-mapped)
+	gitToken      string            // user's GitHub token — for git clone auth during builds
 	builtImages   map[string]string
 }
 
@@ -84,6 +86,7 @@ func newExecutor(db *gorm.DB, p ExecuteParams) (*executor, error) {
 		storage:       pkgcore.ProviderRef{Name: storageName, Creds: storageCreds},
 		buildProvider: buildName,
 		creds:         buildCreds,
+		gitToken:      p.GitToken,
 		builtImages:   map[string]string{},
 	}, nil
 }
@@ -172,7 +175,7 @@ func (e *executor) step(ctx context.Context, kind config.StepKind, name string, 
 			BuilderCredentials: e.creds,
 			Source:             utils.GetString(params, "source"),
 			Name:               name,
-			GitToken:           e.creds["GITHUB_TOKEN"],
+			GitToken:           e.gitToken,
 		})
 		if err != nil {
 			return err
