@@ -6,11 +6,11 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 
 ## Philosophy
 
-- **`NVOI_APP_NAME` + `NVOI_ENV` is the namespace.** `nvoi-{app}-{env}-*`. Different app or env = brand new infrastructure. No flags. Environment variables.
+- **`NVOI_APP_NAME` + `NVOI_ENV` is the namespace.** `nvoi-{app}-{env}-*`. Different app or env = brand new infrastructure.
 - **No state files.** No manifest, no database, no local cache. Infrastructure is the source of truth.
 - **Everything is idempotent.** Every command hits real infrastructure — provider APIs over HTTP, servers over SSH, cluster via kubectl. Run twice, same result.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
-- **Everything is `set`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`, `storage set`. Exists → reconcile. Doesn't exist → create. Same command either way. Always idempotent. Always self-healing. Run end to end, every time, same outcome.
+- **Reconcile with `set`, remove with `delete`.** `instance set`, `volume set`, `dns set`, `service set`, `secret set`, `storage set` create or reconcile. `instance delete`, `volume delete`, `dns delete`, `service delete`, `secret delete`, `storage delete`, `ingress delete` remove explicitly.
 - **`describe` fetches everything live from the cluster.** Nodes, workloads, pods, services, ingress, secrets, storage — all via kubectl over SSH.
 - **Provider interfaces scale.** Hetzner, Cloudflare, AWS. Interface-first. Add a provider = implement the interface.
 - **SSH is the transport.** No agent binary. SSH in, run commands, done.
@@ -19,15 +19,17 @@ A CLI that deploys containers to cloud servers. Granular commands hit real infra
 
 ## Build & Test
 
+Local tooling path:
+
 ```bash
-bin/test                                    # all tests
-bin/test -v                                 # verbose
-bin/test -run TestWaitRollout               # single test
-bin/test -cover                             # with coverage
-bin/build                                   # build only
+docker compose run --rm --entrypoint sh core -c "go test ./..."
+docker compose run --rm --entrypoint sh core -c "go test ./... -v"
+docker compose run --rm --entrypoint sh core -c "go test ./... -run TestWaitRollout"
+docker compose run --rm --entrypoint sh core -c "go test ./... -cover"
+docker compose run --rm --entrypoint sh core -c "go build ./cmd/core"
 ```
 
-`bin/test` and `bin/build` wrap `docker compose run --rm --entrypoint sh core -c '...'`.
+Use `docker compose run --rm --entrypoint sh core -c '...'` directly for ad hoc test/build commands.
 
 Tests in three tiers:
 - **Tier 1** — pure functions: naming, YAML generation, Caddyfile, Poll, credential validation, volume parsing, signed URLs, route merging, cloud-init (hostname), APIError, AWS ArchForType, instanceFromEC2, volumeFromEC2, nvoiTags, defaultIngressRules, deref helpers
@@ -44,13 +46,13 @@ Does not run on every push/sync to a PR. Manual trigger for re-reviews.
 
 ## Local development
 
-Everything runs through Docker Compose. Never run Go on the host.
+Compose is for local tooling only. Real deploys use `bin/deploy` / `bin/destroy`, which call `bin/nvoi`.
 
 ```bash
 bin/core instance list                           # direct CLI
 bin/core describe                                # live cluster state
 bin/cloud login                                  # cloud CLI (starts postgres + api automatically)
-bin/test                                         # run tests
+docker compose run --rm --entrypoint sh core -c "go test ./..."
 ```
 
 **Compose handles the full dependency chain.** `bin/cloud login` starts postgres → waits healthy → starts api → waits healthy → runs cli. One command. Never start services manually.
@@ -59,21 +61,30 @@ See [`examples/README.md`](examples/README.md) for full deploy/destroy workflows
 
 ### How it works
 
-`bin/core` runs the direct CLI (wraps `docker compose run --rm core`). The compose service:
+`bin/core` runs the direct CLI in the local compose `core` container. The compose service:
 
 - Mounts source (`.:/app`) — changes picked up instantly, no rebuild
 - Mounts SSH keys (`~/.ssh:/root/.ssh:ro`)
-- Loads `.env` via `env_file` — everything: app identity, provider selection, credentials, app secrets
+- Loads `examples/.env` via `env_file` — local/example credentials only
 - Only overrides container-specific paths: `SSH_KEY_PATH=/root/.ssh/id_rsa`
 - Caches Go modules across runs (Docker volumes)
 - Entrypoints use `go run` — Go's build cache makes subsequent runs instant when source hasn't changed
 
-**`.env` is the single source of truth.** Compose passes it through. No hardcoded providers in compose. No host exports needed. Change provider = edit `.env`.
+**Env split is strict.**
 
-### First run
+- Root `.env` is for the real app deploy path only: `bin/deploy`, `bin/destroy`, GitHub deploy.
+- `examples/.env` is for examples and local compose tooling only.
+
+**Real deploy path is separate.**
+
+- `bin/deploy` and `bin/destroy` do not go through compose.
+- They call `bin/nvoi`, which builds/runs the real `cmd/core` binary locally.
+- GitHub Actions uses that same path by running `./bin/deploy`.
+
+### First run (local tooling / examples)
 
 ```bash
-cp .env.example .env                    # fill in provider credentials
+cp examples/.env.example examples/.env  # fill in example/dev credentials
 bin/core instance set master --compute-type cx23 --compute-region fsn1
 ```
 
@@ -81,16 +92,18 @@ bin/core instance set master --compute-type cx23 --compute-region fsn1
 
 | File | Purpose |
 |------|---------|
-| `.env` | Everything: app identity, provider selection, credentials, app secrets (not tracked) |
-| `.env.example` | Template for `.env` |
-| `docker-compose.yml` | Four services: `core`, `api`, `cli`, `postgres` |
+| `.env` | Real app deploy env only (not tracked) |
+| `.env.example` | Template for real app deploy env |
+| `examples/.env` | Example/dev env only (not tracked) |
+| `examples/.env.example` | Template for example/dev env |
+| `docker-compose.yml` | Local tooling stack: `core`, `api`, `cli`, `postgres` |
 | `bin/core` | Direct CLI — wraps `docker compose run --rm core` |
 | `bin/cloud` | Cloud CLI — wraps `docker compose run --rm cli` |
-| `bin/test` | Run tests — wraps `docker compose run --rm --entrypoint sh core` |
-| `bin/build` | Build binary — wraps `docker compose run --rm --entrypoint sh core` |
+| `bin/dev` | Website development loop |
 | `bin/entrypoint` | Compose entrypoint for `core` service |
-| `bin/api-entrypoint` | Compose entrypoint for `api` service |
-| `bin/cli-entrypoint` | Compose entrypoint for `cli` service |
+| `bin/nvoi` | Real `cmd/core` binary wrapper for `bin/deploy` and `bin/destroy` |
+| `bin/deploy` | Real app deploy entrypoint |
+| `bin/destroy` | Real app destroy entrypoint |
 
 See [`examples/README.md`](examples/README.md) for deploy workflows (direct + cloud mode).
 
@@ -99,7 +112,7 @@ See [`examples/README.md`](examples/README.md) for deploy workflows (direct + cl
 Two values. Both required. Everything keys off them. Flag or env var — same result.
 
 ```bash
-# Via env vars
+# Via env vars (example/local namespace)
 export NVOI_APP_NAME=dummy-rails
 export NVOI_ENV=production
 # → nvoi-dummy-rails-production-master, nvoi-dummy-rails-production-fw, ...
@@ -138,13 +151,16 @@ nvoi volume list
 
 # ── DNS — DNS records only
 # "web" is the service name — must have --port set via service set.
-nvoi dns set <service> <domain...>                                              # --zone or DNS_ZONE
+nvoi dns set <service> <domain...> --cloudflare-managed                         # explicit Cloudflare-managed overlay path
+nvoi dns set <service> <domain...>                                              # direct DNS only
 nvoi dns delete <service> <domain...>
 nvoi dns list
 
 # ── Ingress — Caddy routes/TLS only
 # Caddy runs on master with hostNetwork and reverse-proxies to the k8s Service.
 nvoi ingress apply <service:domain,domain ...>
+nvoi ingress apply <service:domain,domain ...> --cloudflare-managed             # explicit Cloudflare-managed overlay path
+nvoi ingress delete
 
 # ── Storage — creates bucket, stores S3 credentials as k8s secrets
 # Bucket name derived from convention: nvoi-{app}-{env}-{name}. Override with --bucket.

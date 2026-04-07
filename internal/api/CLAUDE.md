@@ -254,8 +254,8 @@ Token-type agnostic: PAT, OAuth access token, fine-grained token all work.
 
 ```
 core      direct mode CLI (cmd/core via bin/entrypoint)
-api       REST server (cmd/api via bin/api-entrypoint), depends_on postgres (healthy)
-cli       cloud CLI (cmd/cli via bin/cli-entrypoint), depends_on api (healthy)
+api       REST server (cmd/api via `go run ./cmd/api`), depends_on postgres (healthy)
+cli       cloud CLI (cmd/cli via `go run ./cmd/cli`), depends_on api (healthy)
 postgres  PostgreSQL 17
 ```
 

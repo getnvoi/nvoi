@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN_DIR="$ROOT_DIR/.bin"
+BIN_PATH="$BIN_DIR/nvoi"
+
+needs_build=0
+if [[ ! -x "$BIN_PATH" ]]; then
+  needs_build=1
+elif [[ "$ROOT_DIR/go.mod" -nt "$BIN_PATH" ]] || [[ "$ROOT_DIR/go.sum" -nt "$BIN_PATH" ]]; then
+  needs_build=1
+elif find "$ROOT_DIR/cmd" "$ROOT_DIR/internal" "$ROOT_DIR/pkg" -name '*.go' -newer "$BIN_PATH" -print -quit | grep -q .; then
+  needs_build=1
+fi
+
+if (( needs_build )); then
+  mkdir -p "$BIN_DIR"
+  go build -o "$BIN_PATH" ./cmd/core
+fi
+
+exec "$BIN_PATH" "$@"

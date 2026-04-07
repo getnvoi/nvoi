@@ -6,6 +6,7 @@
 /api
 /core
 /web
+/.bin/
 .DS_Store
 tmp/
 node_modules/

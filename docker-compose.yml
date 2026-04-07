@@ -12,7 +12,7 @@ services:
       - ${BUILD_SOURCE:-/dev/null}:/build-source # local build source mount
       - docker-data:/var/lib/docker # persist DinD cache across runs
     privileged: true # DinD — local builder runs docker daemon + SSH tunnel in same namespace
-    env_file: .env
+    env_file: examples/.env
     environment:
       - GOMODCACHE=/go/pkg/mod
       - GOCACHE=/root/.cache/go-build
@@ -29,7 +29,7 @@ services:
       - .:/app
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
-    env_file: .env
+    env_file: examples/.env
     environment:
       - GOMODCACHE=/go/pkg/mod
       - GOCACHE=/root/.cache/go-build
@@ -37,7 +37,7 @@ services:
       - JWT_SECRET=dev-jwt-secret-do-not-use-in-production
       - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     working_dir: /app
-    entrypoint: ["/app/bin/api-entrypoint"]
+    command: ["go", "run", "./cmd/api"]
     ports:
       - "8080:8080"
     depends_on:
@@ -59,13 +59,13 @@ services:
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
       - cli-config:/root/.config/nvoi
-    env_file: .env
+    env_file: examples/.env
     environment:
       - GOMODCACHE=/go/pkg/mod
       - GOCACHE=/root/.cache/go-build
       - NVOI_API_BASE=http://api:8080
     working_dir: /app
-    entrypoint: ["/app/bin/cli-entrypoint"]
+    command: ["go", "run", "./cmd/cli"]
     depends_on:
       api:
         condition: service_healthy

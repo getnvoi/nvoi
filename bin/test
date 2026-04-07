@@ -1,3 +1,0 @@
-#!/bin/sh
-set -e
-exec docker compose run --rm --entrypoint sh core -c "go test ./... $*"
