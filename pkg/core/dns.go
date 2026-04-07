@@ -200,14 +200,13 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 	}
 	out.Success("caddy ready")
 
-	// Wait for HTTPS on the first domain
+	// Verify domains are reachable — hard error if not
 	firstDomain := req.Routes[0].Domains[0]
 	out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
 	if err := infra.WaitHTTPS(ctx, firstDomain); err != nil {
-		out.Warning("domain not responding yet (TLS may still be provisioning)")
-	} else {
-		out.Success(fmt.Sprintf("https://%s live", firstDomain))
+		return fmt.Errorf("https://%s not reachable — check firewall (ports 80/443) and DNS: %w", firstDomain, err)
 	}
+	out.Success(fmt.Sprintf("https://%s live", firstDomain))
 
 	return nil
 }

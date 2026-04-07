@@ -53,7 +53,7 @@ jobs:
         run: |
           # Infrastructure
           nvoi instance set master --compute-type cax11 --compute-region nbg1
-          nvoi firewall set default
+          # nvoi firewall set default  # intentionally disabled — testing ingress hard error
           nvoi volume set pgdata --size 20 --server master
 
           # Secrets
