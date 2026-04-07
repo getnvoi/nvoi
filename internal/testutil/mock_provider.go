@@ -9,15 +9,17 @@ import (
 
 // MockCompute implements provider.ComputeProvider for testing.
 type MockCompute struct {
-	Servers  []*provider.Server
-	Volumes  []*provider.Volume
-	EnsureServerFn func(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error)
-	DeleteServerFn func(ctx context.Context, req provider.DeleteServerRequest) error
-	EnsureVolumeFn func(ctx context.Context, req provider.CreateVolumeRequest) (*provider.Volume, error)
+	Servers                  []*provider.Server
+	Volumes                  []*provider.Volume
+	EnsureServerFn           func(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error)
+	DeleteServerFn           func(ctx context.Context, req provider.DeleteServerRequest) error
+	EnsureVolumeFn           func(ctx context.Context, req provider.CreateVolumeRequest) (*provider.Volume, error)
+	ReconcileFirewallRulesFn func(ctx context.Context, name string, allowed provider.PortAllowList) error
+	GetFirewallRulesFn       func(ctx context.Context, name string) (provider.PortAllowList, error)
 }
 
 func (m *MockCompute) ValidateCredentials(ctx context.Context) error { return nil }
-func (m *MockCompute) ArchForType(instanceType string) string       { return "amd64" }
+func (m *MockCompute) ArchForType(instanceType string) string        { return "amd64" }
 
 func (m *MockCompute) EnsureServer(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error) {
 	if m.EnsureServerFn != nil {
@@ -62,8 +64,8 @@ func (m *MockCompute) EnsureVolume(ctx context.Context, req provider.CreateVolum
 }
 
 func (m *MockCompute) ResizeVolume(ctx context.Context, id string, sizeGB int) error { return nil }
-func (m *MockCompute) DetachVolume(ctx context.Context, name string) error              { return nil }
-func (m *MockCompute) DeleteVolume(ctx context.Context, name string) error { return nil }
+func (m *MockCompute) DetachVolume(ctx context.Context, name string) error           { return nil }
+func (m *MockCompute) DeleteVolume(ctx context.Context, name string) error           { return nil }
 
 func (m *MockCompute) ListVolumes(ctx context.Context, labels map[string]string) ([]*provider.Volume, error) {
 	return m.Volumes, nil
@@ -86,19 +88,38 @@ func (m *MockCompute) ListResources(ctx context.Context) ([]provider.ResourceGro
 	return nil, nil
 }
 
+func (m *MockCompute) ReconcileFirewallRules(ctx context.Context, name string, allowed provider.PortAllowList) error {
+	if m.ReconcileFirewallRulesFn != nil {
+		return m.ReconcileFirewallRulesFn(ctx, name, allowed)
+	}
+	return nil
+}
+
+func (m *MockCompute) GetFirewallRules(ctx context.Context, name string) (provider.PortAllowList, error) {
+	if m.GetFirewallRulesFn != nil {
+		return m.GetFirewallRulesFn(ctx, name)
+	}
+	return nil, nil
+}
+
 var _ provider.ComputeProvider = (*MockCompute)(nil)
 
 // MockDNS implements provider.DNSProvider for testing.
 type MockDNS struct {
-	Records     []provider.DNSRecord
-	EnsuredA    []string // domains passed to EnsureARecord
-	DeletedA    []string // domains passed to DeleteARecord
+	Records         []provider.DNSRecord
+	EnsuredA        []string        // domains passed to EnsureARecord
+	EnsuredAProxied map[string]bool // domain → proxied flag
+	DeletedA        []string        // domains passed to DeleteARecord
 }
 
 func (m *MockDNS) ValidateCredentials(ctx context.Context) error { return nil }
 
-func (m *MockDNS) EnsureARecord(ctx context.Context, domain, ip string) error {
+func (m *MockDNS) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
 	m.EnsuredA = append(m.EnsuredA, domain)
+	if m.EnsuredAProxied == nil {
+		m.EnsuredAProxied = map[string]bool{}
+	}
+	m.EnsuredAProxied[domain] = proxied
 	return nil
 }
 
@@ -153,7 +174,7 @@ var _ provider.BucketProvider = (*MockBucket)(nil)
 
 // MockOutput implements app.Output for testing (captures events).
 type MockOutput struct {
-	Commands  []string
+	Commands   []string
 	Progresses []string
 	Successes  []string
 	Warnings   []string
@@ -164,9 +185,9 @@ type MockOutput struct {
 func (m *MockOutput) Command(command, action, name string, extra ...any) {
 	m.Commands = append(m.Commands, command+"/"+action+"/"+name)
 }
-func (m *MockOutput) Progress(msg string)  { m.Progresses = append(m.Progresses, msg) }
-func (m *MockOutput) Success(msg string)   { m.Successes = append(m.Successes, msg) }
-func (m *MockOutput) Warning(msg string)   { m.Warnings = append(m.Warnings, msg) }
-func (m *MockOutput) Info(msg string)       { m.Infos = append(m.Infos, msg) }
-func (m *MockOutput) Error(err error)       { m.Errors = append(m.Errors, err) }
-func (m *MockOutput) Writer() io.Writer     { return io.Discard }
+func (m *MockOutput) Progress(msg string) { m.Progresses = append(m.Progresses, msg) }
+func (m *MockOutput) Success(msg string)  { m.Successes = append(m.Successes, msg) }
+func (m *MockOutput) Warning(msg string)  { m.Warnings = append(m.Warnings, msg) }
+func (m *MockOutput) Info(msg string)     { m.Infos = append(m.Infos, msg) }
+func (m *MockOutput) Error(err error)     { m.Errors = append(m.Errors, err) }
+func (m *MockOutput) Writer() io.Writer   { return io.Discard }

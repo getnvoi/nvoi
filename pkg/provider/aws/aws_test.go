@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // ── ArchForType ───────────────────────────────────────────────────────────────
@@ -159,13 +160,70 @@ func TestVolumeFromEC2_Unattached(t *testing.T) {
 	}
 }
 
-// ── defaultIngressRules ───────────────────────────────────────────────────────
+// ── defaultIngressRules + reconciliation ─────────────────────────────────────
 
-func TestDefaultIngressRules(t *testing.T) {
-	rules := defaultIngressRules()
+func TestBaseIngressRules_RuleCount(t *testing.T) {
+	// Base rules: SSH + 4 internal (6443, 10250, 8472, 5000). No HTTP ports.
+	rules := baseIngressRules()
+	if len(rules) != 5 {
+		t.Fatalf("expected 5 base ingress rules, got %d — was a rule added or removed?", len(rules))
+	}
+}
 
-	if len(rules) != 7 {
-		t.Fatalf("expected 7 rules, got %d", len(rules))
+func TestBaseIngressRules_SSHOpen(t *testing.T) {
+	rules := baseIngressRules()
+	found := false
+	for _, r := range rules {
+		if deref32(r.FromPort) == 22 {
+			for _, ipRange := range r.IpRanges {
+				if deref(ipRange.CidrIp) == "0.0.0.0/0" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("SSH (22) should be open to 0.0.0.0/0 in base rules")
+	}
+}
+
+func TestBaseIngressRules_NoHTTPPorts(t *testing.T) {
+	rules := baseIngressRules()
+	for _, r := range rules {
+		port := deref32(r.FromPort)
+		if port == 80 || port == 443 {
+			t.Errorf("port %d should NOT be in base rules — managed by firewall set", port)
+		}
+	}
+}
+
+func TestBaseIngressRules_PrivatePorts(t *testing.T) {
+	rules := baseIngressRules()
+	privatePorts := map[int32]bool{6443: false, 10250: false, 5000: false}
+
+	for _, r := range rules {
+		port := deref32(r.FromPort)
+		if _, ok := privatePorts[port]; ok {
+			for _, ipRange := range r.IpRanges {
+				if deref(ipRange.CidrIp) == utils.PrivateNetworkCIDR {
+					privatePorts[port] = true
+				}
+			}
+		}
+	}
+
+	for port, found := range privatePorts {
+		if !found {
+			t.Errorf("port %d should be restricted to 10.0.0.0/16", port)
+		}
+	}
+}
+
+func TestBaseIngressRules(t *testing.T) {
+	rules := baseIngressRules()
+
+	if len(rules) != 5 {
+		t.Fatalf("expected 5 base rules, got %d", len(rules))
 	}
 
 	// Build a lookup: port → (protocol, cidr)
@@ -184,28 +242,30 @@ func TestDefaultIngressRules(t *testing.T) {
 		seen[ruleKey{port, proto}] = cidr
 	}
 
-	// Public rules
+	// SSH — open by default
 	if cidr, ok := seen[ruleKey{22, "tcp"}]; !ok || cidr != "0.0.0.0/0" {
 		t.Errorf("SSH (22/tcp) rule missing or wrong CIDR: %q", cidr)
 	}
-	if cidr, ok := seen[ruleKey{80, "tcp"}]; !ok || cidr != "0.0.0.0/0" {
-		t.Errorf("HTTP (80/tcp) rule missing or wrong CIDR: %q", cidr)
+
+	// HTTP/HTTPS should NOT be present in base rules
+	if _, ok := seen[ruleKey{80, "tcp"}]; ok {
+		t.Error("HTTP (80) should NOT be in base rules")
 	}
-	if cidr, ok := seen[ruleKey{443, "tcp"}]; !ok || cidr != "0.0.0.0/0" {
-		t.Errorf("HTTPS (443/tcp) rule missing or wrong CIDR: %q", cidr)
+	if _, ok := seen[ruleKey{443, "tcp"}]; ok {
+		t.Error("HTTPS (443) should NOT be in base rules")
 	}
 
 	// Private rules
-	if cidr, ok := seen[ruleKey{6443, "tcp"}]; !ok || cidr != "10.0.0.0/16" {
+	if cidr, ok := seen[ruleKey{6443, "tcp"}]; !ok || cidr != utils.PrivateNetworkCIDR {
 		t.Errorf("k8s API (6443/tcp) rule missing or wrong CIDR: %q", cidr)
 	}
-	if cidr, ok := seen[ruleKey{10250, "tcp"}]; !ok || cidr != "10.0.0.0/16" {
+	if cidr, ok := seen[ruleKey{10250, "tcp"}]; !ok || cidr != utils.PrivateNetworkCIDR {
 		t.Errorf("kubelet (10250/tcp) rule missing or wrong CIDR: %q", cidr)
 	}
-	if cidr, ok := seen[ruleKey{8472, "udp"}]; !ok || cidr != "10.0.0.0/16" {
+	if cidr, ok := seen[ruleKey{8472, "udp"}]; !ok || cidr != utils.PrivateNetworkCIDR {
 		t.Errorf("VXLAN (8472/udp) rule missing or wrong CIDR: %q", cidr)
 	}
-	if cidr, ok := seen[ruleKey{5000, "tcp"}]; !ok || cidr != "10.0.0.0/16" {
+	if cidr, ok := seen[ruleKey{5000, "tcp"}]; !ok || cidr != utils.PrivateNetworkCIDR {
 		t.Errorf("registry (5000/tcp) rule missing or wrong CIDR: %q", cidr)
 	}
 }

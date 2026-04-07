@@ -9,6 +9,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gorm.io/gorm"
 )
@@ -73,6 +74,9 @@ func Execute(ctx context.Context, db *gorm.DB, p ExecuteParams) {
 
 // run walks steps for a deployment, dispatching each to step().
 func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
+	e.cluster.EnableSSHCache()
+	defer e.cluster.Close()
+
 	markDeploymentRunning(e.db, deployment)
 
 	var steps []api.DeploymentStep
@@ -121,6 +125,16 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 // step dispatches a single step to the corresponding pkg/core/ function.
 func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, params map[string]any) error {
 	switch kind {
+	case plan.StepFirewallSet:
+		allowed, err := parseFirewallFromParams(ctx, params)
+		if err != nil {
+			return err
+		}
+		return pkgcore.FirewallSet(ctx, pkgcore.FirewallSetRequest{
+			Cluster:    e.cluster,
+			AllowedIPs: allowed,
+		})
+
 	case plan.StepComputeSet:
 		_, err := pkgcore.ComputeSet(ctx, pkgcore.ComputeSetRequest{
 			Cluster:    e.cluster,
@@ -238,10 +252,26 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 
 	case plan.StepDNSSet:
 		return pkgcore.DNSSet(ctx, pkgcore.DNSSetRequest{
-			Cluster: e.cluster,
-			DNS:     e.dns,
-			Service: name,
-			Domains: utils.GetStringSlice(params, "domains"),
+			Cluster:     e.cluster,
+			DNS:         e.dns,
+			Service:     name,
+			Domains:     utils.GetStringSlice(params, "domains"),
+			EdgeProxied: utils.GetBool(params, "edge_proxied"),
+		})
+
+	case plan.StepIngressApply:
+		routes, err := parseIngressRoutesFromParams(params)
+		if err != nil {
+			return err
+		}
+		return pkgcore.IngressApply(ctx, pkgcore.IngressApplyRequest{
+			Cluster:      e.cluster,
+			DNS:          e.dns,
+			Routes:       routes,
+			TLSMode:      utils.GetString(params, "tls_mode"),
+			EdgeProvider: utils.GetString(params, "edge_provider"),
+			CertPEM:      utils.GetString(params, "cert_pem"),
+			KeyPEM:       utils.GetString(params, "key_pem"),
 		})
 
 	case plan.StepDNSDelete:
@@ -255,6 +285,74 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 	default:
 		return fmt.Errorf("unknown step kind: %s", kind)
 	}
+}
+
+// ── firewall param parsing ─────────────────────────────────────────────────────
+
+// parseFirewallFromParams converts step params into a PortAllowList.
+// Supports "preset" key (resolved via ResolveFirewallArgs) and/or "rules" map.
+func parseFirewallFromParams(ctx context.Context, params map[string]any) (provider.PortAllowList, error) {
+	preset := utils.GetString(params, "preset")
+	rulesRaw, hasRules := params["rules"]
+
+	// Build args for ResolveFirewallArgs
+	var args []string
+	if preset != "" {
+		args = append(args, preset)
+	}
+	if hasRules {
+		// Rules is map[string][]string (port → CIDRs)
+		if rulesMap, ok := rulesRaw.(map[string]any); ok {
+			for port, v := range rulesMap {
+				if cidrs, ok := v.([]any); ok {
+					for _, cidr := range cidrs {
+						if s, ok := cidr.(string); ok {
+							args = append(args, fmt.Sprintf("%s:%s", port, s))
+						}
+					}
+				}
+			}
+		}
+		if rulesMap, ok := rulesRaw.(map[string][]string); ok {
+			for port, cidrs := range rulesMap {
+				for _, cidr := range cidrs {
+					args = append(args, fmt.Sprintf("%s:%s", port, cidr))
+				}
+			}
+		}
+	}
+
+	return provider.ResolveFirewallArgs(ctx, args)
+}
+
+// parseIngressRoutesFromParams extracts routes from step params.
+func parseIngressRoutesFromParams(params map[string]any) ([]pkgcore.IngressRouteArg, error) {
+	routesRaw, ok := params["routes"]
+	if !ok {
+		return nil, fmt.Errorf("ingress.apply: missing routes param")
+	}
+	routesList, ok := routesRaw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("ingress.apply: routes must be a list")
+	}
+	edgeProxied := utils.GetString(params, "exposure") == "edge_proxied"
+	var routes []pkgcore.IngressRouteArg
+	for _, item := range routesList {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		svc := utils.GetString(m, "service")
+		domains := utils.GetStringSlice(m, "domains")
+		if svc != "" && len(domains) > 0 {
+			routes = append(routes, pkgcore.IngressRouteArg{
+				Service:     svc,
+				Domains:     domains,
+				EdgeProxied: edgeProxied,
+			})
+		}
+	}
+	return routes, nil
 }
 
 // ── status helpers ─────────────────────────────────────────────────────────────

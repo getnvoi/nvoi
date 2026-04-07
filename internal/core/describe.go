@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"os"
 
-	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/internal/render"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
 

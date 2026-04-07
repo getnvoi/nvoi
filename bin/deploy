@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Draft target deploy script for the future CLI model.
+# This stays CLI-first: config and CLI should express the same underlying model.
+# The public CLI should remain boring even if the internals stay more explicit.
+
+: "${NVOI_APP_NAME:=nvoi}"
+: "${NVOI_ENV:=prod}"
+: "${COMPUTE_PROVIDER:=hetzner}"
+: "${DNS_PROVIDER:=cloudflare}"
+: "${STORAGE_PROVIDER:=cloudflare}"
+: "${SSH_KEY_PATH:=~/.ssh/id_ed25519}"
+
+# Infrastructure
+nvoi instance set master --compute-type cax11 --compute-region nbg1
+nvoi volume set pgdata --size 20 --server master
+
+# Secrets
+nvoi secret set POSTGRES_PASSWORD "$NVOI_POSTGRES_PASSWORD"
+nvoi secret set JWT_SECRET "$NVOI_JWT_SECRET"
+nvoi secret set ENCRYPTION_KEY "$NVOI_ENCRYPTION_KEY"
+nvoi secret set DATABASE_URL "postgres://postgres:${NVOI_POSTGRES_PASSWORD}@db:5432/postgres"
+
+# Storage
+nvoi storage set releases
+
+# Build images
+nvoi build --build-provider local \
+  --target web:./cmd/web \
+  --target api:./cmd/api \
+  --target distribution:./cmd/distribution
+
+# Services
+nvoi service set db --image postgres:17 --port 5432 \
+  --volume pgdata:/var/lib/postgresql/data \
+  --secret POSTGRES_PASSWORD \
+  --no-wait
+nvoi service set api --image "$(nvoi build latest api)" --port 8080 \
+  --secret DATABASE_URL --secret JWT_SECRET --secret ENCRYPTION_KEY \
+  --no-wait
+nvoi service set web --image "$(nvoi build latest web)" --port 3000 \
+  --no-wait
+nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001 \
+  --storage releases
+
+# Exposure
+nvoi firewall set cloudflare
+
+# DNS: Cloudflare-managed distribution mode
+nvoi dns set web nvoi.to www.nvoi.to --cloudflare-managed
+nvoi dns set api api.nvoi.to --cloudflare-managed
+nvoi dns set distribution get.nvoi.to --cloudflare-managed
+
+# Ingress: one boring Cloudflare-managed mode
+nvoi ingress apply \
+  web:nvoi.to,www.nvoi.to \
+  api:api.nvoi.to \
+  distribution:get.nvoi.to \
+  --cloudflare-managed

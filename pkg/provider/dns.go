@@ -6,7 +6,10 @@ import "context"
 // Implementations: cloudflare, hetzner (future), scaleway (future).
 type DNSProvider interface {
 	ValidateCredentials(ctx context.Context) error
-	EnsureARecord(ctx context.Context, domain, ip string) error
+	// EnsureARecord creates or updates an A/AAAA record.
+	// proxied is a hint for providers that support traffic proxying (e.g. Cloudflare).
+	// Providers that don't support proxying ignore it.
+	EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error
 	DeleteARecord(ctx context.Context, domain string) error
 	ListARecords(ctx context.Context) ([]DNSRecord, error)
 	ListResources(ctx context.Context) ([]ResourceGroup, error)

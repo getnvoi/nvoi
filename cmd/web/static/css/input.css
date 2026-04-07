@@ -1,0 +1,106 @@
+@import "tailwindcss";
+@source "../../templates/**/*.html";
+@source "../../content/**/*.md";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.prose {
+  max-width: none;
+  color: var(--color-gray-700);
+  line-height: 1.75;
+}
+.prose h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  color: var(--color-gray-900);
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+}
+.prose h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--color-gray-900);
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-gray-200);
+}
+.prose h3 {
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: var(--color-gray-900);
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+.prose p {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+.prose a {
+  color: var(--color-indigo-600);
+  text-decoration: underline;
+}
+.prose a:hover {
+  color: var(--color-indigo-500);
+}
+.prose code {
+  font-size: 0.875rem;
+  background: var(--color-gray-100);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-family: var(--font-mono);
+  color: var(--color-indigo-700);
+}
+.prose pre {
+  margin: 1.5rem 0;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+}
+.prose pre code {
+  background: transparent;
+  padding: 0;
+}
+.prose ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin: 1rem 0;
+}
+.prose ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin: 1rem 0;
+}
+.prose li {
+  margin: 0.25rem 0;
+}
+.prose table {
+  width: 100%;
+  margin: 1.5rem 0;
+  font-size: 0.875rem;
+}
+.prose th {
+  text-align: left;
+  color: var(--color-gray-900);
+  font-weight: 500;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-gray-300);
+}
+.prose td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-gray-100);
+}
+.prose blockquote {
+  border-left: 4px solid var(--color-indigo-500);
+  padding-left: 1rem;
+  margin: 1rem 0;
+  color: var(--color-gray-500);
+  font-style: italic;
+}
+.prose hr {
+  margin: 2rem 0;
+  border-color: var(--color-gray-200);
+}

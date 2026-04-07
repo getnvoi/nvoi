@@ -1,0 +1,99 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmd/web/**"
+      - "cmd/api/**"
+      - "cmd/distribution/**"
+      - "internal/api/**"
+      - "pkg/**"
+      - "docker-compose.yml"
+      - ".github/workflows/deploy.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install nvoi
+        run: go build -o /usr/local/bin/nvoi ./cmd/core
+
+      - name: Write SSH key
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Deploy
+        env:
+          NVOI_APP_NAME: nvoi
+          NVOI_ENV: prod
+          COMPUTE_PROVIDER: hetzner
+          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+          DNS_PROVIDER: cloudflare
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          DNS_ZONE: nvoi.to
+          STORAGE_PROVIDER: cloudflare
+          SSH_KEY_PATH: ~/.ssh/id_ed25519
+          NVOI_POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          NVOI_JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          NVOI_ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          # Infrastructure
+          nvoi instance set master --compute-type cax11 --compute-region nbg1
+          nvoi volume set pgdata --size 20 --server master
+
+          # Secrets (values from env — not expanded inline in shell)
+          nvoi secret set POSTGRES_PASSWORD "$NVOI_POSTGRES_PASSWORD"
+          nvoi secret set JWT_SECRET "$NVOI_JWT_SECRET"
+          nvoi secret set ENCRYPTION_KEY "$NVOI_ENCRYPTION_KEY"
+          nvoi secret set DATABASE_URL "postgres://postgres:${NVOI_POSTGRES_PASSWORD}@db:5432/postgres"
+
+          # Storage (before services — distribution needs STORAGE_RELEASES_* env vars)
+          nvoi storage set releases
+
+          # Build images (parallel)
+          nvoi build --build-provider local \
+            --target web:./cmd/web \
+            --target api:./cmd/api \
+            --target distribution:./cmd/distribution
+
+          # Services (--no-wait: apply all, then wait once at the end)
+          nvoi service set db --image postgres:17 --port 5432 \
+            --volume pgdata:/var/lib/postgresql/data \
+            --secret POSTGRES_PASSWORD \
+            --no-wait
+          nvoi service set api --image "$(nvoi build latest api)" --port 8080 \
+            --secret DATABASE_URL --secret JWT_SECRET --secret ENCRYPTION_KEY \
+            --no-wait
+          nvoi service set web --image "$(nvoi build latest web)" --port 3000 \
+            --no-wait
+          nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001 \
+            --storage releases
+
+          # Firewall (restrict 80/443 to Cloudflare IPs — before DNS exposes the origin)
+          nvoi firewall set cloudflare
+
+          # DNS (proxied through Cloudflare)
+          nvoi dns set web nvoi.to www.nvoi.to --proxy
+          nvoi dns set api api.nvoi.to --proxy
+          nvoi dns set distribution get.nvoi.to --proxy
+
+          # Ingress (single Caddy deploy, Cloudflare proxy mode)
+          nvoi ingress apply web:nvoi.to,www.nvoi.to api:api.nvoi.to distribution:get.nvoi.to --proxy

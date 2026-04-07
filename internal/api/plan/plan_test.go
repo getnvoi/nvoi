@@ -79,13 +79,14 @@ func TestPlan_PhaseOrder(t *testing.T) {
 	}
 
 	phases := []StepKind{
-		StepComputeSet, StepComputeSet,     // master, worker-1
-		StepVolumeSet, StepVolumeSet,       // meili-data, pgdata (sorted)
-		StepBuild,                          // web
-		StepSecretSet, StepSecretSet,       // POSTGRES_PASSWORD, RAILS_MASTER_KEY (sorted)
-		StepStorageSet,                     // assets
+		StepComputeSet, StepComputeSet, // master, worker-1
+		StepVolumeSet, StepVolumeSet, // meili-data, pgdata (sorted)
+		StepBuild,                    // web
+		StepSecretSet, StepSecretSet, // POSTGRES_PASSWORD, RAILS_MASTER_KEY (sorted)
+		StepStorageSet,                                                 // assets
 		StepServiceSet, StepServiceSet, StepServiceSet, StepServiceSet, // db, jobs, meilisearch, web (sorted)
-		StepDNSSet, // web
+		StepDNSSet,       // web
+		StepIngressApply, // single caddy deploy
 	}
 
 	if len(kinds) != len(phases) {
@@ -95,6 +96,79 @@ func TestPlan_PhaseOrder(t *testing.T) {
 		if kinds[i] != want {
 			t.Errorf("step[%d] = %s, want %s", i, kinds[i], want)
 		}
+	}
+}
+
+func TestPlan_IngressConfigProvidedTLSResolvedFromEnv(t *testing.T) {
+	cfg := hetznerConfig()
+	cfg.Firewall = &config.FirewallConfig{Preset: "default"}
+	cfg.Ingress = &config.IngressConfig{
+		Exposure: "direct",
+		TLS: &config.IngressTLSConfig{
+			Mode: "provided",
+			Cert: "TLS_CERT_PEM",
+			Key:  "TLS_KEY_PEM",
+		},
+	}
+	env := hetznerEnv()
+	env["TLS_CERT_PEM"] = "cert-pem"
+	env["TLS_KEY_PEM"] = "key-pem"
+
+	steps, err := Build(nil, cfg, env)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	ingress := findStep(steps, StepIngressApply, "ingress")
+	if ingress == nil {
+		t.Fatal("expected ingress.apply step")
+	}
+	if ingress.Params["tls_mode"] != "provided" {
+		t.Fatalf("tls_mode = %v, want provided", ingress.Params["tls_mode"])
+	}
+	if ingress.Params["cert_pem"] != "cert-pem" {
+		t.Fatalf("cert_pem = %v, want cert-pem", ingress.Params["cert_pem"])
+	}
+	if ingress.Params["key_pem"] != "key-pem" {
+		t.Fatalf("key_pem = %v, want key-pem", ingress.Params["key_pem"])
+	}
+}
+
+func TestPlan_EdgeOverlayCarriesProviderAndProxyToIngressAndDNS(t *testing.T) {
+	cfg := hetznerConfig()
+	cfg.Firewall = &config.FirewallConfig{Preset: "cloudflare"}
+	cfg.Ingress = &config.IngressConfig{
+		Exposure: "edge_proxied",
+		TLS: &config.IngressTLSConfig{
+			Mode: "edge_origin",
+		},
+		Edge: &config.IngressEdgeConfig{
+			Provider: "cloudflare",
+		},
+	}
+
+	steps, err := Build(nil, cfg, hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	dns := findStep(steps, StepDNSSet, "web")
+	if dns == nil || dns.Params["edge_proxied"] != true {
+		t.Fatalf("expected proxied dns.set, got %+v", dns)
+	}
+
+	ingress := findStep(steps, StepIngressApply, "ingress")
+	if ingress == nil {
+		t.Fatal("expected ingress.apply step")
+	}
+	if ingress.Params["exposure"] != "edge_proxied" {
+		t.Fatalf("exposure = %v, want edge_proxied", ingress.Params["exposure"])
+	}
+	if ingress.Params["tls_mode"] != "edge_origin" {
+		t.Fatalf("tls_mode = %v, want edge_origin", ingress.Params["tls_mode"])
+	}
+	if ingress.Params["edge_provider"] != "cloudflare" {
+		t.Fatalf("edge_provider = %v, want cloudflare", ingress.Params["edge_provider"])
 	}
 }
 
@@ -398,6 +472,72 @@ func TestPlan_DNSRemoved(t *testing.T) {
 	}
 	domains := toStringSlice(s.Params["domains"])
 	assertContains(t, domains, "final.nvoi.to")
+
+	ingress := findStep(steps, StepIngressApply, "ingress")
+	if ingress == nil {
+		t.Fatal("expected ingress.apply before dns.delete for domain removal")
+	}
+}
+
+func TestPlan_DNSPartialRemoval(t *testing.T) {
+	prev := hetznerConfig()
+	prev.Domains["web"] = config.Domains{"final.nvoi.to", "www.nvoi.to"}
+	current := hetznerConfig()
+	current.Domains["web"] = config.Domains{"final.nvoi.to"}
+
+	steps, _ := Build(prev, current, hetznerEnv())
+	s := findStep(steps, StepDNSDelete, "web")
+	if s == nil {
+		t.Fatal("expected dns.delete web for removed domain")
+	}
+
+	domains := toStringSlice(s.Params["domains"])
+	if len(domains) != 1 || domains[0] != "www.nvoi.to" {
+		t.Fatalf("dns.delete domains = %v, want [www.nvoi.to]", domains)
+	}
+
+	ingressIdx := -1
+	dnsIdx := -1
+	for i, step := range steps {
+		if step.Kind == StepIngressApply && ingressIdx == -1 {
+			ingressIdx = i
+		}
+		if step.Kind == StepDNSDelete && step.Name == "web" {
+			dnsIdx = i
+		}
+	}
+	if ingressIdx == -1 || dnsIdx == -1 {
+		t.Fatalf("expected both ingress.apply and dns.delete, got ingress=%d dns=%d", ingressIdx, dnsIdx)
+	}
+	if ingressIdx >= dnsIdx {
+		t.Fatalf("ingress.apply at %d should come before dns.delete at %d", ingressIdx, dnsIdx)
+	}
+}
+
+func TestPlan_DNSPartialAdditionDoesNotEmitDelete(t *testing.T) {
+	prev := hetznerConfig()
+	prev.Domains["web"] = config.Domains{"final.nvoi.to"}
+	current := hetznerConfig()
+	current.Domains["web"] = config.Domains{"final.nvoi.to", "www.nvoi.to"}
+
+	steps, _ := Build(prev, current, hetznerEnv())
+
+	if s := findStep(steps, StepDNSDelete, "web"); s != nil {
+		t.Fatalf("did not expect dns.delete for domain addition, got %+v", *s)
+	}
+
+	ingress := findStep(steps, StepIngressApply, "ingress")
+	if ingress == nil {
+		t.Fatal("expected ingress.apply for domain addition")
+	}
+
+	dnsSet := findStep(steps, StepDNSSet, "web")
+	if dnsSet == nil {
+		t.Fatal("expected dns.set for expanded domain list")
+	}
+	domains := toStringSlice(dnsSet.Params["domains"])
+	assertContains(t, domains, "final.nvoi.to")
+	assertContains(t, domains, "www.nvoi.to")
 }
 
 func TestPlan_SecretRemoved(t *testing.T) {
@@ -494,9 +634,9 @@ func TestPlan_EmptyConfigDeletesAll(t *testing.T) {
 		t.Fatal("empty config against full prev should produce delete steps")
 	}
 
-	// All steps should be deletes — no sets.
+	// Empty desired config still needs ingress reconciliation before guarded DNS delete.
 	for _, s := range steps {
-		if !isDelete(s.Kind) {
+		if s.Kind != StepIngressApply && !isDelete(s.Kind) {
 			t.Errorf("empty config should only produce deletes, got %s %s", s.Kind, s.Name)
 		}
 	}
@@ -526,13 +666,47 @@ func TestPlan_EmptyConfigDeletesAll(t *testing.T) {
 		t.Errorf("compute deletes = %d, want 2", kinds[StepComputeDelete])
 	}
 
-	// Verify order: DNS first, compute last.
-	if steps[0].Kind != StepDNSDelete {
-		t.Errorf("first step = %s, want dns.delete", steps[0].Kind)
+	// Verify guarded order: ingress first, dns second, compute last.
+	if steps[0].Kind != StepIngressApply {
+		t.Errorf("first step = %s, want ingress.apply", steps[0].Kind)
+	}
+	if steps[1].Kind != StepDNSDelete {
+		t.Errorf("second step = %s, want dns.delete", steps[1].Kind)
 	}
 	last := steps[len(steps)-1]
 	if last.Kind != StepComputeDelete {
 		t.Errorf("last step = %s, want instance.delete", last.Kind)
+	}
+}
+
+func TestPlan_DomainRemovalOrdersIngressBeforeDNS(t *testing.T) {
+	prev := hetznerConfig()
+	current := hetznerConfig()
+	delete(current.Domains, "web")
+
+	steps, err := Build(prev, current, hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	ingressIdx := -1
+	dnsIdx := -1
+	for i, s := range steps {
+		if s.Kind == StepIngressApply && ingressIdx == -1 {
+			ingressIdx = i
+		}
+		if s.Kind == StepDNSDelete && s.Name == "web" {
+			dnsIdx = i
+		}
+	}
+	if ingressIdx == -1 {
+		t.Fatal("expected ingress.apply step")
+	}
+	if dnsIdx == -1 {
+		t.Fatal("expected dns.delete step")
+	}
+	if ingressIdx >= dnsIdx {
+		t.Fatalf("ingress.apply at %d should come before dns.delete at %d", ingressIdx, dnsIdx)
 	}
 }
 
@@ -583,4 +757,103 @@ func assertContains(t *testing.T, list []string, want string) {
 		}
 	}
 	t.Errorf("list %v does not contain %q", list, want)
+}
+
+// ── Firewall tests ────────────────────────────────────────────────────────────
+
+func TestPlan_FirewallStep(t *testing.T) {
+	cfg := hetznerConfig()
+	cfg.Firewall = &config.FirewallConfig{Preset: "default"}
+
+	steps, err := Build(nil, cfg, hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	fw := findStep(steps, StepFirewallSet, "firewall")
+	if fw == nil {
+		t.Fatal("expected firewall.set step")
+	}
+	if fw.Params["preset"] != "default" {
+		t.Errorf("firewall preset = %v, want default", fw.Params["preset"])
+	}
+}
+
+func TestPlan_FirewallAfterCompute(t *testing.T) {
+	cfg := hetznerConfig()
+	cfg.Firewall = &config.FirewallConfig{Preset: "cloudflare"}
+
+	steps, err := Build(nil, cfg, hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	lastComputeIdx := -1
+	firewallIdx := -1
+	firstVolumeIdx := -1
+	for i, s := range steps {
+		if s.Kind == StepComputeSet {
+			lastComputeIdx = i
+		}
+		if s.Kind == StepFirewallSet && firewallIdx == -1 {
+			firewallIdx = i
+		}
+		if s.Kind == StepVolumeSet && firstVolumeIdx == -1 {
+			firstVolumeIdx = i
+		}
+	}
+
+	if firewallIdx == -1 {
+		t.Fatal("firewall step not found")
+	}
+	if firewallIdx <= lastComputeIdx {
+		t.Errorf("firewall at %d should be after last compute at %d", firewallIdx, lastComputeIdx)
+	}
+	if firstVolumeIdx != -1 && firewallIdx >= firstVolumeIdx {
+		t.Errorf("firewall at %d should be before first volume at %d", firewallIdx, firstVolumeIdx)
+	}
+}
+
+func TestPlan_NoFirewallWithoutConfig(t *testing.T) {
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	for _, s := range steps {
+		if s.Kind == StepFirewallSet {
+			t.Error("expected no firewall.set step when no firewall config")
+		}
+	}
+}
+
+func TestPlan_FirewallWithRules(t *testing.T) {
+	cfg := hetznerConfig()
+	cfg.Firewall = &config.FirewallConfig{
+		Preset: "cloudflare",
+		Rules:  map[string][]string{"443": {"0.0.0.0/0"}},
+	}
+
+	steps, err := Build(nil, cfg, hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	fw := findStep(steps, StepFirewallSet, "firewall")
+	if fw == nil {
+		t.Fatal("expected firewall.set step")
+	}
+	if fw.Params["preset"] != "cloudflare" {
+		t.Errorf("preset = %v", fw.Params["preset"])
+	}
+	rulesRaw, ok := fw.Params["rules"]
+	if !ok {
+		t.Fatal("expected rules in params")
+	}
+	rules, ok := rulesRaw.(map[string][]string)
+	if !ok {
+		t.Fatalf("rules type = %T, want map[string][]string", rulesRaw)
+	}
+	if rules["443"][0] != "0.0.0.0/0" {
+		t.Errorf("443 rule = %v", rules["443"])
+	}
 }

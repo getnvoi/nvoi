@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func TestFindMaster_Found(t *testing.T) {

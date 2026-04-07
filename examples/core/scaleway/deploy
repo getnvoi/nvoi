@@ -14,6 +14,7 @@ export BUILD_PROVIDER=daytona
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
 bin/core instance set master --compute-type DEV1-L --compute-region fr-par-1
+bin/core firewall set default
 bin/core volume set pgdata --size 30 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────

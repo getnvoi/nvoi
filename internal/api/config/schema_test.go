@@ -205,6 +205,63 @@ func TestDomains_JSONList(t *testing.T) {
 	}
 }
 
+func TestParse_IngressOverlayConfig(t *testing.T) {
+	yaml := `
+servers:
+  master:
+    type: cx23
+    region: fsn1
+services:
+  web:
+    image: nginx
+    port: 80
+domains:
+  web: [example.com]
+ingress:
+  exposure: edge_proxied
+  edge:
+    provider: cloudflare
+  tls:
+    mode: edge_origin
+`
+	cfg, err := Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Ingress == nil {
+		t.Fatal("expected ingress config")
+	}
+	if cfg.Ingress.Exposure != "edge_proxied" {
+		t.Fatalf("exposure = %q", cfg.Ingress.Exposure)
+	}
+	if cfg.Ingress.Edge == nil || cfg.Ingress.Edge.Provider != "cloudflare" {
+		t.Fatalf("edge provider = %+v", cfg.Ingress.Edge)
+	}
+	if cfg.Ingress.TLS == nil || cfg.Ingress.TLS.Mode != "edge_origin" {
+		t.Fatalf("tls mode = %+v", cfg.Ingress.TLS)
+	}
+}
+
+func TestParse_LegacyDomainProxySyntaxRejected(t *testing.T) {
+	yaml := `
+servers:
+  master:
+    type: cx23
+    region: fsn1
+services:
+  web:
+    image: nginx
+    port: 80
+domains:
+  web:
+    domains: [example.com]
+    proxy: true
+`
+	if _, err := Parse([]byte(yaml)); err == nil {
+		t.Fatal("expected legacy proxy syntax to fail")
+	}
+}
+
 // ── ParseEnv ───────────────────────────────────────────────────────────────────
 
 func TestParseEnv(t *testing.T) {

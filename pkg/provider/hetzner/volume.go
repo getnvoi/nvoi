@@ -7,16 +7,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 type volumeJSON struct {
-	ID          int64             `json:"id"`
-	Name        string            `json:"name"`
-	Size        int               `json:"size"`
-	Server      *int64            `json:"server"`
-	Location    struct{ Name string `json:"name"` } `json:"location"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Size     int    `json:"size"`
+	Server   *int64 `json:"server"`
+	Location struct {
+		Name string `json:"name"`
+	} `json:"location"`
 	Labels      map[string]string `json:"labels"`
 	LinuxDevice string            `json:"linux_device"`
 	Status      string            `json:"status"`
@@ -74,7 +76,9 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 		var srvResp struct {
 			Server struct {
 				Datacenter struct {
-					Location struct{ Name string `json:"name"` } `json:"location"`
+					Location struct {
+						Name string `json:"name"`
+					} `json:"location"`
 				} `json:"datacenter"`
 			} `json:"server"`
 		}
@@ -91,7 +95,9 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 			"format":    "xfs",
 		}
 
-		var createResp struct{ Volume volumeJSON `json:"volume"` }
+		var createResp struct {
+			Volume volumeJSON `json:"volume"`
+		}
 		if err := c.api.Do(ctx, "POST", "/volumes", body, &createResp); err != nil {
 			return nil, fmt.Errorf("create volume: %w", err)
 		}
@@ -138,7 +144,9 @@ func (c *Client) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequ
 
 func (c *Client) ResizeVolume(ctx context.Context, id string, sizeGB int) error {
 	var resp struct {
-		Action struct{ ID int64 `json:"id"` } `json:"action"`
+		Action struct {
+			ID int64 `json:"id"`
+		} `json:"action"`
 	}
 	if err := c.api.Do(ctx, "POST", fmt.Sprintf("/volumes/%s/actions/resize", id), map[string]any{"size": sizeGB}, &resp); err != nil {
 		return fmt.Errorf("resize volume: %w", err)
@@ -198,7 +206,9 @@ func (c *Client) ListVolumes(ctx context.Context, labels map[string]string) ([]*
 		selector = "&label_selector=" + strings.Join(parts, ",")
 	}
 
-	var resp struct{ Volumes []volumeJSON `json:"volumes"` }
+	var resp struct {
+		Volumes []volumeJSON `json:"volumes"`
+	}
 	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/volumes?per_page=50%s", selector), nil, &resp); err != nil {
 		return nil, fmt.Errorf("list volumes: %w", err)
 	}
@@ -270,7 +280,9 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 // --- internal helpers ---
 
 func (c *Client) getVolumeByName(ctx context.Context, name string) (*provider.Volume, error) {
-	var resp struct{ Volumes []volumeJSON `json:"volumes"` }
+	var resp struct {
+		Volumes []volumeJSON `json:"volumes"`
+	}
 	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/volumes?name=%s", name), nil, &resp); err != nil {
 		return nil, fmt.Errorf("get volume by name: %w", err)
 	}
@@ -283,7 +295,9 @@ func (c *Client) getVolumeByName(ctx context.Context, name string) (*provider.Vo
 }
 
 func (c *Client) getVolume(ctx context.Context, id string) (*provider.Volume, error) {
-	var resp struct{ Volume volumeJSON `json:"volume"` }
+	var resp struct {
+		Volume volumeJSON `json:"volume"`
+	}
 	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/volumes/%s", id), nil, &resp); err != nil {
 		return nil, fmt.Errorf("get volume: %w", err)
 	}
@@ -326,9 +340,11 @@ func (c *Client) waitForAction(ctx context.Context, actionID int64) error {
 	return utils.Poll(ctx, 2*time.Second, 2*time.Minute, func() (bool, error) {
 		var resp struct {
 			Action struct {
-				ID     int64 `json:"id"`
+				ID     int64  `json:"id"`
 				Status string `json:"status"`
-				Error  *struct{ Message string `json:"message"` } `json:"error"`
+				Error  *struct {
+					Message string `json:"message"`
+				} `json:"error"`
 			} `json:"action"`
 		}
 		if err := c.api.Do(ctx, "GET", fmt.Sprintf("/actions/%d", actionID), nil, &resp); err != nil {

@@ -50,6 +50,16 @@ type ComputeProvider interface {
 	// ResolveDevicePath returns the OS block device path for an attached volume.
 	// Provider-specific: Hetzner returns LinuxDevice from API, AWS computes the NVMe symlink.
 	ResolveDevicePath(vol *Volume) string
+
+	// ReconcileFirewallRules replaces public port rules on the named firewall.
+	// Internal ports (6443, 10250, 8472, 5000) are always preserved.
+	// Public ports not in the PortAllowList are removed.
+	// SSH (22) defaults to 0.0.0.0/0 if not specified.
+	ReconcileFirewallRules(ctx context.Context, name string, allowed PortAllowList) error
+
+	// GetFirewallRules returns the current public port rules on the named firewall.
+	// Internal ports are excluded from the result.
+	GetFirewallRules(ctx context.Context, name string) (PortAllowList, error)
 }
 
 type Firewall struct {
@@ -81,7 +91,6 @@ type Volume struct {
 	Location   string `json:"location"`
 }
 
-
 type CreateServerRequest struct {
 	Name, ServerType, Image, Location, UserData string
 	FirewallName, NetworkName                   string
@@ -90,7 +99,7 @@ type CreateServerRequest struct {
 
 type DeleteServerRequest struct {
 	Name, FirewallName, NetworkName string
-	Labels                         map[string]string
+	Labels                          map[string]string
 }
 
 // CreateVolumeRequest — provider resolves server name → ID internally.

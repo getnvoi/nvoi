@@ -1,0 +1,13 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o tmp/web ./cmd/web"
+bin = "tmp/web"
+include_ext = ["go", "html", "md", "yaml", "css"]
+include_dir = ["cmd/web", "internal"]
+exclude_dir = ["tmp", "node_modules", "cmd/cli", "cmd/api", "cmd/core"]
+kill_delay = "200ms"
+
+[log]
+time = false

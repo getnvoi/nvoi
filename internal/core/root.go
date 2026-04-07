@@ -23,8 +23,10 @@ func Root() *cobra.Command {
 
 	// Infrastructure.
 	root.AddCommand(newInstanceCmd())
+	root.AddCommand(newFirewallCmd())
 	root.AddCommand(newVolumeCmd())
 	root.AddCommand(newDNSCmd())
+	root.AddCommand(newIngressCmd())
 	root.AddCommand(newStorageCmd())
 
 	// Application.

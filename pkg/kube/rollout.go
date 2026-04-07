@@ -124,7 +124,7 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 					case "CreateContainerConfigError":
 						return false, fmt.Errorf("%s: %s — %s", name, reason, cs.State.Waiting.Message)
 					case "CrashLoopBackOff":
-						logs := recentLogs(ctx, ssh, ns, name, kind)
+						logs := RecentLogs(ctx, ssh, ns, name, kind, 20)
 						return false, fmt.Errorf("%s: CrashLoopBackOff (restarts: %d)\nlogs:\n%s", name, cs.RestartCount, indent(logs, "  "))
 					}
 					// Transient — keep polling
@@ -216,7 +216,7 @@ func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, s
 		}
 		initial, tracked := initialRestarts[pod.Metadata.Name]
 		if tracked && currentTotal > initial {
-			logs := recentLogs(ctx, ssh, ns, name, kind)
+			logs := RecentLogs(ctx, ssh, ns, name, kind, 20)
 			return fmt.Errorf("%s: pod crashed after becoming ready (restarts: %d)\nlogs:\n%s", name, currentTotal, indent(logs, "  "))
 		}
 
@@ -229,7 +229,7 @@ func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, s
 				reason := cs.State.Waiting.Reason
 				switch reason {
 				case "CrashLoopBackOff":
-					logs := recentLogs(ctx, ssh, ns, name, kind)
+					logs := RecentLogs(ctx, ssh, ns, name, kind, 20)
 					return fmt.Errorf("%s: CrashLoopBackOff (restarts: %d)\nlogs:\n%s", name, cs.RestartCount, indent(logs, "  "))
 				case "ImagePullBackOff", "ErrImagePull", "InvalidImageName",
 					"CreateContainerConfigError":
@@ -245,8 +245,27 @@ func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, s
 	return nil
 }
 
-func recentLogs(ctx context.Context, ssh utils.SSHClient, ns, name, kind string) string {
-	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("logs %s/%s --tail=20", kind, name)))
+// RecentLogs fetches the last lines from a pod or workload.
+// For pods: kind="" and name is the pod name. Tries --previous first (crashed container).
+// For workloads: kind="deployment" or "statefulset", name is the workload name.
+func RecentLogs(ctx context.Context, ssh utils.SSHClient, ns, name, kind string, tail int) string {
+	if tail == 0 {
+		tail = 20
+	}
+	target := name
+	if kind != "" {
+		target = kind + "/" + name
+	}
+
+	// For bare pods (no kind), try --previous first to get crashed container logs
+	if kind == "" {
+		out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("logs %s --previous --tail=%d", target, tail)))
+		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			return strings.TrimSpace(string(out))
+		}
+	}
+
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("logs %s --tail=%d", target, tail)))
 	if err != nil {
 		return ""
 	}

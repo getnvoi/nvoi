@@ -1,16 +1,21 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // isLocalSource returns true for local paths (. or / prefix), false for remote repos.
@@ -23,10 +28,11 @@ type BuildRunRequest struct {
 	Builder            string
 	BuilderCredentials map[string]string
 	Source             string
+	Dockerfile         string // path to Dockerfile relative to source (default: "Dockerfile")
 	Name               string
 	Branch             string
 	Platform           string
-	GitUsername         string // resolved by cmd layer (signed URL, gh, flag, env)
+	GitUsername        string // resolved by cmd layer (signed URL, gh, flag, env)
 	GitToken           string
 	History            int // keep N most recent tags, delete the rest (0 = keep all)
 }
@@ -71,22 +77,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 	// Auto-detect platform from master architecture
 	platform := req.Platform
 	if platform == "" {
-		sshConn, connErr := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, req.SSHKey)
-		if connErr == nil {
-			out, runErr := sshConn.Run(ctx, "uname -m")
-			sshConn.Close()
-			if runErr == nil {
-				arch := strings.TrimSpace(string(out))
-				if arch == "aarch64" || arch == "arm64" {
-					platform = "linux/arm64"
-				} else {
-					platform = "linux/amd64"
-				}
-			}
-		}
-		if platform == "" {
-			platform = "linux/amd64"
-		}
+		platform = detectPlatform(ctx, master.IPv4, req.SSHKey)
 	}
 
 	// Validate architecture per builder
@@ -100,9 +91,10 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 	result, err := builder.Build(ctx, provider.BuildRequest{
 		ServiceName: req.Name,
 		Source:      source,
+		Dockerfile:  req.Dockerfile,
 		Branch:      req.Branch,
 		Platform:    platform,
-		GitUsername:  gitUsername,
+		GitUsername: gitUsername,
 		GitToken:    gitToken,
 		RegistrySSH: provider.SSHAccess{
 			MasterIP:        master.IPv4,
@@ -126,6 +118,222 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 	}
 
 	return result, nil
+}
+
+// ── Parallel builds ──────────────────────────────────────────────────────────
+
+// BuildTarget is a name:source pair for parallel builds.
+type BuildTarget struct {
+	Name   string
+	Source string
+}
+
+// ParseBuildTargets parses "name:source" args.
+// Source can be a local path or remote URL. The first ":" that isn't
+// part of a URL scheme (e.g. https://) is the delimiter.
+func ParseBuildTargets(args []string) ([]BuildTarget, error) {
+	var targets []BuildTarget
+	for _, arg := range args {
+		name, source, err := splitTarget(arg)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, BuildTarget{Name: name, Source: source})
+	}
+	return targets, nil
+}
+
+func splitTarget(arg string) (name, source string, err error) {
+	idx := strings.Index(arg, ":")
+	if idx < 0 {
+		return "", "", fmt.Errorf("invalid target %q — expected name:source (e.g. web:./cmd/web)", arg)
+	}
+	// Check if the colon is part of a URL scheme (e.g. "web:https://...")
+	// If what follows the colon starts with "//", this is the real delimiter.
+	// If not, and there's another colon later (like in https://), the first colon is still the delimiter
+	// because the name can't contain "https" as a valid image name.
+	name = arg[:idx]
+	source = arg[idx+1:]
+	if name == "" || source == "" {
+		return "", "", fmt.Errorf("invalid target %q — expected name:source (e.g. web:./cmd/web)", arg)
+	}
+	return name, source, nil
+}
+
+// BuildParallelRequest builds multiple images concurrently.
+type BuildParallelRequest struct {
+	Cluster
+	Builder            string
+	BuilderCredentials map[string]string
+	Targets            []BuildTarget
+	Platform           string
+	GitUsername        string
+	GitToken           string
+}
+
+// BuildParallel runs builds concurrently, one goroutine per target.
+func BuildParallel(ctx context.Context, req BuildParallelRequest) error {
+	out := req.Log()
+
+	master, _, _, err := req.Cluster.Master(ctx)
+	if err != nil {
+		return err
+	}
+
+	builder, err := provider.ResolveBuild(req.Builder, req.BuilderCredentials)
+	if err != nil {
+		return err
+	}
+
+	// Auto-detect platform from master
+	platform := req.Platform
+	if platform == "" {
+		platform = detectPlatform(ctx, master.IPv4, req.SSHKey)
+	}
+
+	// Resolve git auth
+	gitUsername, gitToken := req.GitUsername, req.GitToken
+	if gitToken != "" && gitUsername == "" {
+		gitUsername = "x-access-token"
+	}
+
+	// Validate architecture per builder (before spawning goroutines)
+	if req.Builder == "daytona" && platform == "linux/arm64" {
+		return fmt.Errorf("--architecture arm64 is not available with --builder daytona — Daytona sandboxes are amd64 only")
+	}
+
+	// Pre-validate all targets before spawning goroutines
+	for _, t := range req.Targets {
+		local := isLocalSource(t.Source)
+		if local && req.Builder == "daytona" {
+			return fmt.Errorf("target %s: local source %q cannot use --builder daytona — Daytona needs a git repo", t.Name, t.Source)
+		}
+		if !local && req.Builder == "local" {
+			return fmt.Errorf("target %s: remote source %q cannot use --builder local — local builder can't clone remote repos", t.Name, t.Source)
+		}
+	}
+
+	// Check git auth for remote builders (after signed URL extraction could supply tokens)
+	if req.Builder == "daytona" || req.Builder == "github" {
+		hasAnyRemote := false
+		for _, t := range req.Targets {
+			if !isLocalSource(t.Source) {
+				// Check if source has embedded credentials
+				if _, _, token, ok := parseSignedURL(t.Source); ok && token != "" {
+					continue
+				}
+				hasAnyRemote = true
+			}
+		}
+		if hasAnyRemote && gitToken == "" {
+			return fmt.Errorf("git authentication required for remote source.\n  Use a signed URL:  --target name:https://user:TOKEN@github.com/org/repo\n  Or install gh CLI:  gh auth login\n  Or pass explicitly: --git-token TOKEN\n  Or set env var:     export GITHUB_TOKEN=...")
+		}
+	}
+
+	out.Command("build", "parallel", fmt.Sprintf("%d targets", len(req.Targets)))
+
+	g, ctx := errgroup.WithContext(ctx)
+	for _, target := range req.Targets {
+		t := target
+		g.Go(func() error {
+			pw := &prefixWriter{prefix: fmt.Sprintf("[%s] ", t.Name), w: out.Writer()}
+			defer pw.Flush()
+
+			// Resolve signed URLs per target (credentials may be embedded in the source URL)
+			source := t.Source
+			targetUsername, targetToken := gitUsername, gitToken
+			if cleanURL, user, token, ok := parseSignedURL(source); ok {
+				source = cleanURL
+				targetUsername = user
+				targetToken = token
+			}
+			if targetToken != "" && targetUsername == "" {
+				targetUsername = "x-access-token"
+			}
+
+			fmt.Fprintf(pw, "building %s from %s (platform: %s)\n", t.Name, source, platform)
+
+			result, err := builder.Build(ctx, provider.BuildRequest{
+				ServiceName: t.Name,
+				Source:      source,
+				Platform:    platform,
+				GitUsername: targetUsername,
+				GitToken:    targetToken,
+				RegistrySSH: provider.SSHAccess{
+					MasterIP:        master.IPv4,
+					MasterPrivateIP: master.PrivateIP,
+					PrivKey:         req.SSHKey,
+				},
+				Stdout: pw,
+				Stderr: pw,
+			})
+			if err != nil {
+				return fmt.Errorf("%s: %w", t.Name, err)
+			}
+
+			out.Success(fmt.Sprintf("%s → %s", t.Name, result.ImageRef))
+			return nil
+		})
+	}
+
+	return g.Wait()
+}
+
+// prefixWriter prepends a prefix to each line written.
+type prefixWriter struct {
+	prefix string
+	w      io.Writer
+	mu     sync.Mutex
+	buf    bytes.Buffer // partial line buffer
+}
+
+func (p *prefixWriter) Write(data []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	n := len(data)
+	p.buf.Write(data)
+
+	for {
+		line, err := p.buf.ReadString('\n')
+		if err != nil {
+			// No complete line yet — put it back
+			p.buf.WriteString(line)
+			break
+		}
+		if _, werr := fmt.Fprint(p.w, p.prefix+line); werr != nil {
+			return 0, werr
+		}
+	}
+	return n, nil
+}
+
+// Flush writes any remaining partial line in the buffer.
+func (p *prefixWriter) Flush() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.buf.Len() > 0 {
+		fmt.Fprintf(p.w, "%s%s\n", p.prefix, p.buf.String())
+		p.buf.Reset()
+	}
+}
+
+// detectPlatform auto-detects the target platform from the master node's architecture.
+func detectPlatform(ctx context.Context, masterIP string, sshKey []byte) string {
+	sshConn, connErr := infra.ConnectSSH(ctx, masterIP+":22", utils.DefaultUser, sshKey)
+	if connErr != nil {
+		return "linux/amd64"
+	}
+	out, runErr := sshConn.Run(ctx, "uname -m")
+	sshConn.Close()
+	if runErr != nil {
+		return "linux/amd64"
+	}
+	arch := strings.TrimSpace(string(out))
+	if arch == "aarch64" || arch == "arm64" {
+		return "linux/arm64"
+	}
+	return "linux/amd64"
 }
 
 func pruneRegistryTags(ctx context.Context, c Cluster, master *provider.Server, imageName string, keep int) error {

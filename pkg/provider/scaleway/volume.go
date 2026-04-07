@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Block Storage API — separate from Instance API.

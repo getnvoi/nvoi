@@ -1,8 +1,8 @@
 package cli
 
 import (
-	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/internal/render"
+	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
 

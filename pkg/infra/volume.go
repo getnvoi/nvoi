@@ -118,7 +118,6 @@ func unmountVolume(ctx context.Context, ssh utils.SSHClient, mountPath string, w
 	return nil
 }
 
-
 func waitForDevice(ctx context.Context, ssh utils.SSHClient, devicePath string) error {
 	return utils.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
 		out, err := ssh.Run(ctx, fmt.Sprintf("test -b %s && echo ready || true", devicePath))

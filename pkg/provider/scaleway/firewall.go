@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Scaleway security groups implement the firewall abstraction.
 
 // ensureFirewall creates or finds a security group by name. Returns the ID.
+// When the SG already exists, rules are reconciled to match the desired set.
 func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[string]string) (string, error) {
 	if name == "" {
 		return "", nil
@@ -21,6 +22,9 @@ func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[str
 		return "", err
 	}
 	if existing != nil {
+		if err := c.reconcileFirewallRules(ctx, existing.ID); err != nil {
+			return "", fmt.Errorf("reconcile firewall rules: %w", err)
+		}
 		return existing.ID, nil
 	}
 
@@ -48,7 +52,7 @@ func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[str
 	}
 
 	// Add default nvoi rules
-	for _, rule := range defaultFirewallRules() {
+	for _, rule := range baseFirewallRules() {
 		if err := c.addSGRule(ctx, resp.SecurityGroup.ID, rule); err != nil {
 			return "", fmt.Errorf("add rule to %s: %w", name, err)
 		}
@@ -107,6 +111,36 @@ func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, er
 	return out, nil
 }
 
+// reconcileFirewallRules replaces all rules on an existing security group
+// to match the desired nvoi defaults. Deletes current rules, then re-adds.
+// Idempotent — same rules in = same rules out.
+func (c *Client) reconcileFirewallRules(ctx context.Context, sgID string) error {
+	// List existing rules
+	var resp struct {
+		Rules []struct {
+			ID string `json:"id"`
+		} `json:"rules"`
+	}
+	if err := c.doInstance(ctx, "GET", fmt.Sprintf("/security_groups/%s/rules", sgID), nil, &resp); err != nil {
+		return fmt.Errorf("list rules: %w", err)
+	}
+
+	// Delete all existing rules
+	for _, rule := range resp.Rules {
+		if err := c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s/rules/%s", sgID, rule.ID), nil, nil); err != nil {
+			return fmt.Errorf("delete rule %s: %w", rule.ID, err)
+		}
+	}
+
+	// Re-add desired rules
+	for _, rule := range baseFirewallRules() {
+		if err := c.addSGRule(ctx, sgID, rule); err != nil {
+			return fmt.Errorf("add rule: %w", err)
+		}
+	}
+	return nil
+}
+
 // addSGRule adds a single inbound rule. One rule per source IP (Scaleway constraint).
 func (c *Client) addSGRule(ctx context.Context, sgID string, rule firewallRule) error {
 	portFrom, portTo := parsePort(rule.Port)
@@ -156,16 +190,122 @@ func parsePort(port string) (from, to int) {
 	return from, 0
 }
 
-func defaultFirewallRules() []firewallRule {
-	pub := []string{"0.0.0.0/0"}
-	priv := []string{"10.0.0.0/8"}
+// baseFirewallRules returns the base nvoi firewall rules (SSH + internal).
+// HTTP ports (80, 443) are NOT included — managed by firewall set.
+func baseFirewallRules() []firewallRule {
+	pub := []string{"0.0.0.0/0", "::/0"}
+	priv := []string{utils.PrivateNetworkCIDR}
 	return []firewallRule{
 		{Protocol: "tcp", Port: "22", SourceIPs: pub},
-		{Protocol: "tcp", Port: "80", SourceIPs: pub},
-		{Protocol: "tcp", Port: "443", SourceIPs: pub},
 		{Protocol: "tcp", Port: "6443", SourceIPs: priv},
 		{Protocol: "tcp", Port: "10250", SourceIPs: priv},
 		{Protocol: "udp", Port: "8472", SourceIPs: priv},
 		{Protocol: "tcp", Port: "5000", SourceIPs: priv},
 	}
+}
+
+// buildFirewallRules builds the full rule set from base rules + allowed public ports.
+func buildScalewayFirewallRules(allowed provider.PortAllowList) []firewallRule {
+	priv := []string{utils.PrivateNetworkCIDR}
+
+	// Internal ports — always present
+	rules := []firewallRule{
+		{Protocol: "tcp", Port: "6443", SourceIPs: priv},
+		{Protocol: "tcp", Port: "10250", SourceIPs: priv},
+		{Protocol: "udp", Port: "8472", SourceIPs: priv},
+		{Protocol: "tcp", Port: "5000", SourceIPs: priv},
+	}
+
+	// SSH — defaults to open (IPv4 + IPv6), overridable
+	sshCIDRs := []string{"0.0.0.0/0", "::/0"}
+	if ips, ok := allowed["22"]; ok && len(ips) > 0 {
+		sshCIDRs = ips
+	}
+	rules = append(rules, firewallRule{Protocol: "tcp", Port: "22", SourceIPs: sshCIDRs})
+
+	// Public + custom ports from allow list
+	for _, port := range provider.SortedPorts(allowed) {
+		if port == "22" || provider.IsInternalPort(port) {
+			continue
+		}
+		if ips := allowed[port]; len(ips) > 0 {
+			rules = append(rules, firewallRule{Protocol: "tcp", Port: port, SourceIPs: ips})
+		}
+	}
+
+	return rules
+}
+
+// ReconcileFirewallRules replaces all rules on the named security group
+// with the desired set built from the allow list + internal rules.
+func (c *Client) ReconcileFirewallRules(ctx context.Context, name string, allowed provider.PortAllowList) error {
+	fw, err := c.getFirewallByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	if fw == nil {
+		return utils.ErrNotFound
+	}
+
+	// Delete existing rules
+	var resp struct {
+		Rules []struct {
+			ID string `json:"id"`
+		} `json:"rules"`
+	}
+	if err := c.doInstance(ctx, "GET", fmt.Sprintf("/security_groups/%s/rules", fw.ID), nil, &resp); err != nil {
+		return fmt.Errorf("list rules: %w", err)
+	}
+	for _, rule := range resp.Rules {
+		if err := c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s/rules/%s", fw.ID, rule.ID), nil, nil); err != nil {
+			return fmt.Errorf("delete rule %s: %w", rule.ID, err)
+		}
+	}
+
+	// Re-add desired rules
+	for _, rule := range buildScalewayFirewallRules(allowed) {
+		if err := c.addSGRule(ctx, fw.ID, rule); err != nil {
+			return fmt.Errorf("add rule: %w", err)
+		}
+	}
+	return nil
+}
+
+// GetFirewallRules returns the current public port rules on the named security group.
+func (c *Client) GetFirewallRules(ctx context.Context, name string) (provider.PortAllowList, error) {
+	fw, err := c.getFirewallByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if fw == nil {
+		return nil, utils.ErrNotFound
+	}
+
+	var resp struct {
+		Rules []struct {
+			Protocol     string `json:"protocol"`
+			Direction    string `json:"direction"`
+			IPRange      string `json:"ip_range"`
+			DestPortFrom int    `json:"dest_port_from"`
+		} `json:"rules"`
+	}
+	if err := c.doInstance(ctx, "GET", fmt.Sprintf("/security_groups/%s/rules", fw.ID), nil, &resp); err != nil {
+		return nil, fmt.Errorf("list rules: %w", err)
+	}
+
+	result := provider.PortAllowList{}
+	for _, rule := range resp.Rules {
+		if rule.Direction != "inbound" {
+			continue
+		}
+		port := fmt.Sprintf("%d", rule.DestPortFrom)
+		if provider.IsInternalPort(port) {
+			continue
+		}
+		result[port] = append(result[port], rule.IPRange)
+	}
+	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
 }

@@ -9,10 +9,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/infra"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
-
 
 var kubeconfigPath = fmt.Sprintf("/home/%s/.kube/config", utils.DefaultUser)
 
@@ -80,12 +79,27 @@ func FirstPod(ctx context.Context, ssh utils.SSHClient, ns, service string) (str
 	return pod, nil
 }
 
-// Apply uploads a YAML manifest and runs kubectl apply.
+// Apply uploads a YAML manifest and applies it.
+// Uses replace (full overwrite, no leftover fields) when the resource exists,
+// falls back to server-side apply for first creation.
 func Apply(ctx context.Context, ssh utils.SSHClient, ns string, yaml string) error {
 	if err := ssh.Upload(ctx, bytes.NewReader([]byte(yaml)), utils.KubeManifestPath(), 0o644); err != nil {
 		return fmt.Errorf("upload manifest: %w", err)
 	}
-	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply -f %s", utils.KubeManifestPath())))
+	path := utils.KubeManifestPath()
+	// replace overwrites the entire resource — no leftover fields from previous specs.
+	// Fails if the resource doesn't exist yet, so fall back to apply for creation.
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("replace -f %s", path)))
+	if err == nil {
+		return nil
+	}
+	// Only fall through to apply for "not found" — resource doesn't exist yet.
+	// Any other error (schema validation, RBAC, immutable fields) is a real failure.
+	errMsg := strings.ToLower(string(out))
+	if !strings.Contains(errMsg, "not found") && !strings.Contains(errMsg, "notfound") {
+		return fmt.Errorf("kubectl replace: %s: %w", string(out), err)
+	}
+	out, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply --server-side --force-conflicts -f %s", path)))
 	if err != nil {
 		return fmt.Errorf("kubectl apply: %s: %w", string(out), err)
 	}

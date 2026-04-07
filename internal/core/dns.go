@@ -3,18 +3,18 @@ package core
 import (
 	"fmt"
 
-	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/internal/render"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register aws DNS
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare DNS
-	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"  // register scaleway DNS
+	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"   // register scaleway DNS
 	"github.com/spf13/cobra"
 )
 
 func newDNSCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dns",
-		Short: "Manage DNS records",
+		Short: "Manage DNS records only",
 	}
 	cmd.AddCommand(newDNSSetCmd())
 	cmd.AddCommand(newDNSDeleteCmd())
@@ -25,12 +25,13 @@ func newDNSCmd() *cobra.Command {
 func newDNSSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set [service] [domain...]",
-		Short: "Create or update DNS A records pointing to service server",
+		Short: "Create or update DNS A records pointing to the service server",
 		Long: `Points domains at the server running the service.
 
 Examples:
   nvoi dns set web myapp.com --zone myapp.com
-  nvoi dns set web api.myapp.com www.myapp.com --zone myapp.com`,
+  nvoi dns set web api.myapp.com www.myapp.com --zone myapp.com
+  nvoi dns set web myapp.com --cloudflare-managed`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := args[0]
@@ -60,6 +61,7 @@ Examples:
 			if err != nil {
 				return err
 			}
+			cloudflareManaged, _ := cmd.Flags().GetBool("cloudflare-managed")
 
 			return app.DNSSet(cmd.Context(), app.DNSSetRequest{
 				Cluster: app.Cluster{
@@ -70,9 +72,10 @@ Examples:
 					SSHKey:      sshKey,
 					Output:      resolveOutput(cmd),
 				},
-				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
-				Service: service,
-				Domains: domains,
+				DNS:         app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
+				Service:     service,
+				Domains:     domains,
+				EdgeProxied: cloudflareManaged,
 			})
 		},
 	}
@@ -80,13 +83,14 @@ Examples:
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
+	cmd.Flags().Bool("cloudflare-managed", false, "enable Cloudflare-managed DNS proxying")
 	return cmd
 }
 
 func newDNSDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete [service] [domain...]",
-		Short: "Delete DNS records",
+		Short: "Delete DNS records (fails if ingress still uses them)",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := args[0]

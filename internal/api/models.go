@@ -62,9 +62,9 @@ func (p StorageProvider) Valid() bool { return validStorageProviders[p] }
 type BuildProvider string
 
 const (
-	BuildLocal  BuildProvider = "local"
+	BuildLocal   BuildProvider = "local"
 	BuildDaytona BuildProvider = "daytona"
-	BuildGitHub BuildProvider = "github"
+	BuildGitHub  BuildProvider = "github"
 )
 
 var validBuildProviders = map[BuildProvider]bool{
@@ -173,8 +173,8 @@ type Repo struct {
 	WorkspaceID   string         `gorm:"not null;index" json:"workspace_id"`
 	Name          string         `gorm:"not null" json:"name"`
 	Environment   string         `gorm:"not null;default:'production'" json:"environment"` // production, staging, etc.
-	SSHPrivateKey string         `gorm:"type:text;not null" json:"-"`       // encrypted PEM — auto-generated, never nil
-	SSHPublicKey  string         `gorm:"not null" json:"ssh_public_key"`   // OpenSSH format — visible for deploy key setup
+	SSHPrivateKey string         `gorm:"type:text;not null" json:"-"`                      // encrypted PEM — auto-generated, never nil
+	SSHPublicKey  string         `gorm:"not null" json:"ssh_public_key"`                   // OpenSSH format — visible for deploy key setup
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
@@ -277,8 +277,8 @@ type RepoManagedServiceConfig struct {
 	ID          string    `gorm:"primaryKey" json:"id"`
 	RepoID      string    `gorm:"not null;uniqueIndex:idx_repo_managed_svc" json:"repo_id"`
 	Name        string    `gorm:"not null;uniqueIndex:idx_repo_managed_svc" json:"name"` // "db", "cache", "search"
-	Kind        string    `gorm:"not null" json:"kind"`                                   // "postgres", "redis", "meilisearch"
-	Credentials string    `gorm:"type:text;not null" json:"-"`                            // encrypted JSON
+	Kind        string    `gorm:"not null" json:"kind"`                                  // "postgres", "redis", "meilisearch"
+	Credentials string    `gorm:"type:text;not null" json:"-"`                           // encrypted JSON
 	CreatedAt   time.Time `json:"created_at"`
 
 	Repo Repo `gorm:"foreignKey:RepoID" json:"-"`
@@ -408,8 +408,8 @@ type DeploymentStep struct {
 	ID           string     `gorm:"primaryKey" json:"id"`
 	DeploymentID string     `gorm:"not null;index" json:"deployment_id"`
 	Position     int        `gorm:"not null" json:"position"`
-	Kind         string     `gorm:"not null" json:"kind"`   // "instance.set", "service.delete", etc.
-	Name         string     `gorm:"not null" json:"name"`   // "master", "web", etc.
+	Kind         string     `gorm:"not null" json:"kind"`    // "instance.set", "service.delete", etc.
+	Name         string     `gorm:"not null" json:"name"`    // "master", "web", etc.
 	Params       string     `gorm:"type:text" json:"params"` // JSON
 	Status       StepStatus `gorm:"not null;default:'pending'" json:"status"`
 	Error        string     `gorm:"type:text" json:"error,omitempty"`

@@ -13,8 +13,8 @@ type apiError struct {
 	Err    string `json:"error"`
 }
 
-func (e *apiError) Error() string    { return e.Err }
-func (e *apiError) GetStatus() int   { return e.status }
+func (e *apiError) Error() string  { return e.Err }
+func (e *apiError) GetStatus() int { return e.status }
 
 func init() {
 	huma.NewError = func(status int, msg string, errs ...error) huma.StatusError {

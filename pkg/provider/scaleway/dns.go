@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // DNSClient manages A/AAAA records via the Scaleway DNS API (v2beta1).
@@ -41,7 +41,7 @@ func (d *DNSClient) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string) error {
+func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
 	name := provider.RecordName(domain, d.zone)
 	rtype := provider.RecordType(ip)
 

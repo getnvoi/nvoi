@@ -231,7 +231,7 @@ func TestEnsureARecord_Creates(t *testing.T) {
 
 	c := testDNSClient(t, mux)
 
-	if err := c.EnsureARecord(context.Background(), "app.example.com", "9.8.7.6"); err != nil {
+	if err := c.EnsureARecord(context.Background(), "app.example.com", "9.8.7.6", false); err != nil {
 		t.Fatalf("EnsureARecord: %v", err)
 	}
 	if createdRecord.Content != "9.8.7.6" {
@@ -266,7 +266,7 @@ func TestEnsureARecord_AlreadyCorrect(t *testing.T) {
 
 	c := testDNSClient(t, mux)
 
-	if err := c.EnsureARecord(context.Background(), "app.example.com", "1.2.3.4"); err != nil {
+	if err := c.EnsureARecord(context.Background(), "app.example.com", "1.2.3.4", false); err != nil {
 		t.Fatalf("EnsureARecord: %v", err)
 	}
 	if requestCount != 1 {

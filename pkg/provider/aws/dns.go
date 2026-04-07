@@ -43,7 +43,7 @@ func (d *DNSClient) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string) error {
+func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
 	zoneID, err := d.resolveHostedZone(ctx)
 	if err != nil {
 		return err

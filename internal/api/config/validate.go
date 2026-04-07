@@ -5,6 +5,16 @@ import (
 	"strings"
 )
 
+const (
+	ingressExposureDirect      = "direct"
+	ingressExposureEdgeProxied = "edge_proxied"
+
+	ingressTLSACME        = "acme"
+	ingressTLSProvided    = "provided"
+	ingressTLSEdgeOrigin  = "edge_origin"
+	ingressEdgeCloudflare = "cloudflare"
+)
+
 // Validate checks the config for structural errors.
 // Returns all errors found, not just the first.
 func Validate(cfg *Config) []error {
@@ -143,5 +153,112 @@ func Validate(cfg *Config) []error {
 		}
 	}
 
+	// ── Firewall × Domains coherence ──────────────────────────────────────────
+	if len(cfg.Domains) > 0 && cfg.Firewall == nil {
+		add("firewall: domains configured but no firewall section — add \"firewall: default\" or explicit 80/443 rules")
+	}
+	if len(cfg.Domains) > 0 && cfg.Firewall != nil {
+		has80, has443 := firewallOpensPort(cfg.Firewall, "80"), firewallOpensPort(cfg.Firewall, "443")
+		if !has80 || !has443 {
+			add("firewall: domains configured but ports 80/443 not open — add to firewall section or use \"firewall: default\"")
+		}
+	}
+
+	// ── Firewall × Edge overlay coherence ─────────────────────────────────────
+	isCloudflareFirewall := cfg.Firewall != nil && cfg.Firewall.Preset == "cloudflare"
+	exposure := desiredIngressExposure(cfg)
+	tlsMode := desiredIngressTLSMode(cfg, exposure)
+	edgeProvider := desiredIngressEdgeProvider(cfg)
+
+	if exposure == ingressExposureEdgeProxied && !isCloudflareFirewall {
+		add("ingress.exposure: proxied edge mode currently requires \"firewall: cloudflare\" — origin is directly reachable without it")
+	}
+	if isCloudflareFirewall && exposure != ingressExposureEdgeProxied {
+		add("firewall: preset \"cloudflare\" requires ingress.exposure: edge_proxied")
+	}
+
+	// ── Ingress TLS / edge overlay coherence ──────────────────────────────────
+	switch exposure {
+	case "", ingressExposureDirect, ingressExposureEdgeProxied:
+	default:
+		add("ingress.exposure: must be one of %q or %q", ingressExposureDirect, ingressExposureEdgeProxied)
+	}
+
+	if cfg.Ingress != nil && cfg.Ingress.Edge != nil && edgeProvider != "" && edgeProvider != ingressEdgeCloudflare {
+		add("ingress.edge.provider: unsupported provider %q", edgeProvider)
+	}
+	if edgeProvider != "" && exposure != ingressExposureEdgeProxied {
+		add("ingress.edge.provider: edge overlays require ingress.exposure: edge_proxied")
+	}
+
+	switch tlsMode {
+	case ingressTLSACME, ingressTLSProvided, ingressTLSEdgeOrigin:
+	default:
+		add("ingress.tls.mode: must be one of %q, %q, or %q", ingressTLSACME, ingressTLSProvided, ingressTLSEdgeOrigin)
+	}
+
+	if cfg.Ingress != nil && cfg.Ingress.TLS != nil {
+		hasCert := cfg.Ingress.TLS.Cert != ""
+		hasKey := cfg.Ingress.TLS.Key != ""
+		if hasCert != hasKey {
+			add("ingress.tls: cert and key must both be set")
+		}
+		if tlsMode == ingressTLSProvided && (!hasCert || !hasKey) {
+			add("ingress.tls: mode \"provided\" requires both cert and key env refs")
+		}
+		if tlsMode != ingressTLSProvided && (hasCert || hasKey) {
+			add("ingress.tls: cert/key refs are only valid with mode \"provided\"")
+		}
+	}
+
+	if tlsMode == ingressTLSEdgeOrigin {
+		if exposure != ingressExposureEdgeProxied {
+			add("ingress.tls.mode: %q requires ingress.exposure: %s", ingressTLSEdgeOrigin, ingressExposureEdgeProxied)
+		}
+		if edgeProvider != ingressEdgeCloudflare {
+			add("ingress.tls.mode: %q currently requires ingress.edge.provider: %q", ingressTLSEdgeOrigin, ingressEdgeCloudflare)
+		}
+	}
+
 	return errs
+}
+
+// firewallOpensPort checks if a FirewallConfig opens the given port.
+// A preset that includes the port counts (default includes 80/443, cloudflare includes 80/443).
+func firewallOpensPort(fw *FirewallConfig, port string) bool {
+	// Presets that include HTTP ports
+	if fw.Preset == "default" || fw.Preset == "cloudflare" {
+		if port == "80" || port == "443" {
+			return true
+		}
+	}
+	// Explicit rules
+	if cidrs, ok := fw.Rules[port]; ok && len(cidrs) > 0 {
+		return true
+	}
+	return false
+}
+
+func desiredIngressExposure(cfg *Config) string {
+	if cfg.Ingress != nil && cfg.Ingress.Exposure != "" {
+		return cfg.Ingress.Exposure
+	}
+	return ingressExposureDirect
+}
+
+func desiredIngressTLSMode(cfg *Config, exposure string) string {
+	if cfg.Ingress != nil && cfg.Ingress.TLS != nil && cfg.Ingress.TLS.Mode != "" {
+		return cfg.Ingress.TLS.Mode
+	}
+	if exposure == ingressExposureEdgeProxied {
+		return ingressTLSEdgeOrigin
+	}
+	return ingressTLSACME
+}
+
+func desiredIngressEdgeProvider(cfg *Config) string {
+	if cfg.Ingress != nil && cfg.Ingress.Edge != nil {
+		return cfg.Ingress.Edge.Provider
+	}
+	return ""
 }

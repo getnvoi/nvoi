@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/internal/render"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
 
@@ -92,6 +92,11 @@ Examples:
 				return err
 			}
 
+			noWait, _ := cmd.Flags().GetBool("no-wait")
+			if noWait {
+				return nil
+			}
+
 			return app.WaitAllServices(cmd.Context(), app.WaitAllServicesRequest{
 				Cluster: cluster,
 			})
@@ -109,6 +114,7 @@ Examples:
 	cmd.Flags().StringArray("env", nil, "environment variable (KEY=VALUE)")
 	cmd.Flags().StringArray("secret", nil, "secret key reference (must exist via secret set)")
 	cmd.Flags().StringArray("storage", nil, "storage name (injects STORAGE_{NAME}_* env vars from secrets)")
+	cmd.Flags().Bool("no-wait", false, "skip waiting for all pods to be ready")
 	_ = cmd.MarkFlagRequired("image")
 	return cmd
 }

@@ -6,7 +6,9 @@ import (
 	"testing"
 )
 
-func createRepo(t *testing.T, r interface{ ServeHTTP(http.ResponseWriter, *http.Request) }, token, wsID, name string) string {
+func createRepo(t *testing.T, r interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}, token, wsID, name string) string {
 	t.Helper()
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos", map[string]string{"name": name}, token)
 	w := httptest.NewRecorder()

@@ -137,6 +137,11 @@ services:
 
 domains:
   web: final.nvoi.to           # single string or list: [a.com, b.com]
+
+ingress:
+  exposure: direct             # or edge_proxied
+  tls:
+    mode: acme                 # or provided / edge_origin
 ```
 
 ### Service source (mutually exclusive)
@@ -202,16 +207,17 @@ Expand also auto-adds volumes required by managed services to the config.
 
 `Plan(prev, current, env)` is the single function that produces the full deploy sequence. Phase ordering is explicit — declared at the top of the function, one line per phase:
 
-**Deletes first (reverse deploy order):**
+**Deletes/reconciliation before DNS delete:**
 
 | Phase | StepKind | Maps to |
 |-------|----------|---------|
-| 1. DNS | `dns.delete` | `pkg/core.DNSDelete` |
-| 2. Services | `service.delete` | `pkg/core.ServiceDelete` |
-| 3. Storage | `storage.delete` | `pkg/core.StorageDelete` |
-| 4. Secrets | `secret.delete` | `pkg/core.SecretDelete` |
-| 5. Volumes | `volume.delete` | `pkg/core.VolumeDelete` |
-| 6. Compute | `instance.delete` | `pkg/core.ComputeDelete` |
+| 1. Ingress reconcile | `ingress.apply` | `pkg/core.IngressApply` |
+| 2. DNS | `dns.delete` | `pkg/core.DNSDelete` |
+| 3. Services | `service.delete` | `pkg/core.ServiceDelete` |
+| 4. Storage | `storage.delete` | `pkg/core.StorageDelete` |
+| 5. Secrets | `secret.delete` | `pkg/core.SecretDelete` |
+| 6. Volumes | `volume.delete` | `pkg/core.VolumeDelete` |
+| 7. Compute | `instance.delete` | `pkg/core.ComputeDelete` |
 
 **Then sets (forward deploy order):**
 

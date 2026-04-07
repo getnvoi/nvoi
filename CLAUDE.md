@@ -136,12 +136,15 @@ nvoi volume set <name> --size 20 --server master
 nvoi volume delete <name>
 nvoi volume list
 
-# ── DNS + Ingress — creates A record AND deploys Caddy reverse proxy
+# ── DNS — DNS records only
 # "web" is the service name — must have --port set via service set.
-# Caddy runs on master with hostNetwork, handles TLS via Let's Encrypt.
 nvoi dns set <service> <domain...>                                              # --zone or DNS_ZONE
 nvoi dns delete <service> <domain...>
 nvoi dns list
+
+# ── Ingress — Caddy routes/TLS only
+# Caddy runs on master with hostNetwork and reverse-proxies to the k8s Service.
+nvoi ingress apply <service:domain,domain ...>
 
 # ── Storage — creates bucket, stores S3 credentials as k8s secrets
 # Bucket name derived from convention: nvoi-{app}-{env}-{name}. Override with --bucket.
@@ -388,6 +391,7 @@ Hard errors before touching k8s.
 - `--compute-provider` = compute provider (for SSH tunnel to cluster registry). Required.
 - `--build-provider` = build provider (local, daytona, github). Required.
 - `--source` = what to build. Local path (`.`, `./path`) or remote repo (`org/repo`, `https://...`, `git@...`).
+- `--dockerfile-path` = override Dockerfile location (optional).
 - `--name` = image name in the registry. Required.
 - `build list` = query registry for all tags. Uses `--compute-provider` only (no builder needed).
 - `build latest <name>` = return latest image ref. Pipeable.
@@ -398,6 +402,35 @@ Hard errors before touching k8s.
   - Remote repo + `--build-provider local` → error (local can't clone remote repos).
   - Detection: `--source` starts with `.` or `/` → local. Otherwise → remote.
 - The registry IS the state. No build database. `build list` queries the registry directly over SSH.
+
+**Build — Dockerfile resolution (local source only):**
+
+`--source` is where the code is. The builder resolves the Dockerfile and build context automatically.
+
+When `--dockerfile-path` is **not set** (default):
+- Dockerfile: `{source}/Dockerfile` — standard docker convention.
+- Build context: project root, detected by walking up from `{source}` to find `.git` or `go.mod`. If source IS the project root, context = source.
+
+When `--dockerfile-path` **is set**:
+1. Try `{source}/{dockerfile-path}` — relative to source first.
+2. Try `{dockerfile-path}` — absolute or relative to cwd.
+3. Neither exists → hard error.
+- Build context: project root (same walk-up logic).
+
+Examples:
+```bash
+# Source is a subdirectory — Dockerfile found at ./cmd/web/Dockerfile,
+# build context is . (project root, where go.mod lives).
+nvoi build --build-provider local --source ./cmd/web --name web
+
+# Source is project root — Dockerfile at ./Dockerfile, context is .
+nvoi build --build-provider local --source . --name myapp
+
+# Explicit Dockerfile override
+nvoi build --build-provider local --source . --dockerfile-path docker/Dockerfile.prod --name web
+```
+
+For remote sources (`org/repo`, `https://...`): `--dockerfile-path` is passed through to the remote builder as-is. Build context logic is the builder's responsibility.
 
 **Node labeling:**
 - `instance set` labels k8s nodes with `nvoi-role={name}` after k3s install/join. Idempotent — runs every deploy.
@@ -413,14 +446,13 @@ Hard errors before touching k8s.
 - `volume delete` unmounts on all servers, then calls `DeleteVolume` (which detaches + deletes the cloud volume). Not just detach.
 
 **DNS / Ingress:**
-- `dns set <service> <domain...>` does two things: creates the DNS A record pointing at master, AND deploys Caddy ingress to the cluster.
+- `dns set <service> <domain...>` creates DNS A records pointing at master. Ingress is a separate subsystem.
 - Caddy runs as a Deployment with `hostNetwork: true` on the master node (binds port 80/443 directly).
 - Caddy reverse-proxies to the k8s Service by name: `domain → service.namespace.svc.cluster.local:port`.
-- Caddy handles TLS automatically via Let's Encrypt. No cert management needed.
-- Multiple `dns set` calls merge routes into a single Caddy config (ConfigMap). Caddy restarts on config change via annotation checksum.
-- `dns delete` removes the A record AND removes the route from Caddy config. If no routes remain, Caddy is deleted entirely.
-- `dns set` polls until `https://<domain>` returns 200 (or times out after 2 minutes if TLS is still provisioning).
-- **DNS records are DNS-only (not proxied).** Cloudflare records are created with `proxied: false`. Caddy handles TLS directly via Let's Encrypt — Cloudflare proxy in the path breaks certificate issuance. Existing proxied records are updated to DNS-only on next `dns set`.
+- Baseline ingress uses ACME automatically, but the declarative ingress surface can also express provided TLS material and explicit edge overlay behavior.
+- Ingress reconciliation owns Caddy route creation, update, and deletion.
+- `dns delete` is DNS-only and fails if ingress still references the service/domain. Remove or reconcile ingress first.
+- Provider-specific edge/proxy behavior is an overlay on top of the baseline DNS + ingress model, not part of DNS ownership itself.
 - Service must have `port > 0`. Hard error if service has no port.
 
 **Storage:**
@@ -598,3 +630,17 @@ const (
 - **`s3ops.go` uses a dedicated `s3Client` (not `utils.HTTPClient`).** S3/XML operations need raw HTTP, not JSON. Uses `var s3Client = &http.Client{Timeout: 30 * time.Second}` with all `io.ReadAll` errors checked and context propagated. This is by design — `utils.HTTPClient` is JSON-oriented.
 - **AWS SDK `LoadDefaultConfig` errors are deferred to `ValidateCredentials`.** Provider factories can't return errors (signature is `func(creds) Provider`). The AWS constructors store the config error on the struct and surface it on the first `ValidateCredentials` call.
 
+## Production hardening notes
+
+Lessons from real deployment failures. Each was a bug, each was fixed, each teaches a pattern.
+
+- **`~` doesn't expand in Go.** `os.ReadFile("~/.ssh/id_rsa")` fails. `resolveSSHKey()` calls `expandHome()` before reading. Any path from env vars or flags that could contain `~` must expand it. Never trust shell expansion in Go code.
+- **`kubectl apply` does strategic merge, not full replace.** Switching a Deployment from `RollingUpdate` to `Recreate` via `kubectl apply` leaves the old `rollingUpdate` field, causing k8s to reject the update or silently ignore the strategy change. Fix: `kube.Apply()` uses `kubectl replace` first (full overwrite, no leftover fields), falls back to `kubectl apply --server-side --force-conflicts` for first creation.
+- **Caddy with `hostNetwork` can't rolling-update on single-node.** New pod can't bind 80/443 while old pod holds them. Caddy Deployment uses `Recreate` strategy — kills old pod first, then starts new. No `RollingUpdate` for `hostNetwork` workloads on single-node clusters.
+- **DNS and ingress are separate concerns.** `dns set` creates A records only. `ingress apply` owns Caddy entirely — takes all `service:domain` mappings, builds full Caddyfile, deploys once. Never restart Caddy per-domain. One deploy for all routes.
+- **`WaitAllServices` must detect terminal failures.** Polling "1/2 pods ready" for 5 minutes with no feedback is useless. `CrashLoopBackOff` and `Error` statuses trigger early exit after `waitCrashTimeout` (2 min). On bail-out, fetch `--previous` logs from crashing pods via `kube.RecentLogs`. Always show WHY, not just WHAT.
+- **`service set` in deploy scripts needs `--no-wait`.** Each `service set` calls `WaitAllServices` which checks ALL pods in the namespace — including unrelated crashing pods from previous failed deploys. Use `--no-wait` on all but the last service. Only the final service waits for the full cluster.
+- **Build source and Dockerfile are separate.** `--source ./cmd/web` means the Dockerfile lives at `./cmd/web/Dockerfile`. Build context is the project root (walk up to `.git`/`go.mod`). Docker `-f` flag points to the Dockerfile, context is always the root. Dockerfiles that `COPY go.mod` need the root as context.
+- **GitHub Actions secrets can't start with `GITHUB_`.** Reserved prefix. Also: app secrets (`POSTGRES_PASSWORD`, `JWT_SECRET`, `ENCRYPTION_KEY`) are runtime secrets — generate strong random values, never reuse `.env` passwords from development.
+- **Concurrency control on deploy workflows.** Multiple pushes to main queue multiple deploys. Use `concurrency: { group: deploy, cancel-in-progress: false }` to serialize — new deploys wait for current to finish. Never overlap infrastructure mutations.
+- **ARM servers need ARM runners.** `cax11` (Hetzner ARM) produces `linux/arm64` images. GitHub's `ubuntu-latest` is amd64 — can't execute arm64 `RUN` instructions. Use `ubuntu-24.04-arm` runner for native builds, no QEMU.

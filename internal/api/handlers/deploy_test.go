@@ -15,6 +15,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+firewall: default
 services:
   db:
     managed: postgres
@@ -79,8 +80,8 @@ func TestDeploy_CreatesDeploymentWithSteps(t *testing.T) {
 		t.Errorf("first step = %s, want instance.set", first.Kind)
 	}
 	last := deployment.Steps[len(deployment.Steps)-1]
-	if last.Kind != "dns.set" {
-		t.Errorf("last step = %s, want dns.set", last.Kind)
+	if last.Kind != "ingress.apply" {
+		t.Errorf("last step = %s, want ingress.apply", last.Kind)
 	}
 
 	// All steps should be pending.
@@ -331,7 +332,7 @@ func TestDeploy_LogsEndpoint(t *testing.T) {
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	var created struct {
-		ID    string `json:"id"`
+		ID    string                `json:"id"`
 		Steps []struct{ ID string } `json:"steps"`
 	}
 	decode(t, w, &created)

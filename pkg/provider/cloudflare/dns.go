@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // DNSClient manages A/AAAA records via the Cloudflare API.
@@ -42,7 +42,7 @@ func (d *DNSClient) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string) error {
+func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
 	rtype := provider.RecordType(ip)
 	name := provider.RecordName(domain, d.zone)
 
@@ -57,13 +57,13 @@ func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string) error 
 	}
 
 	for _, rec := range existing {
-		if rec.Content == ip && !rec.Proxied {
+		if rec.Content == ip && rec.Proxied == proxied {
 			return nil // already correct
 		}
-		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: rtype, Name: fqdn, Content: ip, TTL: 300, Proxied: false})
+		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: rtype, Name: fqdn, Content: ip, TTL: 300, Proxied: proxied})
 	}
 
-	return d.createRecord(ctx, cfDNSRecord{Type: rtype, Name: fqdn, Content: ip, TTL: 300, Proxied: false})
+	return d.createRecord(ctx, cfDNSRecord{Type: rtype, Name: fqdn, Content: ip, TTL: 300, Proxied: proxied})
 }
 
 func (d *DNSClient) DeleteARecord(ctx context.Context, domain string) error {

@@ -98,7 +98,7 @@ func Expand(cfg *config.Config, storedCreds map[string]map[string]string) (expan
 
 	// Phase 1: Replace managed services with real specs + resolve credentials.
 	managedCreds := map[string]map[string]string{} // name → {HOST: ..., PORT: ..., ...}
-	managedPrefixes := map[string]string{}          // name → "DATABASE"
+	managedPrefixes := map[string]string{}         // name → "DATABASE"
 
 	for name, svc := range services {
 		if svc.Managed == "" {
@@ -204,4 +204,3 @@ func RandomHex(n int) string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
-

@@ -11,8 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // AMI aliases map generic image names to Ubuntu AMI name patterns.
@@ -69,12 +69,12 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 
 	// Launch instance
 	input := &ec2.RunInstancesInput{
-		ImageId:      aws.String(amiID),
-		InstanceType: ec2types.InstanceType(req.ServerType),
-		MinCount:     aws.Int32(1),
-		MaxCount:     aws.Int32(1),
-		SubnetId:     aws.String(subnetID),
-		SecurityGroupIds: []string{sgID},
+		ImageId:           aws.String(amiID),
+		InstanceType:      ec2types.InstanceType(req.ServerType),
+		MinCount:          aws.Int32(1),
+		MaxCount:          aws.Int32(1),
+		SubnetId:          aws.String(subnetID),
+		SecurityGroupIds:  []string{sgID},
 		TagSpecifications: tagSpec(ec2types.ResourceTypeInstance, req.Name, req.Labels),
 	}
 	if req.UserData != "" {

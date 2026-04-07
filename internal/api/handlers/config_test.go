@@ -16,6 +16,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+firewall: default
 volumes:
   pgdata:
     size: 30
@@ -54,7 +55,9 @@ const validEnv = `POSTGRES_PASSWORD=s3cret
 RAILS_MASTER_KEY=abc123
 `
 
-func pushConfig(t *testing.T, r interface{ ServeHTTP(http.ResponseWriter, *http.Request) }, token, wsID, repoID, yaml, env string) int {
+func pushConfig(t *testing.T, r interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}, token, wsID, repoID, yaml, env string) int {
 	t.Helper()
 	body := map[string]any{
 		"compute_provider": "hetzner",
@@ -273,10 +276,10 @@ func TestConfig_Plan(t *testing.T) {
 	if resp.Steps[0].Kind != "instance.set" {
 		t.Errorf("first step = %s, want instance.set", resp.Steps[0].Kind)
 	}
-	// Last step should be dns.set.
+	// Last step should be ingress.apply.
 	last := resp.Steps[len(resp.Steps)-1]
-	if last.Kind != "dns.set" {
-		t.Errorf("last step = %s, want dns.set", last.Kind)
+	if last.Kind != "ingress.apply" {
+		t.Errorf("last step = %s, want ingress.apply", last.Kind)
 	}
 }
 
@@ -437,7 +440,9 @@ services:
     uses: [db, cache]
 `
 
-func pushManagedConfig(t *testing.T, r interface{ ServeHTTP(http.ResponseWriter, *http.Request) }, token, wsID, repoID string) (int, string) {
+func pushManagedConfig(t *testing.T, r interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}, token, wsID, repoID string) (int, string) {
 	t.Helper()
 	body := map[string]any{
 		"compute_provider": "hetzner",
