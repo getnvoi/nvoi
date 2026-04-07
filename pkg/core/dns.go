@@ -152,8 +152,10 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 
 type IngressApplyRequest struct {
 	Cluster
-	Routes []IngressRouteArg
-	Proxy  bool // Cloudflare proxy mode — Caddy serves :80, CF terminates TLS
+	Routes  []IngressRouteArg
+	Proxy   bool   // Cloudflare proxy mode — firewall coherence + skip WaitHTTPS
+	CertPEM string // TLS cert PEM — custom cert instead of ACME (optional)
+	KeyPEM  string // TLS key PEM (required if CertPEM is set)
 }
 
 // IngressApply builds the full Caddyfile from the given routes and deploys Caddy once.
@@ -197,6 +199,24 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 	// Pre-flight: firewall × proxy coherence
 	if err := checkFirewallCoherence(ctx, req.Cluster, req.Proxy); err != nil {
 		return err
+	}
+
+	// Store TLS cert if provided (custom cert or auto-generated Origin CA)
+	hasCert := req.CertPEM != "" && req.KeyPEM != ""
+	if hasCert {
+		out.Progress("storing TLS certificate")
+		if err := kube.UpsertTLSSecret(ctx, ssh, ns, "caddy-origin-cert", req.CertPEM, req.KeyPEM); err != nil {
+			return fmt.Errorf("store cert: %w", err)
+		}
+		out.Success("certificate stored")
+	}
+
+	// Use custom TLS (cert provided or proxy mode) — triggers tls directive in Caddyfile
+	useCustomTLS := hasCert || req.Proxy
+	if useCustomTLS {
+		for i := range routes {
+			routes[i].Proxy = true
+		}
 	}
 
 	out.Progress("applying caddy config")

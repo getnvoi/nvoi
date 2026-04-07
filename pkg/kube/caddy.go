@@ -23,11 +23,28 @@ type IngressRoute struct {
 	Proxy   bool // Cloudflare proxy mode — Caddy serves plain HTTP, no TLS
 }
 
+// OriginCert holds a PEM cert+key pair for Caddy TLS.
+type OriginCert struct {
+	Cert string // PEM
+	Key  string // PEM
+}
+
+const caddyTLSSecretName = "caddy-origin-cert"
+
 // ApplyCaddyConfig updates the ConfigMap and hot-reloads Caddy.
 // If Caddy isn't running yet, deploys it. Zero downtime for config changes.
+// Detects proxy mode from routes — mounts TLS secret if any route is proxied.
 func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, routes []IngressRoute, names *utils.Names) error {
 	if len(routes) == 0 {
 		return nil
+	}
+
+	hasProxy := false
+	for _, r := range routes {
+		if r.Proxy {
+			hasProxy = true
+			break
+		}
 	}
 
 	caddyfile := generateCaddyfile(routes, ns)
@@ -45,7 +62,7 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 	_, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get deployment %s 2>/dev/null", names.KubeCaddy())))
 	if err != nil {
 		// First deploy — create the Deployment
-		depYAML, err := generateDeploymentYAML(names, ns)
+		depYAML, err := generateDeploymentYAML(names, ns, hasProxy)
 		if err != nil {
 			return fmt.Errorf("generate deployment: %w", err)
 		}
@@ -92,6 +109,24 @@ func caddyPodName(ctx context.Context, ssh utils.SSHClient, ns, deploymentName s
 	return name, nil
 }
 
+// UpsertTLSSecret creates or updates a k8s TLS secret with cert and key.
+func UpsertTLSSecret(ctx context.Context, ssh utils.SSHClient, ns, name, cert, key string) error {
+	secret := corev1.Secret{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Type:       corev1.SecretTypeTLS,
+		StringData: map[string]string{
+			"tls.crt": cert,
+			"tls.key": key,
+		},
+	}
+	b, err := sigsyaml.Marshal(secret)
+	if err != nil {
+		return fmt.Errorf("marshal tls secret: %w", err)
+	}
+	return Apply(ctx, ssh, ns, strings.TrimSpace(string(b)))
+}
+
 // GenerateCaddyManifest produces the full Caddy ConfigMap + Deployment YAML.
 // Used only for first deploy or when the deployment itself needs updating (image change).
 func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, error) {
@@ -127,7 +162,8 @@ func generateConfigMapYAML(caddyfile string, names *utils.Names, ns string) (str
 	return strings.TrimSpace(string(b)), nil
 }
 
-func generateDeploymentYAML(names *utils.Names, ns string) (string, error) {
+func generateDeploymentYAML(names *utils.Names, ns string, proxy ...bool) (string, error) {
+	hasProxy := len(proxy) > 0 && proxy[0]
 	one := int32(1)
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	caddyName := names.KubeCaddy()
@@ -158,24 +194,9 @@ func generateDeploymentYAML(names *utils.Names, ns string) (string, error) {
 							{ContainerPort: 80, HostPort: 80},
 							{ContainerPort: 443, HostPort: 443},
 						},
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "config", MountPath: "/etc/caddy/Caddyfile", SubPath: "Caddyfile", ReadOnly: true},
-							{Name: "data", MountPath: "/data"},
-						},
+						VolumeMounts: caddyVolumeMounts(hasProxy),
 					}},
-					Volumes: []corev1.Volume{
-						{Name: "config", VolumeSource: corev1.VolumeSource{
-							ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{Name: names.KubeCaddyConfig()},
-							},
-						}},
-						{Name: "data", VolumeSource: corev1.VolumeSource{
-							HostPath: &corev1.HostPathVolumeSource{
-								Path: names.CaddyDataPath(),
-								Type: &hostPathType,
-							},
-						}},
-					},
+					Volumes: caddyVolumes(names, hostPathType, hasProxy),
 				},
 			},
 		},
@@ -185,6 +206,45 @@ func generateDeploymentYAML(names *utils.Names, ns string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(b)), nil
+}
+
+func caddyVolumeMounts(proxy bool) []corev1.VolumeMount {
+	mounts := []corev1.VolumeMount{
+		{Name: "config", MountPath: "/etc/caddy/Caddyfile", SubPath: "Caddyfile", ReadOnly: true},
+		{Name: "data", MountPath: "/data"},
+	}
+	if proxy {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name: "tls", MountPath: "/etc/caddy/tls", ReadOnly: true,
+		})
+	}
+	return mounts
+}
+
+func caddyVolumes(names *utils.Names, hostPathType corev1.HostPathType, proxy bool) []corev1.Volume {
+	vols := []corev1.Volume{
+		{Name: "config", VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: names.KubeCaddyConfig()},
+			},
+		}},
+		{Name: "data", VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: names.CaddyDataPath(),
+				Type: &hostPathType,
+			},
+		}},
+	}
+	if proxy {
+		vols = append(vols, corev1.Volume{
+			Name: "tls", VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: caddyTLSSecretName,
+				},
+			},
+		})
+	}
+	return vols
 }
 
 // ── Caddyfile generation ──────────────────────────────────────────────────────
@@ -230,18 +290,20 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 		b.WriteString("}\n")
 	}
 
-	if len(proxied) > 0 {
-		if len(direct) > 0 {
+	// Proxied routes: HTTPS with Cloudflare Origin CA cert (no ACME)
+	for i, route := range proxied {
+		if i > 0 || len(direct) > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(":80 {\n")
-		for _, route := range proxied {
-			for _, domain := range route.Domains {
-				fmt.Fprintf(&b, "\t@%s_%s host %s\n", route.Service, sanitizeMatcher(domain), domain)
-				fmt.Fprintf(&b, "\treverse_proxy @%s_%s %s.%s.svc.cluster.local:%d\n",
-					route.Service, sanitizeMatcher(domain), route.Service, namespace, route.Port)
+		for j, domain := range route.Domains {
+			if j > 0 {
+				b.WriteString(", ")
 			}
+			b.WriteString(domain)
 		}
+		b.WriteString(" {\n")
+		b.WriteString("\ttls /etc/caddy/tls/tls.crt /etc/caddy/tls/tls.key\n")
+		fmt.Fprintf(&b, "\treverse_proxy %s.%s.svc.cluster.local:%d\n", route.Service, namespace, route.Port)
 		b.WriteString("}\n")
 	}
 
