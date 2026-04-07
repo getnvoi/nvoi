@@ -30,7 +30,8 @@ func newDNSSetCmd() *cobra.Command {
 
 Examples:
   nvoi dns set web myapp.com --zone myapp.com
-  nvoi dns set web api.myapp.com www.myapp.com --zone myapp.com`,
+  nvoi dns set web api.myapp.com www.myapp.com --zone myapp.com
+  nvoi dns set web myapp.com --cloudflare-managed`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := args[0]
@@ -60,6 +61,7 @@ Examples:
 			if err != nil {
 				return err
 			}
+			cloudflareManaged, _ := cmd.Flags().GetBool("cloudflare-managed")
 
 			return app.DNSSet(cmd.Context(), app.DNSSetRequest{
 				Cluster: app.Cluster{
@@ -70,9 +72,10 @@ Examples:
 					SSHKey:      sshKey,
 					Output:      resolveOutput(cmd),
 				},
-				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
-				Service: service,
-				Domains: domains,
+				DNS:         app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
+				Service:     service,
+				Domains:     domains,
+				EdgeProxied: cloudflareManaged,
 			})
 		},
 	}
@@ -80,6 +83,7 @@ Examples:
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
+	cmd.Flags().Bool("cloudflare-managed", false, "enable Cloudflare-managed DNS proxying")
 	return cmd
 }
 
