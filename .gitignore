@@ -12,4 +12,3 @@ node_modules/
 cmd/web/static/css/output.css
 cmd/web/static/css/output-*.css
 cmd/web/static/manifest.json
-cmd/web/package-lock.json
