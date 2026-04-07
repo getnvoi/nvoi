@@ -190,3 +190,130 @@ func TestIngressApply_NoCluster(t *testing.T) {
 		t.Fatal("expected error when no cluster exists")
 	}
 }
+
+func TestIngressApply_ProxyWithOpenFirewall(t *testing.T) {
+	origDelay := kube.CaddyReloadDelay
+	kube.CaddyReloadDelay = 0
+	defer func() { kube.CaddyReloadDelay = origDelay }()
+
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+		GetFirewallRulesFn: func(ctx context.Context, name string) (provider.PortAllowList, error) {
+			return provider.PortAllowList{
+				"22":  {"0.0.0.0/0"},
+				"80":  {"0.0.0.0/0"},
+				"443": {"0.0.0.0/0"},
+			}, nil
+		},
+	}
+
+	err := IngressApply(context.Background(), IngressApplyRequest{
+		Cluster: ingressCluster(out, ingressSSH(), mock),
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
+		Proxy:   true,
+	})
+
+	if err == nil {
+		t.Fatal("expected error: proxy + open firewall")
+	}
+	if !strings.Contains(err.Error(), "bypassing Cloudflare") {
+		t.Errorf("error should mention bypassing Cloudflare, got: %v", err)
+	}
+}
+
+func TestIngressApply_NoProxyWithCFFirewall(t *testing.T) {
+	origDelay := kube.CaddyReloadDelay
+	kube.CaddyReloadDelay = 0
+	defer func() { kube.CaddyReloadDelay = origDelay }()
+
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+		GetFirewallRulesFn: func(ctx context.Context, name string) (provider.PortAllowList, error) {
+			return provider.PortAllowList{
+				"22":  {"0.0.0.0/0"},
+				"80":  {"173.245.48.0/20", "103.21.244.0/22"},
+				"443": {"173.245.48.0/20", "103.21.244.0/22"},
+			}, nil
+		},
+	}
+
+	err := IngressApply(context.Background(), IngressApplyRequest{
+		Cluster: ingressCluster(out, ingressSSH(), mock),
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
+		Proxy:   false,
+	})
+
+	if err == nil {
+		t.Fatal("expected error: no proxy + CF-only firewall")
+	}
+	if !strings.Contains(err.Error(), "ACME") {
+		t.Errorf("error should mention ACME, got: %v", err)
+	}
+}
+
+func TestIngressApply_ProxyWithCFFirewall(t *testing.T) {
+	origDelay := kube.CaddyReloadDelay
+	kube.CaddyReloadDelay = 0
+	defer func() { kube.CaddyReloadDelay = origDelay }()
+
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+		GetFirewallRulesFn: func(ctx context.Context, name string) (provider.PortAllowList, error) {
+			return provider.PortAllowList{
+				"22":  {"0.0.0.0/0"},
+				"80":  {"173.245.48.0/20"},
+				"443": {"173.245.48.0/20"},
+			}, nil
+		},
+	}
+
+	err := IngressApply(context.Background(), IngressApplyRequest{
+		Cluster: ingressCluster(out, ingressSSH(), mock),
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
+		Proxy:   true,
+	})
+
+	if err != nil {
+		t.Fatalf("proxy + CF firewall should pass, got: %v", err)
+	}
+	// Should report proxied success, not WaitHTTPS
+	foundProxied := false
+	for _, msg := range out.Successes {
+		if strings.Contains(msg, "proxied via Cloudflare") {
+			foundProxied = true
+		}
+	}
+	if !foundProxied {
+		t.Errorf("expected 'proxied via Cloudflare' success, got: %v", out.Successes)
+	}
+}
+
+func TestIngressApply_FirewallClosedWithProxy(t *testing.T) {
+	origDelay := kube.CaddyReloadDelay
+	kube.CaddyReloadDelay = 0
+	defer func() { kube.CaddyReloadDelay = origDelay }()
+
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+		GetFirewallRulesFn: func(ctx context.Context, name string) (provider.PortAllowList, error) {
+			return nil, nil // no rules at all
+		},
+	}
+
+	err := IngressApply(context.Background(), IngressApplyRequest{
+		Cluster: ingressCluster(out, ingressSSH(), mock),
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
+		Proxy:   true,
+	})
+
+	if err == nil {
+		t.Fatal("expected error when firewall closed")
+	}
+	if !strings.Contains(err.Error(), "firewall set cloudflare") {
+		t.Errorf("proxy mode should suggest 'firewall set cloudflare', got: %v", err)
+	}
+}

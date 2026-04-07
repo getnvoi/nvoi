@@ -22,7 +22,7 @@ func newIngressApplyCmd() *cobra.Command {
 
 Examples:
   nvoi ingress apply web:example.com,www.example.com api:api.example.com
-  nvoi ingress apply web:myapp.com`,
+  nvoi ingress apply web:myapp.com --proxy    # Cloudflare proxy mode`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			appName, env, err := resolveAppEnv(cmd)
@@ -47,6 +47,8 @@ Examples:
 				return err
 			}
 
+			proxy, _ := cmd.Flags().GetBool("proxy")
+
 			return app.IngressApply(cmd.Context(), app.IngressApplyRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
@@ -57,10 +59,12 @@ Examples:
 					Output:      resolveOutput(cmd),
 				},
 				Routes: routes,
+				Proxy:  proxy,
 			})
 		},
 	}
 	addComputeProviderFlags(cmd)
 	addAppFlags(cmd)
+	cmd.Flags().Bool("proxy", false, "Cloudflare proxy mode — Caddy serves plain HTTP, CF terminates TLS")
 	return cmd
 }

@@ -153,6 +153,7 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 type IngressApplyRequest struct {
 	Cluster
 	Routes []IngressRouteArg
+	Proxy  bool // Cloudflare proxy mode — Caddy serves :80, CF terminates TLS
 }
 
 // IngressApply builds the full Caddyfile from the given routes and deploys Caddy once.
@@ -183,6 +184,7 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 			Service: r.Service,
 			Port:    port,
 			Domains: r.Domains,
+			Proxy:   req.Proxy,
 		})
 		out.Progress(fmt.Sprintf("%s → %s", r.Service, strings.Join(r.Domains, ", ")))
 	}
@@ -192,18 +194,9 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 		return nil
 	}
 
-	// Pre-flight: check firewall has 80/443 open before deploying ingress
-	prov, err := req.Cluster.Compute()
-	if err == nil {
-		fwNames, _ := req.Cluster.Names()
-		if fwNames != nil {
-			rules, _ := prov.GetFirewallRules(ctx, fwNames.Firewall())
-			has80 := len(rules["80"]) > 0
-			has443 := len(rules["443"]) > 0
-			if !has80 || !has443 {
-				return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set default' first", fwNames.Firewall())
-			}
-		}
+	// Pre-flight: firewall × proxy coherence
+	if err := checkFirewallCoherence(ctx, req.Cluster, req.Proxy); err != nil {
+		return err
 	}
 
 	out.Progress("applying caddy config")
@@ -214,11 +207,62 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 
 	// Verify domains are reachable
 	firstDomain := req.Routes[0].Domains[0]
-	out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
-	if err := waitHTTPSFunc(ctx, firstDomain); err != nil {
-		return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
+	if req.Proxy {
+		out.Success(fmt.Sprintf("proxied via Cloudflare — https://%s", firstDomain))
+	} else {
+		out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
+		if err := waitHTTPSFunc(ctx, firstDomain); err != nil {
+			return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
+		}
+		out.Success(fmt.Sprintf("https://%s live", firstDomain))
 	}
-	out.Success(fmt.Sprintf("https://%s live", firstDomain))
+
+	return nil
+}
+
+// checkFirewallCoherence validates firewall rules match the proxy mode.
+// Proxy + open to all = origin directly reachable, bypassing Cloudflare.
+// No proxy + CF-only firewall = ACME (Let's Encrypt) can't reach origin.
+func checkFirewallCoherence(ctx context.Context, c Cluster, proxy bool) error {
+	prov, err := c.Compute()
+	if err != nil {
+		return nil // can't check, skip
+	}
+	fwNames, err := c.Names()
+	if err != nil {
+		return nil
+	}
+
+	rules, err := prov.GetFirewallRules(ctx, fwNames.Firewall())
+	if err != nil {
+		return nil // can't check, skip
+	}
+
+	has80 := len(rules["80"]) > 0
+	has443 := len(rules["443"]) > 0
+
+	if !has80 || !has443 {
+		if proxy {
+			return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set cloudflare' first", fwNames.Firewall())
+		}
+		return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set default' first", fwNames.Firewall())
+	}
+
+	isOpenToAll := false
+	for _, cidr := range rules["80"] {
+		if cidr == "0.0.0.0/0" || cidr == "::/0" {
+			isOpenToAll = true
+			break
+		}
+	}
+
+	if proxy && isOpenToAll {
+		return fmt.Errorf("--proxy with firewall open to all — origin is directly reachable, bypassing Cloudflare. Run 'nvoi firewall set cloudflare' to restrict 80/443 to Cloudflare IPs")
+	}
+
+	if !proxy && !isOpenToAll {
+		return fmt.Errorf("firewall restricts 80/443 but --proxy not set — Let's Encrypt ACME validation will fail. Add --proxy or run 'nvoi firewall set default'")
+	}
 
 	return nil
 }
