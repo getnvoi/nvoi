@@ -120,6 +120,8 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 
 	out.Command("storage", "delete", req.Name)
 
+	bucketAlreadyGone := false
+
 	if req.Storage.Name != "" {
 		bucket, err := provider.ResolveBucket(req.Storage.Name, req.Storage.Creds)
 		if err != nil {
@@ -128,7 +130,10 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 		bucketName := names.Bucket(req.Name)
 		out.Progress(fmt.Sprintf("deleting bucket %s", bucketName))
 		if err := bucket.DeleteBucket(ctx, bucketName); err != nil {
-			return err // ErrNotFound or real error — caller handles both
+			if !errors.Is(err, utils.ErrNotFound) {
+				return err
+			}
+			bucketAlreadyGone = true
 		}
 	}
 
@@ -153,6 +158,9 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 
 	for _, key := range keys {
 		_ = kube.DeleteSecretKey(ctx, ssh, ns, secretName, key)
+	}
+	if bucketAlreadyGone {
+		return utils.ErrNotFound
 	}
 	return nil
 }

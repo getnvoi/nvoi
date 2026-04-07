@@ -10,7 +10,7 @@ export COMPUTE_PROVIDER=aws
 export DNS_PROVIDER=cloudflare
 export STORAGE_PROVIDER=aws
 
-bin/core dns delete web final.nvoi.to -y
+bin/core dns delete web aws.nvoi.to -y
 bin/core storage empty assets -y
 bin/core storage delete assets -y
 bin/core secret delete RAILS_MASTER_KEY

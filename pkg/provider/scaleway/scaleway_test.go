@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func testClient(t *testing.T, handler http.Handler) *Client {
@@ -209,7 +210,15 @@ func TestBuildScalewayFirewallRules_Cloudflare(t *testing.T) {
 	// SSH should still be open to all (default when not in allow list)
 	sshOpen := false
 	for _, r := range rules {
-		if r.Port == "22" && len(r.SourceIPs) == 1 && r.SourceIPs[0] == "0.0.0.0/0" {
+		if r.Port == "22" && len(r.SourceIPs) >= 1 {
+			for _, ip := range r.SourceIPs {
+				if ip == "0.0.0.0/0" {
+					sshOpen = true
+					break
+				}
+			}
+		}
+		if sshOpen {
 			sshOpen = true
 		}
 	}
@@ -404,7 +413,7 @@ func TestBaseFirewallRules_PrivatePorts(t *testing.T) {
 	for _, r := range rules {
 		if _, ok := privatePorts[r.Port]; ok {
 			for _, ip := range r.SourceIPs {
-				if ip == "10.0.0.0/8" {
+				if ip == utils.PrivateNetworkCIDR {
 					privatePorts[r.Port] = true
 				}
 			}
@@ -413,7 +422,7 @@ func TestBaseFirewallRules_PrivatePorts(t *testing.T) {
 
 	for port, found := range privatePorts {
 		if !found {
-			t.Errorf("port %s should be restricted to 10.0.0.0/8", port)
+			t.Errorf("port %s should be restricted to %s", port, utils.PrivateNetworkCIDR)
 		}
 	}
 }

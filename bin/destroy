@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NVOI="${NVOI_BIN:-$ROOT_DIR/bin/core}"
+
+: "${NVOI_APP_NAME:=nvoi}"
+: "${NVOI_ENV:=prod}"
+: "${COMPUTE_PROVIDER:=hetzner}"
+: "${DNS_PROVIDER:=cloudflare}"
+: "${STORAGE_PROVIDER:=cloudflare}"
+
+# Ingress first: service delete and dns delete are guarded.
+"$NVOI" ingress delete -y
+
+# DNS
+"$NVOI" dns delete web nvoi.to www.nvoi.to -y
+"$NVOI" dns delete api api.nvoi.to -y
+"$NVOI" dns delete distribution get.nvoi.to -y
+
+# Storage contents before bucket deletion
+"$NVOI" storage empty releases -y
+
+# Secrets
+"$NVOI" secret delete DATABASE_URL
+"$NVOI" secret delete ENCRYPTION_KEY
+"$NVOI" secret delete JWT_SECRET
+"$NVOI" secret delete POSTGRES_PASSWORD
+
+# Services
+"$NVOI" service delete distribution -y
+"$NVOI" service delete web -y
+"$NVOI" service delete api -y
+"$NVOI" service delete db -y
+
+# Storage resource
+"$NVOI" storage delete releases -y
+
+# Volumes and compute
+"$NVOI" volume delete pgdata -y
+"$NVOI" instance delete master -y

@@ -8,6 +8,8 @@ import (
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 )
 
+var describeInfraState = pkgcore.Describe
+
 // InfraStateRequest holds everything needed to query reality.
 type InfraStateRequest struct {
 	pkgcore.Cluster
@@ -50,7 +52,7 @@ func InfraState(ctx context.Context, req InfraStateRequest) *Cfg {
 	}
 
 	// ── Cluster state: services, storage, DNS ─────────────────────────────
-	desc, err := pkgcore.Describe(ctx, pkgcore.DescribeRequest{Cluster: req.Cluster})
+	desc, err := describeInfraState(ctx, pkgcore.DescribeRequest{Cluster: req.Cluster})
 	if err != nil {
 		if len(cfg.Servers) == 0 && len(cfg.Volumes) == 0 {
 			return nil
@@ -69,12 +71,6 @@ func InfraState(ctx context.Context, req InfraStateRequest) *Cfg {
 			cfg.Domains[i.Service] = append(existing, i.Domain)
 		} else {
 			cfg.Domains[i.Service] = config.Domains{i.Domain}
-		}
-		if i.Proxy {
-			if cfg.DomainProxy == nil {
-				cfg.DomainProxy = map[string]bool{}
-			}
-			cfg.DomainProxy[i.Service] = true
 		}
 	}
 

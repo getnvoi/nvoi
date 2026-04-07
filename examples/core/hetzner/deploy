@@ -73,7 +73,7 @@ bin/core service set jobs \
 
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
-bin/core dns set web hz.nvoi.to --proxy
+bin/core dns set web hz.nvoi.to --cloudflare-managed
 
 echo ""
 echo "==> done. https://hz.nvoi.to"

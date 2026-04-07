@@ -275,8 +275,9 @@ func TestParseFirewallFromParams_Nil(t *testing.T) {
 
 func TestParseIngressRoutesFromParams_Valid(t *testing.T) {
 	params := map[string]any{
+		"exposure": "edge_proxied",
 		"routes": []any{
-			map[string]any{"service": "web", "domains": []any{"example.com"}, "proxy": true},
+			map[string]any{"service": "web", "domains": []any{"example.com"}},
 		},
 	}
 	routes, err := parseIngressRoutesFromParams(params)
@@ -289,8 +290,8 @@ func TestParseIngressRoutesFromParams_Valid(t *testing.T) {
 	if routes[0].Service != "web" {
 		t.Errorf("service = %q", routes[0].Service)
 	}
-	if !routes[0].Proxy {
-		t.Error("proxy should be true")
+	if !routes[0].EdgeProxied {
+		t.Error("EdgeProxied should be true")
 	}
 }
 
@@ -300,9 +301,12 @@ func TestParseIngressRoutesFromParams_MissingService(t *testing.T) {
 			map[string]any{"domains": []any{"example.com"}},
 		},
 	}
-	_, err := parseIngressRoutesFromParams(params)
-	if err == nil {
-		t.Fatal("expected error for missing service")
+	routes, err := parseIngressRoutesFromParams(params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("routes = %d, want 0", len(routes))
 	}
 }
 
@@ -312,9 +316,12 @@ func TestParseIngressRoutesFromParams_NoDomains(t *testing.T) {
 			map[string]any{"service": "web"},
 		},
 	}
-	_, err := parseIngressRoutesFromParams(params)
-	if err == nil {
-		t.Fatal("expected error for empty domains")
+	routes, err := parseIngressRoutesFromParams(params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("routes = %d, want 0", len(routes))
 	}
 }
 

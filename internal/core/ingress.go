@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
@@ -88,7 +89,7 @@ Examples:
 				}
 			}
 
-			return app.IngressApply(cmd.Context(), app.IngressApplyRequest{
+			err = app.IngressApply(cmd.Context(), app.IngressApplyRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -104,6 +105,7 @@ Examples:
 				CertPEM:      certPEM,
 				KeyPEM:       keyPEM,
 			})
+			return err
 		},
 	}
 	addComputeProviderFlags(cmd)
@@ -167,7 +169,7 @@ func newIngressDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			return app.IngressApply(cmd.Context(), app.IngressApplyRequest{
+			err = app.IngressApply(cmd.Context(), app.IngressApplyRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -178,6 +180,7 @@ func newIngressDeleteCmd() *cobra.Command {
 				},
 				Routes: nil,
 			})
+			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addComputeProviderFlags(cmd)

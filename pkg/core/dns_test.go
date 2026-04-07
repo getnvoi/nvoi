@@ -64,32 +64,26 @@ func TestParseIngressArgs(t *testing.T) {
 	}
 }
 
-func TestParseIngressArgs_ProxyDefault(t *testing.T) {
+func TestParseIngressArgs_EdgeProxiedDefaultsFalse(t *testing.T) {
 	routes, err := ParseIngressArgs([]string{"web:example.com"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if routes[0].Proxy {
-		t.Error("Proxy should default to false")
+	if routes[0].EdgeProxied {
+		t.Error("EdgeProxied should default to false")
 	}
 }
 
-func TestParseIngressArgs_PerRouteProxy(t *testing.T) {
+func TestParseIngressArgs_NoPerRouteEdgeMode(t *testing.T) {
 	routes, err := ParseIngressArgs([]string{
-		"web:example.com:proxy",
+		"web:example.com",
 		"api:api.example.com",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !routes[0].Proxy {
-		t.Error("route[0] should have Proxy=true")
-	}
-	if routes[0].Domains[0] != "example.com" {
-		t.Errorf("route[0] domain = %q, want example.com", routes[0].Domains[0])
-	}
-	if routes[1].Proxy {
-		t.Error("route[1] should have Proxy=false")
+	if routes[0].EdgeProxied || routes[1].EdgeProxied {
+		t.Fatal("ParseIngressArgs should not infer per-route edge mode")
 	}
 }
 

@@ -1,59 +1,97 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Draft target deploy script for the future CLI model.
-# This stays CLI-first: config and CLI should express the same underlying model.
-# The public CLI should remain boring even if the internals stay more explicit.
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NVOI="${NVOI_BIN:-$ROOT_DIR/bin/core}"
+
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/.env"
+  set +a
+fi
 
 : "${NVOI_APP_NAME:=nvoi}"
 : "${NVOI_ENV:=prod}"
 : "${COMPUTE_PROVIDER:=hetzner}"
 : "${DNS_PROVIDER:=cloudflare}"
 : "${STORAGE_PROVIDER:=cloudflare}"
-: "${SSH_KEY_PATH:=~/.ssh/id_ed25519}"
+
+require_hex() {
+  local name="$1"
+  local value="${!name:-}"
+  local min_len="${2:-0}"
+  local exact_len="${3:-0}"
+
+  if [[ -z "$value" ]]; then
+    echo "$name is required" >&2
+    exit 1
+  fi
+  if [[ ! "$value" =~ ^[0-9a-fA-F]+$ ]]; then
+    echo "$name must be hex" >&2
+    exit 1
+  fi
+  if (( exact_len > 0 )) && (( ${#value} != exact_len )); then
+    echo "$name must be exactly $exact_len hex chars" >&2
+    exit 1
+  fi
+  if (( min_len > 0 )) && (( ${#value} < min_len )); then
+    echo "$name must be at least $min_len hex chars" >&2
+    exit 1
+  fi
+}
+
+# Runtime secrets must be strong and hex-only.
+require_hex NVOI_POSTGRES_PASSWORD 64
+require_hex NVOI_POSTGRES_USER 12 12
+require_hex NVOI_POSTGRES_DB 12 12
+require_hex NVOI_JWT_SECRET 64
+require_hex NVOI_ENCRYPTION_KEY 0 64
 
 # Infrastructure
-nvoi instance set master --compute-type cax11 --compute-region nbg1
-nvoi volume set pgdata --size 20 --server master
+"$NVOI" instance set master --compute-type cax11 --compute-region nbg1
+"$NVOI" volume set pgdata --size 20 --server master
 
 # Secrets
-nvoi secret set POSTGRES_PASSWORD "$NVOI_POSTGRES_PASSWORD"
-nvoi secret set JWT_SECRET "$NVOI_JWT_SECRET"
-nvoi secret set ENCRYPTION_KEY "$NVOI_ENCRYPTION_KEY"
-nvoi secret set DATABASE_URL "postgres://postgres:${NVOI_POSTGRES_PASSWORD}@db:5432/postgres"
+"$NVOI" secret set POSTGRES_PASSWORD "$NVOI_POSTGRES_PASSWORD"
+"$NVOI" secret set JWT_SECRET "$NVOI_JWT_SECRET"
+"$NVOI" secret set ENCRYPTION_KEY "$NVOI_ENCRYPTION_KEY"
+"$NVOI" secret set DATABASE_URL "postgres://${NVOI_POSTGRES_USER}:${NVOI_POSTGRES_PASSWORD}@db:5432/${NVOI_POSTGRES_DB}"
 
 # Storage
-nvoi storage set releases
+"$NVOI" storage set releases
 
 # Build images
-nvoi build --build-provider local \
+"$NVOI" build --build-provider local \
   --target web:./cmd/web \
   --target api:./cmd/api \
   --target distribution:./cmd/distribution
 
 # Services
-nvoi service set db --image postgres:17 --port 5432 \
+"$NVOI" service set db --image postgres:17 --port 5432 \
   --volume pgdata:/var/lib/postgresql/data \
+  --env POSTGRES_USER="$NVOI_POSTGRES_USER" \
+  --env POSTGRES_DB="$NVOI_POSTGRES_DB" \
   --secret POSTGRES_PASSWORD \
   --no-wait
-nvoi service set api --image "$(nvoi build latest api)" --port 8080 \
+"$NVOI" service set api --image "$("$NVOI" build latest api)" --port 8080 \
   --secret DATABASE_URL --secret JWT_SECRET --secret ENCRYPTION_KEY \
   --no-wait
-nvoi service set web --image "$(nvoi build latest web)" --port 3000 \
+"$NVOI" service set web --image "$("$NVOI" build latest web)" --port 3000 \
   --no-wait
-nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001 \
+"$NVOI" service set distribution --image "$("$NVOI" build latest distribution)" --port 3001 \
   --storage releases
 
 # Exposure
-nvoi firewall set cloudflare
+"$NVOI" firewall set cloudflare
 
 # DNS: Cloudflare-managed distribution mode
-nvoi dns set web nvoi.to www.nvoi.to --cloudflare-managed
-nvoi dns set api api.nvoi.to --cloudflare-managed
-nvoi dns set distribution get.nvoi.to --cloudflare-managed
+"$NVOI" dns set web nvoi.to www.nvoi.to --cloudflare-managed
+"$NVOI" dns set api api.nvoi.to --cloudflare-managed
+"$NVOI" dns set distribution get.nvoi.to --cloudflare-managed
 
 # Ingress: one boring Cloudflare-managed mode
-nvoi ingress apply \
+"$NVOI" ingress apply \
   web:nvoi.to,www.nvoi.to \
   api:api.nvoi.to \
   distribution:get.nvoi.to \
