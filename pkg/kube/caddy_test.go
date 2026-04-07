@@ -173,14 +173,8 @@ func TestGenerateCaddyManifest(t *testing.T) {
 		t.Error("expected hostNetwork=true on pod spec")
 	}
 
-	// Checksum annotation
-	annotations := dep.Spec.Template.ObjectMeta.Annotations
-	checksum, ok := annotations[utils.LabelConfigChecksum]
-	if !ok || checksum == "" {
-		t.Error("expected non-empty config checksum annotation on pod template")
-	}
-	// SHA-256 hex is 64 characters
-	if len(checksum) != 64 {
-		t.Errorf("expected 64-char SHA-256 hex checksum, got %d chars: %q", len(checksum), checksum)
+	// No checksum annotation — Caddy uses hot reload, not pod restarts.
+	if dep.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("expected Recreate strategy, got %q", dep.Spec.Strategy.Type)
 	}
 }

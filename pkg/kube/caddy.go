@@ -2,10 +2,10 @@ package kube
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,8 +23,77 @@ type IngressRoute struct {
 	Proxy   bool // Cloudflare proxy mode — Caddy serves plain HTTP, no TLS
 }
 
-// GenerateCaddyManifest produces the Caddy ConfigMap + Deployment YAML.
-// Caddy runs with hostNetwork on the master node, handling TLS via Let's Encrypt.
+// ApplyCaddyConfig updates the ConfigMap and hot-reloads Caddy.
+// If Caddy isn't running yet, deploys it. Zero downtime for config changes.
+func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, routes []IngressRoute, names *utils.Names) error {
+	if len(routes) == 0 {
+		return nil
+	}
+
+	caddyfile := generateCaddyfile(routes, ns)
+
+	// Apply ConfigMap
+	cmYAML, err := generateConfigMapYAML(caddyfile, names, ns)
+	if err != nil {
+		return fmt.Errorf("generate configmap: %w", err)
+	}
+	if err := Apply(ctx, ssh, ns, cmYAML); err != nil {
+		return fmt.Errorf("apply configmap: %w", err)
+	}
+
+	// Check if Caddy deployment exists
+	_, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get deployment %s 2>/dev/null", names.KubeCaddy())))
+	if err != nil {
+		// First deploy — create the Deployment
+		depYAML, err := generateDeploymentYAML(names, ns)
+		if err != nil {
+			return fmt.Errorf("generate deployment: %w", err)
+		}
+		if err := Apply(ctx, ssh, ns, depYAML); err != nil {
+			return fmt.Errorf("apply deployment: %w", err)
+		}
+		return nil // new pod will pick up the ConfigMap on start
+	}
+
+	// Caddy already running — hot reload.
+	// ConfigMap volume sync takes up to kubelet sync period (default 60s).
+	// Wait briefly then reload.
+	time.Sleep(caddyReloadDelay)
+
+	podName, err := caddyPodName(ctx, ssh, ns, names.KubeCaddy())
+	if err != nil {
+		return fmt.Errorf("find caddy pod: %w", err)
+	}
+
+	_, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf(
+		"exec %s -- caddy reload --config /etc/caddy/Caddyfile --force", podName)))
+	if err != nil {
+		return fmt.Errorf("caddy reload: %w", err)
+	}
+
+	return nil
+}
+
+// caddyReloadDelay is the wait for kubelet to sync ConfigMap to the volume.
+// Variable for testing.
+var caddyReloadDelay = 5 * time.Second
+
+// caddyPodName finds the running Caddy pod name.
+func caddyPodName(ctx context.Context, ssh utils.SSHClient, ns, deploymentName string) (string, error) {
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf(
+		"get pods -l %s=%s -o jsonpath='{.items[0].metadata.name}'", utils.LabelAppName, deploymentName)))
+	if err != nil {
+		return "", err
+	}
+	name := strings.Trim(strings.TrimSpace(string(out)), "'")
+	if name == "" {
+		return "", fmt.Errorf("no caddy pod found")
+	}
+	return name, nil
+}
+
+// GenerateCaddyManifest produces the full Caddy ConfigMap + Deployment YAML.
+// Used only for first deploy or when the deployment itself needs updating (image change).
 func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, error) {
 	if len(routes) == 0 {
 		return "", nil
@@ -32,20 +101,33 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 
 	ns := names.KubeNamespace()
 	caddyfile := generateCaddyfile(routes, ns)
-	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(caddyfile)))
 
-	// ConfigMap
+	cmYAML, err := generateConfigMapYAML(caddyfile, names, ns)
+	if err != nil {
+		return "", err
+	}
+	depYAML, err := generateDeploymentYAML(names, ns)
+	if err != nil {
+		return "", err
+	}
+
+	return cmYAML + "\n---\n" + depYAML, nil
+}
+
+func generateConfigMapYAML(caddyfile string, names *utils.Names, ns string) (string, error) {
 	cm := corev1.ConfigMap{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
 		ObjectMeta: metav1.ObjectMeta{Name: names.KubeCaddyConfig(), Namespace: ns},
 		Data:       map[string]string{"Caddyfile": caddyfile},
 	}
-	cmBytes, err := sigsyaml.Marshal(cm)
+	b, err := sigsyaml.Marshal(cm)
 	if err != nil {
 		return "", err
 	}
+	return strings.TrimSpace(string(b)), nil
+}
 
-	// Deployment
+func generateDeploymentYAML(names *utils.Names, ns string) (string, error) {
 	one := int32(1)
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	caddyName := names.KubeCaddy()
@@ -62,10 +144,7 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: caddyName}},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      labels,
-					Annotations: map[string]string{utils.LabelConfigChecksum: checksum},
-				},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					HostNetwork: true,
 					DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
@@ -101,20 +180,16 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 			},
 		},
 	}
-	depBytes, err := sigsyaml.Marshal(dep)
+	b, err := sigsyaml.Marshal(dep)
 	if err != nil {
 		return "", err
 	}
-
-	return strings.TrimSpace(string(cmBytes)) + "\n---\n" + strings.TrimSpace(string(depBytes)), nil
+	return strings.TrimSpace(string(b)), nil
 }
 
+// ── Caddyfile generation ──────────────────────────────────────────────────────
+
 // generateCaddyfile produces a Caddyfile routing domains to k8s services.
-// Uses the namespace-qualified service DNS name so Caddy can resolve via cluster DNS.
-//
-// Non-proxied routes get individual domain blocks with auto-TLS (Let's Encrypt).
-// Proxied routes share a single :80 block with host matchers — Cloudflare
-// terminates TLS at the edge, origin serves plain HTTP.
 func generateCaddyfile(routes []IngressRoute, namespace string) string {
 	sorted := make([]IngressRoute, len(routes))
 	copy(sorted, routes)
@@ -130,7 +205,6 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 
 	var b strings.Builder
 
-	// Collect proxied routes for the shared :80 block
 	var proxied []IngressRoute
 	var direct []IngressRoute
 	for _, route := range sorted {
@@ -141,7 +215,6 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 		}
 	}
 
-	// Non-proxied routes: individual domain blocks with auto-TLS
 	for i, route := range direct {
 		if i > 0 {
 			b.WriteString("\n")
@@ -157,7 +230,6 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 		b.WriteString("}\n")
 	}
 
-	// Proxied routes: shared :80 block with host matchers
 	if len(proxied) > 0 {
 		if len(direct) > 0 {
 			b.WriteString("\n")
@@ -176,20 +248,19 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 	return b.String()
 }
 
-// sanitizeMatcher converts a domain into a safe Caddy matcher name.
-// Replaces dots and hyphens with underscores.
 func sanitizeMatcher(domain string) string {
 	r := strings.NewReplacer(".", "_", "-", "_")
 	return r.Replace(domain)
 }
 
+// ── Caddyfile parsing ─────────────────────────────────────────────────────────
+
 // GetIngressRoutes reads the current Caddy ConfigMap and extracts the routes.
-// Returns nil if no ConfigMap exists.
 func GetIngressRoutes(ctx context.Context, ssh utils.SSHClient, ns, configMapName string) ([]IngressRoute, error) {
 	cmd := kubectl(ns, fmt.Sprintf("get configmap %s -o jsonpath='{.data.Caddyfile}' 2>/dev/null", configMapName))
 	out, err := ssh.Run(ctx, cmd)
 	if err != nil {
-		return nil, nil // no configmap = no routes
+		return nil, nil
 	}
 
 	raw := strings.TrimSpace(string(out))
@@ -201,7 +272,6 @@ func GetIngressRoutes(ctx context.Context, ssh utils.SSHClient, ns, configMapNam
 	return parseCaddyfile(raw), nil
 }
 
-// parseCaddyfile extracts IngressRoutes from a Caddyfile string.
 func parseCaddyfile(content string) []IngressRoute {
 	var routes []IngressRoute
 	lines := strings.Split(content, "\n")
@@ -212,15 +282,12 @@ func parseCaddyfile(content string) []IngressRoute {
 			continue
 		}
 
-		// Domain line ends with {
 		if strings.HasSuffix(line, "{") {
 			domainPart := strings.TrimSuffix(line, "{")
 			domainPart = strings.TrimSpace(domainPart)
 
-			// :80 block = proxied routes with host matchers
 			if domainPart == ":80" {
 				routes = append(routes, parseProxiedBlock(lines[i+1:])...)
-				// Skip to end of block
 				for i++; i < len(lines); i++ {
 					if strings.TrimSpace(lines[i]) == "}" {
 						break
@@ -234,13 +301,11 @@ func parseCaddyfile(content string) []IngressRoute {
 				domains[k] = strings.TrimSpace(domains[k])
 			}
 
-			// Next line should be reverse_proxy
 			route := IngressRoute{Domains: domains}
 			if i+1 < len(lines) {
 				proxyLine := strings.TrimSpace(lines[i+1])
 				if strings.HasPrefix(proxyLine, "reverse_proxy ") {
 					upstream := strings.TrimPrefix(proxyLine, "reverse_proxy ")
-					// Parse service.namespace.svc.cluster.local:port
 					parts := strings.SplitN(upstream, ".", 2)
 					if len(parts) >= 1 {
 						route.Service = parts[0]
@@ -257,14 +322,8 @@ func parseCaddyfile(content string) []IngressRoute {
 	return routes
 }
 
-// parseProxiedBlock parses @matcher host + reverse_proxy pairs inside a :80 block.
 func parseProxiedBlock(lines []string) []IngressRoute {
-	// Collect domain → (service, port) from @matcher lines
-	type proxyTarget struct {
-		service string
-		port    int
-	}
-	serviceRoutes := map[string]*IngressRoute{} // keyed by service name
+	serviceRoutes := map[string]*IngressRoute{}
 
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimSpace(lines[i])
@@ -272,7 +331,6 @@ func parseProxiedBlock(lines []string) []IngressRoute {
 			break
 		}
 
-		// @service_domain host example.com
 		if strings.HasPrefix(line, "@") && strings.Contains(line, " host ") {
 			parts := strings.SplitN(line, " host ", 2)
 			if len(parts) != 2 {
@@ -280,11 +338,9 @@ func parseProxiedBlock(lines []string) []IngressRoute {
 			}
 			domain := strings.TrimSpace(parts[1])
 
-			// Next line: reverse_proxy @matcher upstream
 			if i+1 < len(lines) {
 				proxyLine := strings.TrimSpace(lines[i+1])
 				if strings.HasPrefix(proxyLine, "reverse_proxy @") {
-					// reverse_proxy @matcher service.ns.svc.cluster.local:port
 					fields := strings.Fields(proxyLine)
 					if len(fields) >= 3 {
 						upstream := fields[2]
@@ -302,7 +358,7 @@ func parseProxiedBlock(lines []string) []IngressRoute {
 						}
 						r.Domains = append(r.Domains, domain)
 					}
-					i++ // skip the reverse_proxy line
+					i++
 				}
 			}
 		}

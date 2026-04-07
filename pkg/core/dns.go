@@ -97,10 +97,7 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 			kube.DeleteByName(ctx, ssh, ns, names.KubeCaddy())
 			kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete configmap %s --ignore-not-found", names.KubeCaddyConfig()))
 		} else {
-			yaml, err := kube.GenerateCaddyManifest(routes, names)
-			if err == nil {
-				kube.Apply(ctx, ssh, ns, yaml)
-			}
+			kube.ApplyCaddyConfig(ctx, ssh, ns, routes, names)
 		}
 	}
 
@@ -197,17 +194,9 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 		return nil
 	}
 
-	yaml, err := kube.GenerateCaddyManifest(routes, names)
-	if err != nil {
-		return fmt.Errorf("generate caddy manifest: %w", err)
-	}
-	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
-		return fmt.Errorf("apply caddy: %w", err)
-	}
-
-	out.Progress("waiting for caddy rollout")
-	if err := kube.WaitRollout(ctx, ssh, ns, names.KubeCaddy(), "deployment", false, out); err != nil {
-		return fmt.Errorf("caddy rollout: %w", err)
+	out.Progress("applying caddy config")
+	if err := kube.ApplyCaddyConfig(ctx, ssh, ns, routes, names); err != nil {
+		return fmt.Errorf("caddy: %w", err)
 	}
 	out.Success("caddy ready")
 
