@@ -23,6 +23,7 @@ type BuildRunRequest struct {
 	Builder            string
 	BuilderCredentials map[string]string
 	Source             string
+	Dockerfile         string // path to Dockerfile relative to source (default: "Dockerfile")
 	Name               string
 	Branch             string
 	Platform           string
@@ -100,6 +101,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 	result, err := builder.Build(ctx, provider.BuildRequest{
 		ServiceName: req.Name,
 		Source:      source,
+		Dockerfile:  req.Dockerfile,
 		Branch:      req.Branch,
 		Platform:    platform,
 		GitUsername: gitUsername,

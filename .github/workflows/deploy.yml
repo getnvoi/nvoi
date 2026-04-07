@@ -57,9 +57,9 @@ jobs:
           nvoi secret set ENCRYPTION_KEY "${{ secrets.ENCRYPTION_KEY }}"
 
           # Build images
-          nvoi build --build-provider local --source . --name web
-          nvoi build --build-provider local --source . --name api
-          nvoi build --build-provider local --source . --name dist
+          nvoi build --build-provider local --source . --dockerfile-path cmd/web/Dockerfile --name web
+          nvoi build --build-provider local --source . --dockerfile-path cmd/api/Dockerfile --name api
+          nvoi build --build-provider local --source . --dockerfile-path cmd/distribution/Dockerfile --name dist
 
           # Services
           nvoi service set db --image postgres:17 --port 5432 \

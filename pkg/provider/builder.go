@@ -16,6 +16,7 @@ type BuildProvider interface {
 type BuildRequest struct {
 	ServiceName string    // service being built (used in image tag)
 	Source      string    // local path (./path) or remote repo (org/repo, https://..., git@...)
+	Dockerfile  string    // path to Dockerfile relative to source (default: "Dockerfile")
 	Branch      string    // git branch (remote only, default "main")
 	Platform    string    // "linux/amd64" or "linux/arm64" (auto-detected if empty)
 	GitUsername string    // HTTPS clone auth username (empty defaults to "x-access-token")

@@ -23,6 +23,7 @@ Examples:
   nvoi build --build-provider daytona --source benbonnet/dummy-rails --name web`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			source, _ := cmd.Flags().GetString("source")
+			dockerfile, _ := cmd.Flags().GetString("dockerfile-path")
 			name, _ := cmd.Flags().GetString("name")
 			branch, _ := cmd.Flags().GetString("branch")
 			platform, _ := cmd.Flags().GetString("platform")
@@ -80,6 +81,7 @@ Examples:
 				Builder:            builderName,
 				BuilderCredentials: builderCreds,
 				Source:             source,
+				Dockerfile:         dockerfile,
 				Name:               name,
 				Branch:             branch,
 				Platform:           platform,
@@ -94,6 +96,7 @@ Examples:
 	addBuildProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().String("source", "", "source to build (local path or remote repo)")
+	cmd.Flags().String("dockerfile-path", "", "path to Dockerfile (default: Dockerfile in source root)")
 	cmd.Flags().String("name", "", "image name in registry")
 	cmd.Flags().String("branch", "main", "git branch (remote sources only)")
 	cmd.Flags().String("platform", "", "target platform (auto-detected if empty)")

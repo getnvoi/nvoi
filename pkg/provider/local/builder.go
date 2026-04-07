@@ -62,12 +62,16 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 
 	fmt.Fprintf(req.Stdout, "  building %s (platform: %s)...\n", req.ServiceName, platform)
 
-	cmd := exec.CommandContext(ctx, "docker", "buildx", "build",
+	buildArgs := []string{"buildx", "build",
 		"--tag", tunnelRef,
 		"--platform", platform,
 		"--output", "type=image,push=true,registry.insecure=true",
-		req.Source,
-	)
+	}
+	if req.Dockerfile != "" {
+		buildArgs = append(buildArgs, "-f", req.Dockerfile)
+	}
+	buildArgs = append(buildArgs, req.Source)
+	cmd := exec.CommandContext(ctx, "docker", buildArgs...)
 	cmd.Stdout = req.Stdout
 	cmd.Stderr = req.Stderr
 
