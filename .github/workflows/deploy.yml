@@ -53,7 +53,6 @@ jobs:
         run: |
           # Infrastructure
           nvoi instance set master --compute-type cax11 --compute-region nbg1
-          nvoi firewall set default
           nvoi volume set pgdata --size 20 --server master
 
           # Secrets
@@ -84,10 +83,13 @@ jobs:
           nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001 \
             --storage releases
 
-          # DNS
-          nvoi dns set web nvoi.to www.nvoi.to
-          nvoi dns set api api.nvoi.to
-          nvoi dns set distribution get.nvoi.to
+          # DNS (proxied through Cloudflare)
+          nvoi dns set web nvoi.to www.nvoi.to --proxy
+          nvoi dns set api api.nvoi.to --proxy
+          nvoi dns set distribution get.nvoi.to --proxy
 
-          # Ingress (single Caddy deploy with all routes)
-          nvoi ingress apply web:nvoi.to,www.nvoi.to api:api.nvoi.to distribution:get.nvoi.to
+          # Firewall (restrict 80/443 to Cloudflare IPs — before ingress)
+          nvoi firewall set cloudflare
+
+          # Ingress (single Caddy deploy, Cloudflare proxy mode)
+          nvoi ingress apply web:nvoi.to,www.nvoi.to api:api.nvoi.to distribution:get.nvoi.to --proxy
