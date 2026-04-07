@@ -52,6 +52,8 @@ jobs:
           STORAGE_PROVIDER: cloudflare
           NVOI_BIN: nvoi
           SSH_KEY_PATH: ~/.ssh/id_ed25519
+          NVOI_POSTGRES_USER: ${{ secrets.NVOI_POSTGRES_USER }}
+          NVOI_POSTGRES_DB: ${{ secrets.NVOI_POSTGRES_DB }}
           NVOI_POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           NVOI_JWT_SECRET: ${{ secrets.JWT_SECRET }}
           NVOI_ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
