@@ -628,3 +628,18 @@ const (
 - **`s3ops.go` uses a dedicated `s3Client` (not `utils.HTTPClient`).** S3/XML operations need raw HTTP, not JSON. Uses `var s3Client = &http.Client{Timeout: 30 * time.Second}` with all `io.ReadAll` errors checked and context propagated. This is by design — `utils.HTTPClient` is JSON-oriented.
 - **AWS SDK `LoadDefaultConfig` errors are deferred to `ValidateCredentials`.** Provider factories can't return errors (signature is `func(creds) Provider`). The AWS constructors store the config error on the struct and surface it on the first `ValidateCredentials` call.
 
+## Production hardening notes
+
+Lessons from real deployment failures. Each was a bug, each was fixed, each teaches a pattern.
+
+- **`~` doesn't expand in Go.** `os.ReadFile("~/.ssh/id_rsa")` fails. `resolveSSHKey()` calls `expandHome()` before reading. Any path from env vars or flags that could contain `~` must expand it. Never trust shell expansion in Go code.
+- **`kubectl apply` does strategic merge, not full replace.** Switching a Deployment from `RollingUpdate` to `Recreate` via `kubectl apply` leaves the old `rollingUpdate` field, causing k8s to reject the update or silently ignore the strategy change. Fix: `kube.Apply()` uses `kubectl replace` first (full overwrite, no leftover fields), falls back to `kubectl apply --server-side --force-conflicts` for first creation.
+- **Caddy with `hostNetwork` can't rolling-update on single-node.** New pod can't bind 80/443 while old pod holds them. Caddy Deployment uses `Recreate` strategy — kills old pod first, then starts new. No `RollingUpdate` for `hostNetwork` workloads on single-node clusters.
+- **DNS and ingress are separate concerns.** `dns set` creates A records only. `ingress apply` owns Caddy entirely — takes all `service:domain` mappings, builds full Caddyfile, deploys once. Never restart Caddy per-domain. One deploy for all routes.
+- **`WaitAllServices` must detect terminal failures.** Polling "1/2 pods ready" for 5 minutes with no feedback is useless. `CrashLoopBackOff` and `Error` statuses trigger early exit after `waitCrashTimeout` (2 min). On bail-out, fetch `--previous` logs from crashing pods via `kube.RecentLogs`. Always show WHY, not just WHAT.
+- **`service set` in deploy scripts needs `--no-wait`.** Each `service set` calls `WaitAllServices` which checks ALL pods in the namespace — including unrelated crashing pods from previous failed deploys. Use `--no-wait` on all but the last service. Only the final service waits for the full cluster.
+- **Build source and Dockerfile are separate.** `--source ./cmd/web` means the Dockerfile lives at `./cmd/web/Dockerfile`. Build context is the project root (walk up to `.git`/`go.mod`). Docker `-f` flag points to the Dockerfile, context is always the root. Dockerfiles that `COPY go.mod` need the root as context.
+- **GitHub Actions secrets can't start with `GITHUB_`.** Reserved prefix. Also: app secrets (`POSTGRES_PASSWORD`, `JWT_SECRET`, `ENCRYPTION_KEY`) are runtime secrets — generate strong random values, never reuse `.env` passwords from development.
+- **Concurrency control on deploy workflows.** Multiple pushes to main queue multiple deploys. Use `concurrency: { group: deploy, cancel-in-progress: false }` to serialize — new deploys wait for current to finish. Never overlap infrastructure mutations.
+- **ARM servers need ARM runners.** `cax11` (Hetzner ARM) produces `linux/arm64` images. GitHub's `ubuntu-latest` is amd64 — can't execute arm64 `RUN` instructions. Use `ubuntu-24.04-arm` runner for native builds, no QEMU.
+
