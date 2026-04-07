@@ -297,7 +297,9 @@ func (p *prefixWriter) Write(data []byte) (int, error) {
 			p.buf.WriteString(line)
 			break
 		}
-		fmt.Fprint(p.w, p.prefix+line)
+		if _, werr := fmt.Fprint(p.w, p.prefix+line); werr != nil {
+			return 0, werr
+		}
 	}
 	return n, nil
 }

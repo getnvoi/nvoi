@@ -56,6 +56,7 @@ func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 	steps = append(steps, diffStorage(reality, desired)...)
 	steps = append(steps, diffSecrets(reality, desired)...)
 	steps = append(steps, diffVolumes(reality, desired)...)
+	steps = append(steps, diffFirewall(reality, desired)...)
 	steps = append(steps, diffCompute(reality, desired)...)
 
 	// ── Sets (forward deploy order) ────────────────────────────────────────
@@ -318,6 +319,18 @@ func diffVolumes(reality, desired *Cfg) []Step {
 		}
 	}
 	return steps
+}
+
+func diffFirewall(reality, desired *Cfg) []Step {
+	if reality == nil {
+		return nil
+	}
+	// If previous config had firewall rules but new config doesn't,
+	// reset to base rules (nil PortAllowList = SSH + internal only).
+	if reality.Firewall != nil && desired.Firewall == nil {
+		return []Step{{Kind: StepFirewallSet, Name: "firewall", Params: map[string]any{}}}
+	}
+	return nil
 }
 
 func diffCompute(reality, desired *Cfg) []Step {

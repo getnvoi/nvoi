@@ -9,6 +9,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // waitHTTPSFunc is the HTTPS reachability check. Variable for testing.
@@ -121,7 +122,7 @@ func DNSList(ctx context.Context, req DNSListRequest) ([]provider.DNSRecord, err
 
 // ── Ingress ───────────────────────────────────────────────────────────────────
 
-// IngressRoute is a parsed service:domain,domain arg for ingress apply.
+// IngressRouteArg is a parsed service:domain,domain arg for ingress apply.
 type IngressRouteArg struct {
 	Service string
 	Domains []string
@@ -230,7 +231,7 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 			continue
 		}
 		firstDomain := route.Domains[0]
-		if route.Proxy {
+		if route.Proxy || hasCert {
 			out.Success(fmt.Sprintf("proxied via Cloudflare — https://%s", firstDomain))
 			continue
 		}
@@ -251,16 +252,19 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 func checkFirewallCoherence(ctx context.Context, c Cluster, routes []IngressRouteArg) error {
 	prov, err := c.Compute()
 	if err != nil {
-		return nil // can't check, skip
+		return fmt.Errorf("firewall check: %w", err)
 	}
 	fwNames, err := c.Names()
 	if err != nil {
-		return nil
+		return fmt.Errorf("firewall check: %w", err)
 	}
 
 	rules, err := prov.GetFirewallRules(ctx, fwNames.Firewall())
 	if err != nil {
-		return nil // can't check, skip
+		if errors.Is(err, utils.ErrNotFound) {
+			return nil // firewall not created yet — skip coherence check
+		}
+		return fmt.Errorf("firewall check: %w", err)
 	}
 
 	anyProxy := false

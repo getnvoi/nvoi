@@ -5,7 +5,6 @@ import (
 	"os"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider/cloudflare"
 	"github.com/spf13/cobra"
 )
 
@@ -61,6 +60,8 @@ Examples:
 			certPath, _ := cmd.Flags().GetString("cert")
 			keyPath, _ := cmd.Flags().GetString("key")
 
+			out := resolveOutput(cmd)
+
 			// Resolve cert + key
 			var certPEM, keyPEM string
 
@@ -79,34 +80,13 @@ Examples:
 			} else if certPath != "" || keyPath != "" {
 				return fmt.Errorf("--cert and --key must both be provided")
 			} else if proxy {
-				// Auto-generate Cloudflare Origin CA cert (idempotent — cert passed only if new)
-				dnsProvider, err := resolveDNSProvider(cmd)
+				// Auto-generate Cloudflare Origin CA cert
+				cert, key, err := resolveOriginCACert(cmd, routes, out)
 				if err != nil {
 					return err
 				}
-				if dnsProvider != "cloudflare" {
-					return fmt.Errorf("--proxy without --cert/--key requires Cloudflare as DNS provider (current: %s)", dnsProvider)
-				}
-				dnsCreds, err := resolveDNSCredentials(cmd, dnsProvider)
-				if err != nil {
-					return err
-				}
-
-				var allDomains []string
-				for _, r := range routes {
-					allDomains = append(allDomains, r.Domains...)
-				}
-
-				out := resolveOutput(cmd)
-				out.Progress("generating Cloudflare Origin CA certificate")
-				ca := cloudflare.NewOriginCA(dnsCreds["api_key"])
-				originCert, err := ca.EnsureCert(cmd.Context(), allDomains)
-				if err != nil {
-					return fmt.Errorf("origin ca cert: %w", err)
-				}
-				certPEM = originCert.Certificate
-				keyPEM = originCert.PrivateKey
-				out.Success("origin cert ready")
+				certPEM = cert
+				keyPEM = key
 			}
 
 			return app.IngressApply(cmd.Context(), app.IngressApplyRequest{
@@ -116,7 +96,7 @@ Examples:
 					Provider:    computeProvider,
 					Credentials: computeCreds,
 					SSHKey:      sshKey,
-					Output:      resolveOutput(cmd),
+					Output:      out,
 				},
 				Routes:  routes,
 				CertPEM: certPEM,

@@ -2,12 +2,12 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
+	"strconv"
 	"strings"
-	"time"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // InternalPorts are always managed by instance set — never user-configurable.
@@ -24,13 +24,17 @@ func IsInternalPort(port string) bool {
 	return InternalPorts[port]
 }
 
-// SortedPorts returns the port keys of a PortAllowList in sorted order.
+// SortedPorts returns the port keys of a PortAllowList in numerically sorted order.
 func SortedPorts(m PortAllowList) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		a, _ := strconv.Atoi(keys[i])
+		b, _ := strconv.Atoi(keys[j])
+		return a < b
+	})
 	return keys
 }
 
@@ -97,28 +101,17 @@ func resolvePreset(ctx context.Context, name string) (PortAllowList, error) {
 // FetchCloudflareIPs fetches Cloudflare's published IP ranges.
 // GET https://api.cloudflare.com/client/v4/ips → {"result": {"ipv4_cidrs": [...]}}
 func FetchCloudflareIPs(ctx context.Context) ([]string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.cloudflare.com/client/v4/ips", nil)
-	if err != nil {
-		return nil, err
+	client := &utils.HTTPClient{
+		BaseURL: "https://api.cloudflare.com/client/v4",
+		Label:   "cloudflare ips",
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("cloudflare IPs API returned %d", resp.StatusCode)
-	}
-
 	var body struct {
 		Result struct {
 			IPv4CIDRs []string `json:"ipv4_cidrs"`
 		} `json:"result"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decode cloudflare IPs: %w", err)
+	if err := client.Do(ctx, "GET", "/ips", nil, &body); err != nil {
+		return nil, fmt.Errorf("fetch cloudflare IPs: %w", err)
 	}
 	if len(body.Result.IPv4CIDRs) == 0 {
 		return nil, fmt.Errorf("cloudflare IPs API returned empty list")
@@ -163,6 +156,10 @@ func ParseRawRules(args []string) PortAllowList {
 			port, cidrs, ok := strings.Cut(group, ":")
 			if !ok || port == "" {
 				continue
+			}
+			portNum, err := strconv.Atoi(port)
+			if err != nil || portNum < 1 || portNum > 65535 {
+				continue // skip invalid ports
 			}
 			for _, cidr := range strings.Split(cidrs, ",") {
 				cidr = strings.TrimSpace(cidr)

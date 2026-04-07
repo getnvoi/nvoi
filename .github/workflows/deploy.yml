@@ -33,9 +33,10 @@ jobs:
 
       - name: Write SSH key
         run: |
+          umask 077
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
 
       - name: Deploy
         env:
@@ -49,17 +50,20 @@ jobs:
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           DNS_ZONE: nvoi.to
           STORAGE_PROVIDER: cloudflare
-          SSH_KEY_PATH: ~/.ssh/id_rsa
+          SSH_KEY_PATH: ~/.ssh/id_ed25519
+          NVOI_POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          NVOI_JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          NVOI_ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           # Infrastructure
           nvoi instance set master --compute-type cax11 --compute-region nbg1
           nvoi volume set pgdata --size 20 --server master
 
-          # Secrets
-          nvoi secret set POSTGRES_PASSWORD "${{ secrets.POSTGRES_PASSWORD }}"
-          nvoi secret set JWT_SECRET "${{ secrets.JWT_SECRET }}"
-          nvoi secret set ENCRYPTION_KEY "${{ secrets.ENCRYPTION_KEY }}"
-          nvoi secret set DATABASE_URL "postgres://postgres:${{ secrets.POSTGRES_PASSWORD }}@db:5432/postgres"
+          # Secrets (values from env — not expanded inline in shell)
+          nvoi secret set POSTGRES_PASSWORD "$NVOI_POSTGRES_PASSWORD"
+          nvoi secret set JWT_SECRET "$NVOI_JWT_SECRET"
+          nvoi secret set ENCRYPTION_KEY "$NVOI_ENCRYPTION_KEY"
+          nvoi secret set DATABASE_URL "postgres://postgres:${NVOI_POSTGRES_PASSWORD}@db:5432/postgres"
 
           # Storage (before services — distribution needs STORAGE_RELEASES_* env vars)
           nvoi storage set releases

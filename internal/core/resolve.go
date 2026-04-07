@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"strings"
 
+	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/cloudflare"
 	"github.com/spf13/cobra"
 )
 
@@ -206,6 +208,36 @@ func expandHome(path string) string {
 		}
 	}
 	return path
+}
+
+// resolveOriginCACert generates a Cloudflare Origin CA certificate.
+// Cloudflare-specific — only valid when DNS provider is cloudflare.
+func resolveOriginCACert(cmd *cobra.Command, routes []app.IngressRouteArg, out app.Output) (certPEM, keyPEM string, err error) {
+	dnsProvider, err := resolveDNSProvider(cmd)
+	if err != nil {
+		return "", "", err
+	}
+	if dnsProvider != "cloudflare" {
+		return "", "", fmt.Errorf("--proxy without --cert/--key requires Cloudflare as DNS provider (current: %s)", dnsProvider)
+	}
+	dnsCreds, err := resolveDNSCredentials(cmd, dnsProvider)
+	if err != nil {
+		return "", "", err
+	}
+
+	var allDomains []string
+	for _, r := range routes {
+		allDomains = append(allDomains, r.Domains...)
+	}
+
+	out.Progress("generating Cloudflare Origin CA certificate")
+	ca := cloudflare.NewOriginCA(dnsCreds["api_key"], dnsCreds["zone_id"])
+	originCert, err := ca.CreateCert(cmd.Context(), allDomains)
+	if err != nil {
+		return "", "", fmt.Errorf("origin ca cert: %w", err)
+	}
+	out.Success("origin cert ready")
+	return originCert.Certificate, originCert.PrivateKey, nil
 }
 
 // ── Flag helpers ─────────────────────────────────────────────────────────────

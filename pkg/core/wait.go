@@ -92,9 +92,11 @@ func WaitAllServices(ctx context.Context, req WaitAllServicesRequest) error {
 				}
 				return false, fmt.Errorf("pod(s) stuck in CrashLoopBackOff: %s", strings.Join(crashPods, ", "))
 			}
-		} else {
-			crashStart = time.Time{} // reset if no crashes this poll
 		}
+		// Don't reset crashStart — if the pod oscillates between crash and
+		// transient states, cumulative crash time should still trigger the timeout.
+		// If all pods become Ready, we exit the loop with success before the
+		// crash timeout fires.
 
 		return false, nil
 	})

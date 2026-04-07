@@ -127,7 +127,9 @@ func (c *Client) reconcileFirewallRules(ctx context.Context, sgID string) error 
 
 	// Delete all existing rules
 	for _, rule := range resp.Rules {
-		_ = c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s/rules/%s", sgID, rule.ID), nil, nil)
+		if err := c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s/rules/%s", sgID, rule.ID), nil, nil); err != nil {
+			return fmt.Errorf("delete rule %s: %w", rule.ID, err)
+		}
 	}
 
 	// Re-add desired rules
@@ -255,7 +257,9 @@ func (c *Client) ReconcileFirewallRules(ctx context.Context, name string, allowe
 		return fmt.Errorf("list rules: %w", err)
 	}
 	for _, rule := range resp.Rules {
-		_ = c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s/rules/%s", fw.ID, rule.ID), nil, nil)
+		if err := c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s/rules/%s", fw.ID, rule.ID), nil, nil); err != nil {
+			return fmt.Errorf("delete rule %s: %w", rule.ID, err)
+		}
 	}
 
 	// Re-add desired rules

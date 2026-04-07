@@ -122,8 +122,8 @@ func blogListHandler(contentDir string, assets map[string]string) gin.HandlerFun
 
 func blogPostHandler(contentDir string, assets map[string]string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		slug := c.Param("slug")
-		if strings.Contains(slug, "..") {
+		slug := filepath.Base(c.Param("slug"))
+		if strings.Contains(slug, "..") || slug == "." {
 			c.Status(http.StatusNotFound)
 			return
 		}
@@ -225,11 +225,14 @@ func renderTemplate(c *gin.Context, name string, data gin.H) {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
-	c.Status(http.StatusOK)
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	if err := t.ExecuteTemplate(c.Writer, "layout", data); err != nil {
+	var buf bytes.Buffer
+	if err := t.ExecuteTemplate(&buf, "layout", data); err != nil {
 		c.Status(http.StatusInternalServerError)
+		return
 	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.Status(http.StatusOK)
+	c.Writer.Write(buf.Bytes())
 }
 
 func loadTemplates(root string) map[string]*template.Template {

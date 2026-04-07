@@ -16,11 +16,12 @@ import (
 
 // OriginCAClient manages Cloudflare Origin CA certificates.
 type OriginCAClient struct {
-	api *utils.HTTPClient
+	api    *utils.HTTPClient
+	zoneID string
 }
 
 // NewOriginCA creates a client for the Cloudflare Origin CA API.
-func NewOriginCA(apiKey string) *OriginCAClient {
+func NewOriginCA(apiKey, zoneID string) *OriginCAClient {
 	return &OriginCAClient{
 		api: &utils.HTTPClient{
 			BaseURL: cfBaseURL,
@@ -29,6 +30,7 @@ func NewOriginCA(apiKey string) *OriginCAClient {
 			},
 			Label: "cloudflare origin ca",
 		},
+		zoneID: zoneID,
 	}
 }
 
@@ -38,16 +40,10 @@ type OriginCert struct {
 	PrivateKey  string // PEM
 }
 
-// EnsureCert creates an Origin CA certificate for the given hostnames.
+// CreateCert generates a new Origin CA certificate for the given hostnames.
 // Returns a 15-year ECDSA cert signed by Cloudflare's Origin CA.
-func (c *OriginCAClient) EnsureCert(ctx context.Context, hostnames []string) (*OriginCert, error) {
-	// Check if a valid cert already exists for these hostnames
-	existing, err := c.findExistingCert(ctx, hostnames)
-	if err == nil && existing != "" {
-		// Can't retrieve the private key for existing certs — need to generate fresh.
-		// Cloudflare doesn't store private keys. We always generate locally.
-	}
-
+// Caller should persist the private key to avoid creating orphaned certs on every deploy.
+func (c *OriginCAClient) CreateCert(ctx context.Context, hostnames []string) (*OriginCert, error) {
 	// Generate ECDSA private key
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -90,47 +86,4 @@ func (c *OriginCAClient) EnsureCert(ctx context.Context, hostnames []string) (*O
 		Certificate: resp.Result.Certificate,
 		PrivateKey:  string(keyPEM),
 	}, nil
-}
-
-// findExistingCert checks if there's already a valid Origin CA cert for these hostnames.
-// Returns the cert ID if found, empty string if not.
-func (c *OriginCAClient) findExistingCert(ctx context.Context, hostnames []string) (string, error) {
-	if len(hostnames) == 0 {
-		return "", fmt.Errorf("no hostnames")
-	}
-	var resp struct {
-		Result []struct {
-			ID        string   `json:"id"`
-			Hostnames []string `json:"hostnames"`
-		} `json:"result"`
-	}
-	err := c.api.Do(ctx, "GET", fmt.Sprintf("/certificates?zone_id="), nil, &resp)
-	if err != nil {
-		return "", err
-	}
-	// Check for matching hostnames
-	want := map[string]bool{}
-	for _, h := range hostnames {
-		want[h] = true
-	}
-	for _, cert := range resp.Result {
-		match := true
-		for _, h := range hostnames {
-			found := false
-			for _, ch := range cert.Hostnames {
-				if ch == h || ch == "*."+h {
-					found = true
-					break
-				}
-			}
-			if !found {
-				match = false
-				break
-			}
-		}
-		if match {
-			return cert.ID, nil
-		}
-	}
-	return "", fmt.Errorf("no matching cert")
 }

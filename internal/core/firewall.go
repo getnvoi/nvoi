@@ -1,10 +1,10 @@
 package core
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
+	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/spf13/cobra"
@@ -112,12 +112,16 @@ func newFirewallListCmd() *cobra.Command {
 			}
 
 			if rules == nil || len(rules) == 0 {
-				fmt.Println("base rules only (SSH + internal)")
+				t := render.NewTable("PORT", "ALLOWED CIDRs")
+				t.Row("*", "base rules only (SSH + internal)")
+				t.Print()
 				return nil
 			}
+			t := render.NewTable("PORT", "ALLOWED CIDRs")
 			for _, port := range provider.SortedPorts(rules) {
-				fmt.Printf("%-6s → %s\n", port, strings.Join(rules[port], ", "))
+				t.Row(port, strings.Join(rules[port], ", "))
 			}
+			t.Print()
 			return nil
 		},
 	}

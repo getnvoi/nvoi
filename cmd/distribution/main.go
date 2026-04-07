@@ -15,6 +15,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -92,18 +93,22 @@ func loadConfig() r2Config {
 }
 
 func serveObject(w http.ResponseWriter, r *http.Request, cfg r2Config, key string) {
-	data, _, err := s3.Get(cfg.Endpoint, cfg.AccessKeyID, cfg.SecretAccessKey, cfg.Bucket, key)
+	body, _, contentLength, err := s3.GetStream(cfg.Endpoint, cfg.AccessKeyID, cfg.SecretAccessKey, cfg.Bucket, key)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+	defer body.Close()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
-	if strings.HasSuffix(key, ".exe") {
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", key[strings.LastIndex(key, "/")+1:]))
+	if contentLength > 0 {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
 	}
-	w.Write(data)
+	if strings.HasSuffix(key, ".exe") {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", key[strings.LastIndex(key, "/")+1:]))
+	}
+	io.Copy(w, body)
 }
 
 func getenv(key, fallback string) string {

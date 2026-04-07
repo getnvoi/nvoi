@@ -75,7 +75,9 @@ func (f *FirewallConfig) UnmarshalJSON(data []byte) error {
 	f.Rules = map[string][]string{}
 	for key, val := range raw {
 		if key == "preset" {
-			json.Unmarshal(val, &f.Preset)
+			if err := json.Unmarshal(val, &f.Preset); err != nil {
+				return fmt.Errorf("firewall preset must be a string: %w", err)
+			}
 		} else {
 			var cidrs []string
 			if err := json.Unmarshal(val, &cidrs); err != nil {
@@ -237,6 +239,32 @@ func Parse(data []byte) (*Config, error) {
 					}
 					cfg.DomainProxy[svc] = true
 				}
+			}
+		}
+	}
+
+	return &cfg, nil
+}
+
+// ParseJSON parses a JSON config, including proxy flag extraction.
+func ParseJSON(data []byte) (*Config, error) {
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+
+	// Extract proxy flags from raw JSON (Domains unmarshal loses them).
+	var raw struct {
+		Domains map[string]json.RawMessage `json:"domains"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		for svc, rawDomain := range raw.Domains {
+			var dc DomainConfig
+			if err := json.Unmarshal(rawDomain, &dc); err == nil && dc.Proxy {
+				if cfg.DomainProxy == nil {
+					cfg.DomainProxy = map[string]bool{}
+				}
+				cfg.DomainProxy[svc] = true
 			}
 		}
 	}

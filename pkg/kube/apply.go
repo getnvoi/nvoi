@@ -89,11 +89,17 @@ func Apply(ctx context.Context, ssh utils.SSHClient, ns string, yaml string) err
 	path := utils.KubeManifestPath()
 	// replace overwrites the entire resource — no leftover fields from previous specs.
 	// Fails if the resource doesn't exist yet, so fall back to apply for creation.
-	_, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("replace -f %s", path)))
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("replace -f %s", path)))
 	if err == nil {
 		return nil
 	}
-	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply --server-side --force-conflicts -f %s", path)))
+	// Only fall through to apply for "not found" — resource doesn't exist yet.
+	// Any other error (schema validation, RBAC, immutable fields) is a real failure.
+	errMsg := strings.ToLower(string(out))
+	if !strings.Contains(errMsg, "not found") && !strings.Contains(errMsg, "notfound") {
+		return fmt.Errorf("kubectl replace: %s: %w", string(out), err)
+	}
+	out, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply --server-side --force-conflicts -f %s", path)))
 	if err != nil {
 		return fmt.Errorf("kubectl apply: %s: %w", string(out), err)
 	}

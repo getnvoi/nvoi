@@ -145,9 +145,15 @@ func (c *Cluster) SSH(ctx context.Context) (utils.SSHClient, *utils.Names, error
 		c.ssh.mu.Lock()
 		defer c.ssh.mu.Unlock()
 
-		// If cached connection targets the same address, reuse it.
+		// If cached connection targets the same address, verify it's still alive.
 		if c.ssh.conn != nil && c.ssh.addr == addr {
-			return borrowedSSH{c.ssh.conn}, c.ssh.names, nil
+			if _, err := c.ssh.conn.Run(ctx, "true"); err != nil {
+				// Connection is dead — close and reconnect
+				c.ssh.conn.Close()
+				c.ssh.conn = nil
+			} else {
+				return borrowedSSH{c.ssh.conn}, c.ssh.names, nil
+			}
 		}
 
 		// Different address or first call — close stale connection and connect fresh.

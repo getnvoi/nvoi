@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
@@ -21,12 +22,6 @@ type IngressRoute struct {
 	Port    int
 	Domains []string
 	Proxy   bool // Cloudflare proxy mode — Caddy serves plain HTTP, no TLS
-}
-
-// OriginCert holds a PEM cert+key pair for Caddy TLS.
-type OriginCert struct {
-	Cert string // PEM
-	Key  string // PEM
 }
 
 const caddyTLSSecretName = "caddy-origin-cert"
@@ -74,13 +69,33 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 
 	// Caddy already running — hot reload.
 	// ConfigMap volume sync takes up to kubelet sync period (default 60s).
-	// Wait briefly then reload.
-	time.Sleep(CaddyReloadDelay)
-
+	// Poll until the file hash matches, then reload.
 	podName, err := caddyPodName(ctx, ssh, ns, names.KubeCaddy())
 	if err != nil {
 		return fmt.Errorf("find caddy pod: %w", err)
 	}
+
+	expectedHash := fmt.Sprintf("%x", sha256.Sum256([]byte(caddyfile)))
+	deadline := time.After(CaddyReloadDelay)
+	for {
+		out, hashErr := ssh.Run(ctx, kubectl(ns, fmt.Sprintf(
+			"exec %s -- sha256sum /etc/caddy/Caddyfile", podName)))
+		if hashErr == nil {
+			fields := strings.Fields(strings.TrimSpace(string(out)))
+			if len(fields) > 0 && fields[0] == expectedHash {
+				break
+			}
+		}
+		select {
+		case <-deadline:
+			// Timeout — proceed with reload anyway
+			goto reload
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+reload:
 
 	_, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf(
 		"exec %s -- caddy reload --config /etc/caddy/Caddyfile --force", podName)))
@@ -134,6 +149,14 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 		return "", nil
 	}
 
+	hasProxy := false
+	for _, r := range routes {
+		if r.Proxy {
+			hasProxy = true
+			break
+		}
+	}
+
 	ns := names.KubeNamespace()
 	caddyfile := generateCaddyfile(routes, ns)
 
@@ -141,7 +164,7 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 	if err != nil {
 		return "", err
 	}
-	depYAML, err := generateDeploymentYAML(names, ns)
+	depYAML, err := generateDeploymentYAML(names, ns, hasProxy)
 	if err != nil {
 		return "", err
 	}
@@ -162,8 +185,7 @@ func generateConfigMapYAML(caddyfile string, names *utils.Names, ns string) (str
 	return strings.TrimSpace(string(b)), nil
 }
 
-func generateDeploymentYAML(names *utils.Names, ns string, proxy ...bool) (string, error) {
-	hasProxy := len(proxy) > 0 && proxy[0]
+func generateDeploymentYAML(names *utils.Names, ns string, hasProxy bool) (string, error) {
 	one := int32(1)
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	caddyName := names.KubeCaddy()
@@ -310,11 +332,6 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 	return b.String()
 }
 
-func sanitizeMatcher(domain string) string {
-	r := strings.NewReplacer(".", "_", "-", "_")
-	return r.Replace(domain)
-}
-
 // ── Caddyfile parsing ─────────────────────────────────────────────────────────
 
 // GetIngressRoutes reads the current Caddy ConfigMap and extracts the routes.
@@ -348,26 +365,24 @@ func parseCaddyfile(content string) []IngressRoute {
 			domainPart := strings.TrimSuffix(line, "{")
 			domainPart = strings.TrimSpace(domainPart)
 
-			if domainPart == ":80" {
-				routes = append(routes, parseProxiedBlock(lines[i+1:])...)
-				for i++; i < len(lines); i++ {
-					if strings.TrimSpace(lines[i]) == "}" {
-						break
-					}
-				}
-				continue
-			}
-
 			domains := strings.Split(domainPart, ",")
 			for k := range domains {
 				domains[k] = strings.TrimSpace(domains[k])
 			}
 
 			route := IngressRoute{Domains: domains}
-			if i+1 < len(lines) {
-				proxyLine := strings.TrimSpace(lines[i+1])
-				if strings.HasPrefix(proxyLine, "reverse_proxy ") {
-					upstream := strings.TrimPrefix(proxyLine, "reverse_proxy ")
+
+			// Scan all lines inside the block until closing }
+			for i++; i < len(lines); i++ {
+				inner := strings.TrimSpace(lines[i])
+				if inner == "}" {
+					break
+				}
+				if strings.HasPrefix(inner, "tls /etc/caddy/tls/") {
+					route.Proxy = true
+				}
+				if strings.HasPrefix(inner, "reverse_proxy ") {
+					upstream := strings.TrimPrefix(inner, "reverse_proxy ")
 					parts := strings.SplitN(upstream, ".", 2)
 					if len(parts) >= 1 {
 						route.Service = parts[0]
@@ -376,59 +391,9 @@ func parseCaddyfile(content string) []IngressRoute {
 						fmt.Sscanf(upstream[idx+1:], "%d", &route.Port)
 					}
 				}
-				i++
 			}
 			routes = append(routes, route)
 		}
-	}
-	return routes
-}
-
-func parseProxiedBlock(lines []string) []IngressRoute {
-	serviceRoutes := map[string]*IngressRoute{}
-
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if line == "}" || line == "" {
-			break
-		}
-
-		if strings.HasPrefix(line, "@") && strings.Contains(line, " host ") {
-			parts := strings.SplitN(line, " host ", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			domain := strings.TrimSpace(parts[1])
-
-			if i+1 < len(lines) {
-				proxyLine := strings.TrimSpace(lines[i+1])
-				if strings.HasPrefix(proxyLine, "reverse_proxy @") {
-					fields := strings.Fields(proxyLine)
-					if len(fields) >= 3 {
-						upstream := fields[2]
-						svcParts := strings.SplitN(upstream, ".", 2)
-						service := svcParts[0]
-						var port int
-						if idx := strings.LastIndex(upstream, ":"); idx >= 0 {
-							fmt.Sscanf(upstream[idx+1:], "%d", &port)
-						}
-
-						r, ok := serviceRoutes[service]
-						if !ok {
-							r = &IngressRoute{Service: service, Port: port, Proxy: true}
-							serviceRoutes[service] = r
-						}
-						r.Domains = append(r.Domains, domain)
-					}
-					i++
-				}
-			}
-		}
-	}
-
-	var routes []IngressRoute
-	for _, r := range serviceRoutes {
-		routes = append(routes, *r)
 	}
 	return routes
 }

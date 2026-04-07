@@ -126,7 +126,7 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, params map[string]any) error {
 	switch kind {
 	case plan.StepFirewallSet:
-		allowed, err := parseFirewallFromParams(params)
+		allowed, err := parseFirewallFromParams(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -286,7 +286,7 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 
 // parseFirewallFromParams converts step params into a PortAllowList.
 // Supports "preset" key (resolved via ResolveFirewallArgs) and/or "rules" map.
-func parseFirewallFromParams(params map[string]any) (provider.PortAllowList, error) {
+func parseFirewallFromParams(ctx context.Context, params map[string]any) (provider.PortAllowList, error) {
 	preset := utils.GetString(params, "preset")
 	rulesRaw, hasRules := params["rules"]
 
@@ -317,7 +317,7 @@ func parseFirewallFromParams(params map[string]any) (provider.PortAllowList, err
 		}
 	}
 
-	return provider.ResolveFirewallArgs(context.Background(), args)
+	return provider.ResolveFirewallArgs(ctx, args)
 }
 
 // parseIngressRoutesFromParams extracts routes from step params.
