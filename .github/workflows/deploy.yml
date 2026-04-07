@@ -66,13 +66,16 @@ jobs:
           nvoi build --build-provider local --source ./cmd/api --name api
           nvoi build --build-provider local --source ./cmd/distribution --name distribution
 
-          # Services
+          # Services (--no-wait: apply all, then wait once at the end)
           nvoi service set db --image postgres:17 --port 5432 \
             --volume pgdata:/var/lib/postgresql/data \
-            --secret POSTGRES_PASSWORD
+            --secret POSTGRES_PASSWORD \
+            --no-wait
           nvoi service set api --image "$(nvoi build latest api)" --port 8080 \
-            --secret DATABASE_URL --secret JWT_SECRET --secret ENCRYPTION_KEY
-          nvoi service set web --image "$(nvoi build latest web)" --port 3000
+            --secret DATABASE_URL --secret JWT_SECRET --secret ENCRYPTION_KEY \
+            --no-wait
+          nvoi service set web --image "$(nvoi build latest web)" --port 3000 \
+            --no-wait
           nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001
 
           # DNS
