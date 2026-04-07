@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
@@ -35,8 +36,7 @@ func WaitAllServices(ctx context.Context, req WaitAllServicesRequest) error {
 
 	out.Progress("waiting for all services")
 
-	lastStatus := ""
-	return utils.Poll(ctx, 3*time.Second, timeout, func() (bool, error) {
+	return utils.Poll(ctx, 10*time.Second, timeout, func() (bool, error) {
 		pods, err := kube.GetAllPods(ctx, ssh, ns)
 		if err != nil {
 			return false, nil // transient
@@ -58,16 +58,13 @@ func WaitAllServices(ctx context.Context, req WaitAllServicesRequest) error {
 			}
 		}
 
-		status := fmt.Sprintf("%d/%d pods ready", ready, total)
-		if status != lastStatus {
-			out.Progress(status)
-			lastStatus = status
-		}
-
 		if ready == total {
 			out.Success("all services ready")
 			return true, nil
 		}
+
+		status := fmt.Sprintf("%d/%d pods ready — waiting: %s", ready, total, strings.Join(notReady, ", "))
+		out.Progress(status)
 
 		return false, nil
 	})
