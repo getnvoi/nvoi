@@ -12,15 +12,32 @@ import (
 )
 
 // WaitHTTPS polls until https://domain returns a non-5xx response.
-// Parallel to WaitSSH — waits for a service to become reachable.
+// Fails fast on connection refused/timeout (firewall). Waits longer for TLS errors (cert provisioning).
 func WaitHTTPS(ctx context.Context, domain string) error {
 	client := &http.Client{Timeout: 5 * time.Second}
+	connFailures := 0 // consecutive TCP-level failures
+
 	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
 		resp, err := client.Get("https://" + domain)
 		if err != nil {
+			errMsg := err.Error()
+			// TCP connection refused or timeout = firewall/port closed.
+			// Fail fast after 3 consecutive connection failures (9 seconds).
+			if strings.Contains(errMsg, "connection refused") ||
+				strings.Contains(errMsg, "i/o timeout") ||
+				strings.Contains(errMsg, "no route to host") {
+				connFailures++
+				if connFailures >= 3 {
+					return false, fmt.Errorf("port not reachable (connection refused/timeout) — firewall may be blocking 80/443")
+				}
+				return false, nil
+			}
+			// TLS errors = cert not ready yet, keep polling
+			connFailures = 0
 			return false, nil
 		}
 		resp.Body.Close()
+		connFailures = 0
 		return resp.StatusCode >= 200 && resp.StatusCode < 500, nil
 	})
 }
