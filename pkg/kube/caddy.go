@@ -59,6 +59,7 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 		ObjectMeta: metav1.ObjectMeta{Name: caddyName, Namespace: ns, Labels: labels},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &one,
+			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: caddyName}},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
