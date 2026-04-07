@@ -143,6 +143,12 @@ func Validate(cfg *Config) []error {
 		}
 	}
 
+	// ── Firewall preset validation ────────────────────────────────────────────
+	knownPresets := map[string]bool{"default": true, "cloudflare": true}
+	if cfg.Firewall != nil && cfg.Firewall.Preset != "" && !knownPresets[cfg.Firewall.Preset] {
+		add("firewall: unknown preset %q (available: default, cloudflare)", cfg.Firewall.Preset)
+	}
+
 	// ── Firewall × Domains coherence ──────────────────────────────────────────
 	if len(cfg.Domains) > 0 && cfg.Firewall == nil {
 		add("firewall: domains configured but no firewall section — add \"firewall: default\" or explicit 80/443 rules")
@@ -155,21 +161,59 @@ func Validate(cfg *Config) []error {
 	}
 
 	// ── Firewall × Proxy coherence (Cloudflare only) ──────────────────────────
-	isCloudflareFirewall := cfg.Firewall != nil && cfg.Firewall.Preset == "cloudflare"
+	// A firewall is "restricted" if it uses cloudflare preset OR has explicit rules
+	// that aren't open to all (0.0.0.0/0). Rule overrides on a cloudflare preset
+	// that open a port to all make that port unrestricted.
+	isRestrictedFirewall := firewallIsRestricted(cfg.Firewall)
 	for svcName := range cfg.DomainProxy {
-		if !isCloudflareFirewall {
-			add("domains.%s: proxy requires \"firewall: cloudflare\" — origin is directly reachable without it", svcName)
+		if !isRestrictedFirewall {
+			add("domains.%s: proxy requires a restricted firewall (e.g. \"firewall: cloudflare\") — origin is directly reachable without it", svcName)
 		}
 	}
-	if isCloudflareFirewall {
+	if isRestrictedFirewall {
 		for svcName := range cfg.Domains {
 			if !cfg.DomainProxy[svcName] {
-				add("domains.%s: firewall is cloudflare but domain is not proxied — add proxy: true or use \"firewall: default\"", svcName)
+				add("domains.%s: firewall restricts 80/443 but domain is not proxied — add proxy: true or use \"firewall: default\"", svcName)
 			}
 		}
 	}
 
 	return errs
+}
+
+// firewallIsRestricted returns true if the firewall restricts 80/443 to specific CIDRs
+// (not open to all). Accounts for rule overrides that may open ports the preset restricts.
+func firewallIsRestricted(fw *FirewallConfig) bool {
+	if fw == nil {
+		return false
+	}
+	// If no preset and no rules, not restricted (base rules only)
+	if fw.Preset == "" && len(fw.Rules) == 0 {
+		return false
+	}
+	// Check if any rule override opens 80 or 443 to all
+	for _, port := range []string{"80", "443"} {
+		if cidrs, ok := fw.Rules[port]; ok {
+			for _, cidr := range cidrs {
+				if cidr == "0.0.0.0/0" || cidr == "::/0" {
+					return false // rule override makes this port open to all
+				}
+			}
+		}
+	}
+	// Cloudflare preset without open overrides = restricted
+	if fw.Preset == "cloudflare" {
+		return true
+	}
+	// Explicit rules without 0.0.0.0/0 on 80/443 = restricted
+	if len(fw.Rules) > 0 && fw.Preset == "" {
+		has80 := len(fw.Rules["80"]) > 0
+		has443 := len(fw.Rules["443"]) > 0
+		if has80 || has443 {
+			return true // has rules for HTTP ports that aren't open to all
+		}
+	}
+	return false
 }
 
 // firewallOpensPort checks if a FirewallConfig opens the given port.

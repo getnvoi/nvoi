@@ -111,7 +111,7 @@ func newFirewallListCmd() *cobra.Command {
 				return err
 			}
 
-			if rules == nil || len(rules) == 0 {
+			if len(rules) == 0 {
 				t := render.NewTable("PORT", "ALLOWED CIDRs")
 				t.Row("*", "base rules only (SSH + internal)")
 				t.Print()

@@ -64,7 +64,7 @@ type DNSDeleteRequest struct {
 	Domains []string
 }
 
-// DNSDelete removes DNS A records and the corresponding Caddy route.
+// DNSDelete removes DNS A records. Does NOT touch Caddy — use IngressRemoveRoute for that.
 func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	out := req.Log()
 	out.Command("dns", "delete", req.Service)
@@ -81,29 +81,45 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 		}
 	}
 
-	// Remove route from Caddy if we have cluster access
+	// Also remove the Caddy route (keeps teardown working as a single command).
+	// This is a convenience — the canonical owner of Caddy is IngressRemoveRoute.
 	if req.Provider != "" {
-		ssh, names, err := req.Cluster.SSH(ctx)
-		if errors.Is(err, ErrNoMaster) {
-			return nil
-		}
-		if err != nil {
-			return nil
-		}
-		defer ssh.Close()
-
-		ns := names.KubeNamespace()
-		existing, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
-		routes := removeRoute(existing, req.Service)
-
-		if len(routes) == 0 {
-			kube.DeleteByName(ctx, ssh, ns, names.KubeCaddy())
-			kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete configmap %s --ignore-not-found", names.KubeCaddyConfig()))
-		} else {
-			kube.ApplyCaddyConfig(ctx, ssh, ns, routes, names)
+		if err := IngressRemoveRoute(ctx, req.Cluster, req.Service); err != nil {
+			out.Warning(fmt.Sprintf("caddy cleanup: %v", err))
 		}
 	}
 
+	return nil
+}
+
+// IngressRemoveRouteRequest holds the params for removing a service's ingress route.
+type IngressRemoveRouteRequest struct {
+	Cluster
+	Service string
+}
+
+// IngressRemoveRoute removes a single service's route from the Caddyfile.
+// If no routes remain, Caddy and its ConfigMap are deleted entirely.
+func IngressRemoveRoute(ctx context.Context, c Cluster, service string) error {
+	ssh, names, err := c.SSH(ctx)
+	if errors.Is(err, ErrNoMaster) {
+		return nil
+	}
+	if err != nil {
+		return nil
+	}
+	defer ssh.Close()
+
+	ns := names.KubeNamespace()
+	existing, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
+	routes := removeRoute(existing, service)
+
+	if len(routes) == 0 {
+		kube.DeleteByName(ctx, ssh, ns, names.KubeCaddy())
+		kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete configmap %s --ignore-not-found", names.KubeCaddyConfig()))
+	} else {
+		return kube.ApplyCaddyConfig(ctx, ssh, ns, routes, names)
+	}
 	return nil
 }
 
@@ -129,16 +145,25 @@ type IngressRouteArg struct {
 	Proxy   bool
 }
 
-// ParseIngressArgs parses "service:domain,domain" args.
+// ParseIngressArgs parses "service:domain,domain" or "service:domain,domain:proxy" args.
+// Trailing ":proxy" enables per-route proxy mode (alternative to --proxy which is all-or-nothing).
 func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 	var routes []IngressRouteArg
 	for _, arg := range args {
-		service, domainPart, ok := strings.Cut(arg, ":")
-		if !ok || service == "" || domainPart == "" {
-			return nil, fmt.Errorf("invalid route %q — expected service:domain,domain", arg)
+		service, rest, ok := strings.Cut(arg, ":")
+		if !ok || service == "" || rest == "" {
+			return nil, fmt.Errorf("invalid route %q — expected service:domain,domain or service:domain,domain:proxy", arg)
 		}
+
+		// Check for trailing :proxy suffix
+		proxy := false
+		if strings.HasSuffix(rest, ":proxy") {
+			proxy = true
+			rest = strings.TrimSuffix(rest, ":proxy")
+		}
+
 		var domains []string
-		for _, d := range strings.Split(domainPart, ",") {
+		for _, d := range strings.Split(rest, ",") {
 			d = strings.TrimSpace(d)
 			if d != "" {
 				domains = append(domains, d)
@@ -147,7 +172,7 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 		if len(domains) == 0 {
 			return nil, fmt.Errorf("invalid route %q — no domains", arg)
 		}
-		routes = append(routes, IngressRouteArg{Service: service, Domains: domains})
+		routes = append(routes, IngressRouteArg{Service: service, Domains: domains, Proxy: proxy})
 	}
 	return routes, nil
 }
@@ -197,19 +222,31 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 		return nil
 	}
 
-	// Pre-flight: firewall × proxy coherence
-	if err := checkFirewallCoherence(ctx, req.Cluster, req.Routes); err != nil {
-		return err
-	}
-
 	// Store TLS cert if provided (custom cert or auto-generated Origin CA)
 	hasCert := req.CertPEM != "" && req.KeyPEM != ""
 	if hasCert {
 		out.Progress("storing TLS certificate")
-		if err := kube.UpsertTLSSecret(ctx, ssh, ns, "caddy-origin-cert", req.CertPEM, req.KeyPEM); err != nil {
+		if err := kube.UpsertTLSSecret(ctx, ssh, ns, kube.CaddyTLSSecretName, req.CertPEM, req.KeyPEM); err != nil {
 			return fmt.Errorf("store cert: %w", err)
 		}
 		out.Success("certificate stored")
+	}
+
+	// If proxy routes requested but no cert provided, check for existing secret
+	if !hasCert {
+		anyProxy := false
+		for _, r := range req.Routes {
+			if r.Proxy {
+				anyProxy = true
+				break
+			}
+		}
+		if anyProxy {
+			if kube.TLSSecretExists(ctx, ssh, ns, kube.CaddyTLSSecretName) {
+				out.Info("reusing existing Origin CA certificate")
+				hasCert = true
+			}
+		}
 	}
 
 	// Custom certs reuse the same Caddy TLS path as proxied routes.
@@ -217,6 +254,18 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 		for i := range routes {
 			routes[i].Proxy = true
 		}
+	}
+
+	// Pre-flight: firewall × proxy coherence (after cert override so we check final state)
+	finalRoutes := make([]IngressRouteArg, len(req.Routes))
+	copy(finalRoutes, req.Routes)
+	if hasCert {
+		for i := range finalRoutes {
+			finalRoutes[i].Proxy = true
+		}
+	}
+	if err := checkFirewallCoherence(ctx, req.Cluster, finalRoutes); err != nil {
+		return err
 	}
 
 	out.Progress("applying caddy config")
@@ -277,6 +326,11 @@ func checkFirewallCoherence(ctx context.Context, c Cluster, routes []IngressRout
 		}
 	}
 
+	// Mixed proxy/direct routes can't be satisfied by any single firewall config
+	if anyProxy && anyDirect {
+		return fmt.Errorf("cannot mix proxied and non-proxied routes — all routes must be either proxied (through Cloudflare) or direct (ACME). Unify the --proxy setting or split into separate ingress apply invocations")
+	}
+
 	has80 := len(rules["80"]) > 0
 	has443 := len(rules["443"]) > 0
 
@@ -287,13 +341,15 @@ func checkFirewallCoherence(ctx context.Context, c Cluster, routes []IngressRout
 		return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set default' first", fwNames.Firewall())
 	}
 
-	isOpenToAll := false
-	for _, cidr := range rules["80"] {
-		if cidr == "0.0.0.0/0" || cidr == "::/0" {
-			isOpenToAll = true
-			break
+	portOpenToAll := func(port string) bool {
+		for _, cidr := range rules[port] {
+			if cidr == "0.0.0.0/0" || cidr == "::/0" {
+				return true
+			}
 		}
+		return false
 	}
+	isOpenToAll := portOpenToAll("80") || portOpenToAll("443")
 
 	if anyProxy && isOpenToAll {
 		return fmt.Errorf("--proxy with firewall open to all — origin is directly reachable, bypassing Cloudflare. Run 'nvoi firewall set cloudflare' to restrict 80/443 to Cloudflare IPs")

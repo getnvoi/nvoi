@@ -208,6 +208,123 @@ func TestExecutor_BuiltImagesAccumulates(t *testing.T) {
 	}
 }
 
+// ── parseFirewallFromParams tests ─────────────────────────────────────────────
+
+func TestParseFirewallFromParams_PresetOnly(t *testing.T) {
+	params := map[string]any{"preset": "default"}
+	got, err := parseFirewallFromParams(context.Background(), params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got["80"]) == 0 || len(got["443"]) == 0 {
+		t.Errorf("default preset should open 80/443, got %v", got)
+	}
+}
+
+func TestParseFirewallFromParams_RulesOnly(t *testing.T) {
+	params := map[string]any{
+		"rules": map[string]any{
+			"80":  []any{"0.0.0.0/0"},
+			"443": []any{"10.0.0.0/8"},
+		},
+	}
+	got, err := parseFirewallFromParams(context.Background(), params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got["80"]) != 1 || got["80"][0] != "0.0.0.0/0" {
+		t.Errorf("80 = %v", got["80"])
+	}
+	if len(got["443"]) != 1 || got["443"][0] != "10.0.0.0/8" {
+		t.Errorf("443 = %v", got["443"])
+	}
+}
+
+func TestParseFirewallFromParams_PresetPlusRules(t *testing.T) {
+	params := map[string]any{
+		"preset": "default",
+		"rules": map[string]any{
+			"443": []any{"10.0.0.0/8"},
+		},
+	}
+	got, err := parseFirewallFromParams(context.Background(), params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 80 from default preset
+	if len(got["80"]) == 0 {
+		t.Error("80 should come from default preset")
+	}
+	// 443 overridden by rules
+	if len(got["443"]) != 1 || got["443"][0] != "10.0.0.0/8" {
+		t.Errorf("443 should be overridden, got %v", got["443"])
+	}
+}
+
+func TestParseFirewallFromParams_Nil(t *testing.T) {
+	got, err := parseFirewallFromParams(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+// ── parseIngressRoutesFromParams tests ───────────────────────────────────────
+
+func TestParseIngressRoutesFromParams_Valid(t *testing.T) {
+	params := map[string]any{
+		"routes": []any{
+			map[string]any{"service": "web", "domains": []any{"example.com"}, "proxy": true},
+		},
+	}
+	routes, err := parseIngressRoutesFromParams(params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("routes = %d, want 1", len(routes))
+	}
+	if routes[0].Service != "web" {
+		t.Errorf("service = %q", routes[0].Service)
+	}
+	if !routes[0].Proxy {
+		t.Error("proxy should be true")
+	}
+}
+
+func TestParseIngressRoutesFromParams_MissingService(t *testing.T) {
+	params := map[string]any{
+		"routes": []any{
+			map[string]any{"domains": []any{"example.com"}},
+		},
+	}
+	_, err := parseIngressRoutesFromParams(params)
+	if err == nil {
+		t.Fatal("expected error for missing service")
+	}
+}
+
+func TestParseIngressRoutesFromParams_NoDomains(t *testing.T) {
+	params := map[string]any{
+		"routes": []any{
+			map[string]any{"service": "web"},
+		},
+	}
+	_, err := parseIngressRoutesFromParams(params)
+	if err == nil {
+		t.Fatal("expected error for empty domains")
+	}
+}
+
+func TestParseIngressRoutesFromParams_MissingRoutes(t *testing.T) {
+	_, err := parseIngressRoutesFromParams(map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for missing routes")
+	}
+}
+
 // seedData creates a user + workspace for executor tests. Returns workspace ID.
 func seedData(t *testing.T, db *gorm.DB) string {
 	t.Helper()

@@ -92,6 +92,34 @@ func (f *FirewallConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (f FirewallConfig) MarshalJSON() ([]byte, error) {
+	if f.Preset != "" && len(f.Rules) == 0 {
+		return json.Marshal(f.Preset)
+	}
+	m := map[string]any{}
+	if f.Preset != "" {
+		m["preset"] = f.Preset
+	}
+	for port, cidrs := range f.Rules {
+		m[port] = cidrs
+	}
+	return json.Marshal(m)
+}
+
+func (f FirewallConfig) MarshalYAML() (any, error) {
+	if f.Preset != "" && len(f.Rules) == 0 {
+		return f.Preset, nil
+	}
+	m := map[string]any{}
+	if f.Preset != "" {
+		m["preset"] = f.Preset
+	}
+	for port, cidrs := range f.Rules {
+		m[port] = cidrs
+	}
+	return m, nil
+}
+
 // DomainConfig supports simple domains or domains with proxy config.
 //
 //	domains:
@@ -122,6 +150,28 @@ type Config struct {
 	//       proxy: true
 	// Populated by Parse from DomainConfig entries that have proxy: true.
 	DomainProxy map[string]bool `json:"-" yaml:"-"` // internal, not serialized directly
+}
+
+// MarshalJSON serializes Config with DomainProxy embedded back into Domains.
+// Proxied domains are written as DomainConfig objects, others as string lists.
+func (c Config) MarshalJSON() ([]byte, error) {
+	type Alias Config // break recursion
+	alias := struct {
+		Alias
+		Domains map[string]any `json:"domains,omitempty"`
+	}{Alias: Alias(c)}
+
+	if len(c.Domains) > 0 {
+		alias.Domains = make(map[string]any, len(c.Domains))
+		for svc, domains := range c.Domains {
+			if c.DomainProxy[svc] {
+				alias.Domains[svc] = DomainConfig{Domains: []string(domains), Proxy: true}
+			} else {
+				alias.Domains[svc] = domains
+			}
+		}
+	}
+	return json.Marshal(alias)
 }
 
 type Server struct {

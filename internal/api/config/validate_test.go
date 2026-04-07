@@ -267,6 +267,13 @@ func TestValidate_MultipleErrors(t *testing.T) {
 
 // ── Firewall × Domains × Proxy coherence ──────────────────────────────────────
 
+func TestValidate_UnknownFirewallPreset(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{Preset: "banana"}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "unknown preset")
+}
+
 func TestValidate_DomainsWithoutFirewall(t *testing.T) {
 	cfg := validConfig()
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
@@ -304,7 +311,7 @@ func TestValidate_ProxyWithDefaultFirewall(t *testing.T) {
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
 	cfg.DomainProxy = map[string]bool{"web": true}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "proxy requires \"firewall: cloudflare\"")
+	assertHasError(t, errs, "proxy requires a restricted firewall")
 }
 
 func TestValidate_CloudflareFirewallWithoutProxy(t *testing.T) {
@@ -313,7 +320,35 @@ func TestValidate_CloudflareFirewallWithoutProxy(t *testing.T) {
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
 	// No DomainProxy — web is not proxied
 	errs := Validate(cfg)
-	assertHasError(t, errs, "firewall is cloudflare but domain is not proxied")
+	assertHasError(t, errs, "domain is not proxied")
+}
+
+func TestValidate_CloudflarePresetWithOpenOverride(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{
+		Preset: "cloudflare",
+		Rules:  map[string][]string{"443": {"0.0.0.0/0"}}, // override opens 443 to all
+	}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	cfg.DomainProxy = map[string]bool{"web": true}
+	errs := Validate(cfg)
+	// Rule override makes port open to all — proxy + open = bad
+	assertHasError(t, errs, "proxy requires a restricted firewall")
+}
+
+func TestValidate_ExplicitRestrictedRulesWithProxy(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{
+		Rules: map[string][]string{
+			"80":  {"173.245.48.0/20"},
+			"443": {"173.245.48.0/20"},
+		},
+	}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	cfg.DomainProxy = map[string]bool{"web": true}
+	errs := Validate(cfg)
+	// Explicit restricted CIDRs without cloudflare preset — should be valid with proxy
+	assertNoError(t, errs, "proxy requires")
 }
 
 func TestValidate_CloudflareFirewallWithProxy(t *testing.T) {

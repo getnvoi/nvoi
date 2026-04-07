@@ -51,6 +51,7 @@ func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 	var steps []Step
 
 	// ── Deletes (reverse deploy order) ─────────────────────────────────────
+	steps = append(steps, diffIngress(reality, desired)...)
 	steps = append(steps, diffDNS(reality, desired)...)
 	steps = append(steps, diffServices(reality, desired)...)
 	steps = append(steps, diffStorage(reality, desired)...)
@@ -58,6 +59,11 @@ func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 	steps = append(steps, diffVolumes(reality, desired)...)
 	steps = append(steps, diffFirewall(reality, desired)...)
 	steps = append(steps, diffCompute(reality, desired)...)
+
+	// ── Coherence check: removing firewall while domains remain ─────────────
+	if reality != nil && reality.Firewall != nil && desired.Firewall == nil && len(desired.Domains) > 0 {
+		return nil, fmt.Errorf("cannot remove firewall when domains are configured — ingress requires ports 80/443 open. Add \"firewall: default\" or remove domains")
+	}
 
 	// ── Sets (forward deploy order) ────────────────────────────────────────
 	steps = append(steps, setCompute(desired)...)
@@ -248,6 +254,35 @@ func setIngress(cfg *Cfg) []Step {
 }
 
 // ── Diff phases (reverse deploy order) ─────────────────────────────────────
+
+// diffIngress re-applies ingress when domains change (added, removed, or proxy toggled).
+// Ingress is always a full set — the step rebuilds the Caddyfile from desired state.
+func diffIngress(reality, desired *Cfg) []Step {
+	if reality == nil {
+		return nil
+	}
+	// Check if any domains were removed or proxy flags changed
+	changed := false
+	for svcName := range reality.Domains {
+		if _, ok := desired.Domains[svcName]; !ok {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		for svcName := range reality.Domains {
+			if reality.DomainProxy[svcName] != desired.DomainProxy[svcName] {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed || len(desired.Domains) == 0 {
+		return nil
+	}
+	// Re-emit a full ingress.apply with the desired routes — setIngress handles the content
+	return setIngress(desired)
+}
 
 func diffDNS(reality, desired *Cfg) []Step {
 	if reality == nil {

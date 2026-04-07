@@ -26,7 +26,8 @@ func newIngressApplyCmd() *cobra.Command {
 Examples:
   nvoi ingress apply web:example.com api:api.example.com
   nvoi ingress apply web:example.com --cert cert.pem --key key.pem
-  nvoi ingress apply web:example.com --proxy   # auto-generates Cloudflare Origin CA cert`,
+  nvoi ingress apply web:example.com --proxy         # all routes proxied via Cloudflare
+  nvoi ingress apply web:example.com:proxy api:api.example.com  # per-route proxy`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			appName, env, err := resolveAppEnv(cmd)

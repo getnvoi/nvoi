@@ -193,8 +193,8 @@ func parsePort(port string) (from, to int) {
 // baseFirewallRules returns the base nvoi firewall rules (SSH + internal).
 // HTTP ports (80, 443) are NOT included — managed by firewall set.
 func baseFirewallRules() []firewallRule {
-	pub := []string{"0.0.0.0/0"}
-	priv := []string{"10.0.0.0/8"}
+	pub := []string{"0.0.0.0/0", "::/0"}
+	priv := []string{utils.PrivateNetworkCIDR}
 	return []firewallRule{
 		{Protocol: "tcp", Port: "22", SourceIPs: pub},
 		{Protocol: "tcp", Port: "6443", SourceIPs: priv},
@@ -206,7 +206,7 @@ func baseFirewallRules() []firewallRule {
 
 // buildFirewallRules builds the full rule set from base rules + allowed public ports.
 func buildScalewayFirewallRules(allowed provider.PortAllowList) []firewallRule {
-	priv := []string{"10.0.0.0/8"}
+	priv := []string{utils.PrivateNetworkCIDR}
 
 	// Internal ports — always present
 	rules := []firewallRule{
@@ -216,8 +216,8 @@ func buildScalewayFirewallRules(allowed provider.PortAllowList) []firewallRule {
 		{Protocol: "tcp", Port: "5000", SourceIPs: priv},
 	}
 
-	// SSH — defaults to open, overridable
-	sshCIDRs := []string{"0.0.0.0/0"}
+	// SSH — defaults to open (IPv4 + IPv6), overridable
+	sshCIDRs := []string{"0.0.0.0/0", "::/0"}
 	if ips, ok := allowed["22"]; ok && len(ips) > 0 {
 		sshCIDRs = ips
 	}

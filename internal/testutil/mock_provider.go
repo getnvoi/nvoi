@@ -106,15 +106,20 @@ var _ provider.ComputeProvider = (*MockCompute)(nil)
 
 // MockDNS implements provider.DNSProvider for testing.
 type MockDNS struct {
-	Records  []provider.DNSRecord
-	EnsuredA []string // domains passed to EnsureARecord
-	DeletedA []string // domains passed to DeleteARecord
+	Records         []provider.DNSRecord
+	EnsuredA        []string        // domains passed to EnsureARecord
+	EnsuredAProxied map[string]bool // domain → proxied flag
+	DeletedA        []string        // domains passed to DeleteARecord
 }
 
 func (m *MockDNS) ValidateCredentials(ctx context.Context) error { return nil }
 
 func (m *MockDNS) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
 	m.EnsuredA = append(m.EnsuredA, domain)
+	if m.EnsuredAProxied == nil {
+		m.EnsuredAProxied = map[string]bool{}
+	}
+	m.EnsuredAProxied[domain] = proxied
 	return nil
 }
 

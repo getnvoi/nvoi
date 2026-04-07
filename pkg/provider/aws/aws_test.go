@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // ── ArchForType ───────────────────────────────────────────────────────────────
@@ -204,7 +205,7 @@ func TestBaseIngressRules_PrivatePorts(t *testing.T) {
 		port := deref32(r.FromPort)
 		if _, ok := privatePorts[port]; ok {
 			for _, ipRange := range r.IpRanges {
-				if deref(ipRange.CidrIp) == "10.0.0.0/16" {
+				if deref(ipRange.CidrIp) == utils.PrivateNetworkCIDR {
 					privatePorts[port] = true
 				}
 			}
@@ -255,16 +256,16 @@ func TestBaseIngressRules(t *testing.T) {
 	}
 
 	// Private rules
-	if cidr, ok := seen[ruleKey{6443, "tcp"}]; !ok || cidr != "10.0.0.0/16" {
+	if cidr, ok := seen[ruleKey{6443, "tcp"}]; !ok || cidr != utils.PrivateNetworkCIDR {
 		t.Errorf("k8s API (6443/tcp) rule missing or wrong CIDR: %q", cidr)
 	}
-	if cidr, ok := seen[ruleKey{10250, "tcp"}]; !ok || cidr != "10.0.0.0/16" {
+	if cidr, ok := seen[ruleKey{10250, "tcp"}]; !ok || cidr != utils.PrivateNetworkCIDR {
 		t.Errorf("kubelet (10250/tcp) rule missing or wrong CIDR: %q", cidr)
 	}
-	if cidr, ok := seen[ruleKey{8472, "udp"}]; !ok || cidr != "10.0.0.0/16" {
+	if cidr, ok := seen[ruleKey{8472, "udp"}]; !ok || cidr != utils.PrivateNetworkCIDR {
 		t.Errorf("VXLAN (8472/udp) rule missing or wrong CIDR: %q", cidr)
 	}
-	if cidr, ok := seen[ruleKey{5000, "tcp"}]; !ok || cidr != "10.0.0.0/16" {
+	if cidr, ok := seen[ruleKey{5000, "tcp"}]; !ok || cidr != utils.PrivateNetworkCIDR {
 		t.Errorf("registry (5000/tcp) rule missing or wrong CIDR: %q", cidr)
 	}
 }

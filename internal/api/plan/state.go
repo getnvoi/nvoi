@@ -70,6 +70,12 @@ func InfraState(ctx context.Context, req InfraStateRequest) *Cfg {
 		} else {
 			cfg.Domains[i.Service] = config.Domains{i.Domain}
 		}
+		if i.Proxy {
+			if cfg.DomainProxy == nil {
+				cfg.DomainProxy = map[string]bool{}
+			}
+			cfg.DomainProxy[i.Service] = true
+		}
 	}
 
 	if len(cfg.Servers) == 0 && len(cfg.Services) == 0 {

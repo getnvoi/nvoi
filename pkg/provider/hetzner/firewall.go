@@ -31,7 +31,9 @@ func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[str
 		if fw.Name == name {
 			id := strconv.FormatInt(fw.ID, 10)
 			// Update rules
-			_ = c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/set_rules", id), map[string]any{"rules": baseFirewallRules()}, nil)
+			if err := c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/set_rules", id), map[string]any{"rules": baseFirewallRules()}, nil); err != nil {
+				return "", fmt.Errorf("reconcile firewall rules: %w", err)
+			}
 			return id, nil
 		}
 	}

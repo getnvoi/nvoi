@@ -10,6 +10,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/cloudflare"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gorm.io/gorm"
 )
@@ -264,9 +265,28 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 		if err != nil {
 			return err
 		}
+
+		var certPEM, keyPEM string
+		if anyProxy(routes) && e.dns.Name == "cloudflare" {
+			// Generate Origin CA cert for proxied routes (if no existing cert in cluster)
+			var allDomains []string
+			for _, r := range routes {
+				allDomains = append(allDomains, r.Domains...)
+			}
+			ca := cloudflare.NewOriginCA(e.dns.Creds["api_key"], e.dns.Creds["zone_id"])
+			originCert, err := ca.CreateCert(ctx, allDomains)
+			if err != nil {
+				return fmt.Errorf("origin ca cert: %w", err)
+			}
+			certPEM = originCert.Certificate
+			keyPEM = originCert.PrivateKey
+		}
+
 		return pkgcore.IngressApply(ctx, pkgcore.IngressApplyRequest{
 			Cluster: e.cluster,
 			Routes:  routes,
+			CertPEM: certPEM,
+			KeyPEM:  keyPEM,
 		})
 
 	case plan.StepDNSDelete:
@@ -296,7 +316,7 @@ func parseFirewallFromParams(ctx context.Context, params map[string]any) (provid
 		args = append(args, preset)
 	}
 	if hasRules {
-		// Rules is map[string][]string (port → CIDRs)
+		// Rules arrives as map[string]any from JSON deserialization
 		if rulesMap, ok := rulesRaw.(map[string]any); ok {
 			for port, v := range rulesMap {
 				if cidrs, ok := v.([]any); ok {
@@ -305,13 +325,6 @@ func parseFirewallFromParams(ctx context.Context, params map[string]any) (provid
 							args = append(args, fmt.Sprintf("%s:%s", port, s))
 						}
 					}
-				}
-			}
-		}
-		if rulesMap, ok := rulesRaw.(map[string][]string); ok {
-			for port, cidrs := range rulesMap {
-				for _, cidr := range cidrs {
-					args = append(args, fmt.Sprintf("%s:%s", port, cidr))
 				}
 			}
 		}
@@ -331,22 +344,35 @@ func parseIngressRoutesFromParams(params map[string]any) ([]pkgcore.IngressRoute
 		return nil, fmt.Errorf("ingress.apply: routes must be a list")
 	}
 	var routes []pkgcore.IngressRouteArg
-	for _, item := range routesList {
+	for i, item := range routesList {
 		m, ok := item.(map[string]any)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("ingress.apply: route at index %d is not a map", i)
 		}
 		svc := utils.GetString(m, "service")
-		domains := utils.GetStringSlice(m, "domains")
-		if svc != "" && len(domains) > 0 {
-			routes = append(routes, pkgcore.IngressRouteArg{
-				Service: svc,
-				Domains: domains,
-				Proxy:   utils.GetBool(m, "proxy"),
-			})
+		if svc == "" {
+			return nil, fmt.Errorf("ingress.apply: route at index %d missing service name", i)
 		}
+		domains := utils.GetStringSlice(m, "domains")
+		if len(domains) == 0 {
+			return nil, fmt.Errorf("ingress.apply: route at index %d (service %q) has no domains", i, svc)
+		}
+		routes = append(routes, pkgcore.IngressRouteArg{
+			Service: svc,
+			Domains: domains,
+			Proxy:   utils.GetBool(m, "proxy"),
+		})
 	}
 	return routes, nil
+}
+
+func anyProxy(routes []pkgcore.IngressRouteArg) bool {
+	for _, r := range routes {
+		if r.Proxy {
+			return true
+		}
+	}
+	return false
 }
 
 // ── status helpers ─────────────────────────────────────────────────────────────

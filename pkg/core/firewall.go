@@ -29,7 +29,7 @@ func FirewallSet(ctx context.Context, req FirewallSetRequest) error {
 		return fmt.Errorf("firewall set: %w", err)
 	}
 
-	if req.AllowedIPs == nil || len(req.AllowedIPs) == 0 {
+	if len(req.AllowedIPs) == 0 {
 		out.Success("base rules only (SSH + internal)")
 	} else {
 		for _, port := range provider.SortedPorts(req.AllowedIPs) {

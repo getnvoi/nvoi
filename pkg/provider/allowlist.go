@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,7 +68,10 @@ func ResolveFirewallArgs(ctx context.Context, args []string) (PortAllowList, err
 	}
 
 	// Parse raw rules
-	overrides := ParseRawRules(rawArgs)
+	overrides, err := ParseRawRules(rawArgs)
+	if err != nil {
+		return nil, err
+	}
 
 	// Merge: raw overrides win for same port
 	return MergeAllowLists(base, overrides), nil
@@ -108,6 +112,7 @@ func FetchCloudflareIPs(ctx context.Context) ([]string, error) {
 	var body struct {
 		Result struct {
 			IPv4CIDRs []string `json:"ipv4_cidrs"`
+			IPv6CIDRs []string `json:"ipv6_cidrs"`
 		} `json:"result"`
 	}
 	if err := client.Do(ctx, "GET", "/ips", nil, &body); err != nil {
@@ -116,16 +121,21 @@ func FetchCloudflareIPs(ctx context.Context) ([]string, error) {
 	if len(body.Result.IPv4CIDRs) == 0 {
 		return nil, fmt.Errorf("cloudflare IPs API returned empty list")
 	}
-	return body.Result.IPv4CIDRs, nil
+	return append(body.Result.IPv4CIDRs, body.Result.IPv6CIDRs...), nil
 }
 
 // FallbackCloudflareIPs is used when the API fetch fails (offline deploys).
 var FallbackCloudflareIPs = []string{
+	// IPv4
 	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22",
 	"103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
 	"190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
 	"198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
 	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+	// IPv6
+	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32",
+	"2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29",
+	"2c0f:f248::/32",
 }
 
 // MergeAllowLists merges base + overrides. Override wins for same port.
@@ -148,7 +158,8 @@ func MergeAllowLists(base, overrides PortAllowList) PortAllowList {
 
 // ParseRawRules parses "port:cidr,cidr" args (no preset handling).
 // Also handles semicolon-separated format from env vars.
-func ParseRawRules(args []string) PortAllowList {
+// Returns an error for invalid ports or CIDRs.
+func ParseRawRules(args []string) (PortAllowList, error) {
 	result := PortAllowList{}
 	for _, arg := range args {
 		for _, group := range strings.Split(arg, ";") {
@@ -159,7 +170,7 @@ func ParseRawRules(args []string) PortAllowList {
 			}
 			portNum, err := strconv.Atoi(port)
 			if err != nil || portNum < 1 || portNum > 65535 {
-				continue // skip invalid ports
+				return nil, fmt.Errorf("invalid port %q: must be 1-65535", port)
 			}
 			for _, cidr := range strings.Split(cidrs, ",") {
 				cidr = strings.TrimSpace(cidr)
@@ -169,12 +180,27 @@ func ParseRawRules(args []string) PortAllowList {
 				if !strings.Contains(cidr, "/") {
 					cidr += "/32"
 				}
+				if _, _, err := net.ParseCIDR(cidr); err != nil {
+					return nil, fmt.Errorf("invalid CIDR %q for port %s: %w", cidr, port, err)
+				}
 				result[port] = append(result[port], cidr)
 			}
 		}
 	}
-	if len(result) == 0 {
-		return nil
+	// Deduplicate CIDRs per port
+	for port, cidrs := range result {
+		seen := make(map[string]struct{}, len(cidrs))
+		deduped := cidrs[:0]
+		for _, c := range cidrs {
+			if _, ok := seen[c]; !ok {
+				seen[c] = struct{}{}
+				deduped = append(deduped, c)
+			}
+		}
+		result[port] = deduped
 	}
-	return result
+	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
 }

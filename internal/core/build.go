@@ -102,7 +102,15 @@ Examples:
 			}
 
 			// Multiple targets → parallel
-			_, err = app.BuildParallel(cmd.Context(), app.BuildParallelRequest{
+			// Flags that only apply to single-target builds
+			if cmd.Flags().Changed("branch") {
+				return fmt.Errorf("--branch is not supported with multiple --target — parallel builds use the default branch")
+			}
+			if cmd.Flags().Changed("history") {
+				return fmt.Errorf("--history is not supported with multiple --target — use 'nvoi build prune' instead")
+			}
+
+			err = app.BuildParallel(cmd.Context(), app.BuildParallelRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
