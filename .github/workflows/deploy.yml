@@ -55,6 +55,7 @@ jobs:
           nvoi secret set POSTGRES_PASSWORD "${{ secrets.POSTGRES_PASSWORD }}"
           nvoi secret set JWT_SECRET "${{ secrets.JWT_SECRET }}"
           nvoi secret set ENCRYPTION_KEY "${{ secrets.ENCRYPTION_KEY }}"
+          nvoi secret set DATABASE_URL "postgres://postgres:${{ secrets.POSTGRES_PASSWORD }}@db:5432/postgres"
 
           # Build images
           nvoi build --build-provider local --source ./cmd/web --name web
@@ -66,7 +67,7 @@ jobs:
             --volume pgdata:/var/lib/postgresql/data \
             --secret POSTGRES_PASSWORD
           nvoi service set api --image "$(nvoi build latest api)" --port 8080 \
-            --secret POSTGRES_PASSWORD --secret JWT_SECRET --secret ENCRYPTION_KEY
+            --secret DATABASE_URL --secret JWT_SECRET --secret ENCRYPTION_KEY
           nvoi service set web --image "$(nvoi build latest web)" --port 3000
           nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001
 
