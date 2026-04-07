@@ -41,7 +41,7 @@ jobs:
       - name: Deploy
         env:
           NVOI_APP_NAME: nvoi
-          NVOI_ENV: prod
+          NVOI_ENV: production
           COMPUTE_PROVIDER: hetzner
           HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
           DNS_PROVIDER: cloudflare

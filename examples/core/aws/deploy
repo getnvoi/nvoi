@@ -4,7 +4,7 @@ set -euo pipefail
 # ── AWS deploy ────────────────────────────────────────────────────────────────
 # 1 server, postgres, web, jobs. AWS compute (EC2) + S3. Cloudflare DNS.
 
-set -a; source .env; set +a
+set -a; source examples/.env; set +a
 
 export COMPUTE_PROVIDER=aws
 export DNS_PROVIDER=cloudflare

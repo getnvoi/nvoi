@@ -5,6 +5,9 @@ Two modes, same result. Core runs nvoi commands imperatively. Cloud pushes a con
 ## Usage
 
 ```bash
+# Prepare example-only env once
+cp examples/.env.example examples/.env
+
 # Core mode — direct CLI, each command hits infrastructure
 examples/core/hetzner/deploy
 examples/core/aws/deploy
@@ -20,7 +23,7 @@ examples/core/hetzner/destroy
 examples/cloud/hetzner/destroy      # pushes empty config, diff deletes everything
 ```
 
-All scripts use `bin/core` (direct CLI) or `bin/cloud` (cloud CLI). Provider selection is via `export` at the top of each script — `bin/core` and `bin/cloud` pass those through to compose.
+All scripts use `bin/core` (direct CLI) or `bin/cloud` (cloud CLI). Example scripts read `examples/.env` only. The real app deploy path uses root `.env` only via `bin/deploy` and `bin/destroy`.
 
 ## Structure
 

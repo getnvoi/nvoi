@@ -8,7 +8,7 @@ export COMPUTE_PROVIDER=aws
 export DNS_PROVIDER=cloudflare
 export STORAGE_PROVIDER=aws
 
-bin/cloud push --config examples/cloud/empty.yaml --env .env \
+bin/cloud push --config examples/cloud/empty.yaml --env examples/.env \
   --compute-provider aws --dns-provider cloudflare --storage-provider aws
 
 bin/cloud deploy

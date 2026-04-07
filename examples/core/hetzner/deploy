@@ -4,7 +4,7 @@ set -euo pipefail
 # ── Hetzner deploy ────────────────────────────────────────────────────────────
 # 2 servers, 2 volumes, meilisearch, postgres, web, jobs. Cloudflare DNS + R2.
 
-set -a; source .env; set +a
+set -a; source examples/.env; set +a
 
 export COMPUTE_PROVIDER=hetzner
 export DNS_PROVIDER=cloudflare

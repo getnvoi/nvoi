@@ -15,7 +15,7 @@ bin/cloud repos create dummy-rails
 
 bin/cloud push \
   --config examples/cloud/hetzner/config.yaml \
-  --env .env \
+  --env examples/.env \
   --compute-provider hetzner \
   --dns-provider cloudflare \
   --storage-provider cloudflare \

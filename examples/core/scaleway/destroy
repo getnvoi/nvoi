@@ -4,7 +4,7 @@ set -euo pipefail
 # ── Scaleway teardown ─────────────────────────────────────────────────────────
 # Reverse order of deploy.
 
-set -a; source .env; set +a
+set -a; source examples/.env; set +a
 
 export COMPUTE_PROVIDER=scaleway
 export DNS_PROVIDER=cloudflare

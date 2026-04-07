@@ -15,7 +15,7 @@ bin/cloud repos create dummy-rails
 
 bin/cloud push \
   --config examples/cloud/aws/config.yaml \
-  --env .env \
+  --env examples/.env \
   --compute-provider aws \
   --dns-provider cloudflare \
   --storage-provider aws \
