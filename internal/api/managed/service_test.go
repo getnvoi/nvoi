@@ -57,7 +57,7 @@ func TestPostgres_Credentials(t *testing.T) {
 	assertKey(t, creds, "HOST", "db")
 	assertKey(t, creds, "PORT", "5432")
 	assertKey(t, creds, "USER", "postgres")
-	assertKey(t, creds, "DATABASE", "db")
+	assertKey(t, creds, "NAME", "db")
 	if creds["PASSWORD"] == "" {
 		t.Error("PASSWORD should not be empty")
 	}
@@ -235,7 +235,7 @@ func TestExpand_UsesStoredCreds(t *testing.T) {
 	}
 
 	stored := map[string]map[string]string{
-		"db": {"HOST": "db", "PORT": "5432", "USER": "postgres", "PASSWORD": "stored-pwd", "DATABASE": "db", "URL": "postgres://postgres:stored-pwd@db:5432/db"},
+		"db": {"HOST": "db", "PORT": "5432", "USER": "postgres", "PASSWORD": "stored-pwd", "NAME": "db", "URL": "postgres://postgres:stored-pwd@db:5432/db"},
 	}
 
 	_, newCreds, err := Expand(cfg, stored)
@@ -271,8 +271,8 @@ func TestExpand_InjectsSecretsViaUses(t *testing.T) {
 	sort.Strings(secrets)
 
 	expected := []string{
-		"DATABASE_DB_DATABASE",
 		"DATABASE_DB_HOST",
+		"DATABASE_DB_NAME",
 		"DATABASE_DB_PASSWORD",
 		"DATABASE_DB_PORT",
 		"DATABASE_DB_URL",

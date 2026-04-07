@@ -39,7 +39,7 @@ func (Postgres) Credentials(name string) map[string]string {
 		"PORT":     "5432",
 		"USER":     "postgres",
 		"PASSWORD": password,
-		"DATABASE": name,
+		"NAME":     name,
 		"URL":      fmt.Sprintf("postgres://postgres:%s@%s:5432/%s", password, name, name),
 	}
 }

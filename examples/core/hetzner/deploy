@@ -15,6 +15,7 @@ export BUILD_PROVIDER=daytona
 
 bin/core instance set master --compute-type cx23 --compute-region fsn1
 bin/core instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
+bin/core firewall set cloudflare
 bin/core volume set pgdata --size 30 --server master
 bin/core volume set meili-data --size 20 --server master
 
@@ -72,7 +73,7 @@ bin/core service set jobs \
 
 # ── DNS ──────────────────────────────────────────────────────────────────────────
 
-bin/core dns set web hz.nvoi.to
+bin/core dns set web hz.nvoi.to --proxy
 
 echo ""
 echo "==> done. https://hz.nvoi.to"

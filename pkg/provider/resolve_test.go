@@ -24,6 +24,8 @@ func (stubCompute) GetPrivateIP(context.Context, string) (string, error)        
 func (stubCompute) ResizeVolume(context.Context, string, int) error                    { return nil }
 func (stubCompute) ResolveDevicePath(vol *Volume) string                               { return vol.DevicePath }
 func (stubCompute) ListResources(context.Context) ([]ResourceGroup, error)             { return nil, nil }
+func (stubCompute) ReconcileFirewallRules(context.Context, string, PortAllowList) error { return nil }
+func (stubCompute) GetFirewallRules(context.Context, string) (PortAllowList, error)    { return nil, nil }
 
 func init() {
 	RegisterCompute("test-compute", CredentialSchema{

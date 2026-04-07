@@ -15,6 +15,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+firewall: default
 services:
   db:
     managed: postgres

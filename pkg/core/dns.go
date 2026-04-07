@@ -16,6 +16,7 @@ type DNSSetRequest struct {
 	DNS     ProviderRef
 	Service string
 	Domains []string
+	Proxy   bool // Cloudflare proxy mode — origin serves plain HTTP
 }
 
 func DNSSet(ctx context.Context, req DNSSetRequest) error {
@@ -34,9 +35,14 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	ip := master.IPv4
 	out.Command("dns", "set", req.Service, "ip", ip, "domains", req.Domains)
 
+	// Validate --proxy is only used with Cloudflare
+	if req.Proxy && req.DNS.Name != "cloudflare" {
+		return fmt.Errorf("--proxy requires Cloudflare as DNS provider (current: %s)", req.DNS.Name)
+	}
+
 	for _, domain := range req.Domains {
 		out.Progress(fmt.Sprintf("ensuring %s → %s", domain, ip))
-		if err := dns.EnsureARecord(ctx, domain, ip); err != nil {
+		if err := dns.EnsureARecord(ctx, domain, ip, req.Proxy); err != nil {
 			return fmt.Errorf("dns set %s: %w", domain, err)
 		}
 		out.Success(domain)
@@ -63,6 +69,7 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 		Service: req.Service,
 		Port:    port,
 		Domains: req.Domains,
+		Proxy:   req.Proxy,
 	})
 
 	out.Progress("applying caddy ingress")
@@ -80,11 +87,15 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	}
 	out.Success("caddy ready")
 
-	out.Progress(fmt.Sprintf("waiting for https://%s", req.Domains[0]))
-	if err := infra.WaitHTTPS(ctx, req.Domains[0]); err != nil {
-		out.Warning("domain not responding yet (TLS may still be provisioning)")
+	if req.Proxy {
+		out.Success(fmt.Sprintf("proxied via Cloudflare — https://%s", req.Domains[0]))
 	} else {
-		out.Success(fmt.Sprintf("https://%s live", req.Domains[0]))
+		out.Progress(fmt.Sprintf("waiting for https://%s", req.Domains[0]))
+		if err := infra.WaitHTTPS(ctx, req.Domains[0]); err != nil {
+			out.Warning("domain not responding yet (TLS may still be provisioning)")
+		} else {
+			out.Success(fmt.Sprintf("https://%s live", req.Domains[0]))
+		}
 	}
 
 	return nil

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 type fwRule struct {
@@ -31,7 +31,7 @@ func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[str
 		if fw.Name == name {
 			id := strconv.FormatInt(fw.ID, 10)
 			// Update rules
-			_ = c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/set_rules", id), map[string]any{"rules": defaultFirewallRules()}, nil)
+			_ = c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/set_rules", id), map[string]any{"rules": baseFirewallRules()}, nil)
 			return id, nil
 		}
 	}
@@ -40,7 +40,7 @@ func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[str
 	body := map[string]any{
 		"name":   name,
 		"labels": labels,
-		"rules":  defaultFirewallRules(),
+		"rules":  baseFirewallRules(),
 	}
 	var createResp struct {
 		Firewall struct {
@@ -106,17 +106,104 @@ func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, er
 	return out, nil
 }
 
-// defaultFirewallRules returns the standard nvoi firewall rules.
-func defaultFirewallRules() []fwRule {
+// baseFirewallRules returns the base nvoi firewall rules (SSH + internal).
+// HTTP ports (80, 443) are NOT included — managed by firewall set.
+func baseFirewallRules() []fwRule {
 	pub := []string{"0.0.0.0/0", "::/0"}
 	priv := []string{utils.PrivateNetworkCIDR}
 	return []fwRule{
 		{Direction: "in", Protocol: "tcp", Port: "22", SourceIPs: pub},
-		{Direction: "in", Protocol: "tcp", Port: "80", SourceIPs: pub},
-		{Direction: "in", Protocol: "tcp", Port: "443", SourceIPs: pub},
 		{Direction: "in", Protocol: "tcp", Port: "6443", SourceIPs: priv},
 		{Direction: "in", Protocol: "tcp", Port: "10250", SourceIPs: priv},
 		{Direction: "in", Protocol: "udp", Port: "8472", SourceIPs: priv},
 		{Direction: "in", Protocol: "tcp", Port: "5000", SourceIPs: priv},
 	}
 }
+
+// buildFirewallRules builds the full rule set from base rules + allowed public ports.
+func buildFirewallRules(allowed provider.PortAllowList) []fwRule {
+	priv := []string{utils.PrivateNetworkCIDR}
+
+	// Internal ports — always present
+	rules := []fwRule{
+		{Direction: "in", Protocol: "tcp", Port: "6443", SourceIPs: priv},
+		{Direction: "in", Protocol: "tcp", Port: "10250", SourceIPs: priv},
+		{Direction: "in", Protocol: "udp", Port: "8472", SourceIPs: priv},
+		{Direction: "in", Protocol: "tcp", Port: "5000", SourceIPs: priv},
+	}
+
+	// SSH — defaults to open, overridable
+	sshCIDRs := []string{"0.0.0.0/0", "::/0"}
+	if ips, ok := allowed["22"]; ok && len(ips) > 0 {
+		sshCIDRs = ips
+	}
+	rules = append(rules, fwRule{Direction: "in", Protocol: "tcp", Port: "22", SourceIPs: sshCIDRs})
+
+	// Public + custom ports from allow list
+	for _, port := range provider.SortedPorts(allowed) {
+		if port == "22" || provider.IsInternalPort(port) {
+			continue
+		}
+		if ips := allowed[port]; len(ips) > 0 {
+			rules = append(rules, fwRule{Direction: "in", Protocol: "tcp", Port: port, SourceIPs: ips})
+		}
+	}
+
+	return rules
+}
+
+// ReconcileFirewallRules replaces all rules on the named firewall with the
+// desired set built from the allow list + base internal rules.
+func (c *Client) ReconcileFirewallRules(ctx context.Context, name string, allowed provider.PortAllowList) error {
+	var listResp struct {
+		Firewalls []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"firewalls"`
+	}
+	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/firewalls?name=%s", name), nil, &listResp); err != nil {
+		return fmt.Errorf("find firewall: %w", err)
+	}
+	for _, fw := range listResp.Firewalls {
+		if fw.Name == name {
+			id := strconv.FormatInt(fw.ID, 10)
+			rules := buildFirewallRules(allowed)
+			return c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/set_rules", id), map[string]any{"rules": rules}, nil)
+		}
+	}
+	return utils.ErrNotFound
+}
+
+// GetFirewallRules returns the current public port rules on the named firewall.
+func (c *Client) GetFirewallRules(ctx context.Context, name string) (provider.PortAllowList, error) {
+	var listResp struct {
+		Firewalls []struct {
+			ID    int64    `json:"id"`
+			Name  string   `json:"name"`
+			Rules []fwRule `json:"rules"`
+		} `json:"firewalls"`
+	}
+	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/firewalls?name=%s", name), nil, &listResp); err != nil {
+		return nil, fmt.Errorf("find firewall: %w", err)
+	}
+	for _, fw := range listResp.Firewalls {
+		if fw.Name == name {
+			result := provider.PortAllowList{}
+			for _, rule := range fw.Rules {
+				if rule.Direction != "in" {
+					continue
+				}
+				if provider.IsInternalPort(rule.Port) {
+					continue
+				}
+				result[rule.Port] = rule.SourceIPs
+			}
+			if len(result) == 0 {
+				return nil, nil
+			}
+			return result, nil
+		}
+	}
+	return nil, utils.ErrNotFound
+}
+

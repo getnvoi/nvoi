@@ -584,3 +584,102 @@ func assertContains(t *testing.T, list []string, want string) {
 	}
 	t.Errorf("list %v does not contain %q", list, want)
 }
+
+// ── Firewall tests ────────────────────────────────────────────────────────────
+
+func TestPlan_FirewallStep(t *testing.T) {
+	cfg := hetznerConfig()
+	cfg.Firewall = &config.FirewallConfig{Preset: "default"}
+
+	steps, err := Build(nil, cfg, hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	fw := findStep(steps, StepFirewallSet, "firewall")
+	if fw == nil {
+		t.Fatal("expected firewall.set step")
+	}
+	if fw.Params["preset"] != "default" {
+		t.Errorf("firewall preset = %v, want default", fw.Params["preset"])
+	}
+}
+
+func TestPlan_FirewallAfterCompute(t *testing.T) {
+	cfg := hetznerConfig()
+	cfg.Firewall = &config.FirewallConfig{Preset: "cloudflare"}
+
+	steps, err := Build(nil, cfg, hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	lastComputeIdx := -1
+	firewallIdx := -1
+	firstVolumeIdx := -1
+	for i, s := range steps {
+		if s.Kind == StepComputeSet {
+			lastComputeIdx = i
+		}
+		if s.Kind == StepFirewallSet && firewallIdx == -1 {
+			firewallIdx = i
+		}
+		if s.Kind == StepVolumeSet && firstVolumeIdx == -1 {
+			firstVolumeIdx = i
+		}
+	}
+
+	if firewallIdx == -1 {
+		t.Fatal("firewall step not found")
+	}
+	if firewallIdx <= lastComputeIdx {
+		t.Errorf("firewall at %d should be after last compute at %d", firewallIdx, lastComputeIdx)
+	}
+	if firstVolumeIdx != -1 && firewallIdx >= firstVolumeIdx {
+		t.Errorf("firewall at %d should be before first volume at %d", firewallIdx, firstVolumeIdx)
+	}
+}
+
+func TestPlan_NoFirewallWithoutConfig(t *testing.T) {
+	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	for _, s := range steps {
+		if s.Kind == StepFirewallSet {
+			t.Error("expected no firewall.set step when no firewall config")
+		}
+	}
+}
+
+func TestPlan_FirewallWithRules(t *testing.T) {
+	cfg := hetznerConfig()
+	cfg.Firewall = &config.FirewallConfig{
+		Preset: "cloudflare",
+		Rules:  map[string][]string{"443": {"0.0.0.0/0"}},
+	}
+
+	steps, err := Build(nil, cfg, hetznerEnv())
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	fw := findStep(steps, StepFirewallSet, "firewall")
+	if fw == nil {
+		t.Fatal("expected firewall.set step")
+	}
+	if fw.Params["preset"] != "cloudflare" {
+		t.Errorf("preset = %v", fw.Params["preset"])
+	}
+	rulesRaw, ok := fw.Params["rules"]
+	if !ok {
+		t.Fatal("expected rules in params")
+	}
+	rules, ok := rulesRaw.(map[string][]string)
+	if !ok {
+		t.Fatalf("rules type = %T, want map[string][]string", rulesRaw)
+	}
+	if rules["443"][0] != "0.0.0.0/0" {
+		t.Errorf("443 rule = %v", rules["443"])
+	}
+}

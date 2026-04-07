@@ -4,6 +4,8 @@ servers:
     type: DEV1-L
     region: fr-par-1
 
+firewall: default
+
 build:
   web:
     source: benbonnet/dummy-rails
@@ -26,7 +28,7 @@ services:
       - RAILS_MASTER_KEY
       - POSTGRES_HOST=DATABASE_DB_HOST
       - POSTGRES_USER=DATABASE_DB_USER
-      - POSTGRES_DB=DATABASE_DB_DATABASE
+      - POSTGRES_DB=DATABASE_DB_NAME
       - POSTGRES_PASSWORD=DATABASE_DB_PASSWORD
     storage:
       - assets
@@ -40,7 +42,7 @@ services:
       - RAILS_MASTER_KEY
       - POSTGRES_HOST=DATABASE_DB_HOST
       - POSTGRES_USER=DATABASE_DB_USER
-      - POSTGRES_DB=DATABASE_DB_DATABASE
+      - POSTGRES_DB=DATABASE_DB_NAME
       - POSTGRES_PASSWORD=DATABASE_DB_PASSWORD
     uses: [db]
 

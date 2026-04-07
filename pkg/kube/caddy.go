@@ -20,6 +20,7 @@ type IngressRoute struct {
 	Service string
 	Port    int
 	Domains []string
+	Proxy   bool // Cloudflare proxy mode — Caddy serves plain HTTP, no TLS
 }
 
 // GenerateCaddyManifest produces the Caddy ConfigMap + Deployment YAML.
@@ -109,6 +110,10 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 
 // generateCaddyfile produces a Caddyfile routing domains to k8s services.
 // Uses the namespace-qualified service DNS name so Caddy can resolve via cluster DNS.
+//
+// Non-proxied routes get individual domain blocks with auto-TLS (Let's Encrypt).
+// Proxied routes share a single :80 block with host matchers — Cloudflare
+// terminates TLS at the edge, origin serves plain HTTP.
 func generateCaddyfile(routes []IngressRoute, namespace string) string {
 	sorted := make([]IngressRoute, len(routes))
 	copy(sorted, routes)
@@ -123,7 +128,20 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 	})
 
 	var b strings.Builder
-	for i, route := range sorted {
+
+	// Collect proxied routes for the shared :80 block
+	var proxied []IngressRoute
+	var direct []IngressRoute
+	for _, route := range sorted {
+		if route.Proxy {
+			proxied = append(proxied, route)
+		} else {
+			direct = append(direct, route)
+		}
+	}
+
+	// Non-proxied routes: individual domain blocks with auto-TLS
+	for i, route := range direct {
 		if i > 0 {
 			b.WriteString("\n")
 		}
@@ -134,11 +152,34 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 			b.WriteString(domain)
 		}
 		b.WriteString(" {\n")
-		// Use namespace-qualified service name for cluster DNS resolution
 		fmt.Fprintf(&b, "\treverse_proxy %s.%s.svc.cluster.local:%d\n", route.Service, namespace, route.Port)
 		b.WriteString("}\n")
 	}
+
+	// Proxied routes: shared :80 block with host matchers
+	if len(proxied) > 0 {
+		if len(direct) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(":80 {\n")
+		for _, route := range proxied {
+			for _, domain := range route.Domains {
+				fmt.Fprintf(&b, "\t@%s_%s host %s\n", route.Service, sanitizeMatcher(domain), domain)
+				fmt.Fprintf(&b, "\treverse_proxy @%s_%s %s.%s.svc.cluster.local:%d\n",
+					route.Service, sanitizeMatcher(domain), route.Service, namespace, route.Port)
+			}
+		}
+		b.WriteString("}\n")
+	}
+
 	return b.String()
+}
+
+// sanitizeMatcher converts a domain into a safe Caddy matcher name.
+// Replaces dots and hyphens with underscores.
+func sanitizeMatcher(domain string) string {
+	r := strings.NewReplacer(".", "_", "-", "_")
+	return r.Replace(domain)
 }
 
 // GetIngressRoutes reads the current Caddy ConfigMap and extracts the routes.
@@ -174,6 +215,19 @@ func parseCaddyfile(content string) []IngressRoute {
 		if strings.HasSuffix(line, "{") {
 			domainPart := strings.TrimSuffix(line, "{")
 			domainPart = strings.TrimSpace(domainPart)
+
+			// :80 block = proxied routes with host matchers
+			if domainPart == ":80" {
+				routes = append(routes, parseProxiedBlock(lines[i+1:])...)
+				// Skip to end of block
+				for i++; i < len(lines); i++ {
+					if strings.TrimSpace(lines[i]) == "}" {
+						break
+					}
+				}
+				continue
+			}
+
 			domains := strings.Split(domainPart, ",")
 			for k := range domains {
 				domains[k] = strings.TrimSpace(domains[k])
@@ -198,6 +252,64 @@ func parseCaddyfile(content string) []IngressRoute {
 			}
 			routes = append(routes, route)
 		}
+	}
+	return routes
+}
+
+// parseProxiedBlock parses @matcher host + reverse_proxy pairs inside a :80 block.
+func parseProxiedBlock(lines []string) []IngressRoute {
+	// Collect domain → (service, port) from @matcher lines
+	type proxyTarget struct {
+		service string
+		port    int
+	}
+	serviceRoutes := map[string]*IngressRoute{} // keyed by service name
+
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "}" || line == "" {
+			break
+		}
+
+		// @service_domain host example.com
+		if strings.HasPrefix(line, "@") && strings.Contains(line, " host ") {
+			parts := strings.SplitN(line, " host ", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			domain := strings.TrimSpace(parts[1])
+
+			// Next line: reverse_proxy @matcher upstream
+			if i+1 < len(lines) {
+				proxyLine := strings.TrimSpace(lines[i+1])
+				if strings.HasPrefix(proxyLine, "reverse_proxy @") {
+					// reverse_proxy @matcher service.ns.svc.cluster.local:port
+					fields := strings.Fields(proxyLine)
+					if len(fields) >= 3 {
+						upstream := fields[2]
+						svcParts := strings.SplitN(upstream, ".", 2)
+						service := svcParts[0]
+						var port int
+						if idx := strings.LastIndex(upstream, ":"); idx >= 0 {
+							fmt.Sscanf(upstream[idx+1:], "%d", &port)
+						}
+
+						r, ok := serviceRoutes[service]
+						if !ok {
+							r = &IngressRoute{Service: service, Port: port, Proxy: true}
+							serviceRoutes[service] = r
+						}
+						r.Domains = append(r.Domains, domain)
+					}
+					i++ // skip the reverse_proxy line
+				}
+			}
+		}
+	}
+
+	var routes []IngressRoute
+	for _, r := range serviceRoutes {
+		routes = append(routes, *r)
 	}
 	return routes
 }

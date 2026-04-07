@@ -9,6 +9,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gorm.io/gorm"
 )
@@ -73,6 +74,9 @@ func Execute(ctx context.Context, db *gorm.DB, p ExecuteParams) {
 
 // run walks steps for a deployment, dispatching each to step().
 func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
+	e.cluster.EnableSSHCache()
+	defer e.cluster.Close()
+
 	markDeploymentRunning(e.db, deployment)
 
 	var steps []api.DeploymentStep
@@ -121,6 +125,16 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 // step dispatches a single step to the corresponding pkg/core/ function.
 func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, params map[string]any) error {
 	switch kind {
+	case plan.StepFirewallSet:
+		allowed, err := parseFirewallFromParams(params)
+		if err != nil {
+			return err
+		}
+		return pkgcore.FirewallSet(ctx, pkgcore.FirewallSetRequest{
+			Cluster:    e.cluster,
+			AllowedIPs: allowed,
+		})
+
 	case plan.StepComputeSet:
 		_, err := pkgcore.ComputeSet(ctx, pkgcore.ComputeSetRequest{
 			Cluster:    e.cluster,
@@ -255,6 +269,44 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 	default:
 		return fmt.Errorf("unknown step kind: %s", kind)
 	}
+}
+
+// ── firewall param parsing ─────────────────────────────────────────────────────
+
+// parseFirewallFromParams converts step params into a PortAllowList.
+// Supports "preset" key (resolved via ResolveFirewallArgs) and/or "rules" map.
+func parseFirewallFromParams(params map[string]any) (provider.PortAllowList, error) {
+	preset := utils.GetString(params, "preset")
+	rulesRaw, hasRules := params["rules"]
+
+	// Build args for ResolveFirewallArgs
+	var args []string
+	if preset != "" {
+		args = append(args, preset)
+	}
+	if hasRules {
+		// Rules is map[string][]string (port → CIDRs)
+		if rulesMap, ok := rulesRaw.(map[string]any); ok {
+			for port, v := range rulesMap {
+				if cidrs, ok := v.([]any); ok {
+					for _, cidr := range cidrs {
+						if s, ok := cidr.(string); ok {
+							args = append(args, fmt.Sprintf("%s:%s", port, s))
+						}
+					}
+				}
+			}
+		}
+		if rulesMap, ok := rulesRaw.(map[string][]string); ok {
+			for port, cidrs := range rulesMap {
+				for _, cidr := range cidrs {
+					args = append(args, fmt.Sprintf("%s:%s", port, cidr))
+				}
+			}
+		}
+	}
+
+	return provider.ResolveFirewallArgs(context.Background(), args)
 }
 
 // ── status helpers ─────────────────────────────────────────────────────────────

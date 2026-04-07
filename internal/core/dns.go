@@ -61,6 +61,8 @@ Examples:
 				return err
 			}
 
+			proxy, _ := cmd.Flags().GetBool("proxy")
+
 			return app.DNSSet(cmd.Context(), app.DNSSetRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
@@ -73,6 +75,7 @@ Examples:
 				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
 				Service: service,
 				Domains: domains,
+				Proxy:   proxy,
 			})
 		},
 	}
@@ -80,6 +83,7 @@ Examples:
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
+	cmd.Flags().Bool("proxy", false, "proxy traffic through Cloudflare (requires --dns-provider cloudflare)")
 	return cmd
 }
 

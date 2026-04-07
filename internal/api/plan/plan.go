@@ -18,6 +18,7 @@ type StepKind string
 const (
 	StepComputeSet    StepKind = "instance.set"
 	StepComputeDelete StepKind = "instance.delete"
+	StepFirewallSet   StepKind = "firewall.set"
 	StepVolumeSet     StepKind = "volume.set"
 	StepVolumeDelete  StepKind = "volume.delete"
 	StepBuild         StepKind = "build"
@@ -58,6 +59,7 @@ func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 
 	// ── Sets (forward deploy order) ────────────────────────────────────────
 	steps = append(steps, setCompute(desired)...)
+	steps = append(steps, setFirewall(desired)...)
 	steps = append(steps, setVolumes(desired)...)
 	steps = append(steps, setBuild(desired)...)
 	secretSteps, err := setSecrets(desired, env)
@@ -89,6 +91,20 @@ func setCompute(cfg *Cfg) []Step {
 		steps = append(steps, Step{Kind: StepComputeSet, Name: name, Params: params})
 	}
 	return steps
+}
+
+func setFirewall(cfg *Cfg) []Step {
+	if cfg.Firewall == nil {
+		return nil
+	}
+	params := map[string]any{}
+	if cfg.Firewall.Preset != "" {
+		params["preset"] = cfg.Firewall.Preset
+	}
+	if len(cfg.Firewall.Rules) > 0 {
+		params["rules"] = cfg.Firewall.Rules
+	}
+	return []Step{{Kind: StepFirewallSet, Name: "firewall", Params: params}}
 }
 
 func setVolumes(cfg *Cfg) []Step {

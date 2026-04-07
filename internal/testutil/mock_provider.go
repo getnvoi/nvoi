@@ -11,9 +11,11 @@ import (
 type MockCompute struct {
 	Servers  []*provider.Server
 	Volumes  []*provider.Volume
-	EnsureServerFn func(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error)
-	DeleteServerFn func(ctx context.Context, req provider.DeleteServerRequest) error
-	EnsureVolumeFn func(ctx context.Context, req provider.CreateVolumeRequest) (*provider.Volume, error)
+	EnsureServerFn          func(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error)
+	DeleteServerFn          func(ctx context.Context, req provider.DeleteServerRequest) error
+	EnsureVolumeFn          func(ctx context.Context, req provider.CreateVolumeRequest) (*provider.Volume, error)
+	ReconcileFirewallRulesFn func(ctx context.Context, name string, allowed provider.PortAllowList) error
+	GetFirewallRulesFn       func(ctx context.Context, name string) (provider.PortAllowList, error)
 }
 
 func (m *MockCompute) ValidateCredentials(ctx context.Context) error { return nil }
@@ -86,6 +88,20 @@ func (m *MockCompute) ListResources(ctx context.Context) ([]provider.ResourceGro
 	return nil, nil
 }
 
+func (m *MockCompute) ReconcileFirewallRules(ctx context.Context, name string, allowed provider.PortAllowList) error {
+	if m.ReconcileFirewallRulesFn != nil {
+		return m.ReconcileFirewallRulesFn(ctx, name, allowed)
+	}
+	return nil
+}
+
+func (m *MockCompute) GetFirewallRules(ctx context.Context, name string) (provider.PortAllowList, error) {
+	if m.GetFirewallRulesFn != nil {
+		return m.GetFirewallRulesFn(ctx, name)
+	}
+	return nil, nil
+}
+
 var _ provider.ComputeProvider = (*MockCompute)(nil)
 
 // MockDNS implements provider.DNSProvider for testing.
@@ -97,7 +113,7 @@ type MockDNS struct {
 
 func (m *MockDNS) ValidateCredentials(ctx context.Context) error { return nil }
 
-func (m *MockDNS) EnsureARecord(ctx context.Context, domain, ip string) error {
+func (m *MockDNS) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
 	m.EnsuredA = append(m.EnsuredA, domain)
 	return nil
 }

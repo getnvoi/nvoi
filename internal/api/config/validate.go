@@ -143,5 +143,47 @@ func Validate(cfg *Config) []error {
 		}
 	}
 
+	// ── Firewall × Domains coherence ──────────────────────────────────────────
+	if len(cfg.Domains) > 0 && cfg.Firewall == nil {
+		add("firewall: domains configured but no firewall section — add \"firewall: default\" or explicit 80/443 rules")
+	}
+	if len(cfg.Domains) > 0 && cfg.Firewall != nil {
+		has80, has443 := firewallOpensPort(cfg.Firewall, "80"), firewallOpensPort(cfg.Firewall, "443")
+		if !has80 || !has443 {
+			add("firewall: domains configured but ports 80/443 not open — add to firewall section or use \"firewall: default\"")
+		}
+	}
+
+	// ── Firewall × Proxy coherence (Cloudflare only) ──────────────────────────
+	isCloudflareFirewall := cfg.Firewall != nil && cfg.Firewall.Preset == "cloudflare"
+	for svcName := range cfg.DomainProxy {
+		if !isCloudflareFirewall {
+			add("domains.%s: proxy requires \"firewall: cloudflare\" — origin is directly reachable without it", svcName)
+		}
+	}
+	if isCloudflareFirewall {
+		for svcName := range cfg.Domains {
+			if !cfg.DomainProxy[svcName] {
+				add("domains.%s: firewall is cloudflare but domain is not proxied — add proxy: true or use \"firewall: default\"", svcName)
+			}
+		}
+	}
+
 	return errs
+}
+
+// firewallOpensPort checks if a FirewallConfig opens the given port.
+// A preset that includes the port counts (default includes 80/443, cloudflare includes 80/443).
+func firewallOpensPort(fw *FirewallConfig, port string) bool {
+	// Presets that include HTTP ports
+	if fw.Preset == "default" || fw.Preset == "cloudflare" {
+		if port == "80" || port == "443" {
+			return true
+		}
+	}
+	// Explicit rules
+	if cidrs, ok := fw.Rules[port]; ok && len(cidrs) > 0 {
+		return true
+	}
+	return false
 }

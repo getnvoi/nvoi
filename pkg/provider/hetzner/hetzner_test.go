@@ -328,6 +328,84 @@ func TestResizeVolume(t *testing.T) {
 	}
 }
 
+// ── Firewall rule reconciliation ────────────────────────────────────────────────
+
+func TestEnsureFirewall_ReconcileExistingRules(t *testing.T) {
+	setRulesCalled := false
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// GET /firewalls?name=... returns existing firewall
+		if r.Method == "GET" && contains(r.URL.String(), "/firewalls") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"firewalls": []map[string]any{
+					{"id": 99, "name": "nvoi-test-fw"},
+				},
+			})
+			return
+		}
+		// POST /firewalls/99/actions/set_rules — the reconciliation call
+		if r.Method == "POST" && contains(r.URL.Path, "/firewalls/99/actions/set_rules") {
+			setRulesCalled = true
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			rules, ok := body["rules"].([]any)
+			if !ok || len(rules) != 5 {
+				t.Errorf("expected 5 base rules in set_rules, got %v", len(rules))
+			}
+			w.WriteHeader(200)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	id, err := c.ensureFirewall(context.Background(), "nvoi-test-fw", map[string]string{"app": "test"})
+	if err != nil {
+		t.Fatalf("ensureFirewall: %v", err)
+	}
+	if id != "99" {
+		t.Errorf("id = %q, want %q", id, "99")
+	}
+	if !setRulesCalled {
+		t.Error("set_rules was NOT called on existing firewall — rules not reconciled")
+	}
+}
+
+func TestEnsureFirewall_CreateNew(t *testing.T) {
+	created := false
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// GET /firewalls?name=... returns empty — firewall doesn't exist
+		if r.Method == "GET" && contains(r.URL.String(), "/firewalls") {
+			json.NewEncoder(w).Encode(map[string]any{"firewalls": []any{}})
+			return
+		}
+		// POST /firewalls — create new firewall
+		if r.Method == "POST" && r.URL.Path == "/firewalls" {
+			created = true
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			rules, ok := body["rules"].([]any)
+			if !ok || len(rules) != 5 {
+				t.Errorf("expected 5 base rules on create, got %v", len(rules))
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"firewall": map[string]any{"id": 101},
+			})
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	id, err := c.ensureFirewall(context.Background(), "nvoi-new-fw", map[string]string{"app": "test"})
+	if err != nil {
+		t.Fatalf("ensureFirewall: %v", err)
+	}
+	if id != "101" {
+		t.Errorf("id = %q, want %q", id, "101")
+	}
+	if !created {
+		t.Error("firewall was NOT created")
+	}
+}
+
 // --- helpers ---
 
 func contains(s, substr string) bool {
