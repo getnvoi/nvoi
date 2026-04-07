@@ -61,6 +61,9 @@ jobs:
           nvoi secret set ENCRYPTION_KEY "${{ secrets.ENCRYPTION_KEY }}"
           nvoi secret set DATABASE_URL "postgres://postgres:${{ secrets.POSTGRES_PASSWORD }}@db:5432/postgres"
 
+          # Storage (before services — distribution needs STORAGE_RELEASES_* env vars)
+          nvoi storage set releases
+
           # Build images
           nvoi build --build-provider local --source ./cmd/web --name web
           nvoi build --build-provider local --source ./cmd/api --name api
@@ -76,12 +79,10 @@ jobs:
             --no-wait
           nvoi service set web --image "$(nvoi build latest web)" --port 3000 \
             --no-wait
-          nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001
+          nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001 \
+            --storage releases
 
           # DNS
           nvoi dns set web nvoi.to www.nvoi.to
           nvoi dns set api api.nvoi.to
           nvoi dns set distribution get.nvoi.to
-
-          # Storage
-          nvoi storage set releases

@@ -64,7 +64,7 @@ func WaitAllServices(ctx context.Context, req WaitAllServicesRequest) error {
 				ready++
 			} else {
 				notReady = append(notReady, fmt.Sprintf("%s (%s)", pod.Name, pod.Status))
-				if pod.Status == "CrashLoopBackOff" {
+				if pod.Status == "CrashLoopBackOff" || pod.Status == "Error" {
 					crashPods = append(crashPods, pod.Name)
 				}
 			}
