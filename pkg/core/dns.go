@@ -192,17 +192,31 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 		return nil
 	}
 
+	// Pre-flight: check firewall has 80/443 open before deploying ingress
+	prov, err := req.Cluster.Compute()
+	if err == nil {
+		fwNames, _ := req.Cluster.Names()
+		if fwNames != nil {
+			rules, _ := prov.GetFirewallRules(ctx, fwNames.Firewall())
+			has80 := len(rules["80"]) > 0
+			has443 := len(rules["443"]) > 0
+			if !has80 || !has443 {
+				return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set default' first", fwNames.Firewall())
+			}
+		}
+	}
+
 	out.Progress("applying caddy config")
 	if err := kube.ApplyCaddyConfig(ctx, ssh, ns, routes, names); err != nil {
 		return fmt.Errorf("caddy: %w", err)
 	}
 	out.Success("caddy ready")
 
-	// Verify domains are reachable — hard error if not
+	// Verify domains are reachable
 	firstDomain := req.Routes[0].Domains[0]
 	out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
 	if err := waitHTTPSFunc(ctx, firstDomain); err != nil {
-		return fmt.Errorf("https://%s not reachable — check firewall (ports 80/443) and DNS: %w", firstDomain, err)
+		return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
 	}
 	out.Success(fmt.Sprintf("https://%s live", firstDomain))
 

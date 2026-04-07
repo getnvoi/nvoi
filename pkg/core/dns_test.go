@@ -82,21 +82,20 @@ func TestParseIngressArgs_Invalid(t *testing.T) {
 	}
 }
 
-func TestIngressApply_HardErrorWhenUnreachable(t *testing.T) {
-	// Override WaitHTTPS to simulate unreachable domain
-	origWait := waitHTTPSFunc
-	waitHTTPSFunc = func(ctx context.Context, domain string) error {
-		return fmt.Errorf("timeout")
+func ingressCluster(out *testutil.MockOutput, ssh utils.SSHClient, mock *testutil.MockCompute) Cluster {
+	provName := fmt.Sprintf("ingress-test-%p", mock) // unique per mock to avoid registration collisions
+	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
+		return mock
+	})
+	return Cluster{
+		AppName: "test", Env: "prod",
+		Provider: provName, Output: out,
+		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) { return ssh, nil },
 	}
-	defer func() { waitHTTPSFunc = origWait }()
+}
 
-	// Override caddy reload delay
-	origDelay := kube.CaddyReloadDelay
-	kube.CaddyReloadDelay = 0
-	defer func() { kube.CaddyReloadDelay = origDelay }()
-
-	out := &testutil.MockOutput{}
-	ssh := &testutil.MockSSH{
+func ingressSSH() *testutil.MockSSH {
+	return &testutil.MockSSH{
 		Prefixes: []testutil.MockPrefix{
 			{Prefix: "get deployment caddy", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
 			{Prefix: "get configmap", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
@@ -107,20 +106,65 @@ func TestIngressApply_HardErrorWhenUnreachable(t *testing.T) {
 			{Prefix: "apply", Result: testutil.MockResult{}},
 		},
 	}
+}
 
-	provider.RegisterCompute("ingress-test", provider.CredentialSchema{Name: "ingress-test"}, func(creds map[string]string) provider.ComputeProvider {
-		return &testutil.MockCompute{
-			Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
-		}
-	})
+func TestIngressApply_FailsWhenFirewallClosed(t *testing.T) {
+	origDelay := kube.CaddyReloadDelay
+	kube.CaddyReloadDelay = 0
+	defer func() { kube.CaddyReloadDelay = origDelay }()
+
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+		// GetFirewallRules returns nil — no 80/443 open
+		GetFirewallRulesFn: func(ctx context.Context, name string) (provider.PortAllowList, error) {
+			return nil, nil
+		},
+	}
 
 	err := IngressApply(context.Background(), IngressApplyRequest{
-		Cluster: Cluster{
-			AppName: "test", Env: "prod",
-			Provider: "ingress-test", Output: out,
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) { return ssh, nil },
+		Cluster: ingressCluster(out, ingressSSH(), mock),
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
+	})
+
+	if err == nil {
+		t.Fatal("expected error when firewall has no 80/443")
+	}
+	if !strings.Contains(err.Error(), "does not have ports 80/443 open") {
+		t.Errorf("error should mention closed ports, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "firewall set default") {
+		t.Errorf("error should suggest fix, got: %v", err)
+	}
+}
+
+func TestIngressApply_HardErrorWhenUnreachable(t *testing.T) {
+	origWait := waitHTTPSFunc
+	waitHTTPSFunc = func(ctx context.Context, domain string) error {
+		return fmt.Errorf("timeout")
+	}
+	defer func() { waitHTTPSFunc = origWait }()
+
+	origDelay := kube.CaddyReloadDelay
+	kube.CaddyReloadDelay = 0
+	defer func() { kube.CaddyReloadDelay = origDelay }()
+
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+		// Firewall has 80/443 open — passes pre-flight
+		GetFirewallRulesFn: func(ctx context.Context, name string) (provider.PortAllowList, error) {
+			return provider.PortAllowList{
+				"22":  {"0.0.0.0/0"},
+				"80":  {"0.0.0.0/0"},
+				"443": {"0.0.0.0/0"},
+			}, nil
 		},
-		Routes: []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
+	}
+
+	err := IngressApply(context.Background(), IngressApplyRequest{
+		Cluster: ingressCluster(out, ingressSSH(), mock),
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
 	})
 
 	if err == nil {
@@ -129,7 +173,20 @@ func TestIngressApply_HardErrorWhenUnreachable(t *testing.T) {
 	if !strings.Contains(err.Error(), "not reachable") {
 		t.Errorf("error should mention 'not reachable', got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "firewall") {
-		t.Errorf("error should mention 'firewall', got: %v", err)
+}
+
+func TestIngressApply_NoCluster(t *testing.T) {
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: nil, // no servers — Master() will fail
+	}
+
+	err := IngressApply(context.Background(), IngressApplyRequest{
+		Cluster: ingressCluster(out, nil, mock),
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
+	})
+
+	if err == nil {
+		t.Fatal("expected error when no cluster exists")
 	}
 }
