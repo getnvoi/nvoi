@@ -159,6 +159,7 @@ func resolveStorageCredentials(cmd *cobra.Command, providerName string) (map[str
 func resolveSSHKey() ([]byte, error) {
 	keyPath := os.Getenv("SSH_KEY_PATH")
 	if keyPath != "" {
+		keyPath = expandHome(keyPath)
 		key, err := os.ReadFile(keyPath)
 		if err != nil {
 			return nil, fmt.Errorf("read SSH key %s: %w", keyPath, err)
@@ -195,6 +196,16 @@ func resolveGitAuth(cmd *cobra.Command) (string, string) {
 		return "x-access-token", token
 	}
 	return "", ""
+}
+
+// expandHome replaces a leading ~ with $HOME.
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home := os.Getenv("HOME"); home != "" {
+			return home + path[1:]
+		}
+	}
+	return path
 }
 
 // ── Flag helpers ─────────────────────────────────────────────────────────────
