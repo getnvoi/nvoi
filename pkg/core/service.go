@@ -171,5 +171,28 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	}
 	defer ssh.Close()
 
+	if err := ensureServiceDeleteAllowed(ctx, ssh, names.KubeNamespace(), names.KubeCaddyConfig(), req.Name); err != nil {
+		return err
+	}
+
 	return kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name)
+}
+
+func ensureServiceDeleteAllowed(ctx context.Context, ssh utils.SSHClient, ns, caddyConfig, service string) error {
+	routes, err := kube.GetIngressRoutes(ctx, ssh, ns, caddyConfig)
+	if err != nil {
+		return fmt.Errorf("service delete guard: inspect ingress: %w", err)
+	}
+
+	for _, route := range routes {
+		if route.Service == service {
+			return fmt.Errorf(
+				"service delete blocked: ingress still targets %q (%s) — remove or reconcile ingress first",
+				service,
+				strings.Join(route.Domains, ", "),
+			)
+		}
+	}
+
+	return nil
 }

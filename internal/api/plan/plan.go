@@ -41,6 +41,15 @@ type Step struct {
 	Params map[string]any `json:"params,omitempty"`
 }
 
+const (
+	ingressExposureDirect      = "direct"
+	ingressExposureEdgeProxied = "edge_proxied"
+
+	ingressTLSACME       = "acme"
+	ingressTLSProvided   = "provided"
+	ingressTLSEdgeOrigin = "edge_origin"
+)
+
 // Plan generates the full ordered deploy sequence: deletes for removed resources
 // first (reverse deploy order), then sets for desired resources (forward deploy order).
 //
@@ -51,7 +60,11 @@ func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 	var steps []Step
 
 	// ── Deletes (reverse deploy order) ─────────────────────────────────────
-	steps = append(steps, diffIngress(reality, desired)...)
+	ingressDiff, err := diffIngress(reality, desired, env)
+	if err != nil {
+		return nil, err
+	}
+	steps = append(steps, ingressDiff...)
 	steps = append(steps, diffDNS(reality, desired)...)
 	steps = append(steps, diffServices(reality, desired)...)
 	steps = append(steps, diffStorage(reality, desired)...)
@@ -59,11 +72,6 @@ func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 	steps = append(steps, diffVolumes(reality, desired)...)
 	steps = append(steps, diffFirewall(reality, desired)...)
 	steps = append(steps, diffCompute(reality, desired)...)
-
-	// ── Coherence check: removing firewall while domains remain ─────────────
-	if reality != nil && reality.Firewall != nil && desired.Firewall == nil && len(desired.Domains) > 0 {
-		return nil, fmt.Errorf("cannot remove firewall when domains are configured — ingress requires ports 80/443 open. Add \"firewall: default\" or remove domains")
-	}
 
 	// ── Sets (forward deploy order) ────────────────────────────────────────
 	steps = append(steps, setCompute(desired)...)
@@ -82,7 +90,11 @@ func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 	}
 	steps = append(steps, serviceSteps...)
 	steps = append(steps, setDNS(desired)...)
-	steps = append(steps, setIngress(desired)...)
+	ingressSteps, err := setIngress(desired, env)
+	if err != nil {
+		return nil, err
+	}
+	steps = append(steps, ingressSteps...)
 
 	return steps, nil
 }
@@ -225,63 +237,64 @@ func setServices(cfg *Cfg, env map[string]string) ([]Step, error) {
 
 func setDNS(cfg *Cfg) []Step {
 	var steps []Step
+	edgeProxied := desiredIngressExposure(cfg) == ingressExposureEdgeProxied
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		params := map[string]any{
 			"domains": []string(cfg.Domains[svcName]),
 		}
-		if cfg.DomainProxy[svcName] {
-			params["proxy"] = true
+		if edgeProxied {
+			params["edge_proxied"] = true
 		}
 		steps = append(steps, Step{Kind: StepDNSSet, Name: svcName, Params: params})
 	}
 	return steps
 }
 
-func setIngress(cfg *Cfg) []Step {
+func setIngress(cfg *Cfg, env map[string]string) ([]Step, error) {
 	if len(cfg.Domains) == 0 {
-		return nil
+		return nil, nil
 	}
-	// Build routes: service:domain,domain for all domain mappings
+	routes := ingressRoutes(cfg, nil)
+	params, err := ingressParams(cfg, routes, env)
+	if err != nil {
+		return nil, err
+	}
+	return []Step{{Kind: StepIngressApply, Name: "ingress", Params: params}}, nil
+}
+
+func ingressRoutes(cfg *Cfg, allowedServices map[string]bool) []map[string]any {
 	var routes []map[string]any
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
+		if allowedServices != nil && !allowedServices[svcName] {
+			continue
+		}
 		routes = append(routes, map[string]any{
 			"service": svcName,
 			"domains": []string(cfg.Domains[svcName]),
-			"proxy":   cfg.DomainProxy[svcName],
 		})
 	}
-	return []Step{{Kind: StepIngressApply, Name: "ingress", Params: map[string]any{"routes": routes}}}
+	return routes
 }
 
 // ── Diff phases (reverse deploy order) ─────────────────────────────────────
 
-// diffIngress re-applies ingress when domains change (added, removed, or proxy toggled).
-// Ingress is always a full set — the step rebuilds the Caddyfile from desired state.
-func diffIngress(reality, desired *Cfg) []Step {
-	if reality == nil {
-		return nil
+func diffIngress(reality, desired *Cfg, env map[string]string) ([]Step, error) {
+	if reality == nil || !domainsChanged(reality, desired) {
+		return nil, nil
 	}
-	// Check if any domains were removed or proxy flags changed
-	changed := false
-	for svcName := range reality.Domains {
-		if _, ok := desired.Domains[svcName]; !ok {
-			changed = true
-			break
+
+	allowed := map[string]bool{}
+	for name := range reality.Services {
+		if _, ok := desired.Services[name]; ok {
+			allowed[name] = true
 		}
 	}
-	if !changed {
-		for svcName := range reality.Domains {
-			if reality.DomainProxy[svcName] != desired.DomainProxy[svcName] {
-				changed = true
-				break
-			}
-		}
+	routes := ingressRoutes(desired, allowed)
+	params, err := ingressParams(desired, routes, env)
+	if err != nil {
+		return nil, err
 	}
-	if !changed || len(desired.Domains) == 0 {
-		return nil
-	}
-	// Re-emit a full ingress.apply with the desired routes — setIngress handles the content
-	return setIngress(desired)
+	return []Step{{Kind: StepIngressApply, Name: "ingress", Params: params}}, nil
 }
 
 func diffDNS(reality, desired *Cfg) []Step {
@@ -290,9 +303,18 @@ func diffDNS(reality, desired *Cfg) []Step {
 	}
 	var steps []Step
 	for svcName, domains := range reality.Domains {
-		if _, ok := desired.Domains[svcName]; !ok {
+		nextDomains, ok := desired.Domains[svcName]
+		if !ok {
 			steps = append(steps, Step{Kind: StepDNSDelete, Name: svcName, Params: map[string]any{
 				"domains": []string(domains),
+			}})
+			continue
+		}
+
+		removed := removedDomains(domains, nextDomains)
+		if len(removed) > 0 {
+			steps = append(steps, Step{Kind: StepDNSDelete, Name: svcName, Params: map[string]any{
+				"domains": removed,
 			}})
 		}
 	}
@@ -401,4 +423,98 @@ func secretKey(entry string) string {
 		return key
 	}
 	return entry
+}
+
+func domainsChanged(reality, desired *Cfg) bool {
+	if len(reality.Domains) != len(desired.Domains) {
+		return true
+	}
+	for svc, domains := range reality.Domains {
+		other, ok := desired.Domains[svc]
+		if !ok {
+			return true
+		}
+		if len(domains) != len(other) {
+			return true
+		}
+		for i := range domains {
+			if domains[i] != other[i] {
+				return true
+			}
+		}
+		if desiredIngressExposure(reality) != desiredIngressExposure(desired) {
+			return true
+		}
+	}
+	if desiredIngressTLSMode(reality) != desiredIngressTLSMode(desired) {
+		return true
+	}
+	return false
+}
+
+func removedDomains(prev, next []string) []string {
+	keep := map[string]bool{}
+	for _, domain := range next {
+		keep[domain] = true
+	}
+
+	var removed []string
+	for _, domain := range prev {
+		if !keep[domain] {
+			removed = append(removed, domain)
+		}
+	}
+	return removed
+}
+
+func desiredIngressExposure(cfg *Cfg) string {
+	if cfg == nil {
+		return ingressExposureDirect
+	}
+	if cfg.Ingress != nil && cfg.Ingress.Exposure != "" {
+		return cfg.Ingress.Exposure
+	}
+	return ingressExposureDirect
+}
+
+func desiredIngressTLSMode(cfg *Cfg) string {
+	if cfg == nil {
+		return ingressTLSACME
+	}
+	if cfg.Ingress != nil && cfg.Ingress.TLS != nil && cfg.Ingress.TLS.Mode != "" {
+		return cfg.Ingress.TLS.Mode
+	}
+	if desiredIngressExposure(cfg) == ingressExposureEdgeProxied {
+		return ingressTLSEdgeOrigin
+	}
+	return ingressTLSACME
+}
+
+func ingressParams(cfg *Cfg, routes []map[string]any, env map[string]string) (map[string]any, error) {
+	params := map[string]any{
+		"routes":   routes,
+		"tls_mode": desiredIngressTLSMode(cfg),
+		"exposure": desiredIngressExposure(cfg),
+	}
+
+	if cfg != nil && cfg.Ingress != nil && cfg.Ingress.Edge != nil && cfg.Ingress.Edge.Provider != "" {
+		params["edge_provider"] = cfg.Ingress.Edge.Provider
+	}
+
+	if cfg != nil && cfg.Ingress != nil && cfg.Ingress.TLS != nil && desiredIngressTLSMode(cfg) == ingressTLSProvided {
+		certRef := cfg.Ingress.TLS.Cert
+		keyRef := cfg.Ingress.TLS.Key
+		certPEM, ok := env[certRef]
+		if !ok {
+			return nil, fmt.Errorf("ingress.tls.cert: %q not found in env", certRef)
+		}
+		keyPEM, ok := env[keyRef]
+		if !ok {
+			return nil, fmt.Errorf("ingress.tls.key: %q not found in env", keyRef)
+		}
+		params["cert_pem"] = certPEM
+		params["key_pem"] = keyPEM
+	}
+
+	return params, nil
 }

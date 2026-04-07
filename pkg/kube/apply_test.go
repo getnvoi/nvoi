@@ -147,6 +147,47 @@ func TestApply(t *testing.T) {
 	}
 }
 
+func TestApply_ReplaceSucceeds(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "replace", Result: testutil.MockResult{Output: []byte("deployment/web replaced")}},
+		},
+	}
+
+	yamlContent := "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\n"
+	err := Apply(context.Background(), mock, "myns", yamlContent)
+	if err != nil {
+		t.Fatalf("replace success should not error, got %v", err)
+	}
+
+	// Should upload the manifest
+	if len(mock.Uploads) != 1 {
+		t.Fatalf("expected 1 upload, got %d", len(mock.Uploads))
+	}
+}
+
+func TestApply_ReplaceFailsWithRealError(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "replace", Result: testutil.MockResult{Output: []byte("Error: field is immutable"), Err: fmt.Errorf("exit status 1")}},
+			// apply should NOT be called — real errors don't fall through
+			{Prefix: "apply --server-side", Result: testutil.MockResult{Output: []byte("should not reach here")}},
+		},
+	}
+
+	yamlContent := "apiVersion: v1\nkind: Service\nmetadata:\n  name: web\n"
+	err := Apply(context.Background(), mock, "myns", yamlContent)
+	if err == nil {
+		t.Fatal("replace with real error should fail, got nil")
+	}
+	if !contains(err.Error(), "kubectl replace") {
+		t.Errorf("error should mention kubectl replace, got: %q", err)
+	}
+	if !contains(err.Error(), "immutable") {
+		t.Errorf("error should contain original error text, got: %q", err)
+	}
+}
+
 func TestListSecretKeys(t *testing.T) {
 	mock := &testutil.MockSSH{
 		Prefixes: []testutil.MockPrefix{

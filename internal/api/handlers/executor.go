@@ -10,7 +10,6 @@ import (
 	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
-	"github.com/getnvoi/nvoi/pkg/provider/cloudflare"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gorm.io/gorm"
 )
@@ -253,11 +252,11 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 
 	case plan.StepDNSSet:
 		return pkgcore.DNSSet(ctx, pkgcore.DNSSetRequest{
-			Cluster: e.cluster,
-			DNS:     e.dns,
-			Service: name,
-			Domains: utils.GetStringSlice(params, "domains"),
-			Proxy:   utils.GetBool(params, "proxy"),
+			Cluster:     e.cluster,
+			DNS:         e.dns,
+			Service:     name,
+			Domains:     utils.GetStringSlice(params, "domains"),
+			EdgeProxied: utils.GetBool(params, "edge_proxied"),
 		})
 
 	case plan.StepIngressApply:
@@ -265,28 +264,14 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 		if err != nil {
 			return err
 		}
-
-		var certPEM, keyPEM string
-		if anyProxy(routes) && e.dns.Name == "cloudflare" {
-			// Generate Origin CA cert for proxied routes (if no existing cert in cluster)
-			var allDomains []string
-			for _, r := range routes {
-				allDomains = append(allDomains, r.Domains...)
-			}
-			ca := cloudflare.NewOriginCA(e.dns.Creds["api_key"], e.dns.Creds["zone_id"])
-			originCert, err := ca.CreateCert(ctx, allDomains)
-			if err != nil {
-				return fmt.Errorf("origin ca cert: %w", err)
-			}
-			certPEM = originCert.Certificate
-			keyPEM = originCert.PrivateKey
-		}
-
 		return pkgcore.IngressApply(ctx, pkgcore.IngressApplyRequest{
-			Cluster: e.cluster,
-			Routes:  routes,
-			CertPEM: certPEM,
-			KeyPEM:  keyPEM,
+			Cluster:      e.cluster,
+			DNS:          e.dns,
+			Routes:       routes,
+			TLSMode:      utils.GetString(params, "tls_mode"),
+			EdgeProvider: utils.GetString(params, "edge_provider"),
+			CertPEM:      utils.GetString(params, "cert_pem"),
+			KeyPEM:       utils.GetString(params, "key_pem"),
 		})
 
 	case plan.StepDNSDelete:
@@ -316,7 +301,7 @@ func parseFirewallFromParams(ctx context.Context, params map[string]any) (provid
 		args = append(args, preset)
 	}
 	if hasRules {
-		// Rules arrives as map[string]any from JSON deserialization
+		// Rules is map[string][]string (port → CIDRs)
 		if rulesMap, ok := rulesRaw.(map[string]any); ok {
 			for port, v := range rulesMap {
 				if cidrs, ok := v.([]any); ok {
@@ -325,6 +310,13 @@ func parseFirewallFromParams(ctx context.Context, params map[string]any) (provid
 							args = append(args, fmt.Sprintf("%s:%s", port, s))
 						}
 					}
+				}
+			}
+		}
+		if rulesMap, ok := rulesRaw.(map[string][]string); ok {
+			for port, cidrs := range rulesMap {
+				for _, cidr := range cidrs {
+					args = append(args, fmt.Sprintf("%s:%s", port, cidr))
 				}
 			}
 		}
@@ -343,36 +335,24 @@ func parseIngressRoutesFromParams(params map[string]any) ([]pkgcore.IngressRoute
 	if !ok {
 		return nil, fmt.Errorf("ingress.apply: routes must be a list")
 	}
+	edgeProxied := utils.GetString(params, "exposure") == "edge_proxied"
 	var routes []pkgcore.IngressRouteArg
-	for i, item := range routesList {
+	for _, item := range routesList {
 		m, ok := item.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("ingress.apply: route at index %d is not a map", i)
+			continue
 		}
 		svc := utils.GetString(m, "service")
-		if svc == "" {
-			return nil, fmt.Errorf("ingress.apply: route at index %d missing service name", i)
-		}
 		domains := utils.GetStringSlice(m, "domains")
-		if len(domains) == 0 {
-			return nil, fmt.Errorf("ingress.apply: route at index %d (service %q) has no domains", i, svc)
+		if svc != "" && len(domains) > 0 {
+			routes = append(routes, pkgcore.IngressRouteArg{
+				Service:     svc,
+				Domains:     domains,
+				EdgeProxied: edgeProxied,
+			})
 		}
-		routes = append(routes, pkgcore.IngressRouteArg{
-			Service: svc,
-			Domains: domains,
-			Proxy:   utils.GetBool(m, "proxy"),
-		})
 	}
 	return routes, nil
-}
-
-func anyProxy(routes []pkgcore.IngressRouteArg) bool {
-	for _, r := range routes {
-		if r.Proxy {
-			return true
-		}
-	}
-	return false
 }
 
 // ── status helpers ─────────────────────────────────────────────────────────────

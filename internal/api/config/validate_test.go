@@ -267,13 +267,6 @@ func TestValidate_MultipleErrors(t *testing.T) {
 
 // ── Firewall × Domains × Proxy coherence ──────────────────────────────────────
 
-func TestValidate_UnknownFirewallPreset(t *testing.T) {
-	cfg := validConfig()
-	cfg.Firewall = &FirewallConfig{Preset: "banana"}
-	errs := Validate(cfg)
-	assertHasError(t, errs, "unknown preset")
-}
-
 func TestValidate_DomainsWithoutFirewall(t *testing.T) {
 	cfg := validConfig()
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
@@ -309,57 +302,90 @@ func TestValidate_ProxyWithDefaultFirewall(t *testing.T) {
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "default"}
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.DomainProxy = map[string]bool{"web": true}
+	cfg.Ingress = &IngressConfig{Exposure: "edge_proxied"}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "proxy requires a restricted firewall")
+	assertHasError(t, errs, "proxied edge mode currently requires \"firewall: cloudflare\"")
 }
 
 func TestValidate_CloudflareFirewallWithoutProxy(t *testing.T) {
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "cloudflare"}
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	// No DomainProxy — web is not proxied
 	errs := Validate(cfg)
-	assertHasError(t, errs, "domain is not proxied")
-}
-
-func TestValidate_CloudflarePresetWithOpenOverride(t *testing.T) {
-	cfg := validConfig()
-	cfg.Firewall = &FirewallConfig{
-		Preset: "cloudflare",
-		Rules:  map[string][]string{"443": {"0.0.0.0/0"}}, // override opens 443 to all
-	}
-	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.DomainProxy = map[string]bool{"web": true}
-	errs := Validate(cfg)
-	// Rule override makes port open to all — proxy + open = bad
-	assertHasError(t, errs, "proxy requires a restricted firewall")
-}
-
-func TestValidate_ExplicitRestrictedRulesWithProxy(t *testing.T) {
-	cfg := validConfig()
-	cfg.Firewall = &FirewallConfig{
-		Rules: map[string][]string{
-			"80":  {"173.245.48.0/20"},
-			"443": {"173.245.48.0/20"},
-		},
-	}
-	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.DomainProxy = map[string]bool{"web": true}
-	errs := Validate(cfg)
-	// Explicit restricted CIDRs without cloudflare preset — should be valid with proxy
-	assertNoError(t, errs, "proxy requires")
+	assertHasError(t, errs, "firewall: preset \"cloudflare\" requires ingress.exposure: edge_proxied")
 }
 
 func TestValidate_CloudflareFirewallWithProxy(t *testing.T) {
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "cloudflare"}
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.DomainProxy = map[string]bool{"web": true}
+	cfg.Ingress = &IngressConfig{
+		Exposure: "edge_proxied",
+		Edge:     &IngressEdgeConfig{Provider: "cloudflare"},
+	}
 	errs := Validate(cfg)
 	assertNoError(t, errs, "firewall")
-	assertNoError(t, errs, "proxy")
 	assertNoError(t, errs, "cloudflare")
+}
+
+func TestValidate_IngressConfigProvidedTLSValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{Preset: "default"}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	cfg.Ingress = &IngressConfig{
+		Exposure: "direct",
+		TLS: &IngressTLSConfig{
+			Mode: "provided",
+			Cert: "TLS_CERT_PEM",
+			Key:  "TLS_KEY_PEM",
+		},
+	}
+
+	errs := Validate(cfg)
+	assertNoError(t, errs, "ingress")
+}
+
+func TestValidate_IngressConfigProvidedTLSRequiresBothRefs(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{Preset: "default"}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	cfg.Ingress = &IngressConfig{
+		Exposure: "direct",
+		TLS: &IngressTLSConfig{
+			Mode: "provided",
+			Cert: "TLS_CERT_PEM",
+		},
+	}
+
+	errs := Validate(cfg)
+	assertHasError(t, errs, "cert and key must both be set")
+}
+
+func TestValidate_EdgeOriginRequiresExplicitCloudflareOverlay(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{Preset: "cloudflare"}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	cfg.Ingress = &IngressConfig{
+		Exposure: "edge_proxied",
+		TLS: &IngressTLSConfig{
+			Mode: "edge_origin",
+		},
+	}
+
+	errs := Validate(cfg)
+	assertHasError(t, errs, "requires ingress.edge.provider")
+}
+
+func TestValidate_EdgeOverlayRequiresExplicitExposure(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{Preset: "default"}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	cfg.Ingress = &IngressConfig{
+		Edge: &IngressEdgeConfig{Provider: "cloudflare"},
+	}
+
+	errs := Validate(cfg)
+	assertHasError(t, errs, "edge overlays require ingress.exposure")
 }
 
 func assertNoError(t *testing.T, errs []error, substr string) {

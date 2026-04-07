@@ -16,12 +16,11 @@ import (
 
 // OriginCAClient manages Cloudflare Origin CA certificates.
 type OriginCAClient struct {
-	api    *utils.HTTPClient
-	zoneID string
+	api *utils.HTTPClient
 }
 
 // NewOriginCA creates a client for the Cloudflare Origin CA API.
-func NewOriginCA(apiKey, zoneID string) *OriginCAClient {
+func NewOriginCA(apiKey string) *OriginCAClient {
 	return &OriginCAClient{
 		api: &utils.HTTPClient{
 			BaseURL: cfBaseURL,
@@ -30,7 +29,6 @@ func NewOriginCA(apiKey, zoneID string) *OriginCAClient {
 			},
 			Label: "cloudflare origin ca",
 		},
-		zoneID: zoneID,
 	}
 }
 
@@ -42,7 +40,8 @@ type OriginCert struct {
 
 // CreateCert generates a new Origin CA certificate for the given hostnames.
 // Returns a 15-year ECDSA cert signed by Cloudflare's Origin CA.
-// Caller should persist the private key to avoid creating orphaned certs on every deploy.
+// Caller owns persistence/reuse of the deploy artifact. This helper is issuance-only;
+// it does not implement provider-side listing or revocation lifecycle.
 func (c *OriginCAClient) CreateCert(ctx context.Context, hostnames []string) (*OriginCert, error) {
 	// Generate ECDSA private key
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

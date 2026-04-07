@@ -20,6 +20,7 @@ type MockSSH struct {
 	Commands map[string]MockResult // exact command → result
 	Prefixes []MockPrefix          // prefix matches, checked in order
 	Uploads  []MockUpload          // recorded uploads
+	Calls    []string              // recorded Run commands
 	Closed   bool
 }
 
@@ -50,6 +51,7 @@ func NewMockSSH(commands map[string]MockResult) *MockSSH {
 func (m *MockSSH) Run(_ context.Context, cmd string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, cmd)
 
 	// Exact match first
 	if r, ok := m.Commands[cmd]; ok {

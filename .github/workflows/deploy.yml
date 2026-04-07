@@ -87,13 +87,13 @@ jobs:
           nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001 \
             --storage releases
 
+          # Firewall (restrict 80/443 to Cloudflare IPs — before DNS exposes the origin)
+          nvoi firewall set cloudflare
+
           # DNS (proxied through Cloudflare)
           nvoi dns set web nvoi.to www.nvoi.to --proxy
           nvoi dns set api api.nvoi.to --proxy
           nvoi dns set distribution get.nvoi.to --proxy
-
-          # Firewall (restrict 80/443 to Cloudflare IPs — before ingress)
-          nvoi firewall set cloudflare
 
           # Ingress (single Caddy deploy, Cloudflare proxy mode)
           nvoi ingress apply web:nvoi.to,www.nvoi.to api:api.nvoi.to distribution:get.nvoi.to --proxy

@@ -25,9 +25,7 @@ func newIngressApplyCmd() *cobra.Command {
 
 Examples:
   nvoi ingress apply web:example.com api:api.example.com
-  nvoi ingress apply web:example.com --cert cert.pem --key key.pem
-  nvoi ingress apply web:example.com --proxy         # all routes proxied via Cloudflare
-  nvoi ingress apply web:example.com:proxy api:api.example.com  # per-route proxy`,
+  nvoi ingress apply web:example.com --cert cert.pem --key key.pem`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			appName, env, err := resolveAppEnv(cmd)
@@ -52,22 +50,15 @@ Examples:
 				return err
 			}
 
-			proxy, _ := cmd.Flags().GetBool("proxy")
-			if proxy {
-				for i := range routes {
-					routes[i].Proxy = true
-				}
-			}
 			certPath, _ := cmd.Flags().GetString("cert")
 			keyPath, _ := cmd.Flags().GetString("key")
 
 			out := resolveOutput(cmd)
 
-			// Resolve cert + key
+			// Resolve cert + key (BYO cert only — auto-generation handled by pkg/core)
 			var certPEM, keyPEM string
 
 			if certPath != "" && keyPath != "" {
-				// Bring your own cert
 				certData, err := os.ReadFile(certPath)
 				if err != nil {
 					return fmt.Errorf("read cert: %w", err)
@@ -80,14 +71,13 @@ Examples:
 				keyPEM = string(keyData)
 			} else if certPath != "" || keyPath != "" {
 				return fmt.Errorf("--cert and --key must both be provided")
-			} else if proxy {
-				// Auto-generate Cloudflare Origin CA cert
-				cert, key, err := resolveOriginCACert(cmd, routes, out)
-				if err != nil {
-					return err
-				}
-				certPEM = cert
-				keyPEM = key
+			}
+
+			// Resolve DNS provider ref — needed for overlay TLS helpers when explicitly used.
+			dnsProviderName, _ := resolveDNSProvider(cmd)
+			var dnsCreds map[string]string
+			if dnsProviderName != "" {
+				dnsCreds, _ = resolveDNSCredentials(cmd, dnsProviderName)
 			}
 
 			return app.IngressApply(cmd.Context(), app.IngressApplyRequest{
@@ -99,7 +89,9 @@ Examples:
 					SSHKey:      sshKey,
 					Output:      out,
 				},
+				DNS:     app.ProviderRef{Name: dnsProviderName, Creds: dnsCreds},
 				Routes:  routes,
+				TLSMode: resolveIngressTLSMode(certPEM, keyPEM),
 				CertPEM: certPEM,
 				KeyPEM:  keyPEM,
 			})
@@ -108,8 +100,14 @@ Examples:
 	addComputeProviderFlags(cmd)
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().Bool("proxy", false, "Cloudflare proxy mode — auto-generates Origin CA cert, firewall coherence check")
 	cmd.Flags().String("cert", "", "TLS certificate PEM file (custom cert, skips ACME)")
 	cmd.Flags().String("key", "", "TLS private key PEM file (required with --cert)")
 	return cmd
+}
+
+func resolveIngressTLSMode(certPEM, keyPEM string) string {
+	if certPEM != "" || keyPEM != "" {
+		return "provided"
+	}
+	return "acme"
 }

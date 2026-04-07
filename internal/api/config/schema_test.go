@@ -205,10 +205,8 @@ func TestDomains_JSONList(t *testing.T) {
 	}
 }
 
-// ── Firewall unmarshaling ─────────────────────────────────────────────────────
-
-func TestFirewall_YAMLPresetString(t *testing.T) {
-	input := `
+func TestParse_IngressOverlayConfig(t *testing.T) {
+	yaml := `
 servers:
   master:
     type: cx23
@@ -217,27 +215,35 @@ services:
   web:
     image: nginx
     port: 80
-firewall: default
 domains:
-  web: example.com
+  web: [example.com]
+ingress:
+  exposure: edge_proxied
+  edge:
+    provider: cloudflare
+  tls:
+    mode: edge_origin
 `
-	cfg, err := Parse([]byte(input))
+	cfg, err := Parse([]byte(yaml))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if cfg.Firewall == nil {
-		t.Fatal("firewall should not be nil")
+	if cfg.Ingress == nil {
+		t.Fatal("expected ingress config")
 	}
-	if cfg.Firewall.Preset != "default" {
-		t.Errorf("preset = %q, want default", cfg.Firewall.Preset)
+	if cfg.Ingress.Exposure != "edge_proxied" {
+		t.Fatalf("exposure = %q", cfg.Ingress.Exposure)
 	}
-	if cfg.Firewall.Rules != nil {
-		t.Errorf("rules should be nil for preset-only, got %v", cfg.Firewall.Rules)
+	if cfg.Ingress.Edge == nil || cfg.Ingress.Edge.Provider != "cloudflare" {
+		t.Fatalf("edge provider = %+v", cfg.Ingress.Edge)
+	}
+	if cfg.Ingress.TLS == nil || cfg.Ingress.TLS.Mode != "edge_origin" {
+		t.Fatalf("tls mode = %+v", cfg.Ingress.TLS)
 	}
 }
 
-func TestFirewall_YAMLPresetPlusRules(t *testing.T) {
-	input := `
+func TestParse_LegacyDomainProxySyntaxRejected(t *testing.T) {
+	yaml := `
 servers:
   master:
     type: cx23
@@ -246,199 +252,13 @@ services:
   web:
     image: nginx
     port: 80
-firewall:
-  preset: cloudflare
-  "443":
-    - 0.0.0.0/0
 domains:
   web:
     domains: [example.com]
     proxy: true
 `
-	cfg, err := Parse([]byte(input))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if cfg.Firewall.Preset != "cloudflare" {
-		t.Errorf("preset = %q, want cloudflare", cfg.Firewall.Preset)
-	}
-	if len(cfg.Firewall.Rules["443"]) != 1 || cfg.Firewall.Rules["443"][0] != "0.0.0.0/0" {
-		t.Errorf("rules[443] = %v, want [0.0.0.0/0]", cfg.Firewall.Rules["443"])
-	}
-}
-
-func TestFirewall_YAMLExplicitRulesOnly(t *testing.T) {
-	input := `
-servers:
-  master:
-    type: cx23
-    region: fsn1
-services:
-  web:
-    image: nginx
-    port: 80
-firewall:
-  "80":
-    - 0.0.0.0/0
-  "443":
-    - 0.0.0.0/0
-domains:
-  web: example.com
-`
-	cfg, err := Parse([]byte(input))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if cfg.Firewall.Preset != "" {
-		t.Errorf("preset should be empty, got %q", cfg.Firewall.Preset)
-	}
-	if len(cfg.Firewall.Rules) != 2 {
-		t.Errorf("rules should have 2 ports, got %d", len(cfg.Firewall.Rules))
-	}
-}
-
-func TestFirewall_JSONPresetString(t *testing.T) {
-	var fw FirewallConfig
-	if err := json.Unmarshal([]byte(`"default"`), &fw); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if fw.Preset != "default" {
-		t.Errorf("preset = %q, want default", fw.Preset)
-	}
-}
-
-func TestFirewall_JSONPresetPlusRules(t *testing.T) {
-	var fw FirewallConfig
-	if err := json.Unmarshal([]byte(`{"preset":"cloudflare","443":["0.0.0.0/0"]}`), &fw); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if fw.Preset != "cloudflare" {
-		t.Errorf("preset = %q, want cloudflare", fw.Preset)
-	}
-	if len(fw.Rules["443"]) != 1 {
-		t.Errorf("rules[443] = %v", fw.Rules["443"])
-	}
-}
-
-// ── Domains with proxy ───────────────────────────────────────────────────────
-
-func TestDomains_YAMLStructuredWithProxy(t *testing.T) {
-	input := `
-servers:
-  master:
-    type: cx23
-    region: fsn1
-services:
-  web:
-    image: nginx
-    port: 80
-firewall: cloudflare
-domains:
-  web:
-    domains: [example.com, www.example.com]
-    proxy: true
-`
-	cfg, err := Parse([]byte(input))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if len(cfg.Domains["web"]) != 2 {
-		t.Errorf("domains = %v, want 2 entries", cfg.Domains["web"])
-	}
-	if !cfg.DomainProxy["web"] {
-		t.Error("DomainProxy[web] should be true")
-	}
-}
-
-func TestDomains_YAMLStructuredWithoutProxy(t *testing.T) {
-	input := `
-servers:
-  master:
-    type: cx23
-    region: fsn1
-services:
-  web:
-    image: nginx
-    port: 80
-firewall: default
-domains:
-  web:
-    domains: [example.com]
-`
-	cfg, err := Parse([]byte(input))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if cfg.DomainProxy["web"] {
-		t.Error("DomainProxy[web] should be false when proxy not set")
-	}
-}
-
-func TestDomains_JSONStructuredWithProxy(t *testing.T) {
-	input := `{
-		"servers": {"master": {"type": "cx23", "region": "fsn1"}},
-		"services": {"web": {"image": "nginx", "port": 80}},
-		"firewall": "cloudflare",
-		"domains": {"web": {"domains": ["example.com"], "proxy": true}}
-	}`
-	cfg, err := ParseJSON([]byte(input))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if len(cfg.Domains["web"]) != 1 {
-		t.Errorf("domains = %v", cfg.Domains["web"])
-	}
-	if !cfg.DomainProxy["web"] {
-		t.Error("DomainProxy[web] should be true")
-	}
-}
-
-// ── DomainProxy round-trip ────────────────────────────────────────────────────
-
-func TestDomainProxy_JSONRoundTrip(t *testing.T) {
-	original := &Config{
-		Servers:  map[string]Server{"master": {Type: "cx23", Region: "fsn1"}},
-		Firewall: &FirewallConfig{Preset: "cloudflare"},
-		Services: map[string]Service{"web": {Image: "nginx", Port: 80}},
-		Domains:  map[string]Domains{"web": {"example.com", "www.example.com"}},
-		DomainProxy: map[string]bool{"web": true},
-	}
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	restored, err := ParseJSON(data)
-	if err != nil {
-		t.Fatalf("parseJSON: %v", err)
-	}
-
-	if !restored.DomainProxy["web"] {
-		t.Error("DomainProxy[web] lost after JSON round-trip")
-	}
-	if len(restored.Domains["web"]) != 2 {
-		t.Errorf("domains lost after round-trip: %v", restored.Domains["web"])
-	}
-}
-
-func TestFirewall_JSONRoundTrip(t *testing.T) {
-	original := &FirewallConfig{Preset: "default"}
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	// Preset-only should serialize as string "default"
-	if string(data) != `"default"` {
-		t.Errorf("preset-only should marshal as string, got %s", string(data))
-	}
-
-	var restored FirewallConfig
-	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if restored.Preset != "default" {
-		t.Errorf("preset = %q after round-trip", restored.Preset)
+	if _, err := Parse([]byte(yaml)); err == nil {
+		t.Fatal("expected legacy proxy syntax to fail")
 	}
 }
 

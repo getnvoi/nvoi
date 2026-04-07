@@ -18,45 +18,29 @@ import (
 
 // IngressRoute maps a service to its public domains.
 type IngressRoute struct {
-	Service string
-	Port    int
-	Domains []string
-	Proxy   bool // Cloudflare proxy mode — DNS record proxied through CF, firewall restricted to CF IPs
-	HasTLS  bool // Caddy serves explicit TLS cert from disk (Origin CA or BYO) instead of ACME
+	Service      string
+	Port         int
+	Domains      []string
+	UseTLSSecret bool // Render this site with mounted TLS material instead of ACME
 }
 
-// CaddyTLSSecretName is the k8s secret name for Caddy's TLS cert (Origin CA or BYO).
 const CaddyTLSSecretName = "caddy-origin-cert"
-
-// AnyProxyRoute returns true if any route has Proxy set.
-func AnyProxyRoute(routes []IngressRoute) bool {
-	for _, r := range routes {
-		if r.Proxy {
-			return true
-		}
-	}
-	return false
-}
-
-// AnyTLSRoute returns true if any route uses explicit TLS (Origin CA or BYO cert).
-func AnyTLSRoute(routes []IngressRoute) bool {
-	for _, r := range routes {
-		if r.HasTLS {
-			return true
-		}
-	}
-	return false
-}
 
 // ApplyCaddyConfig updates the ConfigMap and hot-reloads Caddy.
 // If Caddy isn't running yet, deploys it. Zero downtime for config changes.
-// Detects proxy mode from routes — mounts TLS secret if any route is proxied.
+// Mounts the shared TLS secret when any route uses secret-backed TLS material.
 func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, routes []IngressRoute, names *utils.Names) error {
 	if len(routes) == 0 {
 		return nil
 	}
 
-	hasTLS := AnyTLSRoute(routes)
+	hasTLSSecret := false
+	for _, r := range routes {
+		if r.UseTLSSecret {
+			hasTLSSecret = true
+			break
+		}
+	}
 
 	caddyfile := generateCaddyfile(routes, ns)
 
@@ -70,10 +54,12 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 	}
 
 	// Check if Caddy deployment exists
-	_, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get deployment %s 2>/dev/null", names.KubeCaddy())))
-	if err != nil {
+	existingDep, getErr := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get deployment %s -o jsonpath='{.spec.template.spec.volumes[*].name}' 2>/dev/null", names.KubeCaddy())))
+	deploymentExists := getErr == nil
+
+	if !deploymentExists {
 		// First deploy — create the Deployment
-		depYAML, err := generateDeploymentYAML(names, ns, hasTLS)
+		depYAML, err := generateDeploymentYAML(names, ns, hasTLSSecret)
 		if err != nil {
 			return fmt.Errorf("generate deployment: %w", err)
 		}
@@ -83,7 +69,20 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 		return nil // new pod will pick up the ConfigMap on start
 	}
 
-	// Caddy already running — hot reload.
+	// Re-apply deployment if TLS secret usage changed (volume mounts differ).
+	existingHasTLS := strings.Contains(string(existingDep), "tls")
+	if hasTLSSecret != existingHasTLS {
+		depYAML, err := generateDeploymentYAML(names, ns, hasTLSSecret)
+		if err != nil {
+			return fmt.Errorf("generate deployment: %w", err)
+		}
+		if err := Apply(ctx, ssh, ns, depYAML); err != nil {
+			return fmt.Errorf("apply deployment: %w", err)
+		}
+		return nil // new pod will pick up both the ConfigMap and new volume mounts
+	}
+
+	// Caddy already running, same mode — hot reload.
 	// ConfigMap volume sync takes up to kubelet sync period (default 60s).
 	// Poll until the file hash matches, then reload.
 	podName, err := caddyPodName(ctx, ssh, ns, names.KubeCaddy())
@@ -123,9 +122,8 @@ reload:
 }
 
 // CaddyReloadDelay is the wait for kubelet to sync ConfigMap to the volume.
-// Kubelet default sync period is 60s, so we wait up to 65s.
 // Variable for testing.
-var CaddyReloadDelay = 65 * time.Second
+var CaddyReloadDelay = 5 * time.Second
 
 // caddyPodName finds the running Caddy pod name.
 func caddyPodName(ctx context.Context, ssh utils.SSHClient, ns, deploymentName string) (string, error) {
@@ -139,12 +137,6 @@ func caddyPodName(ctx context.Context, ssh utils.SSHClient, ns, deploymentName s
 		return "", fmt.Errorf("no caddy pod found")
 	}
 	return name, nil
-}
-
-// TLSSecretExists checks if a TLS secret exists in the given namespace.
-func TLSSecretExists(ctx context.Context, ssh utils.SSHClient, ns, name string) bool {
-	_, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get secret %s 2>/dev/null", name)))
-	return err == nil
 }
 
 // UpsertTLSSecret creates or updates a k8s TLS secret with cert and key.
@@ -166,13 +158,20 @@ func UpsertTLSSecret(ctx context.Context, ssh utils.SSHClient, ns, name, cert, k
 }
 
 // GenerateCaddyManifest produces the full Caddy ConfigMap + Deployment YAML.
-// Test helper — production uses ApplyCaddyConfig which applies pieces independently.
+// Used only for first deploy or when the deployment itself needs updating (image change).
 func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, error) {
 	if len(routes) == 0 {
 		return "", nil
 	}
 
-	hasTLS := AnyTLSRoute(routes)
+	hasTLSSecret := false
+	for _, r := range routes {
+		if r.UseTLSSecret {
+			hasTLSSecret = true
+			break
+		}
+	}
+
 	ns := names.KubeNamespace()
 	caddyfile := generateCaddyfile(routes, ns)
 
@@ -180,7 +179,7 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 	if err != nil {
 		return "", err
 	}
-	depYAML, err := generateDeploymentYAML(names, ns, hasTLS)
+	depYAML, err := generateDeploymentYAML(names, ns, hasTLSSecret)
 	if err != nil {
 		return "", err
 	}
@@ -201,7 +200,7 @@ func generateConfigMapYAML(caddyfile string, names *utils.Names, ns string) (str
 	return strings.TrimSpace(string(b)), nil
 }
 
-func generateDeploymentYAML(names *utils.Names, ns string, hasTLS bool) (string, error) {
+func generateDeploymentYAML(names *utils.Names, ns string, hasProxy bool) (string, error) {
 	one := int32(1)
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	caddyName := names.KubeCaddy()
@@ -232,9 +231,9 @@ func generateDeploymentYAML(names *utils.Names, ns string, hasTLS bool) (string,
 							{ContainerPort: 80, HostPort: 80},
 							{ContainerPort: 443, HostPort: 443},
 						},
-						VolumeMounts: caddyVolumeMounts(hasTLS),
+						VolumeMounts: caddyVolumeMounts(hasProxy),
 					}},
-					Volumes: caddyVolumes(names, hostPathType, hasTLS),
+					Volumes: caddyVolumes(names, hostPathType, hasProxy),
 				},
 			},
 		},
@@ -303,18 +302,17 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 
 	var b strings.Builder
 
-	// Split routes: explicit TLS (Origin CA or BYO cert) vs ACME (auto-TLS)
-	var tlsRoutes []IngressRoute
-	var acmeRoutes []IngressRoute
+	var secretTLS []IngressRoute
+	var direct []IngressRoute
 	for _, route := range sorted {
-		if route.HasTLS {
-			tlsRoutes = append(tlsRoutes, route)
+		if route.UseTLSSecret {
+			secretTLS = append(secretTLS, route)
 		} else {
-			acmeRoutes = append(acmeRoutes, route)
+			direct = append(direct, route)
 		}
 	}
 
-	for i, route := range acmeRoutes {
+	for i, route := range direct {
 		if i > 0 {
 			b.WriteString("\n")
 		}
@@ -329,9 +327,9 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 		b.WriteString("}\n")
 	}
 
-	// Explicit TLS routes: serve cert from disk (Origin CA or BYO), no ACME
-	for i, route := range tlsRoutes {
-		if i > 0 || len(acmeRoutes) > 0 {
+	// Secret-backed TLS routes: HTTPS with mounted TLS material (no ACME)
+	for i, route := range secretTLS {
+		if i > 0 || len(direct) > 0 {
 			b.WriteString("\n")
 		}
 		for j, domain := range route.Domains {
@@ -396,7 +394,7 @@ func parseCaddyfile(content string) []IngressRoute {
 					break
 				}
 				if strings.HasPrefix(inner, "tls /etc/caddy/tls/") {
-					route.HasTLS = true
+					route.UseTLSSecret = true
 				}
 				if strings.HasPrefix(inner, "reverse_proxy ") {
 					upstream := strings.TrimPrefix(inner, "reverse_proxy ")

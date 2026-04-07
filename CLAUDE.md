@@ -136,12 +136,15 @@ nvoi volume set <name> --size 20 --server master
 nvoi volume delete <name>
 nvoi volume list
 
-# ── DNS + Ingress — creates A record AND deploys Caddy reverse proxy
+# ── DNS — DNS records only
 # "web" is the service name — must have --port set via service set.
-# Caddy runs on master with hostNetwork, handles TLS via Let's Encrypt.
 nvoi dns set <service> <domain...>                                              # --zone or DNS_ZONE
 nvoi dns delete <service> <domain...>
 nvoi dns list
+
+# ── Ingress — Caddy routes/TLS only
+# Caddy runs on master with hostNetwork and reverse-proxies to the k8s Service.
+nvoi ingress apply <service:domain,domain ...>
 
 # ── Storage — creates bucket, stores S3 credentials as k8s secrets
 # Bucket name derived from convention: nvoi-{app}-{env}-{name}. Override with --bucket.
@@ -443,14 +446,13 @@ For remote sources (`org/repo`, `https://...`): `--dockerfile-path` is passed th
 - `volume delete` unmounts on all servers, then calls `DeleteVolume` (which detaches + deletes the cloud volume). Not just detach.
 
 **DNS / Ingress:**
-- `dns set <service> <domain...>` does two things: creates the DNS A record pointing at master, AND deploys Caddy ingress to the cluster.
+- `dns set <service> <domain...>` creates DNS A records pointing at master. Ingress is a separate subsystem.
 - Caddy runs as a Deployment with `hostNetwork: true` on the master node (binds port 80/443 directly).
 - Caddy reverse-proxies to the k8s Service by name: `domain → service.namespace.svc.cluster.local:port`.
-- Caddy handles TLS automatically via Let's Encrypt. No cert management needed.
-- Multiple `dns set` calls merge routes into a single Caddy config (ConfigMap). Caddy restarts on config change via annotation checksum.
-- `dns delete` removes the A record AND removes the route from Caddy config. If no routes remain, Caddy is deleted entirely.
-- `dns set` polls until `https://<domain>` returns 200 (or times out after 2 minutes if TLS is still provisioning).
-- **DNS records are DNS-only (not proxied).** Cloudflare records are created with `proxied: false`. Caddy handles TLS directly via Let's Encrypt — Cloudflare proxy in the path breaks certificate issuance. Existing proxied records are updated to DNS-only on next `dns set`.
+- Baseline ingress uses ACME automatically, but the declarative ingress surface can also express provided TLS material and explicit edge overlay behavior.
+- Ingress reconciliation owns Caddy route creation, update, and deletion.
+- `dns delete` is DNS-only and fails if ingress still references the service/domain. Remove or reconcile ingress first.
+- Provider-specific edge/proxy behavior is an overlay on top of the baseline DNS + ingress model, not part of DNS ownership itself.
 - Service must have `port > 0`. Hard error if service has no port.
 
 **Storage:**
@@ -642,4 +644,3 @@ Lessons from real deployment failures. Each was a bug, each was fixed, each teac
 - **GitHub Actions secrets can't start with `GITHUB_`.** Reserved prefix. Also: app secrets (`POSTGRES_PASSWORD`, `JWT_SECRET`, `ENCRYPTION_KEY`) are runtime secrets — generate strong random values, never reuse `.env` passwords from development.
 - **Concurrency control on deploy workflows.** Multiple pushes to main queue multiple deploys. Use `concurrency: { group: deploy, cancel-in-progress: false }` to serialize — new deploys wait for current to finish. Never overlap infrastructure mutations.
 - **ARM servers need ARM runners.** `cax11` (Hetzner ARM) produces `linux/arm64` images. GitHub's `ubuntu-latest` is amd64 — can't execute arm64 `RUN` instructions. Use `ubuntu-24.04-arm` runner for native builds, no QEMU.
-

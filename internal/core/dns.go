@@ -14,7 +14,7 @@ import (
 func newDNSCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dns",
-		Short: "Manage DNS records",
+		Short: "Manage DNS records only",
 	}
 	cmd.AddCommand(newDNSSetCmd())
 	cmd.AddCommand(newDNSDeleteCmd())
@@ -25,7 +25,7 @@ func newDNSCmd() *cobra.Command {
 func newDNSSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set [service] [domain...]",
-		Short: "Create or update DNS A records pointing to service server",
+		Short: "Create or update DNS A records pointing to the service server",
 		Long: `Points domains at the server running the service.
 
 Examples:
@@ -61,8 +61,6 @@ Examples:
 				return err
 			}
 
-			proxy, _ := cmd.Flags().GetBool("proxy")
-
 			return app.DNSSet(cmd.Context(), app.DNSSetRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
@@ -75,7 +73,6 @@ Examples:
 				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
 				Service: service,
 				Domains: domains,
-				Proxy:   proxy,
 			})
 		},
 	}
@@ -83,14 +80,13 @@ Examples:
 	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().String("zone", "", "DNS zone (env: DNS_ZONE)")
-	cmd.Flags().Bool("proxy", false, "proxy traffic through Cloudflare (requires --dns-provider cloudflare)")
 	return cmd
 }
 
 func newDNSDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete [service] [domain...]",
-		Short: "Delete DNS records",
+		Short: "Delete DNS records (fails if ingress still uses them)",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service := args[0]

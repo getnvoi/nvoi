@@ -92,45 +92,42 @@ func (f *FirewallConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (f FirewallConfig) MarshalJSON() ([]byte, error) {
-	if f.Preset != "" && len(f.Rules) == 0 {
-		return json.Marshal(f.Preset)
-	}
-	m := map[string]any{}
-	if f.Preset != "" {
-		m["preset"] = f.Preset
-	}
-	for port, cidrs := range f.Rules {
-		m[port] = cidrs
-	}
-	return json.Marshal(m)
-}
-
-func (f FirewallConfig) MarshalYAML() (any, error) {
-	if f.Preset != "" && len(f.Rules) == 0 {
-		return f.Preset, nil
-	}
-	m := map[string]any{}
-	if f.Preset != "" {
-		m["preset"] = f.Preset
-	}
-	for port, cidrs := range f.Rules {
-		m[port] = cidrs
-	}
-	return m, nil
-}
-
-// DomainConfig supports simple domains or domains with proxy config.
+// DomainConfig supports structured domains config.
 //
 //	domains:
-//	  web: example.com                   # simple
-//	  web: [example.com, www.example.com] # list
-//	  web:                               # with proxy
-//	    domains: [example.com]
-//	    proxy: true
+//	  web:
+//	    domains: [example.com, www.example.com]
 type DomainConfig struct {
 	Domains []string `json:"domains" yaml:"domains"`
-	Proxy   bool     `json:"proxy,omitempty" yaml:"proxy,omitempty"`
+}
+
+// IngressConfig is the declarative production surface for ingress behavior.
+//
+//	ingress:
+//	  exposure: direct
+//	  tls:
+//	    mode: acme
+//
+//	ingress:
+//	  exposure: edge_proxied
+//	  edge:
+//	    provider: cloudflare
+//	  tls:
+//	    mode: edge_origin
+type IngressConfig struct {
+	Exposure string             `json:"exposure,omitempty" yaml:"exposure,omitempty"`
+	TLS      *IngressTLSConfig  `json:"tls,omitempty" yaml:"tls,omitempty"`
+	Edge     *IngressEdgeConfig `json:"edge,omitempty" yaml:"edge,omitempty"`
+}
+
+type IngressTLSConfig struct {
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Cert string `json:"cert,omitempty" yaml:"cert,omitempty"` // env key containing PEM
+	Key  string `json:"key,omitempty" yaml:"key,omitempty"`   // env key containing PEM
+}
+
+type IngressEdgeConfig struct {
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 }
 
 // Config is the public schema — what users write.
@@ -142,36 +139,7 @@ type Config struct {
 	Storage  map[string]Storage `json:"storage,omitempty" yaml:"storage,omitempty"`
 	Services map[string]Service `json:"services" yaml:"services"`
 	Domains  map[string]Domains `json:"domains,omitempty" yaml:"domains,omitempty"`
-	// DomainProxy lists service names whose domains should be proxied through Cloudflare.
-	// Cloudflare-only. Set via structured domain config:
-	//   domains:
-	//     web:
-	//       domains: [example.com]
-	//       proxy: true
-	// Populated by Parse from DomainConfig entries that have proxy: true.
-	DomainProxy map[string]bool `json:"-" yaml:"-"` // internal, not serialized directly
-}
-
-// MarshalJSON serializes Config with DomainProxy embedded back into Domains.
-// Proxied domains are written as DomainConfig objects, others as string lists.
-func (c Config) MarshalJSON() ([]byte, error) {
-	type Alias Config // break recursion
-	alias := struct {
-		Alias
-		Domains map[string]any `json:"domains,omitempty"`
-	}{Alias: Alias(c)}
-
-	if len(c.Domains) > 0 {
-		alias.Domains = make(map[string]any, len(c.Domains))
-		for svc, domains := range c.Domains {
-			if c.DomainProxy[svc] {
-				alias.Domains[svc] = DomainConfig{Domains: []string(domains), Proxy: true}
-			} else {
-				alias.Domains[svc] = domains
-			}
-		}
-	}
-	return json.Marshal(alias)
+	Ingress  *IngressConfig     `json:"ingress,omitempty" yaml:"ingress,omitempty"`
 }
 
 type Server struct {
@@ -210,14 +178,13 @@ type Service struct {
 	Uses     []string `json:"uses,omitempty" yaml:"uses,omitempty"`         // managed service refs → credentials injected as secrets
 }
 
-// Domains supports a single string, a list of strings, or a structured form with proxy.
+// Domains supports a single string, a list of strings, or a structured form with domains.
 //
 //	domains:
 //	  web: example.com                   # simple string
 //	  api: [a.com, b.com]               # list
-//	  admin:                             # structured (Cloudflare proxy)
+//	  admin:                             # structured
 //	    domains: [admin.example.com]
-//	    proxy: true
 type Domains []string
 
 func (d *Domains) UnmarshalYAML(value *yaml.Node) error {
@@ -233,8 +200,13 @@ func (d *Domains) UnmarshalYAML(value *yaml.Node) error {
 		*d = list
 		return nil
 	}
-	// Mapping — structured form. Domains extracted here, proxy handled by Parse.
+	// Mapping — structured form.
 	if value.Kind == yaml.MappingNode {
+		for i := 0; i < len(value.Content)-1; i += 2 {
+			if key := value.Content[i].Value; key != "domains" {
+				return fmt.Errorf("domains mapping only supports the \"domains\" key")
+			}
+		}
 		var dc DomainConfig
 		if err := value.Decode(&dc); err != nil {
 			return err
@@ -242,7 +214,7 @@ func (d *Domains) UnmarshalYAML(value *yaml.Node) error {
 		*d = Domains(dc.Domains)
 		return nil
 	}
-	return fmt.Errorf("domains entry must be a string, list, or mapping with domains/proxy keys")
+	return fmt.Errorf("domains entry must be a string, list, or mapping with a domains key")
 }
 
 func (d *Domains) UnmarshalJSON(data []byte) error {
@@ -258,65 +230,35 @@ func (d *Domains) UnmarshalJSON(data []byte) error {
 	}
 	var dc DomainConfig
 	if err := json.Unmarshal(data, &dc); err == nil {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(data, &raw); err == nil {
+			for key := range raw {
+				if key != "domains" {
+					return fmt.Errorf("domains object only supports the \"domains\" key")
+				}
+			}
+		}
 		*d = Domains(dc.Domains)
 		return nil
 	}
-	return fmt.Errorf("domains entry must be a string, list, or object with domains/proxy")
+	return fmt.Errorf("domains entry must be a string, list, or object with a domains key")
 }
 
 // Parse parses a YAML config.
-// Performs a two-pass parse: first into Config (Domains as []string),
-// then a raw pass to extract proxy flags from structured domain entries.
 func Parse(data []byte) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
 
-	// Second pass: extract proxy flags from raw YAML.
-	// Domains unmarshal loses the proxy field (it only keeps the domain list).
-	// Re-parse the domains section as raw nodes to find structured entries.
-	var raw struct {
-		Domains map[string]yaml.Node `yaml:"domains"`
-	}
-	if err := yaml.Unmarshal(data, &raw); err == nil {
-		for svc, node := range raw.Domains {
-			if node.Kind == yaml.MappingNode {
-				var dc DomainConfig
-				if err := node.Decode(&dc); err == nil && dc.Proxy {
-					if cfg.DomainProxy == nil {
-						cfg.DomainProxy = map[string]bool{}
-					}
-					cfg.DomainProxy[svc] = true
-				}
-			}
-		}
-	}
-
 	return &cfg, nil
 }
 
-// ParseJSON parses a JSON config, including proxy flag extraction.
+// ParseJSON parses a JSON config.
 func ParseJSON(data []byte) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
-	}
-
-	// Extract proxy flags from raw JSON (Domains unmarshal loses them).
-	var raw struct {
-		Domains map[string]json.RawMessage `json:"domains"`
-	}
-	if err := json.Unmarshal(data, &raw); err == nil {
-		for svc, rawDomain := range raw.Domains {
-			var dc DomainConfig
-			if err := json.Unmarshal(rawDomain, &dc); err == nil && dc.Proxy {
-				if cfg.DomainProxy == nil {
-					cfg.DomainProxy = map[string]bool{}
-				}
-				cfg.DomainProxy[svc] = true
-			}
-		}
 	}
 
 	return &cfg, nil
