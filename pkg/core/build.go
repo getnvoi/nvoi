@@ -1,12 +1,17 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
@@ -128,6 +133,173 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 	}
 
 	return result, nil
+}
+
+// ── Parallel builds ──────────────────────────────────────────────────────────
+
+// BuildTarget is a name:source pair for parallel builds.
+type BuildTarget struct {
+	Name   string
+	Source string
+}
+
+// ParseBuildTargets parses "name:source" args.
+// Source can be a local path or remote URL. The first ":" that isn't
+// part of a URL scheme (e.g. https://) is the delimiter.
+func ParseBuildTargets(args []string) ([]BuildTarget, error) {
+	var targets []BuildTarget
+	for _, arg := range args {
+		name, source, err := splitTarget(arg)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, BuildTarget{Name: name, Source: source})
+	}
+	return targets, nil
+}
+
+func splitTarget(arg string) (name, source string, err error) {
+	idx := strings.Index(arg, ":")
+	if idx < 0 {
+		return "", "", fmt.Errorf("invalid target %q — expected name:source (e.g. web:./cmd/web)", arg)
+	}
+	// Check if the colon is part of a URL scheme (e.g. "web:https://...")
+	// If what follows the colon starts with "//", this is the real delimiter.
+	// If not, and there's another colon later (like in https://), the first colon is still the delimiter
+	// because the name can't contain "https" as a valid image name.
+	name = arg[:idx]
+	source = arg[idx+1:]
+	if name == "" || source == "" {
+		return "", "", fmt.Errorf("invalid target %q — expected name:source (e.g. web:./cmd/web)", arg)
+	}
+	return name, source, nil
+}
+
+// BuildParallelRequest builds multiple images concurrently.
+type BuildParallelRequest struct {
+	Cluster
+	Builder            string
+	BuilderCredentials map[string]string
+	Targets            []BuildTarget
+	Platform           string
+	GitUsername        string
+	GitToken           string
+}
+
+// BuildParallel runs builds concurrently, one goroutine per target.
+// Returns a map of name → image ref.
+func BuildParallel(ctx context.Context, req BuildParallelRequest) (map[string]string, error) {
+	out := req.Log()
+
+	master, _, _, err := req.Cluster.Master(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	builder, err := provider.ResolveBuild(req.Builder, req.BuilderCredentials)
+	if err != nil {
+		return nil, err
+	}
+
+	// Auto-detect platform from master
+	platform := req.Platform
+	if platform == "" {
+		sshConn, connErr := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, req.SSHKey)
+		if connErr == nil {
+			archOut, runErr := sshConn.Run(ctx, "uname -m")
+			sshConn.Close()
+			if runErr == nil {
+				arch := strings.TrimSpace(string(archOut))
+				if arch == "aarch64" || arch == "arm64" {
+					platform = "linux/arm64"
+				} else {
+					platform = "linux/amd64"
+				}
+			}
+		}
+		if platform == "" {
+			platform = "linux/amd64"
+		}
+	}
+
+	// Resolve git auth
+	gitUsername, gitToken := req.GitUsername, req.GitToken
+	if gitToken != "" && gitUsername == "" {
+		gitUsername = "x-access-token"
+	}
+
+	out.Command("build", "parallel", fmt.Sprintf("%d targets", len(req.Targets)))
+
+	var mu sync.Mutex
+	results := make(map[string]string)
+
+	g, ctx := errgroup.WithContext(ctx)
+	for _, target := range req.Targets {
+		t := target
+		g.Go(func() error {
+			pw := &prefixWriter{prefix: fmt.Sprintf("[%s] ", t.Name), w: out.Writer()}
+
+			fmt.Fprintf(pw, "building %s from %s (platform: %s)\n", t.Name, t.Source, platform)
+
+			result, err := builder.Build(ctx, provider.BuildRequest{
+				ServiceName: t.Name,
+				Source:      t.Source,
+				Platform:    platform,
+				GitUsername: gitUsername,
+				GitToken:    gitToken,
+				RegistrySSH: provider.SSHAccess{
+					MasterIP:        master.IPv4,
+					MasterPrivateIP: master.PrivateIP,
+					PrivKey:         req.SSHKey,
+				},
+				Stdout: pw,
+				Stderr: pw,
+			})
+			if err != nil {
+				return fmt.Errorf("%s: %w", t.Name, err)
+			}
+
+			mu.Lock()
+			results[t.Name] = result.ImageRef
+			mu.Unlock()
+
+			out.Success(fmt.Sprintf("%s → %s", t.Name, result.ImageRef))
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
+// prefixWriter prepends a prefix to each line written.
+type prefixWriter struct {
+	prefix string
+	w      io.Writer
+	mu     sync.Mutex
+	buf    bytes.Buffer // partial line buffer
+}
+
+func (p *prefixWriter) Write(data []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	n := len(data)
+	p.buf.Write(data)
+
+	for {
+		line, err := p.buf.ReadString('\n')
+		if err != nil {
+			// No complete line yet — put it back
+			p.buf.WriteString(line)
+			break
+		}
+		fmt.Fprint(p.w, p.prefix+line)
+	}
+	return n, nil
 }
 
 func pruneRegistryTags(ctx context.Context, c Cluster, master *provider.Server, imageName string, keep int) error {

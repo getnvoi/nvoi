@@ -9,8 +9,10 @@ import (
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
-	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// waitHTTPSFunc is the HTTPS reachability check. Variable for testing.
+var waitHTTPSFunc = infra.WaitHTTPS
 
 // ── DNS ───────────────────────────────────────────────────────────────────────
 
@@ -156,14 +158,10 @@ type IngressApplyRequest struct {
 // IngressApply builds the full Caddyfile from the given routes and deploys Caddy once.
 func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 	out := req.Log()
-	master, names, _, err := req.Cluster.Master(ctx)
+
+	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return err
-	}
-
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, req.SSHKey)
-	if err != nil {
-		return fmt.Errorf("ssh master: %w", err)
 	}
 	defer ssh.Close()
 
@@ -203,7 +201,7 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 	// Verify domains are reachable — hard error if not
 	firstDomain := req.Routes[0].Domains[0]
 	out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
-	if err := infra.WaitHTTPS(ctx, firstDomain); err != nil {
+	if err := waitHTTPSFunc(ctx, firstDomain); err != nil {
 		return fmt.Errorf("https://%s not reachable — check firewall (ports 80/443) and DNS: %w", firstDomain, err)
 	}
 	out.Success(fmt.Sprintf("https://%s live", firstDomain))

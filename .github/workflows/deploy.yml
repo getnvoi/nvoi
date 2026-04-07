@@ -53,7 +53,7 @@ jobs:
         run: |
           # Infrastructure
           nvoi instance set master --compute-type cax11 --compute-region nbg1
-          # nvoi firewall set default  # intentionally disabled — testing ingress hard error
+          nvoi firewall set default
           nvoi volume set pgdata --size 20 --server master
 
           # Secrets
@@ -65,10 +65,11 @@ jobs:
           # Storage (before services — distribution needs STORAGE_RELEASES_* env vars)
           nvoi storage set releases
 
-          # Build images
-          nvoi build --build-provider local --source ./cmd/web --name web
-          nvoi build --build-provider local --source ./cmd/api --name api
-          nvoi build --build-provider local --source ./cmd/distribution --name distribution
+          # Build images (parallel)
+          nvoi build --build-provider local \
+            --target web:./cmd/web \
+            --target api:./cmd/api \
+            --target distribution:./cmd/distribution
 
           # Services (--no-wait: apply all, then wait once at the end)
           nvoi service set db --image postgres:17 --port 5432 \

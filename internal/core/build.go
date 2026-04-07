@@ -16,20 +16,26 @@ func newBuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build",
 		Short: "Build images and push to cluster registry",
-		Long: `Builds a container image and pushes to the cluster registry.
+		Long: `Builds container images and pushes to the cluster registry.
+--target is name:source. One target = single build. Multiple = parallel.
 
 Examples:
-  nvoi build --build-provider local --source . --name web
-  nvoi build --build-provider daytona --source benbonnet/dummy-rails --name web`,
+  nvoi build --target web:./cmd/web
+  nvoi build --target web:./cmd/web --target api:./cmd/api
+  nvoi build --target web:benbonnet/dummy-rails --build-provider daytona`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			source, _ := cmd.Flags().GetString("source")
-			dockerfile, _ := cmd.Flags().GetString("dockerfile-path")
-			name, _ := cmd.Flags().GetString("name")
-			branch, _ := cmd.Flags().GetString("branch")
+			targets, _ := cmd.Flags().GetStringArray("target")
+			if len(targets) == 0 {
+				return fmt.Errorf("at least one --target name:source is required")
+			}
+
+			parsed, err := app.ParseBuildTargets(targets)
+			if err != nil {
+				return err
+			}
+
 			platform, _ := cmd.Flags().GetString("platform")
 			architecture, _ := cmd.Flags().GetString("architecture")
-
-			// --architecture takes precedence over --platform
 			if architecture != "" {
 				switch architecture {
 				case "amd64", "amd":
@@ -67,9 +73,36 @@ Examples:
 			}
 
 			gitUsername, gitToken := resolveGitAuth(cmd)
-			history, _ := cmd.Flags().GetInt("history")
 
-			_, err = app.BuildRun(cmd.Context(), app.BuildRunRequest{
+			// Single target → sequential BuildRun (supports --branch, --history)
+			if len(parsed) == 1 {
+				branch, _ := cmd.Flags().GetString("branch")
+				history, _ := cmd.Flags().GetInt("history")
+
+				_, err = app.BuildRun(cmd.Context(), app.BuildRunRequest{
+					Cluster: app.Cluster{
+						AppName:     appName,
+						Env:         env,
+						Provider:    providerName,
+						Credentials: creds,
+						SSHKey:      sshKey,
+						Output:      resolveOutput(cmd),
+					},
+					Builder:            builderName,
+					BuilderCredentials: builderCreds,
+					Source:             parsed[0].Source,
+					Name:               parsed[0].Name,
+					Branch:             branch,
+					Platform:           platform,
+					GitUsername:        gitUsername,
+					GitToken:           gitToken,
+					History:            history,
+				})
+				return err
+			}
+
+			// Multiple targets → parallel
+			_, err = app.BuildParallel(cmd.Context(), app.BuildParallelRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -80,14 +113,10 @@ Examples:
 				},
 				Builder:            builderName,
 				BuilderCredentials: builderCreds,
-				Source:             source,
-				Dockerfile:         dockerfile,
-				Name:               name,
-				Branch:             branch,
+				Targets:            parsed,
 				Platform:           platform,
 				GitUsername:        gitUsername,
 				GitToken:           gitToken,
-				History:            history,
 			})
 			return err
 		},
@@ -95,16 +124,12 @@ Examples:
 	addComputeProviderFlags(cmd)
 	addBuildProviderFlags(cmd)
 	addAppFlags(cmd)
-	cmd.Flags().String("source", "", "source to build (local path or remote repo)")
-	cmd.Flags().String("dockerfile-path", "", "path to Dockerfile (default: Dockerfile in source root)")
-	cmd.Flags().String("name", "", "image name in registry")
+	cmd.Flags().StringArray("target", nil, "build target (name:source, repeatable)")
 	cmd.Flags().String("branch", "main", "git branch (remote sources only)")
 	cmd.Flags().String("platform", "", "target platform (auto-detected if empty)")
 	cmd.Flags().String("architecture", "", "target architecture (amd64, arm64)")
 	cmd.Flags().String("git-token", "", "git token for private repo cloning")
 	cmd.Flags().Int("history", 0, "keep N most recent tags, prune the rest (0 = keep all)")
-	_ = cmd.MarkFlagRequired("source")
-	_ = cmd.MarkFlagRequired("name")
 
 	cmd.AddCommand(newBuildListCmd())
 	cmd.AddCommand(newBuildLatestCmd())

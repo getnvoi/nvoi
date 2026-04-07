@@ -58,7 +58,7 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 	// Caddy already running — hot reload.
 	// ConfigMap volume sync takes up to kubelet sync period (default 60s).
 	// Wait briefly then reload.
-	time.Sleep(caddyReloadDelay)
+	time.Sleep(CaddyReloadDelay)
 
 	podName, err := caddyPodName(ctx, ssh, ns, names.KubeCaddy())
 	if err != nil {
@@ -74,9 +74,9 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 	return nil
 }
 
-// caddyReloadDelay is the wait for kubelet to sync ConfigMap to the volume.
+// CaddyReloadDelay is the wait for kubelet to sync ConfigMap to the volume.
 // Variable for testing.
-var caddyReloadDelay = 5 * time.Second
+var CaddyReloadDelay = 5 * time.Second
 
 // caddyPodName finds the running Caddy pod name.
 func caddyPodName(ctx context.Context, ssh utils.SSHClient, ns, deploymentName string) (string, error) {
