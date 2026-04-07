@@ -84,7 +84,7 @@ func Apply(ctx context.Context, ssh utils.SSHClient, ns string, yaml string) err
 	if err := ssh.Upload(ctx, bytes.NewReader([]byte(yaml)), utils.KubeManifestPath(), 0o644); err != nil {
 		return fmt.Errorf("upload manifest: %w", err)
 	}
-	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply -f %s", utils.KubeManifestPath())))
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply --server-side --force-conflicts -f %s", utils.KubeManifestPath())))
 	if err != nil {
 		return fmt.Errorf("kubectl apply: %s: %w", string(out), err)
 	}

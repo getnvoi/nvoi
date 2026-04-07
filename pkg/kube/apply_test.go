@@ -125,7 +125,7 @@ func TestGetServicePortNotFound(t *testing.T) {
 func TestApply(t *testing.T) {
 	mock := &testutil.MockSSH{
 		Prefixes: []testutil.MockPrefix{
-			{Prefix: "apply -f", Result: testutil.MockResult{Output: []byte("deployment/web created")}},
+			{Prefix: "apply --server-side", Result: testutil.MockResult{Output: []byte("deployment/web created")}},
 		},
 	}
 
