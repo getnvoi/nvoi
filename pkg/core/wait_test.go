@@ -15,6 +15,8 @@ import (
 )
 
 func init() {
+	waitPollInterval = 50 * time.Millisecond
+
 	provider.RegisterCompute("wait-test", provider.CredentialSchema{Name: "wait-test"}, func(creds map[string]string) provider.ComputeProvider {
 		return &testutil.MockCompute{
 			Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},

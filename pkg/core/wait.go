@@ -10,6 +10,9 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// waitPollInterval is the polling interval for WaitAllServices. Variable for testing.
+var waitPollInterval = 10 * time.Second
+
 // WaitAllServicesRequest asks the cluster to poll all pods in the namespace
 // until every pod is ready or the timeout expires.
 type WaitAllServicesRequest struct {
@@ -36,7 +39,7 @@ func WaitAllServices(ctx context.Context, req WaitAllServicesRequest) error {
 
 	out.Progress("waiting for all services")
 
-	return utils.Poll(ctx, 10*time.Second, timeout, func() (bool, error) {
+	return utils.Poll(ctx, waitPollInterval, timeout, func() (bool, error) {
 		pods, err := kube.GetAllPods(ctx, ssh, ns)
 		if err != nil {
 			return false, nil // transient
