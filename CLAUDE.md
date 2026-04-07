@@ -388,6 +388,7 @@ Hard errors before touching k8s.
 - `--compute-provider` = compute provider (for SSH tunnel to cluster registry). Required.
 - `--build-provider` = build provider (local, daytona, github). Required.
 - `--source` = what to build. Local path (`.`, `./path`) or remote repo (`org/repo`, `https://...`, `git@...`).
+- `--dockerfile-path` = override Dockerfile location (optional).
 - `--name` = image name in the registry. Required.
 - `build list` = query registry for all tags. Uses `--compute-provider` only (no builder needed).
 - `build latest <name>` = return latest image ref. Pipeable.
@@ -398,6 +399,35 @@ Hard errors before touching k8s.
   - Remote repo + `--build-provider local` → error (local can't clone remote repos).
   - Detection: `--source` starts with `.` or `/` → local. Otherwise → remote.
 - The registry IS the state. No build database. `build list` queries the registry directly over SSH.
+
+**Build — Dockerfile resolution (local source only):**
+
+`--source` is where the code is. The builder resolves the Dockerfile and build context automatically.
+
+When `--dockerfile-path` is **not set** (default):
+- Dockerfile: `{source}/Dockerfile` — standard docker convention.
+- Build context: project root, detected by walking up from `{source}` to find `.git` or `go.mod`. If source IS the project root, context = source.
+
+When `--dockerfile-path` **is set**:
+1. Try `{source}/{dockerfile-path}` — relative to source first.
+2. Try `{dockerfile-path}` — absolute or relative to cwd.
+3. Neither exists → hard error.
+- Build context: project root (same walk-up logic).
+
+Examples:
+```bash
+# Source is a subdirectory — Dockerfile found at ./cmd/web/Dockerfile,
+# build context is . (project root, where go.mod lives).
+nvoi build --build-provider local --source ./cmd/web --name web
+
+# Source is project root — Dockerfile at ./Dockerfile, context is .
+nvoi build --build-provider local --source . --name myapp
+
+# Explicit Dockerfile override
+nvoi build --build-provider local --source . --dockerfile-path docker/Dockerfile.prod --name web
+```
+
+For remote sources (`org/repo`, `https://...`): `--dockerfile-path` is passed through to the remote builder as-is. Build context logic is the builder's responsibility.
 
 **Node labeling:**
 - `instance set` labels k8s nodes with `nvoi-role={name}` after k3s install/join. Idempotent — runs every deploy.

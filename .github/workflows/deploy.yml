@@ -57,9 +57,9 @@ jobs:
           nvoi secret set ENCRYPTION_KEY "${{ secrets.ENCRYPTION_KEY }}"
 
           # Build images
-          nvoi build --build-provider local --source . --dockerfile-path cmd/web/Dockerfile --name web
-          nvoi build --build-provider local --source . --dockerfile-path cmd/api/Dockerfile --name api
-          nvoi build --build-provider local --source . --dockerfile-path cmd/distribution/Dockerfile --name dist
+          nvoi build --build-provider local --source ./cmd/web --name web
+          nvoi build --build-provider local --source ./cmd/api --name api
+          nvoi build --build-provider local --source ./cmd/distribution --name distribution
 
           # Services
           nvoi service set db --image postgres:17 --port 5432 \
@@ -68,12 +68,12 @@ jobs:
           nvoi service set api --image "$(nvoi build latest api)" --port 8080 \
             --secret POSTGRES_PASSWORD --secret JWT_SECRET --secret ENCRYPTION_KEY
           nvoi service set web --image "$(nvoi build latest web)" --port 3000
-          nvoi service set dist --image "$(nvoi build latest dist)" --port 3001
+          nvoi service set distribution --image "$(nvoi build latest distribution)" --port 3001
 
           # DNS
           nvoi dns set web nvoi.to www.nvoi.to
           nvoi dns set api api.nvoi.to
-          nvoi dns set dist get.nvoi.to
+          nvoi dns set distribution get.nvoi.to
 
           # Storage
           nvoi storage set releases

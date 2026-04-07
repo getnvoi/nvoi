@@ -53,10 +53,16 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 	tunnelRef := fmt.Sprintf("%s/%s:%s", tunnelAddr, req.ServiceName, tag)
 	registryRef := fmt.Sprintf("%s/%s:%s", registryAddr, req.ServiceName, tag)
 
+	// Resolve Dockerfile and build context
+	dockerfile, buildContext, err := resolveDockerfile(req.Source, req.Dockerfile)
+	if err != nil {
+		return nil, err
+	}
+
 	// Fix file permissions before build — Docker COPY preserves filesystem permissions.
 	// Files with 600 become unreadable by the container's non-root user.
 	fmt.Fprintf(req.Stdout, "  fixing file permissions...\n")
-	if err := fixPermissions(req.Source); err != nil {
+	if err := fixPermissions(buildContext); err != nil {
 		return nil, fmt.Errorf("fix permissions: %w", err)
 	}
 
@@ -66,11 +72,9 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 		"--tag", tunnelRef,
 		"--platform", platform,
 		"--output", "type=image,push=true,registry.insecure=true",
+		"-f", dockerfile,
+		buildContext,
 	}
-	if req.Dockerfile != "" {
-		buildArgs = append(buildArgs, "-f", req.Dockerfile)
-	}
-	buildArgs = append(buildArgs, req.Source)
 	cmd := exec.CommandContext(ctx, "docker", buildArgs...)
 	cmd.Stdout = req.Stdout
 	cmd.Stderr = req.Stderr
@@ -81,6 +85,65 @@ func (b *Builder) Build(ctx context.Context, req provider.BuildRequest) (*provid
 
 	fmt.Fprintf(req.Stdout, "  ✓ pushed %s\n", registryRef)
 	return &provider.BuildResult{ImageRef: registryRef}, nil
+}
+
+// resolveDockerfile finds the Dockerfile and build context.
+//
+// Dockerfile resolution:
+//   - --dockerfile-path set: try {source}/{path}, then {path} as-is. Error if neither exists.
+//   - --dockerfile-path not set: {source}/Dockerfile. Error if not found.
+//
+// Build context: walk up from source to find .git or go.mod (project root).
+// If source is already the project root, context = source.
+func resolveDockerfile(source, dockerfilePath string) (dockerfile, context string, err error) {
+	absSource, err := filepath.Abs(source)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve source path: %w", err)
+	}
+
+	if dockerfilePath != "" {
+		// Try relative to source first
+		rel := filepath.Join(absSource, dockerfilePath)
+		if _, err := os.Stat(rel); err == nil {
+			dockerfile = rel
+		} else {
+			// Try as-is (absolute or relative to cwd)
+			abs, _ := filepath.Abs(dockerfilePath)
+			if _, err := os.Stat(abs); err == nil {
+				dockerfile = abs
+			} else {
+				return "", "", fmt.Errorf("dockerfile not found: tried %s and %s", rel, abs)
+			}
+		}
+	} else {
+		// Default: {source}/Dockerfile
+		dockerfile = filepath.Join(absSource, "Dockerfile")
+		if _, err := os.Stat(dockerfile); err != nil {
+			return "", "", fmt.Errorf("no Dockerfile at %s — use --dockerfile-path to specify", dockerfile)
+		}
+	}
+
+	context = findProjectRoot(absSource)
+	return dockerfile, context, nil
+}
+
+// findProjectRoot walks up from dir looking for .git or go.mod.
+// Returns dir itself if nothing found (source IS the root).
+func findProjectRoot(dir string) string {
+	current := dir
+	for {
+		for _, marker := range []string{".git", "go.mod"} {
+			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
+				return current
+			}
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Hit filesystem root — give up, use source as context
+			return dir
+		}
+		current = parent
+	}
 }
 
 // fixPermissions ensures all files are 644 and all directories are 755
