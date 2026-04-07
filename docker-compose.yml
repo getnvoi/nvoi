@@ -70,6 +70,14 @@ services:
       api:
         condition: service_healthy
 
+  # Marketing website — runs cmd/web, serves landing page + blog
+  web:
+    build:
+      context: .
+      dockerfile: cmd/web/Dockerfile
+    expose:
+      - "3000"
+
   postgres:
     image: postgres:17-alpine
     environment:

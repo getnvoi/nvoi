@@ -1,0 +1,79 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmd/web/**"
+      - "cmd/api/**"
+      - "cmd/distribution/**"
+      - "internal/api/**"
+      - "pkg/**"
+      - "docker-compose.yml"
+      - ".github/workflows/deploy.yml"
+
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install nvoi
+        run: go build -o /usr/local/bin/nvoi ./cmd/core
+
+      - name: Write SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Deploy
+        env:
+          NVOI_APP_NAME: nvoi
+          NVOI_ENV: prod
+          COMPUTE_PROVIDER: hetzner
+          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+          DNS_PROVIDER: cloudflare
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          DNS_ZONE: nvoi.to
+          STORAGE_PROVIDER: cloudflare
+          SSH_KEY_PATH: ~/.ssh/id_rsa
+        run: |
+          # Infrastructure
+          nvoi instance set master --compute-type cax11 --compute-region nbg1
+          nvoi volume set pgdata --size 20 --server master
+
+          # Secrets
+          nvoi secret set POSTGRES_PASSWORD "${{ secrets.POSTGRES_PASSWORD }}"
+          nvoi secret set JWT_SECRET "${{ secrets.JWT_SECRET }}"
+          nvoi secret set ENCRYPTION_KEY "${{ secrets.ENCRYPTION_KEY }}"
+
+          # Build images
+          nvoi build --build-provider local --source . --name web
+          nvoi build --build-provider local --source . --name api
+          nvoi build --build-provider local --source . --name dist
+
+          # Services
+          nvoi service set db --image postgres:17 --port 5432 \
+            --volume pgdata:/var/lib/postgresql/data \
+            --secret POSTGRES_PASSWORD
+          nvoi service set api --image "$(nvoi build latest api)" --port 8080 \
+            --secret POSTGRES_PASSWORD --secret JWT_SECRET --secret ENCRYPTION_KEY
+          nvoi service set web --image "$(nvoi build latest web)" --port 3000
+          nvoi service set dist --image "$(nvoi build latest dist)" --port 3001
+
+          # DNS
+          nvoi dns set web nvoi.to www.nvoi.to
+          nvoi dns set api api.nvoi.to
+          nvoi dns set dist get.nvoi.to
+
+          # Storage
+          nvoi storage set releases

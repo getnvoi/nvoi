@@ -1,0 +1,11 @@
+{{define "content"}}
+<div class="max-w-4xl mx-auto px-6 py-16">
+  <h1 class="text-4xl font-bold mb-8">{{.page.Meta.Title}}</h1>
+  {{if .page.Meta.Date}}<time class="text-sm text-gray-400 mb-8 block">{{formatDate .page.Meta.Date}}</time>{{end}}
+  <article class="prose">
+    {{.page.Content}}
+  </article>
+</div>
+{{end}}
+
+{{template "layout" .}}
