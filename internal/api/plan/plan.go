@@ -219,9 +219,13 @@ func setServices(cfg *Cfg, env map[string]string) ([]Step, error) {
 func setDNS(cfg *Cfg) []Step {
 	var steps []Step
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
-		steps = append(steps, Step{Kind: StepDNSSet, Name: svcName, Params: map[string]any{
+		params := map[string]any{
 			"domains": []string(cfg.Domains[svcName]),
-		}})
+		}
+		if cfg.DomainProxy[svcName] {
+			params["proxy"] = true
+		}
+		steps = append(steps, Step{Kind: StepDNSSet, Name: svcName, Params: params})
 	}
 	return steps
 }
@@ -236,6 +240,7 @@ func setIngress(cfg *Cfg) []Step {
 		routes = append(routes, map[string]any{
 			"service": svcName,
 			"domains": []string(cfg.Domains[svcName]),
+			"proxy":   cfg.DomainProxy[svcName],
 		})
 	}
 	return []Step{{Kind: StepIngressApply, Name: "ingress", Params: map[string]any{"routes": routes}}}

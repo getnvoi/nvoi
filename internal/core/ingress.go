@@ -53,6 +53,11 @@ Examples:
 			}
 
 			proxy, _ := cmd.Flags().GetBool("proxy")
+			if proxy {
+				for i := range routes {
+					routes[i].Proxy = true
+				}
+			}
 			certPath, _ := cmd.Flags().GetString("cert")
 			keyPath, _ := cmd.Flags().GetString("key")
 
@@ -114,7 +119,6 @@ Examples:
 					Output:      resolveOutput(cmd),
 				},
 				Routes:  routes,
-				Proxy:   proxy,
 				CertPEM: certPEM,
 				KeyPEM:  keyPEM,
 			})

@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -153,24 +154,20 @@ func baseIngressRules() []ec2types.IpPermission {
 
 // buildIngressRules builds the full AWS rule set from base + allowed public ports.
 func buildIngressRules(allowed provider.PortAllowList) []ec2types.IpPermission {
-	priv := []ec2types.IpRange{{CidrIp: aws.String("10.0.0.0/16")}}
-
 	// Internal ports — always present
 	rules := []ec2types.IpPermission{
-		{IpProtocol: aws.String("tcp"), FromPort: aws.Int32(6443), ToPort: aws.Int32(6443), IpRanges: priv},
-		{IpProtocol: aws.String("tcp"), FromPort: aws.Int32(10250), ToPort: aws.Int32(10250), IpRanges: priv},
-		{IpProtocol: aws.String("udp"), FromPort: aws.Int32(8472), ToPort: aws.Int32(8472), IpRanges: priv},
-		{IpProtocol: aws.String("tcp"), FromPort: aws.Int32(5000), ToPort: aws.Int32(5000), IpRanges: priv},
+		permissionForCIDRs("tcp", 6443, []string{"10.0.0.0/16"}),
+		permissionForCIDRs("tcp", 10250, []string{"10.0.0.0/16"}),
+		permissionForCIDRs("udp", 8472, []string{"10.0.0.0/16"}),
+		permissionForCIDRs("tcp", 5000, []string{"10.0.0.0/16"}),
 	}
 
 	// SSH — defaults to open, overridable
-	sshRanges := []ec2types.IpRange{{CidrIp: aws.String("0.0.0.0/0")}}
+	sshCIDRs := []string{"0.0.0.0/0"}
 	if ips, ok := allowed["22"]; ok && len(ips) > 0 {
-		sshRanges = cidrsToIPRanges(ips)
+		sshCIDRs = ips
 	}
-	rules = append(rules, ec2types.IpPermission{
-		IpProtocol: aws.String("tcp"), FromPort: aws.Int32(22), ToPort: aws.Int32(22), IpRanges: sshRanges,
-	})
+	rules = append(rules, permissionForCIDRs("tcp", 22, sshCIDRs))
 
 	// Public + custom ports from allow list
 	for _, port := range provider.SortedPorts(allowed) {
@@ -179,10 +176,7 @@ func buildIngressRules(allowed provider.PortAllowList) []ec2types.IpPermission {
 		}
 		if ips := allowed[port]; len(ips) > 0 {
 			p := parsePort32(port)
-			rules = append(rules, ec2types.IpPermission{
-				IpProtocol: aws.String("tcp"), FromPort: aws.Int32(p), ToPort: aws.Int32(p),
-				IpRanges: cidrsToIPRanges(ips),
-			})
+			rules = append(rules, permissionForCIDRs("tcp", p, ips))
 		}
 	}
 
@@ -262,6 +256,9 @@ func (c *Client) GetFirewallRules(ctx context.Context, name string) (provider.Po
 		for _, r := range perm.IpRanges {
 			cidrs = append(cidrs, deref(r.CidrIp))
 		}
+		for _, r := range perm.Ipv6Ranges {
+			cidrs = append(cidrs, deref(r.CidrIpv6))
+		}
 		if len(cidrs) > 0 {
 			result[port] = cidrs
 		}
@@ -274,12 +271,28 @@ func (c *Client) GetFirewallRules(ctx context.Context, name string) (provider.Po
 
 // ── Firewall helpers ──────────────────────────────────────────────────────────
 
-func cidrsToIPRanges(cidrs []string) []ec2types.IpRange {
-	ranges := make([]ec2types.IpRange, len(cidrs))
-	for i, cidr := range cidrs {
-		ranges[i] = ec2types.IpRange{CidrIp: aws.String(cidr)}
+func permissionForCIDRs(protocol string, port int32, cidrs []string) ec2types.IpPermission {
+	ipv4 := make([]ec2types.IpRange, 0, len(cidrs))
+	ipv6 := make([]ec2types.Ipv6Range, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		if isIPv6CIDR(cidr) {
+			ipv6 = append(ipv6, ec2types.Ipv6Range{CidrIpv6: aws.String(cidr)})
+			continue
+		}
+		ipv4 = append(ipv4, ec2types.IpRange{CidrIp: aws.String(cidr)})
 	}
-	return ranges
+	return ec2types.IpPermission{
+		IpProtocol: aws.String(protocol),
+		FromPort:   aws.Int32(port),
+		ToPort:     aws.Int32(port),
+		IpRanges:   ipv4,
+		Ipv6Ranges: ipv6,
+	}
+}
+
+func isIPv6CIDR(cidr string) bool {
+	ip, _, err := net.ParseCIDR(cidr)
+	return err == nil && ip.To4() == nil
 }
 
 func parsePort32(port string) int32 {

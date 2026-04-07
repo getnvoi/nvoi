@@ -125,6 +125,7 @@ func DNSList(ctx context.Context, req DNSListRequest) ([]provider.DNSRecord, err
 type IngressRouteArg struct {
 	Service string
 	Domains []string
+	Proxy   bool
 }
 
 // ParseIngressArgs parses "service:domain,domain" args.
@@ -153,7 +154,6 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 type IngressApplyRequest struct {
 	Cluster
 	Routes  []IngressRouteArg
-	Proxy   bool   // Cloudflare proxy mode — firewall coherence + skip WaitHTTPS
 	CertPEM string // TLS cert PEM — custom cert instead of ACME (optional)
 	KeyPEM  string // TLS key PEM (required if CertPEM is set)
 }
@@ -186,7 +186,7 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 			Service: r.Service,
 			Port:    port,
 			Domains: r.Domains,
-			Proxy:   req.Proxy,
+			Proxy:   r.Proxy,
 		})
 		out.Progress(fmt.Sprintf("%s → %s", r.Service, strings.Join(r.Domains, ", ")))
 	}
@@ -197,7 +197,7 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 	}
 
 	// Pre-flight: firewall × proxy coherence
-	if err := checkFirewallCoherence(ctx, req.Cluster, req.Proxy); err != nil {
+	if err := checkFirewallCoherence(ctx, req.Cluster, req.Routes); err != nil {
 		return err
 	}
 
@@ -211,9 +211,8 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 		out.Success("certificate stored")
 	}
 
-	// Use custom TLS (cert provided or proxy mode) — triggers tls directive in Caddyfile
-	useCustomTLS := hasCert || req.Proxy
-	if useCustomTLS {
+	// Custom certs reuse the same Caddy TLS path as proxied routes.
+	if hasCert {
 		for i := range routes {
 			routes[i].Proxy = true
 		}
@@ -226,10 +225,16 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 	out.Success("caddy ready")
 
 	// Verify domains are reachable
-	firstDomain := req.Routes[0].Domains[0]
-	if req.Proxy {
-		out.Success(fmt.Sprintf("proxied via Cloudflare — https://%s", firstDomain))
-	} else {
+	for _, route := range req.Routes {
+		if len(route.Domains) == 0 {
+			continue
+		}
+		firstDomain := route.Domains[0]
+		if route.Proxy {
+			out.Success(fmt.Sprintf("proxied via Cloudflare — https://%s", firstDomain))
+			continue
+		}
+
 		out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
 		if err := waitHTTPSFunc(ctx, firstDomain); err != nil {
 			return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
@@ -243,7 +248,7 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 // checkFirewallCoherence validates firewall rules match the proxy mode.
 // Proxy + open to all = origin directly reachable, bypassing Cloudflare.
 // No proxy + CF-only firewall = ACME (Let's Encrypt) can't reach origin.
-func checkFirewallCoherence(ctx context.Context, c Cluster, proxy bool) error {
+func checkFirewallCoherence(ctx context.Context, c Cluster, routes []IngressRouteArg) error {
 	prov, err := c.Compute()
 	if err != nil {
 		return nil // can't check, skip
@@ -258,11 +263,21 @@ func checkFirewallCoherence(ctx context.Context, c Cluster, proxy bool) error {
 		return nil // can't check, skip
 	}
 
+	anyProxy := false
+	anyDirect := false
+	for _, route := range routes {
+		if route.Proxy {
+			anyProxy = true
+		} else {
+			anyDirect = true
+		}
+	}
+
 	has80 := len(rules["80"]) > 0
 	has443 := len(rules["443"]) > 0
 
 	if !has80 || !has443 {
-		if proxy {
+		if anyProxy {
 			return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set cloudflare' first", fwNames.Firewall())
 		}
 		return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set default' first", fwNames.Firewall())
@@ -276,11 +291,11 @@ func checkFirewallCoherence(ctx context.Context, c Cluster, proxy bool) error {
 		}
 	}
 
-	if proxy && isOpenToAll {
+	if anyProxy && isOpenToAll {
 		return fmt.Errorf("--proxy with firewall open to all — origin is directly reachable, bypassing Cloudflare. Run 'nvoi firewall set cloudflare' to restrict 80/443 to Cloudflare IPs")
 	}
 
-	if !proxy && !isOpenToAll {
+	if anyDirect && !isOpenToAll {
 		return fmt.Errorf("firewall restricts 80/443 but --proxy not set — Let's Encrypt ACME validation will fail. Add --proxy or run 'nvoi firewall set default'")
 	}
 

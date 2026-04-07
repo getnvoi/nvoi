@@ -210,8 +210,7 @@ func TestIngressApply_ProxyWithOpenFirewall(t *testing.T) {
 
 	err := IngressApply(context.Background(), IngressApplyRequest{
 		Cluster: ingressCluster(out, ingressSSH(), mock),
-		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
-		Proxy:   true,
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}, Proxy: true}},
 	})
 
 	if err == nil {
@@ -242,7 +241,6 @@ func TestIngressApply_NoProxyWithCFFirewall(t *testing.T) {
 	err := IngressApply(context.Background(), IngressApplyRequest{
 		Cluster: ingressCluster(out, ingressSSH(), mock),
 		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
-		Proxy:   false,
 	})
 
 	if err == nil {
@@ -272,8 +270,7 @@ func TestIngressApply_ProxyWithCFFirewall(t *testing.T) {
 
 	err := IngressApply(context.Background(), IngressApplyRequest{
 		Cluster: ingressCluster(out, ingressSSH(), mock),
-		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
-		Proxy:   true,
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}, Proxy: true}},
 	})
 
 	if err != nil {
@@ -306,8 +303,7 @@ func TestIngressApply_FirewallClosedWithProxy(t *testing.T) {
 
 	err := IngressApply(context.Background(), IngressApplyRequest{
 		Cluster: ingressCluster(out, ingressSSH(), mock),
-		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}}},
-		Proxy:   true,
+		Routes:  []IngressRouteArg{{Service: "web", Domains: []string{"example.com"}, Proxy: true}},
 	})
 
 	if err == nil {

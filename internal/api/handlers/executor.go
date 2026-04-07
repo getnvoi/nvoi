@@ -256,6 +256,7 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 			DNS:     e.dns,
 			Service: name,
 			Domains: utils.GetStringSlice(params, "domains"),
+			Proxy:   utils.GetBool(params, "proxy"),
 		})
 
 	case plan.StepIngressApply:
@@ -338,7 +339,11 @@ func parseIngressRoutesFromParams(params map[string]any) ([]pkgcore.IngressRoute
 		svc := utils.GetString(m, "service")
 		domains := utils.GetStringSlice(m, "domains")
 		if svc != "" && len(domains) > 0 {
-			routes = append(routes, pkgcore.IngressRouteArg{Service: svc, Domains: domains})
+			routes = append(routes, pkgcore.IngressRouteArg{
+				Service: svc,
+				Domains: domains,
+				Proxy:   utils.GetBool(m, "proxy"),
+			})
 		}
 	}
 	return routes, nil
