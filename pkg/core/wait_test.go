@@ -16,6 +16,7 @@ import (
 
 func init() {
 	waitPollInterval = 50 * time.Millisecond
+	waitCrashTimeout = 150 * time.Millisecond
 
 	provider.RegisterCompute("wait-test", provider.CredentialSchema{Name: "wait-test"}, func(creds map[string]string) provider.ComputeProvider {
 		return &testutil.MockCompute{
@@ -56,7 +57,7 @@ func TestWaitAllServices_AllReady(t *testing.T) {
 	}
 }
 
-func TestWaitAllServices_ReportsNotReady(t *testing.T) {
+func TestWaitAllServices_ReportsNotReadyThenRecovers(t *testing.T) {
 	call := 0
 	out := &testutil.MockOutput{}
 	ssh := &countingSSH{
@@ -64,7 +65,7 @@ func TestWaitAllServices_ReportsNotReady(t *testing.T) {
 		switchAfter: 2,
 		before: []byte(`{"items":[
 			{"metadata":{"name":"web-abc"},"status":{"phase":"Running","containerStatuses":[{"ready":true,"state":{}}]}},
-			{"metadata":{"name":"api-xyz"},"status":{"phase":"Running","containerStatuses":[{"ready":false,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}
+			{"metadata":{"name":"api-xyz"},"status":{"phase":"Running","containerStatuses":[{"ready":false,"state":{"waiting":{"reason":"ContainerCreating"}}}]}}
 		]}`),
 		after: []byte(`{"items":[
 			{"metadata":{"name":"web-abc"},"status":{"phase":"Running","containerStatuses":[{"ready":true,"state":{}}]}},
@@ -74,20 +75,64 @@ func TestWaitAllServices_ReportsNotReady(t *testing.T) {
 
 	err := WaitAllServices(context.Background(), WaitAllServicesRequest{
 		Cluster: waitCluster(out, ssh),
-		Timeout: 30 * time.Second,
+		Timeout: 5 * time.Second,
 	})
 	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+		t.Fatalf("expected recovery, got: %v", err)
 	}
 
-	foundCrashMsg := false
+	foundMsg := false
 	for _, msg := range out.Progresses {
-		if strings.Contains(msg, "api-xyz") && strings.Contains(msg, "CrashLoopBackOff") {
-			foundCrashMsg = true
+		if strings.Contains(msg, "api-xyz") && strings.Contains(msg, "ContainerCreating") {
+			foundMsg = true
 		}
 	}
-	if !foundCrashMsg {
-		t.Errorf("expected progress with 'api-xyz (CrashLoopBackOff)', got: %v", out.Progresses)
+	if !foundMsg {
+		t.Errorf("expected progress with 'api-xyz (ContainerCreating)', got: %v", out.Progresses)
+	}
+}
+
+func TestWaitAllServices_CrashLoopExitsEarlyWithLogs(t *testing.T) {
+	out := &testutil.MockOutput{}
+	ssh := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{
+				Prefix: "get pods",
+				Result: testutil.MockResult{Output: []byte(`{"items":[
+					{"metadata":{"name":"web-ok"},"status":{"phase":"Running","containerStatuses":[{"ready":true,"state":{}}]}},
+					{"metadata":{"name":"api-crash"},"status":{"phase":"Running","containerStatuses":[{"ready":false,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}
+				]}`)},
+			},
+			{
+				Prefix: "logs api-crash",
+				Result: testutil.MockResult{Output: []byte("panic: DATABASE_URL is required")},
+			},
+		},
+	}
+
+	err := WaitAllServices(context.Background(), WaitAllServicesRequest{
+		Cluster: waitCluster(out, ssh),
+		Timeout: 10 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected CrashLoopBackOff error")
+	}
+	if !strings.Contains(err.Error(), "CrashLoopBackOff") {
+		t.Errorf("error should mention CrashLoopBackOff, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "api-crash") {
+		t.Errorf("error should mention pod name, got: %v", err)
+	}
+
+	// Should have fetched logs on the last attempt
+	foundLogs := false
+	for _, msg := range out.Warnings {
+		if strings.Contains(msg, "DATABASE_URL is required") {
+			foundLogs = true
+		}
+	}
+	if !foundLogs {
+		t.Errorf("expected warning with pod logs, got warnings: %v", out.Warnings)
 	}
 }
 
@@ -104,7 +149,7 @@ func TestWaitAllServices_Timeout(t *testing.T) {
 
 	err := WaitAllServices(context.Background(), WaitAllServicesRequest{
 		Cluster: waitCluster(out, ssh),
-		Timeout: 1 * time.Second,
+		Timeout: 500 * time.Millisecond,
 	})
 	if err == nil {
 		t.Fatal("expected timeout error")
