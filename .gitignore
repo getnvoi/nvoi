@@ -3,4 +3,6 @@
 !.env.example
 *.tmp
 /nvoi
+/api
+/core
 .DS_Store
