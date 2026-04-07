@@ -91,7 +91,6 @@ type Volume struct {
 	Location   string `json:"location"`
 }
 
-
 type CreateServerRequest struct {
 	Name, ServerType, Image, Location, UserData string
 	FirewallName, NetworkName                   string
@@ -100,7 +99,7 @@ type CreateServerRequest struct {
 
 type DeleteServerRequest struct {
 	Name, FirewallName, NetworkName string
-	Labels                         map[string]string
+	Labels                          map[string]string
 }
 
 // CreateVolumeRequest — provider resolves server name → ID internally.

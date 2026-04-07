@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 const workflowPath = ".github/workflows/nvoi-build.yml"

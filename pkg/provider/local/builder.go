@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Builder builds images locally with docker buildx and pushes through an SSH tunnel.

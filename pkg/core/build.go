@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // isLocalSource returns true for local paths (. or / prefix), false for remote repos.
@@ -26,7 +26,7 @@ type BuildRunRequest struct {
 	Name               string
 	Branch             string
 	Platform           string
-	GitUsername         string // resolved by cmd layer (signed URL, gh, flag, env)
+	GitUsername        string // resolved by cmd layer (signed URL, gh, flag, env)
 	GitToken           string
 	History            int // keep N most recent tags, delete the rest (0 = keep all)
 }
@@ -102,7 +102,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 		Source:      source,
 		Branch:      req.Branch,
 		Platform:    platform,
-		GitUsername:  gitUsername,
+		GitUsername: gitUsername,
 		GitToken:    gitToken,
 		RegistrySSH: provider.SSHAccess{
 			MasterIP:        master.IPv4,

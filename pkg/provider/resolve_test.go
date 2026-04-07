@@ -9,23 +9,31 @@ import (
 // stubCompute is a minimal ComputeProvider for testing registration/resolution.
 type stubCompute struct{}
 
-func (stubCompute) ValidateCredentials(context.Context) error                          { return nil }
-func (stubCompute) ArchForType(string) string                                          { return "amd64" }
-func (stubCompute) EnsureServer(context.Context, CreateServerRequest) (*Server, error) { return nil, nil }
-func (stubCompute) DeleteServer(context.Context, DeleteServerRequest) error            { return nil }
-func (stubCompute) ListServers(context.Context, map[string]string) ([]*Server, error)  { return nil, nil }
-func (stubCompute) ListAllFirewalls(context.Context) ([]*Firewall, error)              { return nil, nil }
-func (stubCompute) ListAllNetworks(context.Context) ([]*Network, error)                { return nil, nil }
-func (stubCompute) EnsureVolume(context.Context, CreateVolumeRequest) (*Volume, error) { return nil, nil }
-func (stubCompute) DetachVolume(context.Context, string) error                         { return nil }
-func (stubCompute) DeleteVolume(context.Context, string) error                         { return nil }
-func (stubCompute) ListVolumes(context.Context, map[string]string) ([]*Volume, error)  { return nil, nil }
-func (stubCompute) GetPrivateIP(context.Context, string) (string, error)               { return "", nil }
-func (stubCompute) ResizeVolume(context.Context, string, int) error                    { return nil }
-func (stubCompute) ResolveDevicePath(vol *Volume) string                               { return vol.DevicePath }
-func (stubCompute) ListResources(context.Context) ([]ResourceGroup, error)             { return nil, nil }
+func (stubCompute) ValidateCredentials(context.Context) error { return nil }
+func (stubCompute) ArchForType(string) string                 { return "amd64" }
+func (stubCompute) EnsureServer(context.Context, CreateServerRequest) (*Server, error) {
+	return nil, nil
+}
+func (stubCompute) DeleteServer(context.Context, DeleteServerRequest) error { return nil }
+func (stubCompute) ListServers(context.Context, map[string]string) ([]*Server, error) {
+	return nil, nil
+}
+func (stubCompute) ListAllFirewalls(context.Context) ([]*Firewall, error) { return nil, nil }
+func (stubCompute) ListAllNetworks(context.Context) ([]*Network, error)   { return nil, nil }
+func (stubCompute) EnsureVolume(context.Context, CreateVolumeRequest) (*Volume, error) {
+	return nil, nil
+}
+func (stubCompute) DetachVolume(context.Context, string) error { return nil }
+func (stubCompute) DeleteVolume(context.Context, string) error { return nil }
+func (stubCompute) ListVolumes(context.Context, map[string]string) ([]*Volume, error) {
+	return nil, nil
+}
+func (stubCompute) GetPrivateIP(context.Context, string) (string, error)                { return "", nil }
+func (stubCompute) ResizeVolume(context.Context, string, int) error                     { return nil }
+func (stubCompute) ResolveDevicePath(vol *Volume) string                                { return vol.DevicePath }
+func (stubCompute) ListResources(context.Context) ([]ResourceGroup, error)              { return nil, nil }
 func (stubCompute) ReconcileFirewallRules(context.Context, string, PortAllowList) error { return nil }
-func (stubCompute) GetFirewallRules(context.Context, string) (PortAllowList, error)    { return nil, nil }
+func (stubCompute) GetFirewallRules(context.Context, string) (PortAllowList, error)     { return nil, nil }
 
 func init() {
 	RegisterCompute("test-compute", CredentialSchema{

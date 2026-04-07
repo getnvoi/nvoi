@@ -43,9 +43,9 @@ type ServiceSpec struct {
 func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[string]string) (string, string, error) {
 	ns := names.KubeNamespace()
 	labels := map[string]string{
-		utils.LabelAppName:     spec.Name,
+		utils.LabelAppName:      spec.Name,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
-		utils.LabelNvoiService: spec.Name,
+		utils.LabelNvoiService:  spec.Name,
 	}
 
 	// Container

@@ -6,9 +6,9 @@ import (
 	"io"
 	"sync"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // sshCache holds a cached SSH connection to the master node.

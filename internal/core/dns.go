@@ -3,11 +3,11 @@ package core
 import (
 	"fmt"
 
-	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/internal/render"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register aws DNS
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register cloudflare DNS
-	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"  // register scaleway DNS
+	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"   // register scaleway DNS
 	"github.com/spf13/cobra"
 )
 

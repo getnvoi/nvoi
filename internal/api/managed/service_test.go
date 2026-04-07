@@ -299,9 +299,9 @@ func TestExpand_MultipleUses(t *testing.T) {
 			"master": {Type: "cx23", Region: "fsn1"},
 		},
 		Services: map[string]config.Service{
-			"db":     {Managed: "postgres"},
-			"cache":  {Managed: "redis"},
-			"web":    {Image: "nginx", Port: 80, Uses: []string{"db", "cache"}},
+			"db":    {Managed: "postgres"},
+			"cache": {Managed: "redis"},
+			"web":   {Image: "nginx", Port: 80, Uses: []string{"db", "cache"}},
 		},
 	}
 

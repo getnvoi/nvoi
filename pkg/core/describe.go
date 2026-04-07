@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // ── Request / Result types ──────────────────────────────────────────────────────
@@ -25,8 +25,8 @@ type DescribeNode struct {
 
 type DescribeWorkload struct {
 	Name  string `json:"name"`
-	Kind  string `json:"kind"`   // "deployment" or "statefulset"
-	Ready string `json:"ready"`  // "2/2"
+	Kind  string `json:"kind"`  // "deployment" or "statefulset"
+	Ready string `json:"ready"` // "2/2"
 	Image string `json:"image"`
 	Age   string `json:"age"`
 }
@@ -58,14 +58,14 @@ type DescribeSecret struct {
 }
 
 type DescribeResult struct {
-	Namespace string              `json:"namespace"`
-	Nodes     []DescribeNode      `json:"nodes"`
-	Workloads []DescribeWorkload  `json:"workloads"`
-	Pods      []DescribePod       `json:"pods"`
-	Services  []DescribeService   `json:"services"`
-	Ingress   []DescribeIngress   `json:"ingress"`
-	Secrets   []DescribeSecret    `json:"secrets"`
-	Storage   []StorageItem       `json:"storage"`
+	Namespace string             `json:"namespace"`
+	Nodes     []DescribeNode     `json:"nodes"`
+	Workloads []DescribeWorkload `json:"workloads"`
+	Pods      []DescribePod      `json:"pods"`
+	Services  []DescribeService  `json:"services"`
+	Ingress   []DescribeIngress  `json:"ingress"`
+	Secrets   []DescribeSecret   `json:"secrets"`
+	Storage   []StorageItem      `json:"storage"`
 }
 
 // ── Public ──────────────────────────────────────────────────────────────────────
@@ -328,4 +328,3 @@ func describeServices(ctx context.Context, ssh utils.SSHClient, ns string) []Des
 	}
 	return out
 }
-

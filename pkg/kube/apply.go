@@ -9,10 +9,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/infra"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
-
 
 var kubeconfigPath = fmt.Sprintf("/home/%s/.kube/config", utils.DefaultUser)
 

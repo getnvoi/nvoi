@@ -50,6 +50,7 @@ type bucketEntry struct {
 
 var computeProviders = map[string]computeEntry{}
 var buildProviders = map[string]buildEntry{}
+
 type dnsEntry struct {
 	schema  CredentialSchema
 	factory func(creds map[string]string) DNSProvider
@@ -203,4 +204,3 @@ func ResolveBucket(name string, creds map[string]string) (BucketProvider, error)
 	}
 	return entry.factory(creds), nil
 }
-

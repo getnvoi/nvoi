@@ -169,4 +169,3 @@ func tagName(tags []ec2types.Tag) string {
 	}
 	return ""
 }
-

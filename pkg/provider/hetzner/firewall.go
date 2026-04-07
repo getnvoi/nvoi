@@ -206,4 +206,3 @@ func (c *Client) GetFirewallRules(ctx context.Context, name string) (provider.Po
 	}
 	return nil, utils.ErrNotFound
 }
-

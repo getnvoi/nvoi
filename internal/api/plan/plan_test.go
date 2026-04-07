@@ -79,11 +79,11 @@ func TestPlan_PhaseOrder(t *testing.T) {
 	}
 
 	phases := []StepKind{
-		StepComputeSet, StepComputeSet,     // master, worker-1
-		StepVolumeSet, StepVolumeSet,       // meili-data, pgdata (sorted)
-		StepBuild,                          // web
-		StepSecretSet, StepSecretSet,       // POSTGRES_PASSWORD, RAILS_MASTER_KEY (sorted)
-		StepStorageSet,                     // assets
+		StepComputeSet, StepComputeSet, // master, worker-1
+		StepVolumeSet, StepVolumeSet, // meili-data, pgdata (sorted)
+		StepBuild,                    // web
+		StepSecretSet, StepSecretSet, // POSTGRES_PASSWORD, RAILS_MASTER_KEY (sorted)
+		StepStorageSet,                                                 // assets
 		StepServiceSet, StepServiceSet, StepServiceSet, StepServiceSet, // db, jobs, meilisearch, web (sorted)
 		StepDNSSet, // web
 	}

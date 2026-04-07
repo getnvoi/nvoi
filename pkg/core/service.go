@@ -8,9 +8,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 type ServiceSetRequest struct {

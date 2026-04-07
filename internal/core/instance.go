@@ -3,8 +3,8 @@ package core
 import (
 	"fmt"
 
-	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/internal/render"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"      // register
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"  // register
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway" // register

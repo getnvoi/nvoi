@@ -332,7 +332,7 @@ func TestDeploy_LogsEndpoint(t *testing.T) {
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	var created struct {
-		ID    string `json:"id"`
+		ID    string                `json:"id"`
 		Steps []struct{ ID string } `json:"steps"`
 	}
 	decode(t, w, &created)

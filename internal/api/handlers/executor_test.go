@@ -27,14 +27,14 @@ func TestNewExecutor_BuildsFromParams(t *testing.T) {
 			BuildProvider:   api.BuildDaytona,
 		},
 		Env: map[string]string{
-			"HETZNER_TOKEN":      "tok123",
-			"CF_API_KEY":         "cfkey",
-			"CF_ZONE_ID":        "zone1",
-			"DNS_ZONE":           "example.com",
-			"AWS_ACCESS_KEY_ID":  "awskey",
+			"HETZNER_TOKEN":         "tok123",
+			"CF_API_KEY":            "cfkey",
+			"CF_ZONE_ID":            "zone1",
+			"DNS_ZONE":              "example.com",
+			"AWS_ACCESS_KEY_ID":     "awskey",
 			"AWS_SECRET_ACCESS_KEY": "awssecret",
-			"CF_ACCOUNT_ID":     "cfacct",
-			"DAYTONA_API_KEY":   "daykey",
+			"CF_ACCOUNT_ID":         "cfacct",
+			"DAYTONA_API_KEY":       "daykey",
 		},
 	}
 

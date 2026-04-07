@@ -55,7 +55,9 @@ const validEnv = `POSTGRES_PASSWORD=s3cret
 RAILS_MASTER_KEY=abc123
 `
 
-func pushConfig(t *testing.T, r interface{ ServeHTTP(http.ResponseWriter, *http.Request) }, token, wsID, repoID, yaml, env string) int {
+func pushConfig(t *testing.T, r interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}, token, wsID, repoID, yaml, env string) int {
 	t.Helper()
 	body := map[string]any{
 		"compute_provider": "hetzner",
@@ -438,7 +440,9 @@ services:
     uses: [db, cache]
 `
 
-func pushManagedConfig(t *testing.T, r interface{ ServeHTTP(http.ResponseWriter, *http.Request) }, token, wsID, repoID string) (int, string) {
+func pushManagedConfig(t *testing.T, r interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}, token, wsID, repoID string) (int, string) {
 	t.Helper()
 	body := map[string]any{
 		"compute_provider": "hetzner",

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 const defaultBaseURL = "https://api.hetzner.cloud/v1"

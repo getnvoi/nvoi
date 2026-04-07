@@ -225,7 +225,7 @@ func TestValidate_FullConfig(t *testing.T) {
 		},
 		Firewall: &FirewallConfig{Preset: "default"},
 		Volumes: map[string]Volume{
-			"pgdata":    {Size: 30, Server: "master"},
+			"pgdata":     {Size: 30, Server: "master"},
 			"meili-data": {Size: 20, Server: "master"},
 		},
 		Build: map[string]Build{
@@ -253,10 +253,10 @@ func TestValidate_FullConfig(t *testing.T) {
 func TestValidate_MultipleErrors(t *testing.T) {
 	cfg := &Config{
 		Servers: map[string]Server{
-			"master": {Type: "", Region: ""},  // missing both
+			"master": {Type: "", Region: ""}, // missing both
 		},
 		Services: map[string]Service{
-			"web": {Port: 80},  // missing image/build/managed
+			"web": {Port: 80}, // missing image/build/managed
 		},
 	}
 	errs := Validate(cfg)

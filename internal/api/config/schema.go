@@ -105,13 +105,13 @@ type DomainConfig struct {
 
 // Config is the public schema — what users write.
 type Config struct {
-	Servers  map[string]Server        `json:"servers" yaml:"servers"`
-	Firewall *FirewallConfig          `json:"firewall,omitempty" yaml:"firewall,omitempty"`
-	Volumes  map[string]Volume        `json:"volumes,omitempty" yaml:"volumes,omitempty"`
-	Build    map[string]Build         `json:"build,omitempty" yaml:"build,omitempty"`
-	Storage  map[string]Storage       `json:"storage,omitempty" yaml:"storage,omitempty"`
-	Services map[string]Service       `json:"services" yaml:"services"`
-	Domains  map[string]Domains       `json:"domains,omitempty" yaml:"domains,omitempty"`
+	Servers  map[string]Server  `json:"servers" yaml:"servers"`
+	Firewall *FirewallConfig    `json:"firewall,omitempty" yaml:"firewall,omitempty"`
+	Volumes  map[string]Volume  `json:"volumes,omitempty" yaml:"volumes,omitempty"`
+	Build    map[string]Build   `json:"build,omitempty" yaml:"build,omitempty"`
+	Storage  map[string]Storage `json:"storage,omitempty" yaml:"storage,omitempty"`
+	Services map[string]Service `json:"services" yaml:"services"`
+	Domains  map[string]Domains `json:"domains,omitempty" yaml:"domains,omitempty"`
 	// DomainProxy lists service names whose domains should be proxied through Cloudflare.
 	// Cloudflare-only. Set via structured domain config:
 	//   domains:

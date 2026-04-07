@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/internal/render"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	_ "github.com/getnvoi/nvoi/pkg/provider/daytona" // register daytona builder
 	_ "github.com/getnvoi/nvoi/pkg/provider/github"  // register github actions builder
 	_ "github.com/getnvoi/nvoi/pkg/provider/local"   // register local builder
@@ -83,7 +83,7 @@ Examples:
 				Name:               name,
 				Branch:             branch,
 				Platform:           platform,
-				GitUsername:         gitUsername,
+				GitUsername:        gitUsername,
 				GitToken:           gitToken,
 				History:            history,
 			})
