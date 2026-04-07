@@ -90,15 +90,16 @@ func EnsureDocker(ctx context.Context, ip string, privateKey []byte) error {
 		return err
 	}
 
-	// Verify with fresh session (picks up docker group)
+	// Verify with a fresh session. Group membership and daemon startup can lag
+	// briefly on first boot, especially on CI-provisioned hosts.
 	ssh.Close()
-	return utils.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, 2*time.Second, 3*time.Minute, func() (bool, error) {
 		fresh, err := ConnectSSH(ctx, ip+":22", utils.DefaultUser, privateKey)
 		if err != nil {
 			return false, nil
 		}
 		defer fresh.Close()
-		_, err = fresh.Run(ctx, "docker info >/dev/null 2>&1")
+		_, err = fresh.Run(ctx, "docker info >/dev/null 2>&1 || sudo docker info >/dev/null 2>&1")
 		return err == nil, nil
 	})
 }
