@@ -258,6 +258,16 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 			Domains: utils.GetStringSlice(params, "domains"),
 		})
 
+	case plan.StepIngressApply:
+		routes, err := parseIngressRoutesFromParams(params)
+		if err != nil {
+			return err
+		}
+		return pkgcore.IngressApply(ctx, pkgcore.IngressApplyRequest{
+			Cluster: e.cluster,
+			Routes:  routes,
+		})
+
 	case plan.StepDNSDelete:
 		return pkgcore.DNSDelete(ctx, pkgcore.DNSDeleteRequest{
 			Cluster: e.cluster,
@@ -307,6 +317,31 @@ func parseFirewallFromParams(params map[string]any) (provider.PortAllowList, err
 	}
 
 	return provider.ResolveFirewallArgs(context.Background(), args)
+}
+
+// parseIngressRoutesFromParams extracts routes from step params.
+func parseIngressRoutesFromParams(params map[string]any) ([]pkgcore.IngressRouteArg, error) {
+	routesRaw, ok := params["routes"]
+	if !ok {
+		return nil, fmt.Errorf("ingress.apply: missing routes param")
+	}
+	routesList, ok := routesRaw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("ingress.apply: routes must be a list")
+	}
+	var routes []pkgcore.IngressRouteArg
+	for _, item := range routesList {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		svc := utils.GetString(m, "service")
+		domains := utils.GetStringSlice(m, "domains")
+		if svc != "" && len(domains) > 0 {
+			routes = append(routes, pkgcore.IngressRouteArg{Service: svc, Domains: domains})
+		}
+	}
+	return routes, nil
 }
 
 // ── status helpers ─────────────────────────────────────────────────────────────

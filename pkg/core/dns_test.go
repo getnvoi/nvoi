@@ -6,49 +6,6 @@ import (
 	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
-func TestMergeRouteReplacesExisting(t *testing.T) {
-	existing := []kube.IngressRoute{
-		{Service: "web", Port: 3000, Domains: []string{"old.com"}},
-		{Service: "api", Port: 8080, Domains: []string{"api.com"}},
-	}
-	updated := mergeRoute(existing, kube.IngressRoute{
-		Service: "web", Port: 3000, Domains: []string{"new.com"},
-	})
-	if len(updated) != 2 {
-		t.Fatalf("replace existing: got %d routes, want 2", len(updated))
-	}
-	if updated[0].Domains[0] != "new.com" {
-		t.Errorf("replace existing: web domains = %v, want [new.com]", updated[0].Domains)
-	}
-}
-
-func TestMergeRouteAppendsNew(t *testing.T) {
-	existing := []kube.IngressRoute{
-		{Service: "web", Port: 3000, Domains: []string{"web.com"}},
-	}
-	updated := mergeRoute(existing, kube.IngressRoute{
-		Service: "api", Port: 8080, Domains: []string{"api.com"},
-	})
-	if len(updated) != 2 {
-		t.Fatalf("append new: got %d routes, want 2", len(updated))
-	}
-	if updated[1].Service != "api" {
-		t.Errorf("append new: second route service = %q, want %q", updated[1].Service, "api")
-	}
-}
-
-func TestMergeRouteNilInput(t *testing.T) {
-	updated := mergeRoute(nil, kube.IngressRoute{
-		Service: "web", Port: 3000, Domains: []string{"web.com"},
-	})
-	if len(updated) != 1 {
-		t.Fatalf("nil input: got %d routes, want 1", len(updated))
-	}
-	if updated[0].Service != "web" {
-		t.Errorf("nil input: route service = %q, want %q", updated[0].Service, "web")
-	}
-}
-
 func TestRemoveRouteMatching(t *testing.T) {
 	routes := []kube.IngressRoute{
 		{Service: "web", Port: 3000, Domains: []string{"web.com"}},
@@ -83,5 +40,38 @@ func TestRemoveRouteNotFound(t *testing.T) {
 	}
 	if result[0].Service != "web" {
 		t.Errorf("not found: route service = %q, want %q", result[0].Service, "web")
+	}
+}
+
+func TestParseIngressArgs(t *testing.T) {
+	routes, err := ParseIngressArgs([]string{
+		"web:example.com,www.example.com",
+		"api:api.example.com",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 2 {
+		t.Fatalf("got %d routes, want 2", len(routes))
+	}
+	if routes[0].Service != "web" {
+		t.Errorf("route[0] service = %q, want web", routes[0].Service)
+	}
+	if len(routes[0].Domains) != 2 {
+		t.Errorf("route[0] domains = %v, want 2", routes[0].Domains)
+	}
+	if routes[1].Service != "api" {
+		t.Errorf("route[1] service = %q, want api", routes[1].Service)
+	}
+}
+
+func TestParseIngressArgs_Invalid(t *testing.T) {
+	_, err := ParseIngressArgs([]string{"nodomain"})
+	if err == nil {
+		t.Fatal("expected error for missing colon")
+	}
+	_, err = ParseIngressArgs([]string{"svc:"})
+	if err == nil {
+		t.Fatal("expected error for empty domains")
 	}
 }

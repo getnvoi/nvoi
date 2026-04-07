@@ -30,6 +30,7 @@ const (
 	StepServiceDelete StepKind = "service.delete"
 	StepDNSSet        StepKind = "dns.set"
 	StepDNSDelete     StepKind = "dns.delete"
+	StepIngressApply  StepKind = "ingress.apply"
 )
 
 // Step is one action in the deploy plan.
@@ -74,6 +75,7 @@ func Build(reality, desired *Cfg, env map[string]string) ([]Step, error) {
 	}
 	steps = append(steps, serviceSteps...)
 	steps = append(steps, setDNS(desired)...)
+	steps = append(steps, setIngress(desired)...)
 
 	return steps, nil
 }
@@ -222,6 +224,21 @@ func setDNS(cfg *Cfg) []Step {
 		}})
 	}
 	return steps
+}
+
+func setIngress(cfg *Cfg) []Step {
+	if len(cfg.Domains) == 0 {
+		return nil
+	}
+	// Build routes: service:domain,domain for all domain mappings
+	var routes []map[string]any
+	for _, svcName := range utils.SortedKeys(cfg.Domains) {
+		routes = append(routes, map[string]any{
+			"service": svcName,
+			"domains": []string(cfg.Domains[svcName]),
+		})
+	}
+	return []Step{{Kind: StepIngressApply, Name: "ingress", Params: map[string]any{"routes": routes}}}
 }
 
 // ── Diff phases (reverse deploy order) ─────────────────────────────────────

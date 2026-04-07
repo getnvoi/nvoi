@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
@@ -11,18 +12,21 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// ── DNS ───────────────────────────────────────────────────────────────────────
+
 type DNSSetRequest struct {
 	Cluster
 	DNS     ProviderRef
 	Service string
 	Domains []string
-	Proxy   bool // Cloudflare proxy mode — origin serves plain HTTP
+	Proxy   bool // Cloudflare proxy mode
 }
 
+// DNSSet creates/updates DNS A records. DNS only — no Caddy.
 func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	out := req.Log()
 
-	master, names, _, err := req.Cluster.Master(ctx)
+	master, _, _, err := req.Cluster.Master(ctx)
 	if err != nil {
 		return err
 	}
@@ -35,7 +39,6 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	ip := master.IPv4
 	out.Command("dns", "set", req.Service, "ip", ip, "domains", req.Domains)
 
-	// Validate --proxy is only used with Cloudflare
 	if req.Proxy && req.DNS.Name != "cloudflare" {
 		return fmt.Errorf("--proxy requires Cloudflare as DNS provider (current: %s)", req.DNS.Name)
 	}
@@ -48,56 +51,6 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 		out.Success(domain)
 	}
 
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, req.SSHKey)
-	if err != nil {
-		return fmt.Errorf("ssh master: %w", err)
-	}
-	defer ssh.Close()
-
-	ns := names.KubeNamespace()
-	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
-		return err
-	}
-
-	port, err := kube.GetServicePort(ctx, ssh, ns, req.Service)
-	if err != nil {
-		return fmt.Errorf("service %q has no port — dns requires a service with --port: %w", req.Service, err)
-	}
-
-	existing, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
-	routes := mergeRoute(existing, kube.IngressRoute{
-		Service: req.Service,
-		Port:    port,
-		Domains: req.Domains,
-		Proxy:   req.Proxy,
-	})
-
-	out.Progress("applying caddy ingress")
-	yaml, err := kube.GenerateCaddyManifest(routes, names)
-	if err != nil {
-		return fmt.Errorf("generate caddy manifest: %w", err)
-	}
-	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
-		return fmt.Errorf("apply caddy: %w", err)
-	}
-
-	out.Progress("waiting for caddy rollout")
-	if err := kube.WaitRollout(ctx, ssh, ns, names.KubeCaddy(), "deployment", false, out); err != nil {
-		return fmt.Errorf("caddy rollout: %w", err)
-	}
-	out.Success("caddy ready")
-
-	if req.Proxy {
-		out.Success(fmt.Sprintf("proxied via Cloudflare — https://%s", req.Domains[0]))
-	} else {
-		out.Progress(fmt.Sprintf("waiting for https://%s", req.Domains[0]))
-		if err := infra.WaitHTTPS(ctx, req.Domains[0]); err != nil {
-			out.Warning("domain not responding yet (TLS may still be provisioning)")
-		} else {
-			out.Success(fmt.Sprintf("https://%s live", req.Domains[0]))
-		}
-	}
-
 	return nil
 }
 
@@ -108,6 +61,7 @@ type DNSDeleteRequest struct {
 	Domains []string
 }
 
+// DNSDelete removes DNS A records and the corresponding Caddy route.
 func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	out := req.Log()
 	out.Command("dns", "delete", req.Service)
@@ -166,15 +120,110 @@ func DNSList(ctx context.Context, req DNSListRequest) ([]provider.DNSRecord, err
 	return dns.ListARecords(ctx)
 }
 
-func mergeRoute(routes []kube.IngressRoute, newRoute kube.IngressRoute) []kube.IngressRoute {
-	for i, r := range routes {
-		if r.Service == newRoute.Service {
-			routes[i] = newRoute
-			return routes
-		}
-	}
-	return append(routes, newRoute)
+// ── Ingress ───────────────────────────────────────────────────────────────────
+
+// IngressRoute is a parsed service:domain,domain arg for ingress apply.
+type IngressRouteArg struct {
+	Service string
+	Domains []string
 }
+
+// ParseIngressArgs parses "service:domain,domain" args.
+func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
+	var routes []IngressRouteArg
+	for _, arg := range args {
+		service, domainPart, ok := strings.Cut(arg, ":")
+		if !ok || service == "" || domainPart == "" {
+			return nil, fmt.Errorf("invalid route %q — expected service:domain,domain", arg)
+		}
+		var domains []string
+		for _, d := range strings.Split(domainPart, ",") {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				domains = append(domains, d)
+			}
+		}
+		if len(domains) == 0 {
+			return nil, fmt.Errorf("invalid route %q — no domains", arg)
+		}
+		routes = append(routes, IngressRouteArg{Service: service, Domains: domains})
+	}
+	return routes, nil
+}
+
+type IngressApplyRequest struct {
+	Cluster
+	Routes []IngressRouteArg
+}
+
+// IngressApply builds the full Caddyfile from the given routes and deploys Caddy once.
+func IngressApply(ctx context.Context, req IngressApplyRequest) error {
+	out := req.Log()
+	master, names, _, err := req.Cluster.Master(ctx)
+	if err != nil {
+		return err
+	}
+
+	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, req.SSHKey)
+	if err != nil {
+		return fmt.Errorf("ssh master: %w", err)
+	}
+	defer ssh.Close()
+
+	ns := names.KubeNamespace()
+	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
+		return err
+	}
+
+	out.Command("ingress", "apply", names.KubeCaddy())
+
+	// Build routes from args — resolve each service's port from the cluster
+	var routes []kube.IngressRoute
+	for _, r := range req.Routes {
+		port, err := kube.GetServicePort(ctx, ssh, ns, r.Service)
+		if err != nil {
+			return fmt.Errorf("service %q has no port — ingress requires a service with --port: %w", r.Service, err)
+		}
+		routes = append(routes, kube.IngressRoute{
+			Service: r.Service,
+			Port:    port,
+			Domains: r.Domains,
+		})
+		out.Progress(fmt.Sprintf("%s → %s", r.Service, strings.Join(r.Domains, ", ")))
+	}
+
+	if len(routes) == 0 {
+		out.Info("no routes — skipping caddy")
+		return nil
+	}
+
+	yaml, err := kube.GenerateCaddyManifest(routes, names)
+	if err != nil {
+		return fmt.Errorf("generate caddy manifest: %w", err)
+	}
+	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
+		return fmt.Errorf("apply caddy: %w", err)
+	}
+
+	out.Progress("waiting for caddy rollout")
+	if err := kube.WaitRollout(ctx, ssh, ns, names.KubeCaddy(), "deployment", false, out); err != nil {
+		return fmt.Errorf("caddy rollout: %w", err)
+	}
+	out.Success("caddy ready")
+
+	// Wait for HTTPS on the first domain
+	firstDomain := req.Routes[0].Domains[0]
+	out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
+	if err := infra.WaitHTTPS(ctx, firstDomain); err != nil {
+		out.Warning("domain not responding yet (TLS may still be provisioning)")
+	} else {
+		out.Success(fmt.Sprintf("https://%s live", firstDomain))
+	}
+
+	return nil
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 func removeRoute(routes []kube.IngressRoute, service string) []kube.IngressRoute {
 	var result []kube.IngressRoute

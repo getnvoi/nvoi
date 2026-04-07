@@ -85,7 +85,8 @@ func TestPlan_PhaseOrder(t *testing.T) {
 		StepSecretSet, StepSecretSet, // POSTGRES_PASSWORD, RAILS_MASTER_KEY (sorted)
 		StepStorageSet,                                                 // assets
 		StepServiceSet, StepServiceSet, StepServiceSet, StepServiceSet, // db, jobs, meilisearch, web (sorted)
-		StepDNSSet, // web
+		StepDNSSet,       // web
+		StepIngressApply, // single caddy deploy
 	}
 
 	if len(kinds) != len(phases) {

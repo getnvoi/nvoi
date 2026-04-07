@@ -86,3 +86,6 @@ jobs:
           nvoi dns set web nvoi.to www.nvoi.to
           nvoi dns set api api.nvoi.to
           nvoi dns set distribution get.nvoi.to
+
+          # Ingress (single Caddy deploy with all routes)
+          nvoi ingress apply web:nvoi.to,www.nvoi.to api:api.nvoi.to distribution:get.nvoi.to
