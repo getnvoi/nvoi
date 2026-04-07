@@ -91,7 +91,7 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 	for _, r := range routes {
 		for _, d := range r.Domains {
 			result.Ingress = append(result.Ingress, DescribeIngress{
-				Domain: d, Service: r.Service, Port: r.Port, Proxy: r.Proxy,
+				Domain: d, Service: r.Service, Port: r.Port, Proxy: r.HasTLS,
 			})
 		}
 	}

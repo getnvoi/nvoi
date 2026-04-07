@@ -249,22 +249,15 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 		}
 	}
 
-	// Custom certs reuse the same Caddy TLS path as proxied routes.
+	// Mark routes that have explicit TLS certs (Origin CA or BYO)
 	if hasCert {
 		for i := range routes {
-			routes[i].Proxy = true
+			routes[i].HasTLS = true
 		}
 	}
 
-	// Pre-flight: firewall × proxy coherence (after cert override so we check final state)
-	finalRoutes := make([]IngressRouteArg, len(req.Routes))
-	copy(finalRoutes, req.Routes)
-	if hasCert {
-		for i := range finalRoutes {
-			finalRoutes[i].Proxy = true
-		}
-	}
-	if err := checkFirewallCoherence(ctx, req.Cluster, finalRoutes); err != nil {
+	// Pre-flight: firewall × proxy coherence (uses Proxy, not HasTLS)
+	if err := checkFirewallCoherence(ctx, req.Cluster, req.Routes); err != nil {
 		return err
 	}
 
@@ -280,8 +273,12 @@ func IngressApply(ctx context.Context, req IngressApplyRequest) error {
 			continue
 		}
 		firstDomain := route.Domains[0]
-		if route.Proxy || hasCert {
+		if route.Proxy {
 			out.Success(fmt.Sprintf("proxied via Cloudflare — https://%s", firstDomain))
+			continue
+		}
+		if hasCert {
+			out.Success(fmt.Sprintf("custom TLS — https://%s", firstDomain))
 			continue
 		}
 

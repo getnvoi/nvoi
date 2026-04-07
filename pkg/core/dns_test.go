@@ -71,6 +71,35 @@ func TestParseIngressArgs(t *testing.T) {
 	}
 }
 
+func TestParseIngressArgs_ProxyDefault(t *testing.T) {
+	routes, err := ParseIngressArgs([]string{"web:example.com"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if routes[0].Proxy {
+		t.Error("Proxy should default to false")
+	}
+}
+
+func TestParseIngressArgs_PerRouteProxy(t *testing.T) {
+	routes, err := ParseIngressArgs([]string{
+		"web:example.com:proxy",
+		"api:api.example.com",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !routes[0].Proxy {
+		t.Error("route[0] should have Proxy=true")
+	}
+	if routes[0].Domains[0] != "example.com" {
+		t.Errorf("route[0] domain = %q, want example.com", routes[0].Domains[0])
+	}
+	if routes[1].Proxy {
+		t.Error("route[1] should have Proxy=false")
+	}
+}
+
 func TestParseIngressArgs_Invalid(t *testing.T) {
 	_, err := ParseIngressArgs([]string{"nodomain"})
 	if err == nil {

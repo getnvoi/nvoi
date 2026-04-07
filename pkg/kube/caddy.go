@@ -21,7 +21,8 @@ type IngressRoute struct {
 	Service string
 	Port    int
 	Domains []string
-	Proxy   bool // Cloudflare proxy mode — Caddy serves HTTPS with Origin CA cert (no ACME)
+	Proxy   bool // Cloudflare proxy mode — DNS record proxied through CF, firewall restricted to CF IPs
+	HasTLS  bool // Caddy serves explicit TLS cert from disk (Origin CA or BYO) instead of ACME
 }
 
 // CaddyTLSSecretName is the k8s secret name for Caddy's TLS cert (Origin CA or BYO).
@@ -37,6 +38,16 @@ func AnyProxyRoute(routes []IngressRoute) bool {
 	return false
 }
 
+// AnyTLSRoute returns true if any route uses explicit TLS (Origin CA or BYO cert).
+func AnyTLSRoute(routes []IngressRoute) bool {
+	for _, r := range routes {
+		if r.HasTLS {
+			return true
+		}
+	}
+	return false
+}
+
 // ApplyCaddyConfig updates the ConfigMap and hot-reloads Caddy.
 // If Caddy isn't running yet, deploys it. Zero downtime for config changes.
 // Detects proxy mode from routes — mounts TLS secret if any route is proxied.
@@ -45,7 +56,7 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 		return nil
 	}
 
-	hasProxy := AnyProxyRoute(routes)
+	hasTLS := AnyTLSRoute(routes)
 
 	caddyfile := generateCaddyfile(routes, ns)
 
@@ -62,7 +73,7 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 	_, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get deployment %s 2>/dev/null", names.KubeCaddy())))
 	if err != nil {
 		// First deploy — create the Deployment
-		depYAML, err := generateDeploymentYAML(names, ns, hasProxy)
+		depYAML, err := generateDeploymentYAML(names, ns, hasTLS)
 		if err != nil {
 			return fmt.Errorf("generate deployment: %w", err)
 		}
@@ -161,7 +172,7 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 		return "", nil
 	}
 
-	hasProxy := AnyProxyRoute(routes)
+	hasTLS := AnyTLSRoute(routes)
 	ns := names.KubeNamespace()
 	caddyfile := generateCaddyfile(routes, ns)
 
@@ -169,7 +180,7 @@ func GenerateCaddyManifest(routes []IngressRoute, names *utils.Names) (string, e
 	if err != nil {
 		return "", err
 	}
-	depYAML, err := generateDeploymentYAML(names, ns, hasProxy)
+	depYAML, err := generateDeploymentYAML(names, ns, hasTLS)
 	if err != nil {
 		return "", err
 	}
@@ -190,7 +201,7 @@ func generateConfigMapYAML(caddyfile string, names *utils.Names, ns string) (str
 	return strings.TrimSpace(string(b)), nil
 }
 
-func generateDeploymentYAML(names *utils.Names, ns string, hasProxy bool) (string, error) {
+func generateDeploymentYAML(names *utils.Names, ns string, hasTLS bool) (string, error) {
 	one := int32(1)
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	caddyName := names.KubeCaddy()
@@ -221,9 +232,9 @@ func generateDeploymentYAML(names *utils.Names, ns string, hasProxy bool) (strin
 							{ContainerPort: 80, HostPort: 80},
 							{ContainerPort: 443, HostPort: 443},
 						},
-						VolumeMounts: caddyVolumeMounts(hasProxy),
+						VolumeMounts: caddyVolumeMounts(hasTLS),
 					}},
-					Volumes: caddyVolumes(names, hostPathType, hasProxy),
+					Volumes: caddyVolumes(names, hostPathType, hasTLS),
 				},
 			},
 		},
@@ -292,17 +303,18 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 
 	var b strings.Builder
 
-	var proxied []IngressRoute
-	var direct []IngressRoute
+	// Split routes: explicit TLS (Origin CA or BYO cert) vs ACME (auto-TLS)
+	var tlsRoutes []IngressRoute
+	var acmeRoutes []IngressRoute
 	for _, route := range sorted {
-		if route.Proxy {
-			proxied = append(proxied, route)
+		if route.HasTLS {
+			tlsRoutes = append(tlsRoutes, route)
 		} else {
-			direct = append(direct, route)
+			acmeRoutes = append(acmeRoutes, route)
 		}
 	}
 
-	for i, route := range direct {
+	for i, route := range acmeRoutes {
 		if i > 0 {
 			b.WriteString("\n")
 		}
@@ -317,9 +329,9 @@ func generateCaddyfile(routes []IngressRoute, namespace string) string {
 		b.WriteString("}\n")
 	}
 
-	// Proxied routes: HTTPS with Cloudflare Origin CA cert (no ACME)
-	for i, route := range proxied {
-		if i > 0 || len(direct) > 0 {
+	// Explicit TLS routes: serve cert from disk (Origin CA or BYO), no ACME
+	for i, route := range tlsRoutes {
+		if i > 0 || len(acmeRoutes) > 0 {
 			b.WriteString("\n")
 		}
 		for j, domain := range route.Domains {
@@ -384,7 +396,7 @@ func parseCaddyfile(content string) []IngressRoute {
 					break
 				}
 				if strings.HasPrefix(inner, "tls /etc/caddy/tls/") {
-					route.Proxy = true
+					route.HasTLS = true
 				}
 				if strings.HasPrefix(inner, "reverse_proxy ") {
 					upstream := strings.TrimPrefix(inner, "reverse_proxy ")
