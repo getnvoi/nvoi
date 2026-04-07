@@ -34,7 +34,7 @@ func WaitHTTPS(ctx context.Context, domain string) error {
 				strings.Contains(errMsg, "no route to host") {
 				connFailures++
 				if connFailures >= 3 {
-					return false, fmt.Errorf("port not reachable (connection refused/timeout) — firewall blocking 80/443")
+					return false, fmt.Errorf("port not reachable (connection refused/timeout) — firewall is blocking 80/443")
 				}
 				return false, nil
 			}
@@ -49,7 +49,7 @@ func WaitHTTPS(ctx context.Context, domain string) error {
 		if resp.StatusCode >= 500 {
 			serverErrors++
 			if serverErrors >= 3 {
-				return false, fmt.Errorf("backend returning %d — service may be down", resp.StatusCode)
+				return false, fmt.Errorf("backend returning %d — service is down", resp.StatusCode)
 			}
 			return false, nil
 		}
