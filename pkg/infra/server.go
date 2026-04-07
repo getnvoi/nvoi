@@ -11,33 +11,50 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// WaitHTTPS polls until https://domain returns a non-5xx response.
-// Fails fast on connection refused/timeout (firewall). Waits longer for TLS errors (cert provisioning).
+// WaitHTTPS verifies a domain is reachable over HTTPS.
+// Fails fast on each failure type — no 2-minute blind polling.
+//
+// Connection refused/timeout (3 consecutive): firewall blocking 80/443.
+// TLS handshake failure: cert not provisioned. Polls up to 2 minutes (Let's Encrypt).
+// HTTP 5xx (3 consecutive): Caddy up but backend down. Fail immediately.
 func WaitHTTPS(ctx context.Context, domain string) error {
 	client := &http.Client{Timeout: 5 * time.Second}
-	connFailures := 0 // consecutive TCP-level failures
+	connFailures := 0
+	serverErrors := 0
 
 	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
 		resp, err := client.Get("https://" + domain)
 		if err != nil {
 			errMsg := err.Error()
-			// TCP connection refused or timeout = firewall/port closed.
-			// Fail fast after 3 consecutive connection failures (9 seconds).
+			serverErrors = 0
+
+			// TCP connection refused/timeout = firewall
 			if strings.Contains(errMsg, "connection refused") ||
 				strings.Contains(errMsg, "i/o timeout") ||
 				strings.Contains(errMsg, "no route to host") {
 				connFailures++
 				if connFailures >= 3 {
-					return false, fmt.Errorf("port not reachable (connection refused/timeout) — firewall may be blocking 80/443")
+					return false, fmt.Errorf("port not reachable (connection refused/timeout) — firewall blocking 80/443")
 				}
 				return false, nil
 			}
-			// TLS errors = cert not ready yet, keep polling
+
+			// TLS errors = cert not ready, keep polling
 			connFailures = 0
 			return false, nil
 		}
 		resp.Body.Close()
 		connFailures = 0
+
+		if resp.StatusCode >= 500 {
+			serverErrors++
+			if serverErrors >= 3 {
+				return false, fmt.Errorf("backend returning %d — service may be down", resp.StatusCode)
+			}
+			return false, nil
+		}
+		serverErrors = 0
+
 		return resp.StatusCode >= 200 && resp.StatusCode < 500, nil
 	})
 }
