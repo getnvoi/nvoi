@@ -13,9 +13,11 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
   worker-1:
     type: cx33
     region: fsn1
+    role: worker
 
 volumes:
   pgdata:
@@ -42,7 +44,7 @@ services:
     secrets:
       - POSTGRES_PASSWORD
   web:
-    build: web
+    image: web
     port: 80
     replicas: 2
     health: /up
@@ -87,8 +89,8 @@ domains:
 	}
 
 	web := cfg.Services["web"]
-	if web.Build != "web" {
-		t.Errorf("web build = %q", web.Build)
+	if web.Image != "web" {
+		t.Errorf("web image = %q", web.Image)
 	}
 	if web.Port != 80 {
 		t.Errorf("web port = %d", web.Port)
@@ -122,6 +124,7 @@ servers:
   master:
     type: t3.medium
     region: eu-west-3
+    role: master
 services:
   web:
     image: nginx:latest
@@ -147,6 +150,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 services:
   web:
     image: nginx
@@ -169,6 +173,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 services:
   web:
     image: nginx
@@ -205,12 +210,13 @@ func TestDomains_JSONList(t *testing.T) {
 	}
 }
 
-func TestParse_IngressOverlayConfig(t *testing.T) {
+func TestParse_IngressCloudflareManaged(t *testing.T) {
 	yaml := `
 servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 services:
   web:
     image: nginx
@@ -218,11 +224,7 @@ services:
 domains:
   web: [example.com]
 ingress:
-  exposure: edge_proxied
-  edge:
-    provider: cloudflare
-  tls:
-    mode: edge_origin
+  cloudflare-managed: true
 `
 	cfg, err := Parse([]byte(yaml))
 	if err != nil {
@@ -231,14 +233,8 @@ ingress:
 	if cfg.Ingress == nil {
 		t.Fatal("expected ingress config")
 	}
-	if cfg.Ingress.Exposure != "edge_proxied" {
-		t.Fatalf("exposure = %q", cfg.Ingress.Exposure)
-	}
-	if cfg.Ingress.Edge == nil || cfg.Ingress.Edge.Provider != "cloudflare" {
-		t.Fatalf("edge provider = %+v", cfg.Ingress.Edge)
-	}
-	if cfg.Ingress.TLS == nil || cfg.Ingress.TLS.Mode != "edge_origin" {
-		t.Fatalf("tls mode = %+v", cfg.Ingress.TLS)
+	if !cfg.Ingress.CloudflareManaged {
+		t.Fatal("expected cloudflare-managed = true")
 	}
 }
 
@@ -248,6 +244,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 services:
   web:
     image: nginx
@@ -259,6 +256,89 @@ domains:
 `
 	if _, err := Parse([]byte(yaml)); err == nil {
 		t.Fatal("expected legacy proxy syntax to fail")
+	}
+}
+
+// ── Firewall ──────────────────────────────────────────────────────────────────
+
+func TestParse_FirewallPresetString(t *testing.T) {
+	cfg, err := Parse([]byte(`
+servers:
+  master: { type: cx23, region: fsn1, role: master }
+services:
+  web: { image: nginx }
+firewall: cloudflare
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Firewall == nil || cfg.Firewall.Preset != "cloudflare" {
+		t.Fatalf("firewall = %+v", cfg.Firewall)
+	}
+}
+
+func TestParse_FirewallPresetPlusRules(t *testing.T) {
+	cfg, err := Parse([]byte(`
+servers:
+  master: { type: cx23, region: fsn1, role: master }
+services:
+  web: { image: nginx }
+firewall:
+  preset: cloudflare
+  443:
+    - 0.0.0.0/0
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Firewall.Preset != "cloudflare" {
+		t.Fatalf("preset = %q", cfg.Firewall.Preset)
+	}
+	cidrs, ok := cfg.Firewall.Rules["443"]
+	if !ok || len(cidrs) != 1 || cidrs[0] != "0.0.0.0/0" {
+		t.Fatalf("rules = %+v", cfg.Firewall.Rules)
+	}
+}
+
+func TestParse_FirewallRawOnly(t *testing.T) {
+	cfg, err := Parse([]byte(`
+servers:
+  master: { type: cx23, region: fsn1, role: master }
+services:
+  web: { image: nginx }
+firewall:
+  "80":
+    - 0.0.0.0/0
+  "443":
+    - 10.0.0.0/8
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Firewall.Preset != "" {
+		t.Fatalf("preset should be empty, got %q", cfg.Firewall.Preset)
+	}
+	if len(cfg.Firewall.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(cfg.Firewall.Rules))
+	}
+}
+
+func TestFirewall_JSONRoundTrip(t *testing.T) {
+	// Marshal via MarshalJSON, unmarshal via UnmarshalJSON — the path sigs.k8s.io/yaml uses.
+	fw := FirewallConfig{Preset: "cloudflare", Rules: map[string][]string{"443": {"0.0.0.0/0"}}}
+	data, err := json.Marshal(fw)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got FirewallConfig
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Preset != "cloudflare" {
+		t.Fatalf("preset = %q", got.Preset)
+	}
+	if got.Rules["443"][0] != "0.0.0.0/0" {
+		t.Fatalf("rules = %+v", got.Rules)
 	}
 }
 
@@ -275,7 +355,10 @@ RAILS_MASTER_KEY=abc123
 # Empty
 EMPTY=
 `
-	env := ParseEnv(input)
+	env, err := ParseEnv(input)
+	if err != nil {
+		t.Fatalf("ParseEnv: %v", err)
+	}
 
 	tests := map[string]string{
 		"POSTGRES_USER":     "myapp",
@@ -300,7 +383,10 @@ EMPTY=
 }
 
 func TestParseEnv_Empty(t *testing.T) {
-	env := ParseEnv("")
+	env, err := ParseEnv("")
+	if err != nil {
+		t.Fatalf("ParseEnv: %v", err)
+	}
 	if len(env) != 0 {
 		t.Errorf("expected empty map, got %v", env)
 	}

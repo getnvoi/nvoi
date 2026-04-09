@@ -84,11 +84,7 @@ func resolveComputeProvider(cmd *cobra.Command) (string, error) {
 }
 
 func resolveComputeCredentials(cmd *cobra.Command, providerName string) (map[string]string, error) {
-	schema, err := provider.GetComputeSchema(providerName)
-	if err != nil {
-		return nil, err
-	}
-	return resolveCredentials(cmd, schema, "compute-credentials")
+	return resolveProviderCredentials(cmd, "compute", providerName, "compute-credentials")
 }
 
 // ── Build provider ───────────────────────────────────────────────────────────
@@ -105,11 +101,7 @@ func resolveBuildProvider(cmd *cobra.Command) (string, error) {
 }
 
 func resolveBuildCredentials(cmd *cobra.Command, buildProviderName string) (map[string]string, error) {
-	schema, err := provider.GetBuildSchema(buildProviderName)
-	if err != nil {
-		return nil, err
-	}
-	return resolveCredentials(cmd, schema, "build-credentials")
+	return resolveProviderCredentials(cmd, "build", buildProviderName, "build-credentials")
 }
 
 // ── DNS provider ─────────────────────────────────────────────────────────────
@@ -126,11 +118,7 @@ func resolveDNSProvider(cmd *cobra.Command) (string, error) {
 }
 
 func resolveDNSCredentials(cmd *cobra.Command, providerName string) (map[string]string, error) {
-	schema, err := provider.GetDNSSchema(providerName)
-	if err != nil {
-		return nil, err
-	}
-	return resolveCredentials(cmd, schema, "")
+	return resolveProviderCredentials(cmd, "dns", providerName, "")
 }
 
 // ── Storage provider ─────────────────────────────────────────────────────────
@@ -147,11 +135,16 @@ func resolveStorageProvider(cmd *cobra.Command) (string, error) {
 }
 
 func resolveStorageCredentials(cmd *cobra.Command, providerName string) (map[string]string, error) {
-	schema, err := provider.GetBucketSchema(providerName)
+	return resolveProviderCredentials(cmd, "storage", providerName, "")
+}
+
+// resolveProviderCredentials resolves credentials for any provider kind using the unified schema lookup.
+func resolveProviderCredentials(cmd *cobra.Command, kind, name, flagName string) (map[string]string, error) {
+	schema, err := provider.GetSchema(kind, name)
 	if err != nil {
 		return nil, err
 	}
-	return resolveCredentials(cmd, schema, "")
+	return resolveCredentials(cmd, schema, flagName)
 }
 
 // ── SSH key ──────────────────────────────────────────────────────────────────

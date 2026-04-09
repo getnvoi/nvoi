@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -17,12 +18,13 @@ import (
 type PushConfigInput struct {
 	RepoScopedInput
 	Body struct {
-		ComputeProvider api.ComputeProvider `json:"compute_provider" required:"true" enum:"hetzner,aws,scaleway" doc:"Compute provider"`
+		ComputeProvider api.ComputeProvider `json:"compute_provider,omitempty" enum:"hetzner,aws,scaleway" doc:"Compute provider (optional if repo has InfraProvider links)"`
 		DNSProvider     api.DNSProvider     `json:"dns_provider,omitempty" enum:"cloudflare,aws" doc:"DNS provider"`
 		StorageProvider api.StorageProvider `json:"storage_provider,omitempty" enum:"cloudflare,aws" doc:"Storage provider"`
 		BuildProvider   api.BuildProvider   `json:"build_provider,omitempty" enum:"local,daytona,github" doc:"Build provider"`
 		Config          string              `json:"config" required:"true" doc:"YAML config"`
 		Env             string              `json:"env,omitempty" doc:"KEY=VALUE pairs (encrypted at rest)"`
+		BaseVersion     int                 `json:"base_version,omitempty" doc:"Expected current version (0 = skip check)"`
 	}
 }
 
@@ -77,6 +79,8 @@ type planResponseBody struct {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
+// PushConfig stores a config version. Full replace — no merging.
+// Provider fields optional if repo has InfraProvider links.
 func PushConfig(db *gorm.DB) func(context.Context, *PushConfigInput) (*PushConfigOutput, error) {
 	return func(ctx context.Context, input *PushConfigInput) (*PushConfigOutput, error) {
 		user := api.UserFromContext(ctx)
@@ -85,26 +89,48 @@ func PushConfig(db *gorm.DB) func(context.Context, *PushConfigInput) (*PushConfi
 			return nil, err
 		}
 
-		// Validate provider enums.
+		// Providers: body takes priority, fall back to InfraProvider FKs.
+		compute := input.Body.ComputeProvider
+		dns := input.Body.DNSProvider
+		storage := input.Body.StorageProvider
+		build := input.Body.BuildProvider
+		if compute == "" && repo.ComputeProvider != nil {
+			compute = api.ComputeProvider(repo.ComputeProvider.Name)
+		}
+		if dns == "" && repo.DNSProvider != nil {
+			dns = api.DNSProvider(repo.DNSProvider.Name)
+		}
+		if storage == "" && repo.StorageProvider != nil {
+			storage = api.StorageProvider(repo.StorageProvider.Name)
+		}
+		if build == "" && repo.BuildProvider != nil {
+			build = api.BuildProvider(repo.BuildProvider.Name)
+		}
+
 		rc := api.RepoConfig{
-			ComputeProvider: input.Body.ComputeProvider,
-			DNSProvider:     input.Body.DNSProvider,
-			StorageProvider: input.Body.StorageProvider,
-			BuildProvider:   input.Body.BuildProvider,
+			ComputeProvider: compute,
+			DNSProvider:     dns,
+			StorageProvider: storage,
+			BuildProvider:   build,
 		}
 		if err := rc.ValidateProviders(); err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 
-		// Parse config.
 		cfg, err := config.Parse([]byte(input.Body.Config))
 		if err != nil {
 			return nil, huma.Error400BadRequest("invalid yaml: " + err.Error())
 		}
 
-		env := config.ParseEnv(input.Body.Env)
+		env, err := config.ParseEnv(input.Body.Env)
+		if err != nil {
+			return nil, huma.Error400BadRequest("invalid env: " + err.Error())
+		}
 		resolved, err := plan.ResolveDeploymentSteps(cfg, nil, env)
 		if err != nil {
+			if isMissingCredential(err) {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 
@@ -117,12 +143,18 @@ func PushConfig(db *gorm.DB) func(context.Context, *PushConfigInput) (*PushConfi
 			return nil, huma.Error400BadRequest(strings.Join(msgs, "; "))
 		}
 
-		// Next version number.
 		var maxVersion int
 		db.Model(&api.RepoConfig{}).
 			Where("repo_id = ?", repo.ID).
 			Select("COALESCE(MAX(version), 0)").
 			Scan(&maxVersion)
+
+		if input.Body.BaseVersion > 0 && input.Body.BaseVersion != maxVersion {
+			return nil, huma.Error409Conflict(fmt.Sprintf(
+				"config version conflict: you read v%d but current is v%d — reload and retry",
+				input.Body.BaseVersion, maxVersion,
+			))
+		}
 
 		rc.RepoID = repo.ID
 		rc.Version = maxVersion + 1
@@ -203,7 +235,10 @@ func PlanConfig(db *gorm.DB) func(context.Context, *PlanConfigInput) (*PlanConfi
 			return nil, huma.Error500InternalServerError("corrupt config: " + err.Error())
 		}
 
-		env := config.ParseEnv(rc.Env)
+		env, err := config.ParseEnv(rc.Env)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("corrupt env: " + err.Error())
+		}
 
 		// Query reality — what's actually deployed.
 		creds, credErr := resolveAllCredentials(&rc, env)
@@ -224,6 +259,9 @@ func PlanConfig(db *gorm.DB) func(context.Context, *PlanConfigInput) (*PlanConfi
 
 		resolved, err := plan.ResolveDeploymentSteps(cfg, reality, env)
 		if err != nil {
+			if isMissingCredential(err) {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
 			return nil, huma.Error500InternalServerError("plan failed: " + err.Error())
 		}
 
@@ -232,11 +270,4 @@ func PlanConfig(db *gorm.DB) func(context.Context, *PlanConfigInput) (*PlanConfi
 			Steps:   resolved.Steps,
 		}}, nil
 	}
-}
-
-// ── helpers ────────────────────────────────────────────────────────────────────
-
-func stringParam(params map[string]any, key string) string {
-	v, _ := params[key].(string)
-	return v
 }

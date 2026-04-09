@@ -37,6 +37,62 @@ type executor struct {
 }
 
 func newExecutor(db *gorm.DB, p ExecuteParams) (*executor, error) {
+	// New path: read provider credentials from InfraProvider records on Repo.
+	// Fallback: legacy path reads from RepoConfig env + provider enum columns.
+	if p.Repo.ComputeProviderID != nil {
+		return newExecutorFromProviders(db, p)
+	}
+	return newExecutorLegacy(db, p)
+}
+
+// newExecutorFromProviders builds the executor using InfraProvider credentials.
+func newExecutorFromProviders(db *gorm.DB, p ExecuteParams) (*executor, error) {
+	repo := p.Repo
+
+	computeName, computeCreds := "", map[string]string(nil)
+	if repo.ComputeProvider != nil {
+		computeName = repo.ComputeProvider.Name
+		computeCreds = repo.ComputeProvider.CredentialsMap()
+	}
+
+	dnsName, dnsCreds := "", map[string]string(nil)
+	if repo.DNSProvider != nil {
+		dnsName = repo.DNSProvider.Name
+		dnsCreds = repo.DNSProvider.CredentialsMap()
+	}
+
+	storageName, storageCreds := "", map[string]string(nil)
+	if repo.StorageProvider != nil {
+		storageName = repo.StorageProvider.Name
+		storageCreds = repo.StorageProvider.CredentialsMap()
+	}
+
+	buildName, buildCreds := "", map[string]string(nil)
+	if repo.BuildProvider != nil {
+		buildName = repo.BuildProvider.Name
+		buildCreds = repo.BuildProvider.CredentialsMap()
+	}
+
+	return &executor{
+		db: db,
+		cluster: pkgcore.Cluster{
+			AppName:     repo.Name,
+			Env:         repo.Environment,
+			Provider:    computeName,
+			Credentials: computeCreds,
+			SSHKey:      []byte(repo.SSHPrivateKey),
+		},
+		dns:           pkgcore.ProviderRef{Name: dnsName, Creds: dnsCreds},
+		storage:       pkgcore.ProviderRef{Name: storageName, Creds: storageCreds},
+		buildProvider: buildName,
+		creds:         buildCreds,
+		gitToken:      p.GitToken,
+		builtImages:   map[string]string{},
+	}, nil
+}
+
+// newExecutorLegacy builds the executor from RepoConfig env + provider columns (migration path).
+func newExecutorLegacy(db *gorm.DB, p ExecuteParams) (*executor, error) {
 	creds, err := resolveAllCredentials(p.Config, p.Env)
 	if err != nil {
 		return nil, err
@@ -83,7 +139,7 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 	e.db.Where("deployment_id = ?", deployment.ID).Order("position").Find(&steps)
 
 	var lastErr error
-	hadServices := false
+	var pendingRollouts []pkgcore.WaitRolloutRequest
 	for i := range steps {
 		step := &steps[i]
 		e.cluster.Output = newDBOutput(e.db, step.ID)
@@ -91,15 +147,16 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 
 		var params map[string]any
 		if step.Params != "" {
-			json.Unmarshal([]byte(step.Params), &params)
+			if err := json.Unmarshal([]byte(step.Params), &params); err != nil {
+				markStepDone(e.db, step, err)
+				lastErr = fmt.Errorf("parse step params: %w", err)
+				skipRemainingSteps(e.db, deployment.ID)
+				break
+			}
 		}
 
 		err := e.step(ctx, plan.StepKind(step.Kind), step.Name, params)
 		markStepDone(e.db, step, err)
-
-		if plan.StepKind(step.Kind) == plan.StepServiceSet {
-			hadServices = true
-		}
 
 		if err != nil {
 			lastErr = err
@@ -107,19 +164,57 @@ func (e *executor) run(ctx context.Context, deployment *api.Deployment) {
 			break
 		}
 
-		// After all services applied, wait for all pods to be ready.
-		// This runs once: after the last service.set step, before dns.set.
+		// Collect service rollout info for parallel wait after all services applied.
+		if plan.StepKind(step.Kind) == plan.StepServiceSet {
+			kind := "deployment"
+			if len(utils.GetStringSlice(params, "volumes")) > 0 {
+				kind = "statefulset"
+			}
+			pendingRollouts = append(pendingRollouts, pkgcore.WaitRolloutRequest{
+				Cluster:        e.cluster,
+				Service:        step.Name,
+				WorkloadKind:   kind,
+				HasHealthCheck: utils.GetString(params, "health") != "",
+			})
+		}
+
+		// After last service.set step, wait for all rollouts in parallel.
 		nextIsNotService := i+1 >= len(steps) || plan.StepKind(steps[i+1].Kind) != plan.StepServiceSet
-		if hadServices && nextIsNotService && plan.StepKind(step.Kind) == plan.StepServiceSet {
-			if err := pkgcore.WaitAllServices(ctx, pkgcore.WaitAllServicesRequest{Cluster: e.cluster}); err != nil {
+		if len(pendingRollouts) > 0 && nextIsNotService {
+			if err := waitRolloutsParallel(ctx, pendingRollouts); err != nil {
 				lastErr = err
 				skipRemainingSteps(e.db, deployment.ID)
 				break
 			}
+			pendingRollouts = nil
 		}
 	}
 
 	markDeploymentDone(e.db, deployment, lastErr)
+}
+
+// waitRolloutsParallel waits for all service rollouts concurrently.
+// First failure cancels all others.
+func waitRolloutsParallel(ctx context.Context, rollouts []pkgcore.WaitRolloutRequest) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errs := make(chan error, len(rollouts))
+	for _, req := range rollouts {
+		req := req
+		go func() {
+			errs <- pkgcore.WaitRollout(ctx, req)
+		}()
+	}
+
+	var firstErr error
+	for range rollouts {
+		if err := <-errs; err != nil && firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+	}
+	return firstErr
 }
 
 // step dispatches a single step to the corresponding pkg/core/ function.
@@ -141,7 +236,7 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 			Name:       name,
 			ServerType: utils.GetString(params, "type"),
 			Region:     utils.GetString(params, "region"),
-			Worker:     utils.GetBool(params, "worker"),
+			Worker:     utils.GetString(params, "role") == "worker",
 		})
 		return err
 
@@ -212,21 +307,9 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 		})
 
 	case plan.StepServiceSet:
-		image := utils.GetString(params, "image")
-		if buildRef := utils.GetString(params, "build"); buildRef != "" {
-			if ref, ok := e.builtImages[buildRef]; ok {
-				image = ref
-			} else {
-				ref, err := pkgcore.BuildLatest(ctx, pkgcore.BuildLatestRequest{
-					Cluster: e.cluster,
-					Name:    buildRef,
-				})
-				if err != nil {
-					return fmt.Errorf("resolve image for build %q: %w", buildRef, err)
-				}
-				image = ref
-				e.builtImages[buildRef] = ref
-			}
+		image, err := e.resolveImage(ctx, params)
+		if err != nil {
+			return err
 		}
 
 		return pkgcore.ServiceSet(ctx, pkgcore.ServiceSetRequest{
@@ -252,21 +335,9 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 		})
 
 	case plan.StepCronSet:
-		image := utils.GetString(params, "image")
-		if buildRef := utils.GetString(params, "build"); buildRef != "" {
-			if ref, ok := e.builtImages[buildRef]; ok {
-				image = ref
-			} else {
-				ref, err := pkgcore.BuildLatest(ctx, pkgcore.BuildLatestRequest{
-					Cluster: e.cluster,
-					Name:    buildRef,
-				})
-				if err != nil {
-					return fmt.Errorf("resolve image for build %q: %w", buildRef, err)
-				}
-				image = ref
-				e.builtImages[buildRef] = ref
-			}
+		image, err := e.resolveImage(ctx, params)
+		if err != nil {
+			return err
 		}
 		return pkgcore.CronSet(ctx, pkgcore.CronSetRequest{
 			Cluster:  e.cluster,
@@ -289,28 +360,24 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 
 	case plan.StepDNSSet:
 		return pkgcore.DNSSet(ctx, pkgcore.DNSSetRequest{
-			Cluster:     e.cluster,
-			DNS:         e.dns,
-			Service:     name,
-			Domains:     utils.GetStringSlice(params, "domains"),
-			EdgeProxied: utils.GetBool(params, "edge_proxied"),
+			Cluster:           e.cluster,
+			DNS:               e.dns,
+			Service:           name,
+			Domains:           utils.GetStringSlice(params, "domains"),
+			CloudflareManaged: utils.GetBool(params, "cloudflare_managed"),
 		})
 
 	case plan.StepIngressSet:
-		route := pkgcore.IngressRouteArg{
-			Service: utils.GetString(params, "service"),
-			Domains: utils.GetStringSlice(params, "domains"),
-		}
-		if utils.GetString(params, "exposure") == "edge_proxied" {
-			route.EdgeProxied = true
-		}
 		return pkgcore.IngressSet(ctx, pkgcore.IngressSetRequest{
-			Cluster:      e.cluster,
-			DNS:          e.dns,
-			Route:        route,
-			EdgeProvider: utils.GetString(params, "edge_provider"),
-			CertPEM:      utils.GetString(params, "cert_pem"),
-			KeyPEM:       utils.GetString(params, "key_pem"),
+			Cluster: e.cluster,
+			DNS:     e.dns,
+			Route: pkgcore.IngressRouteArg{
+				Service: utils.GetString(params, "service"),
+				Domains: utils.GetStringSlice(params, "domains"),
+			},
+			CloudflareManaged: utils.GetBool(params, "cloudflare_managed"),
+			CertPEM:           utils.GetString(params, "cert_pem"),
+			KeyPEM:            utils.GetString(params, "key_pem"),
 		})
 
 	case plan.StepIngressDelete:
@@ -340,7 +407,32 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 
 // parseFirewallFromParams converts step params into a PortAllowList.
 // Supports "preset" key (resolved via ResolveFirewallArgs) and/or "rules" map.
+// resolveImage resolves the image from step params — uses build target if set,
+// caches results in builtImages.
+func (e *executor) resolveImage(ctx context.Context, params map[string]any) (string, error) {
+	image := utils.GetString(params, "image")
+	buildRef := utils.GetString(params, "build")
+	if buildRef == "" {
+		return image, nil
+	}
+	if ref, ok := e.builtImages[buildRef]; ok {
+		return ref, nil
+	}
+	ref, err := pkgcore.BuildLatest(ctx, pkgcore.BuildLatestRequest{
+		Cluster: e.cluster,
+		Name:    buildRef,
+	})
+	if err != nil {
+		return "", fmt.Errorf("resolve image for build %q: %w", buildRef, err)
+	}
+	e.builtImages[buildRef] = ref
+	return ref, nil
+}
+
 func parseFirewallFromParams(ctx context.Context, params map[string]any) (provider.PortAllowList, error) {
+	if params == nil {
+		return nil, nil
+	}
 	preset := utils.GetString(params, "preset")
 	rulesRaw, hasRules := params["rules"]
 

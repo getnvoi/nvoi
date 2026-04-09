@@ -9,8 +9,8 @@ import (
 func hetznerConfig() *Cfg {
 	return &Cfg{
 		Servers: map[string]config.Server{
-			"master":   {Type: "cx23", Region: "fsn1"},
-			"worker-1": {Type: "cx33", Region: "fsn1"},
+			"master":   {Type: "cx23", Region: "fsn1", Role: "master"},
+			"worker-1": {Type: "cx33", Region: "fsn1", Role: "worker"},
 		},
 		Volumes: map[string]config.Volume{
 			"meili-data": {Size: 20, Server: "master"},
@@ -24,31 +24,39 @@ func hetznerConfig() *Cfg {
 		},
 		Services: map[string]config.Service{
 			"db": {
-				Image:   "postgres:17",
-				Volumes: []string{"pgdata:/var/lib/postgresql/data"},
-				Env:     []string{"POSTGRES_USER", "POSTGRES_DB"},
-				Secrets: []string{"POSTGRES_PASSWORD"},
+				Workload: config.Workload{
+					Image:   "postgres:17",
+					Volumes: []string{"pgdata:/var/lib/postgresql/data"},
+					Env:     []string{"POSTGRES_USER", "POSTGRES_DB"},
+					Secrets: []string{"POSTGRES_PASSWORD"},
+				},
 			},
 			"meilisearch": {
-				Image:   "getmeili/meilisearch:latest",
-				Volumes: []string{"meili-data:/meili_data"},
+				Workload: config.Workload{
+					Image:   "getmeili/meilisearch:latest",
+					Volumes: []string{"meili-data:/meili_data"},
+				},
 			},
 			"web": {
-				Build:    "web",
+				Workload: config.Workload{
+					Image:   "web",
+					Server:  "worker-1",
+					Env:     []string{"RAILS_ENV=production", "POSTGRES_HOST=db", "POSTGRES_USER", "POSTGRES_DB"},
+					Secrets: []string{"POSTGRES_PASSWORD", "RAILS_MASTER_KEY"},
+					Storage: []string{"assets"},
+				},
 				Port:     80,
 				Replicas: 2,
 				Health:   "/up",
-				Server:   "worker-1",
-				Env:      []string{"RAILS_ENV=production", "POSTGRES_HOST=db", "POSTGRES_USER", "POSTGRES_DB"},
-				Secrets:  []string{"POSTGRES_PASSWORD", "RAILS_MASTER_KEY"},
-				Storage:  []string{"assets"},
 			},
 			"jobs": {
-				Build:   "web",
-				Command: "bin/jobs",
-				Server:  "worker-1",
-				Env:     []string{"RAILS_ENV=production", "POSTGRES_HOST=db", "POSTGRES_USER", "POSTGRES_DB"},
-				Secrets: []string{"POSTGRES_PASSWORD", "RAILS_MASTER_KEY"},
+				Workload: config.Workload{
+					Image:   "web",
+					Command: "bin/jobs",
+					Server:  "worker-1",
+					Env:     []string{"RAILS_ENV=production", "POSTGRES_HOST=db", "POSTGRES_USER", "POSTGRES_DB"},
+					Secrets: []string{"POSTGRES_PASSWORD", "RAILS_MASTER_KEY"},
+				},
 			},
 		},
 		Domains: map[string]config.Domains{
@@ -67,7 +75,7 @@ func hetznerEnv() map[string]string {
 }
 
 func TestPlan_PhaseOrder(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -99,32 +107,25 @@ func TestPlan_PhaseOrder(t *testing.T) {
 	}
 }
 
-func TestPlan_IngressConfigProvidedTLSResolvedFromEnv(t *testing.T) {
+func TestPlan_IngressCustomCertResolvedFromEnv(t *testing.T) {
 	cfg := hetznerConfig()
 	cfg.Firewall = &config.FirewallConfig{Preset: "default"}
 	cfg.Ingress = &config.IngressConfig{
-		Exposure: "direct",
-		TLS: &config.IngressTLSConfig{
-			Mode: "provided",
-			Cert: "TLS_CERT_PEM",
-			Key:  "TLS_KEY_PEM",
-		},
+		Cert: "TLS_CERT_PEM",
+		Key:  "TLS_KEY_PEM",
 	}
 	env := hetznerEnv()
 	env["TLS_CERT_PEM"] = "cert-pem"
 	env["TLS_KEY_PEM"] = "key-pem"
 
-	steps, err := Build(nil, cfg, env)
+	steps, err := Build(BuildRequest{Desired: cfg, Env: env})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 
 	ingress := findStep(steps, StepIngressSet, "web")
 	if ingress == nil {
-		t.Fatal("expected ingress.apply step")
-	}
-	if ingress.Params["tls_mode"] != "provided" {
-		t.Fatalf("tls_mode = %v, want provided", ingress.Params["tls_mode"])
+		t.Fatal("expected ingress.set step")
 	}
 	if ingress.Params["cert_pem"] != "cert-pem" {
 		t.Fatalf("cert_pem = %v, want cert-pem", ingress.Params["cert_pem"])
@@ -134,71 +135,57 @@ func TestPlan_IngressConfigProvidedTLSResolvedFromEnv(t *testing.T) {
 	}
 }
 
-func TestPlan_EdgeOverlayCarriesProviderAndProxyToIngressAndDNS(t *testing.T) {
+func TestPlan_CloudflareManagedCarriesToIngressAndDNS(t *testing.T) {
 	cfg := hetznerConfig()
 	cfg.Firewall = &config.FirewallConfig{Preset: "cloudflare"}
-	cfg.Ingress = &config.IngressConfig{
-		Exposure: "edge_proxied",
-		TLS: &config.IngressTLSConfig{
-			Mode: "edge_origin",
-		},
-		Edge: &config.IngressEdgeConfig{
-			Provider: "cloudflare",
-		},
-	}
+	cfg.Ingress = &config.IngressConfig{CloudflareManaged: true}
 
-	steps, err := Build(nil, cfg, hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: cfg, Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 
 	dns := findStep(steps, StepDNSSet, "web")
-	if dns == nil || dns.Params["edge_proxied"] != true {
-		t.Fatalf("expected proxied dns.set, got %+v", dns)
+	if dns == nil || dns.Params["cloudflare_managed"] != true {
+		t.Fatalf("expected cloudflare_managed dns.set, got %+v", dns)
 	}
 
 	ingress := findStep(steps, StepIngressSet, "web")
 	if ingress == nil {
-		t.Fatal("expected ingress.apply step")
+		t.Fatal("expected ingress.set step")
 	}
-	if ingress.Params["exposure"] != "edge_proxied" {
-		t.Fatalf("exposure = %v, want edge_proxied", ingress.Params["exposure"])
-	}
-	if ingress.Params["tls_mode"] != "edge_origin" {
-		t.Fatalf("tls_mode = %v, want edge_origin", ingress.Params["tls_mode"])
-	}
-	if ingress.Params["edge_provider"] != "cloudflare" {
-		t.Fatalf("edge_provider = %v, want cloudflare", ingress.Params["edge_provider"])
+	if ingress.Params["cloudflare_managed"] != true {
+		t.Fatalf("cloudflare_managed = %v, want true", ingress.Params["cloudflare_managed"])
 	}
 }
 
 func TestPlan_ComputeMasterFirst(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 
-	// First step is master (alphabetically first), no worker flag.
+	// First step is master, role=master.
 	s := steps[0]
 	if s.Kind != StepComputeSet || s.Name != "master" {
 		t.Errorf("step[0] = %s %s, want instance.set master", s.Kind, s.Name)
 	}
-	if _, ok := s.Params["worker"]; ok {
-		t.Error("master should not have worker param")
+	if s.Params["role"] != "master" {
+		t.Errorf("master role = %v, want master", s.Params["role"])
 	}
 
-	// Second is worker-1, with worker=true.
+	// Second is worker-1, role=worker.
 	s = steps[1]
 	if s.Kind != StepComputeSet || s.Name != "worker-1" {
 		t.Errorf("step[1] = %s %s, want instance.set worker-1", s.Kind, s.Name)
 	}
-	if s.Params["worker"] != true {
-		t.Error("worker-1 should have worker=true")
+	if s.Params["role"] != "worker" {
+		t.Errorf("worker-1 role = %v, want worker", s.Params["role"])
 	}
 }
 
 func TestPlan_VolumeParams(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -216,7 +203,7 @@ func TestPlan_VolumeParams(t *testing.T) {
 }
 
 func TestPlan_BuildParams(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -239,8 +226,49 @@ func TestStepKinds_IncludeCron(t *testing.T) {
 	}
 }
 
+func TestPlan_CronWithVolumes(t *testing.T) {
+	cfg := &Cfg{
+		Servers: map[string]config.Server{
+			"master": {Type: "cx23", Region: "fsn1", Role: "master"},
+		},
+		Volumes: map[string]config.Volume{
+			"data": {Size: 10, Server: "master"},
+		},
+		Services: map[string]config.Service{
+			"web": {Workload: config.Workload{Image: "nginx"}, Port: 80},
+		},
+		Crons: map[string]config.Cron{
+			"backup": {
+				Workload: config.Workload{
+					Image:   "postgres:17",
+					Volumes: []string{"data:/var/data"},
+				},
+				Schedule: "0 2 * * *",
+			},
+		},
+	}
+	steps, err := Build(BuildRequest{Desired: cfg})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	var cronStep *Step
+	for i := range steps {
+		if steps[i].Kind == StepCronSet && steps[i].Name == "backup" {
+			cronStep = &steps[i]
+			break
+		}
+	}
+	if cronStep == nil {
+		t.Fatal("expected cron.set step for backup")
+	}
+	volumes, ok := cronStep.Params["volumes"].([]string)
+	if !ok || len(volumes) != 1 || volumes[0] != "data:/var/data" {
+		t.Fatalf("cron volumes = %v", cronStep.Params["volumes"])
+	}
+}
+
 func TestPlan_SecretsDeduplicated(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -258,7 +286,7 @@ func TestPlan_SecretsDeduplicated(t *testing.T) {
 }
 
 func TestPlan_SecretsResolved(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -273,7 +301,7 @@ func TestPlan_SecretsResolved(t *testing.T) {
 }
 
 func TestPlan_StorageParams(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -288,7 +316,7 @@ func TestPlan_StorageParams(t *testing.T) {
 }
 
 func TestPlan_ServiceEnvResolved(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -314,7 +342,7 @@ func TestPlan_ServiceEnvResolved(t *testing.T) {
 }
 
 func TestPlan_ServiceBuildRef(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -332,10 +360,41 @@ func TestPlan_ServiceBuildRef(t *testing.T) {
 	if web.Params["replicas"] != 2 {
 		t.Errorf("web replicas = %v", web.Params["replicas"])
 	}
+	// image: web resolves as build target because cfg.Build["web"] exists.
+	// Verify params["image"] is NOT set — only params["build"].
+	if _, hasImage := web.Params["image"]; hasImage {
+		t.Error("image should not be set when build target matches")
+	}
+}
+
+func TestPlan_ServiceImageLiteral_NoBuildTarget(t *testing.T) {
+	cfg := &Cfg{
+		Servers: map[string]config.Server{
+			"master": {Type: "cx23", Region: "fsn1", Role: "master"},
+		},
+		// No Build map — "nginx:latest" is a literal image.
+		Services: map[string]config.Service{
+			"web": {Workload: config.Workload{Image: "nginx:latest"}, Port: 80},
+		},
+	}
+	steps, err := Build(BuildRequest{Desired: cfg})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	web := findStep(steps, StepServiceSet, "web")
+	if web == nil {
+		t.Fatal("web service step not found")
+	}
+	if web.Params["image"] != "nginx:latest" {
+		t.Errorf("image = %v, want nginx:latest", web.Params["image"])
+	}
+	if _, hasBuild := web.Params["build"]; hasBuild {
+		t.Error("build should not be set for literal image")
+	}
 }
 
 func TestPlan_DNSParams(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -353,13 +412,13 @@ func TestPlan_DNSParams(t *testing.T) {
 func TestPlan_MinimalConfig(t *testing.T) {
 	cfg := &Cfg{
 		Servers: map[string]config.Server{
-			"master": {Type: "t3.medium", Region: "eu-west-3"},
+			"master": {Type: "t3.medium", Region: "eu-west-3", Role: "master"},
 		},
 		Services: map[string]config.Service{
-			"web": {Image: "nginx:latest", Port: 80},
+			"web": {Workload: config.Workload{Image: "nginx:latest"}, Port: 80},
 		},
 	}
-	steps, err := Build(nil, cfg, nil)
+	steps, err := Build(BuildRequest{Desired: cfg})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -378,10 +437,10 @@ func TestPlan_MinimalConfig(t *testing.T) {
 
 func TestPlan_SecretMissingFromEnv(t *testing.T) {
 	cfg := &Cfg{
-		Servers:  map[string]config.Server{"master": {Type: "cx23", Region: "fsn1"}},
-		Services: map[string]config.Service{"web": {Image: "nginx", Secrets: []string{"MISSING_KEY"}}},
+		Servers:  map[string]config.Server{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.Service{"web": {Workload: config.Workload{Image: "nginx", Secrets: []string{"MISSING_KEY"}}}},
 	}
-	_, err := Build(nil, cfg, map[string]string{})
+	_, err := Build(BuildRequest{Desired: cfg, Env: map[string]string{}})
 	if err == nil {
 		t.Fatal("expected error for missing secret")
 	}
@@ -389,10 +448,10 @@ func TestPlan_SecretMissingFromEnv(t *testing.T) {
 
 func TestPlan_EnvMissingFromEnv(t *testing.T) {
 	cfg := &Cfg{
-		Servers:  map[string]config.Server{"master": {Type: "cx23", Region: "fsn1"}},
-		Services: map[string]config.Service{"web": {Image: "nginx", Env: []string{"MISSING_KEY"}}},
+		Servers:  map[string]config.Server{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.Service{"web": {Workload: config.Workload{Image: "nginx", Env: []string{"MISSING_KEY"}}}},
 	}
-	_, err := Build(nil, cfg, map[string]string{})
+	_, err := Build(BuildRequest{Desired: cfg, Env: map[string]string{}})
 	if err == nil {
 		t.Fatal("expected error for missing env key")
 	}
@@ -400,7 +459,7 @@ func TestPlan_EnvMissingFromEnv(t *testing.T) {
 
 func TestPlan_EmptyConfig(t *testing.T) {
 	cfg := &Cfg{Servers: map[string]config.Server{}, Services: map[string]config.Service{}}
-	steps, err := Build(nil, cfg, nil)
+	steps, err := Build(BuildRequest{Desired: cfg})
 	if err != nil {
 		t.Fatalf("empty config should not error: %v", err)
 	}
@@ -412,7 +471,7 @@ func TestPlan_EmptyConfig(t *testing.T) {
 // ── Diff (delete steps from Plan) ──────────────────────────────────────────────
 
 func TestPlan_NilPrev_NoDeletes(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -425,7 +484,7 @@ func TestPlan_NilPrev_NoDeletes(t *testing.T) {
 
 func TestPlan_IdenticalConfigs_NoDeletes(t *testing.T) {
 	cfg := hetznerConfig()
-	steps, err := Build(cfg, cfg, hetznerEnv())
+	steps, err := Build(BuildRequest{Reality: cfg, Desired: cfg, Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -441,7 +500,7 @@ func TestPlan_ServiceRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Services, "meilisearch")
 
-	steps, _ := Build(prev, current, hetznerEnv())
+	steps, _ := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	if findStep(steps, StepServiceDelete, "meilisearch") == nil {
 		t.Error("expected service.delete meilisearch")
 	}
@@ -452,7 +511,7 @@ func TestPlan_VolumeRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Volumes, "meili-data")
 
-	steps, _ := Build(prev, current, hetznerEnv())
+	steps, _ := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	if findStep(steps, StepVolumeDelete, "meili-data") == nil {
 		t.Error("expected volume.delete meili-data")
 	}
@@ -463,7 +522,7 @@ func TestPlan_StorageRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Storage, "assets")
 
-	steps, _ := Build(prev, current, hetznerEnv())
+	steps, _ := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	if findStep(steps, StepStorageDelete, "assets") == nil {
 		t.Error("expected storage.delete assets")
 	}
@@ -474,7 +533,7 @@ func TestPlan_DNSRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Domains, "web")
 
-	steps, _ := Build(prev, current, hetznerEnv())
+	steps, _ := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	s := findStep(steps, StepDNSDelete, "web")
 	if s == nil {
 		t.Error("expected dns.delete web")
@@ -494,7 +553,7 @@ func TestPlan_DNSPartialRemoval(t *testing.T) {
 	current := hetznerConfig()
 	current.Domains["web"] = config.Domains{"final.nvoi.to"}
 
-	steps, _ := Build(prev, current, hetznerEnv())
+	steps, _ := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	s := findStep(steps, StepDNSDelete, "web")
 	if s == nil {
 		t.Fatal("expected dns.delete web for removed domain")
@@ -529,7 +588,7 @@ func TestPlan_DNSPartialAdditionDoesNotEmitDelete(t *testing.T) {
 	current := hetznerConfig()
 	current.Domains["web"] = config.Domains{"final.nvoi.to", "www.nvoi.to"}
 
-	steps, _ := Build(prev, current, hetznerEnv())
+	steps, _ := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 
 	if s := findStep(steps, StepDNSDelete, "web"); s != nil {
 		t.Fatalf("did not expect dns.delete for domain addition, got %+v", *s)
@@ -559,7 +618,7 @@ func TestPlan_SecretRemoved(t *testing.T) {
 	jobs.Secrets = []string{"POSTGRES_PASSWORD"}
 	current.Services["jobs"] = jobs
 
-	steps, _ := Build(prev, current, hetznerEnv())
+	steps, _ := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	if findStep(steps, StepSecretDelete, "RAILS_MASTER_KEY") == nil {
 		t.Error("expected secret.delete RAILS_MASTER_KEY")
 	}
@@ -573,7 +632,7 @@ func TestPlan_ComputeRemoved(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Servers, "worker-1")
 
-	steps, _ := Build(prev, current, hetznerEnv())
+	steps, _ := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	if findStep(steps, StepComputeDelete, "worker-1") == nil {
 		t.Error("expected instance.delete worker-1")
 	}
@@ -588,7 +647,7 @@ func TestPlan_DeletesBeforeSets(t *testing.T) {
 	delete(current.Services, "meilisearch")
 	delete(current.Volumes, "meili-data")
 
-	steps, err := Build(prev, current, hetznerEnv())
+	steps, err := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -616,7 +675,7 @@ func TestPlan_DeletesBeforeSets(t *testing.T) {
 }
 
 func TestPlan_FirstDeploy_NoDeletes(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -634,7 +693,7 @@ func TestPlan_EmptyConfigDeletesAll(t *testing.T) {
 		Services: map[string]config.Service{},
 	}
 
-	steps, err := Build(prev, empty, nil)
+	steps, err := Build(BuildRequest{Reality: prev, Desired: empty})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -693,7 +752,7 @@ func TestPlan_DomainRemovalOrdersIngressBeforeDNS(t *testing.T) {
 	current := hetznerConfig()
 	delete(current.Domains, "web")
 
-	steps, err := Build(prev, current, hetznerEnv())
+	steps, err := Build(BuildRequest{Reality: prev, Desired: current, Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -768,13 +827,49 @@ func assertContains(t *testing.T, list []string, want string) {
 	t.Errorf("list %v does not contain %q", list, want)
 }
 
+// ── Cron secrets ──────────────────────────────────────────────────────────────
+
+func TestPlan_CronSecretsCollected(t *testing.T) {
+	cfg := &Cfg{
+		Servers: map[string]config.Server{
+			"master": {Type: "cx23", Region: "fsn1", Role: "master"},
+		},
+		Services: map[string]config.Service{
+			"web": {Workload: config.Workload{Image: "nginx"}, Port: 80},
+		},
+		Crons: map[string]config.Cron{
+			"backup": {
+				Workload: config.Workload{
+					Image:   "postgres:17",
+					Secrets: []string{"PGPASSWORD"},
+				},
+				Schedule: "0 2 * * *",
+			},
+		},
+	}
+	env := map[string]string{"PGPASSWORD": "xxx"}
+
+	steps, err := Build(BuildRequest{Desired: cfg, Env: env})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	s := findStep(steps, StepSecretSet, "PGPASSWORD")
+	if s == nil {
+		t.Fatal("expected secret.set step for PGPASSWORD (referenced by cron)")
+	}
+	if s.Params["value"] != "xxx" {
+		t.Errorf("secret value = %v, want xxx", s.Params["value"])
+	}
+}
+
 // ── Firewall tests ────────────────────────────────────────────────────────────
 
 func TestPlan_FirewallStep(t *testing.T) {
 	cfg := hetznerConfig()
 	cfg.Firewall = &config.FirewallConfig{Preset: "default"}
 
-	steps, err := Build(nil, cfg, hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: cfg, Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -792,7 +887,7 @@ func TestPlan_FirewallAfterCompute(t *testing.T) {
 	cfg := hetznerConfig()
 	cfg.Firewall = &config.FirewallConfig{Preset: "cloudflare"}
 
-	steps, err := Build(nil, cfg, hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: cfg, Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -824,7 +919,7 @@ func TestPlan_FirewallAfterCompute(t *testing.T) {
 }
 
 func TestPlan_NoFirewallWithoutConfig(t *testing.T) {
-	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: hetznerConfig(), Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -842,7 +937,7 @@ func TestPlan_FirewallWithRules(t *testing.T) {
 		Rules:  map[string][]string{"443": {"0.0.0.0/0"}},
 	}
 
-	steps, err := Build(nil, cfg, hetznerEnv())
+	steps, err := Build(BuildRequest{Desired: cfg, Env: hetznerEnv()})
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}

@@ -75,7 +75,10 @@ func Deploy(db *gorm.DB) func(context.Context, *DeployInput) (*DeployOutput, err
 			return nil, huma.Error500InternalServerError("corrupt config: " + err.Error())
 		}
 
-		env := config.ParseEnv(rc.Env)
+		env, err := config.ParseEnv(rc.Env)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("corrupt env: " + err.Error())
+		}
 
 		// Query reality — what's actually deployed.
 		creds, credErr := resolveAllCredentials(&rc, env)
@@ -96,6 +99,9 @@ func Deploy(db *gorm.DB) func(context.Context, *DeployInput) (*DeployOutput, err
 
 		resolved, err := plan.ResolveDeploymentSteps(cfg, reality, env)
 		if err != nil {
+			if isMissingCredential(err) {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
 			return nil, huma.Error500InternalServerError("plan failed: " + err.Error())
 		}
 
@@ -159,7 +165,10 @@ func RunDeployment(db *gorm.DB) func(context.Context, *RunDeploymentInput) (*Run
 			return nil, huma.Error500InternalServerError("config not found")
 		}
 
-		env := config.ParseEnv(rc.Env)
+		env, err := config.ParseEnv(rc.Env)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("corrupt env: " + err.Error())
+		}
 
 		go Execute(context.Background(), db, ExecuteParams{
 			Deployment: &deployment,

@@ -1,0 +1,22 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Hetzner deploy via YAML push ─────────────────────────────────────────────
+# Alternative approach: push a config YAML + env, then deploy.
+# Same result as examples/cloud/hetzner/ but declarative instead of imperative.
+
+set -a; source examples/.env; set +a
+
+bin/cloud login
+bin/cloud repos use dummy-rails
+
+bin/cloud push \
+  --config examples/cloud/hetzner-yaml/config.yaml \
+  --env examples/.env \
+  --compute-provider hetzner \
+  --dns-provider cloudflare \
+  --storage-provider cloudflare \
+  --build-provider daytona
+
+bin/cloud plan
+bin/cloud deploy

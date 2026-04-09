@@ -12,6 +12,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 firewall: default
 volumes:
   pgdata:
@@ -31,7 +32,7 @@ services:
     secrets:
       - POSTGRES_PASSWORD
   web:
-    build: web
+    image: web
     port: 80
     replicas: 2
     health: /up
@@ -197,7 +198,7 @@ func TestConfig_PushValidationErrors(t *testing.T) {
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
 	// Server missing type — should fail validation.
-	code := pushConfig(t, r, token, wsID, repoID, "servers:\n  master:\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n", "")
+	code := pushConfig(t, r, token, wsID, repoID, "servers:\n  master:\n    region: fsn1\n    role: master\nservices:\n  web:\n    image: nginx\n    port: 80\n", "")
 	if code != http.StatusBadRequest {
 		t.Fatalf("validation: status = %d, want 400", code)
 	}
@@ -226,6 +227,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 services:
   db:
     image: postgres:17
@@ -341,8 +343,9 @@ func TestConfig_PushMissingComputeProvider(t *testing.T) {
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("missing compute provider: status = %d, want 422", w.Code)
+	// No compute_provider in body and no InfraProvider linked — rejected.
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("missing compute provider: status = %d, want 400, body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -357,6 +360,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 services:
   web:
     image: nginx
@@ -425,6 +429,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 services:
   db:
     managed: postgres
@@ -555,6 +560,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 services:
   db:
     managed: postgres
@@ -630,6 +636,44 @@ func TestConfig_ManagedPlanWebGetsAllInjectedSecrets(t *testing.T) {
 		}
 	}
 	t.Fatal("web service.set step not found in plan")
+}
+
+func TestConfig_PushVersionConflict(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	// Push v1.
+	pushConfig(t, r, token, wsID, repoID, validYAML, validEnv)
+
+	// Push v2 (no base_version — always succeeds).
+	pushConfig(t, r, token, wsID, repoID, validYAML, validEnv)
+
+	// Push with stale base_version=1 — current is v2 → expect 409.
+	body := map[string]any{
+		"compute_provider": "hetzner",
+		"dns_provider":     "cloudflare",
+		"storage_provider": "cloudflare",
+		"build_provider":   "daytona",
+		"config":           validYAML,
+		"env":              validEnv,
+		"base_version":     1,
+	}
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("stale base_version: status = %d, want 409, body: %s", w.Code, w.Body.String())
+	}
+
+	// Push with correct base_version=2 — should succeed (201).
+	body["base_version"] = 2
+	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("correct base_version: status = %d, want 201, body: %s", w.Code, w.Body.String())
+	}
 }
 
 func TestConfig_CrossUserIsolation(t *testing.T) {

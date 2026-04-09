@@ -124,6 +124,24 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 		Security:    security,
 	}, DeleteWorkspace(db))
 
+	// ── Providers ───────────────────────────────────────────────────────────
+	prov := "/workspaces/{workspace_id}/providers"
+
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "list-providers", Method: http.MethodGet, Path: prov,
+		Summary: "List providers", Tags: []string{"providers"}, Security: security,
+	}, ListProviders(db))
+
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "set-provider", Method: http.MethodPost, Path: prov,
+		Summary: "Set provider", Tags: []string{"providers"}, Security: security,
+	}, SetProvider(db))
+
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "delete-provider", Method: http.MethodDelete, Path: prov + "/{kind}/{name}",
+		Summary: "Delete provider", Tags: []string{"providers"}, Security: security,
+	}, DeleteProvider(db))
+
 	// ── Repos ────────────────────────────────────────────────────────────────
 	rp := "/workspaces/{workspace_id}/repos"
 	rpID := rp + "/{repo_id}"

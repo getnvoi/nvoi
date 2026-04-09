@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -166,6 +167,86 @@ func (wu *WorkspaceUser) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// ── InfraProvider ───────────────────────────────────────────────────────────
+
+// ProviderKind is the category of infrastructure provider.
+type ProviderKind string
+
+const (
+	ProviderKindCompute ProviderKind = "compute"
+	ProviderKindDNS     ProviderKind = "dns"
+	ProviderKindStorage ProviderKind = "storage"
+	ProviderKindBuild   ProviderKind = "build"
+)
+
+// InfraProvider stores a provider with its credentials at workspace scope.
+// A workspace can have multiple providers (e.g. hetzner + aws compute).
+// Repos link to specific providers via FK columns.
+type InfraProvider struct {
+	ID          string       `gorm:"primaryKey" json:"id"`
+	WorkspaceID string       `gorm:"not null;uniqueIndex:idx_infra_ws_kind_name" json:"workspace_id"`
+	Kind        ProviderKind `gorm:"not null;uniqueIndex:idx_infra_ws_kind_name" json:"kind"` // compute, dns, storage, build
+	Name        string       `gorm:"not null;uniqueIndex:idx_infra_ws_kind_name" json:"name"` // hetzner, cloudflare, aws, daytona, etc.
+	Credentials string       `gorm:"type:text;not null" json:"-"`                             // encrypted JSON (schema-mapped)
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
+
+	Workspace Workspace `gorm:"foreignKey:WorkspaceID" json:"-"`
+}
+
+func (InfraProvider) TableName() string { return "infra_providers" }
+
+func (p *InfraProvider) BeforeCreate(tx *gorm.DB) error {
+	if p.ID == "" {
+		p.ID = newUUID()
+	}
+	return p.encryptCredentials()
+}
+
+func (p *InfraProvider) BeforeUpdate(tx *gorm.DB) error {
+	return p.encryptCredentials()
+}
+
+func (p *InfraProvider) AfterFind(tx *gorm.DB) error {
+	return p.decryptCredentials()
+}
+
+func (p *InfraProvider) encryptCredentials() error {
+	if p.Credentials == "" {
+		return nil
+	}
+	enc, err := Encrypt(p.Credentials)
+	if err != nil {
+		return err
+	}
+	p.Credentials = enc
+	return nil
+}
+
+func (p *InfraProvider) decryptCredentials() error {
+	if p.Credentials == "" {
+		return nil
+	}
+	dec, err := Decrypt(p.Credentials)
+	if err != nil {
+		return fmt.Errorf("decrypt InfraProvider.Credentials: %w", err)
+	}
+	p.Credentials = dec
+	return nil
+}
+
+// CredentialsMap returns the credentials as a map[string]string.
+func (p *InfraProvider) CredentialsMap() map[string]string {
+	if p == nil || p.Credentials == "" {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(p.Credentials), &m); err != nil {
+		return nil
+	}
+	return m
+}
+
 // ── Repo ──────────────────────────────────────────────────────────────────────
 
 type Repo struct {
@@ -179,7 +260,17 @@ type Repo struct {
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 
-	Workspace Workspace `gorm:"foreignKey:WorkspaceID" json:"-"`
+	// Provider links — each repo picks one provider per kind from the workspace.
+	ComputeProviderID *string `gorm:"index" json:"compute_provider_id,omitempty"`
+	DNSProviderID     *string `gorm:"index" json:"dns_provider_id,omitempty"`
+	StorageProviderID *string `gorm:"index" json:"storage_provider_id,omitempty"`
+	BuildProviderID   *string `gorm:"index" json:"build_provider_id,omitempty"`
+
+	Workspace       Workspace      `gorm:"foreignKey:WorkspaceID" json:"-"`
+	ComputeProvider *InfraProvider `gorm:"foreignKey:ComputeProviderID" json:"compute_provider,omitempty"`
+	DNSProvider     *InfraProvider `gorm:"foreignKey:DNSProviderID" json:"dns_provider,omitempty"`
+	StorageProvider *InfraProvider `gorm:"foreignKey:StorageProviderID" json:"storage_provider,omitempty"`
+	BuildProvider   *InfraProvider `gorm:"foreignKey:BuildProviderID" json:"build_provider,omitempty"`
 }
 
 func (r *Repo) BeforeCreate(tx *gorm.DB) error {

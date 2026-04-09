@@ -7,9 +7,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newLogsCmd() *cobra.Command {
+func newDeployLogsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "logs <deployment-id>",
+		Use:   "deploy-logs <deployment-id>",
 		Short: "Stream deployment logs",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -22,7 +22,7 @@ func newLogsCmd() *cobra.Command {
 				return err
 			}
 
-			path := "/workspaces/" + wsID + "/repos/" + repoID + "/deployments/" + args[0] + "/logs"
+			path := "/workspaces/" + wsID + "/repos/" + repoID + "/deployments/" + esc(args[0]) + "/logs"
 
 			resp, err := client.doRaw("GET", path)
 			if err != nil {

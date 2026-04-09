@@ -60,6 +60,20 @@ func (f *FirewallConfig) UnmarshalYAML(value *yaml.Node) error {
 	return fmt.Errorf("firewall must be a string preset or mapping")
 }
 
+func (f FirewallConfig) MarshalJSON() ([]byte, error) {
+	if f.Preset != "" && len(f.Rules) == 0 {
+		return json.Marshal(f.Preset)
+	}
+	m := make(map[string]any, len(f.Rules)+1)
+	if f.Preset != "" {
+		m["preset"] = f.Preset
+	}
+	for port, cidrs := range f.Rules {
+		m[port] = cidrs
+	}
+	return json.Marshal(m)
+}
+
 func (f *FirewallConfig) UnmarshalJSON(data []byte) error {
 	// Try string first
 	var s string
@@ -101,33 +115,38 @@ type DomainConfig struct {
 	Domains []string `json:"domains" yaml:"domains"`
 }
 
-// IngressConfig is the declarative production surface for ingress behavior.
+// IngressConfig controls TLS and edge proxy behavior.
 //
 //	ingress:
-//	  exposure: direct
-//	  tls:
-//	    mode: acme
+//	  cloudflare-managed: true
 //
 //	ingress:
-//	  exposure: edge_proxied
-//	  edge:
-//	    provider: cloudflare
-//	  tls:
-//	    mode: edge_origin
+//	  cert: TLS_CERT_PEM
+//	  key: TLS_KEY_PEM
+//
+// Omit ingress entirely for ACME (Caddy auto-certs).
 type IngressConfig struct {
-	Exposure string             `json:"exposure,omitempty" yaml:"exposure,omitempty"`
-	TLS      *IngressTLSConfig  `json:"tls,omitempty" yaml:"tls,omitempty"`
-	Edge     *IngressEdgeConfig `json:"edge,omitempty" yaml:"edge,omitempty"`
+	CloudflareManaged bool   `json:"cloudflare-managed,omitempty" yaml:"cloudflare-managed,omitempty"`
+	Cert              string `json:"cert,omitempty" yaml:"cert,omitempty"` // env key containing PEM
+	Key               string `json:"key,omitempty" yaml:"key,omitempty"`   // env key containing PEM
 }
 
-type IngressTLSConfig struct {
-	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
-	Cert string `json:"cert,omitempty" yaml:"cert,omitempty"` // env key containing PEM
-	Key  string `json:"key,omitempty" yaml:"key,omitempty"`   // env key containing PEM
+// Workload holds the fields shared by Service and Cron.
+// Both run containers with the same image/command/env/secret/storage/volume model.
+type Workload struct {
+	Image   string   `json:"image,omitempty" yaml:"image,omitempty"`
+	Command string   `json:"command,omitempty" yaml:"command,omitempty"`
+	Server  string   `json:"server,omitempty" yaml:"server,omitempty"`
+	Env     []string `json:"env,omitempty" yaml:"env,omitempty"`
+	Secrets []string `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	Storage []string `json:"storage,omitempty" yaml:"storage,omitempty"`
+	Volumes []string `json:"volumes,omitempty" yaml:"volumes,omitempty"`
 }
 
-type IngressEdgeConfig struct {
-	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+// Cron is a scheduled workload (CronJob).
+type Cron struct {
+	Workload `yaml:",inline"`
+	Schedule string `json:"schedule" yaml:"schedule"`
 }
 
 // Config is the public schema — what users write.
@@ -138,6 +157,7 @@ type Config struct {
 	Build    map[string]Build   `json:"build,omitempty" yaml:"build,omitempty"`
 	Storage  map[string]Storage `json:"storage,omitempty" yaml:"storage,omitempty"`
 	Services map[string]Service `json:"services" yaml:"services"`
+	Crons    map[string]Cron    `json:"crons,omitempty" yaml:"crons,omitempty"`
 	Domains  map[string]Domains `json:"domains,omitempty" yaml:"domains,omitempty"`
 	Ingress  *IngressConfig     `json:"ingress,omitempty" yaml:"ingress,omitempty"`
 }
@@ -145,6 +165,7 @@ type Config struct {
 type Server struct {
 	Type   string `json:"type" yaml:"type"`
 	Region string `json:"region" yaml:"region"`
+	Role   string `json:"role" yaml:"role"` // "master" or "worker" — required
 }
 
 type Volume struct {
@@ -163,19 +184,15 @@ type Storage struct {
 }
 
 type Service struct {
-	Image    string   `json:"image,omitempty" yaml:"image,omitempty"`       // pre-built image (e.g. postgres:17)
-	Build    string   `json:"build,omitempty" yaml:"build,omitempty"`       // references a build target
-	Managed  string   `json:"managed,omitempty" yaml:"managed,omitempty"`   // managed service kind (postgres, redis, meilisearch)
-	Port     int      `json:"port,omitempty" yaml:"port,omitempty"`         // exposed port
-	Replicas int      `json:"replicas,omitempty" yaml:"replicas,omitempty"` // default 1
-	Command  string   `json:"command,omitempty" yaml:"command,omitempty"`   // override entrypoint
-	Health   string   `json:"health,omitempty" yaml:"health,omitempty"`     // readiness probe path
-	Server   string   `json:"server,omitempty" yaml:"server,omitempty"`     // pin to server via node selector
-	Volumes  []string `json:"volumes,omitempty" yaml:"volumes,omitempty"`   // name:/path
-	Env      []string `json:"env,omitempty" yaml:"env,omitempty"`           // KEY=VALUE or KEY (resolved from .env)
-	Secrets  []string `json:"secrets,omitempty" yaml:"secrets,omitempty"`   // k8s secret key refs (resolved from .env)
-	Storage  []string `json:"storage,omitempty" yaml:"storage,omitempty"`   // storage name refs → STORAGE_{NAME}_*
-	Uses     []string `json:"uses,omitempty" yaml:"uses,omitempty"`         // managed service refs → credentials injected as secrets
+	Workload      `yaml:",inline"`
+	Managed       string   `json:"managed,omitempty" yaml:"managed,omitempty"`               // managed service kind (postgres, redis, meilisearch)
+	Port          int      `json:"port,omitempty" yaml:"port,omitempty"`                     // exposed port
+	Replicas      int      `json:"replicas,omitempty" yaml:"replicas,omitempty"`             // default 1
+	Health        string   `json:"health,omitempty" yaml:"health,omitempty"`                 // readiness probe path
+	Uses          []string `json:"uses,omitempty" yaml:"uses,omitempty"`                     // managed service refs → credentials injected as secrets
+	VolumeSize    int      `json:"volume_size,omitempty" yaml:"volume_size,omitempty"`       // data volume size in GB (managed services)
+	BackupStorage string   `json:"backup_storage,omitempty" yaml:"backup_storage,omitempty"` // pre-existing storage name for backups
+	BackupCron    string   `json:"backup_cron,omitempty" yaml:"backup_cron,omitempty"`       // backup schedule
 }
 
 // Domains supports a single string, a list of strings, or a structured form with domains.
@@ -266,10 +283,9 @@ func ParseJSON(data []byte) (*Config, error) {
 
 // ParseEnv parses a .env file into a key-value map.
 // Delegates to godotenv — handles quoting, escaping, multiline, comments.
-func ParseEnv(data string) map[string]string {
-	env, err := godotenv.Parse(strings.NewReader(data))
-	if err != nil {
-		return map[string]string{}
+func ParseEnv(data string) (map[string]string, error) {
+	if data == "" {
+		return map[string]string{}, nil
 	}
-	return env
+	return godotenv.Parse(strings.NewReader(data))
 }

@@ -125,16 +125,17 @@ func TestRepos_OtherUserCantAccess(t *testing.T) {
 	}
 }
 
-func TestRepos_UpdateMissingName(t *testing.T) {
+func TestRepos_UpdateEmptyBody(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
+	// Empty body is valid — no-op update (name is optional now, provider links are optional).
 	req := authRequest("PUT", "/workspaces/"+wsID+"/repos/"+repoID, map[string]string{}, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
 	}
 }
 

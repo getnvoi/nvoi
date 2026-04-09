@@ -110,20 +110,21 @@ func BackupDownload(db *gorm.DB) func(context.Context, *BackupDownloadInput) (*h
 		}
 
 		storageName := input.Name + "-backups"
-		data, err := pkgcore.BackupDownload(ctx, pkgcore.BackupDownloadRequest{
+		req := pkgcore.BackupDownloadRequest{
 			Cluster: *cluster,
 			Name:    storageName,
 			Key:     input.Key,
-		})
-		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
 		}
 
 		return &huma.StreamResponse{
 			Body: func(ctx huma.Context) {
 				ctx.SetHeader("Content-Type", "application/octet-stream")
 				ctx.SetHeader("Content-Disposition", "attachment; filename=\""+input.Key+"\"")
-				ctx.BodyWriter().Write(data)
+				// Stream directly from S3 to the HTTP response — no buffering.
+				if err := pkgcore.BackupDownload(context.Background(), req, ctx.BodyWriter()); err != nil {
+					// Headers already sent — can't change status code. Log the error.
+					ctx.BodyWriter().Write([]byte("\nerror: " + err.Error()))
+				}
 			},
 		}, nil
 	}

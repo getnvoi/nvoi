@@ -13,8 +13,8 @@ export BUILD_PROVIDER=daytona
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/core instance set master --compute-type cx23 --compute-region fsn1
-bin/core instance set worker-1 --compute-type cx33 --compute-region fsn1 --worker
+bin/core instance set master --compute-type cx23 --compute-region fsn1 --role master
+bin/core instance set worker-1 --compute-type cx33 --compute-region fsn1 --role worker
 bin/core firewall set cloudflare
 
 # ── Build ───────────────────────────────────────────────────────────────────────

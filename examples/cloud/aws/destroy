@@ -2,13 +2,23 @@
 set -euo pipefail
 
 # ── AWS teardown via cloud CLI ────────────────────────────────────────────────
-# Push empty config — the diff generates delete steps for everything.
 
-export COMPUTE_PROVIDER=aws
-export DNS_PROVIDER=cloudflare
-export STORAGE_PROVIDER=aws
+set -a; source examples/.env; set +a
 
-bin/cloud push --config examples/cloud/empty.yaml --env examples/.env \
-  --compute-provider aws --dns-provider cloudflare --storage-provider aws
+bin/cloud login
+bin/cloud repos use dummy-rails
+
+bin/cloud ingress delete web:aws-cloud.nvoi.to
+bin/cloud dns delete web:aws-cloud.nvoi.to
+bin/cloud service delete jobs
+bin/cloud service delete web
+bin/cloud database delete db --type postgres
+bin/cloud storage delete db-backups
+bin/cloud storage delete assets
+bin/cloud secret delete RAILS_MASTER_KEY
+bin/cloud secret delete POSTGRES_PASSWORD
+bin/cloud secret delete POSTGRES_USER
+bin/cloud secret delete POSTGRES_DB
+bin/cloud instance delete master
 
 bin/cloud deploy

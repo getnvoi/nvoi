@@ -2,13 +2,23 @@
 set -euo pipefail
 
 # ── Scaleway teardown via cloud CLI ───────────────────────────────────────────
-# Push empty config — the diff generates delete steps for everything.
 
-export COMPUTE_PROVIDER=scaleway
-export DNS_PROVIDER=cloudflare
-export STORAGE_PROVIDER=cloudflare
+set -a; source examples/.env; set +a
 
-bin/cloud push --config examples/cloud/empty.yaml --env examples/.env \
-  --compute-provider scaleway --dns-provider cloudflare --storage-provider cloudflare
+bin/cloud login
+bin/cloud repos use dummy-rails
+
+bin/cloud ingress delete web:scw-cloud.nvoi.to
+bin/cloud dns delete web:scw-cloud.nvoi.to
+bin/cloud service delete jobs
+bin/cloud service delete web
+bin/cloud database delete db --type postgres
+bin/cloud storage delete db-backups
+bin/cloud storage delete assets
+bin/cloud secret delete RAILS_MASTER_KEY
+bin/cloud secret delete POSTGRES_PASSWORD
+bin/cloud secret delete POSTGRES_USER
+bin/cloud secret delete POSTGRES_DB
+bin/cloud instance delete master
 
 bin/cloud deploy

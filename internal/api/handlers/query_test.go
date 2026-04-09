@@ -120,7 +120,7 @@ func TestDNS_NoDNSProvider(t *testing.T) {
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
 	// Push config with no dns_provider.
-	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"
+	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\n    role: master\nservices:\n  web:\n    image: nginx\n    port: 80\n"
 	body := map[string]any{"compute_provider": "hetzner", "config": minimalYAML}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
@@ -287,7 +287,7 @@ func TestBuildPrune_MissingKeep(t *testing.T) {
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
 	// Push config so we get past the no-config check.
-	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"
+	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\n    role: master\nservices:\n  web:\n    image: nginx\n    port: 80\n"
 	body := map[string]any{"compute_provider": "hetzner", "config": minimalYAML}
 	pushReq := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	pw := httptest.NewRecorder()
@@ -368,7 +368,7 @@ func TestExec_MissingCommand(t *testing.T) {
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
 	// Push config so we get past findRepo.
-	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"
+	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\n    role: master\nservices:\n  web:\n    image: nginx\n    port: 80\n"
 	body := map[string]any{"compute_provider": "hetzner", "config": minimalYAML}
 	pushReq := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	pw := httptest.NewRecorder()

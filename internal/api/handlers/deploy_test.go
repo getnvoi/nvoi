@@ -15,6 +15,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 firewall: default
 services:
   db:
@@ -290,6 +291,7 @@ servers:
   master:
     type: cx23
     region: fsn1
+    role: master
 firewall: default
 services:
   web:

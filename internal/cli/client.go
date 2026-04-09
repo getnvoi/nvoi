@@ -12,6 +12,24 @@ import (
 
 const defaultAPIBase = "https://api.nvoi.to"
 
+// APIError is a typed error from the API with a status code.
+type APIError struct {
+	Status  int
+	Message string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("api error %d: %s", e.Status, e.Message)
+}
+
+// IsNotFound returns true if the error is a 404 from the API.
+func IsNotFound(err error) bool {
+	if e, ok := err.(*APIError); ok {
+		return e.Status == 404
+	}
+	return false
+}
+
 type APIClient struct {
 	base  string
 	token string
@@ -80,7 +98,7 @@ func (c *APIClient) Do(method, path string, body, out any) error {
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("api error %d: %s", resp.StatusCode, string(respBody))
+		return parseAPIError(resp.StatusCode, respBody)
 	}
 
 	if out != nil {
@@ -108,7 +126,7 @@ func (c *APIClient) doRaw(method, path string) (*http.Response, error) {
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(respBody))
+		return nil, parseAPIError(resp.StatusCode, respBody)
 	}
 
 	return resp, nil
@@ -145,8 +163,19 @@ func (c *APIClient) doRawWithBody(method, path string, body any) (*http.Response
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(respBody))
+		return nil, parseAPIError(resp.StatusCode, respBody)
 	}
 
 	return resp, nil
+}
+
+func parseAPIError(status int, body []byte) *APIError {
+	var apiErr struct {
+		Err string `json:"error"`
+	}
+	msg := string(body)
+	if json.Unmarshal(body, &apiErr) == nil && apiErr.Err != "" {
+		msg = apiErr.Err
+	}
+	return &APIError{Status: status, Message: msg}
 }

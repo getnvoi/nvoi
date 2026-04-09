@@ -8,10 +8,10 @@ import (
 func validConfig() *Config {
 	return &Config{
 		Servers: map[string]Server{
-			"master": {Type: "cx23", Region: "fsn1"},
+			"master": {Type: "cx23", Region: "fsn1", Role: "master"},
 		},
 		Services: map[string]Service{
-			"web": {Image: "nginx", Port: 80},
+			"web": {Workload: Workload{Image: "nginx"}, Port: 80},
 		},
 	}
 }
@@ -43,10 +43,110 @@ func TestValidate_ServerMissingType(t *testing.T) {
 
 func TestValidate_ServerMissingRegion(t *testing.T) {
 	cfg := validConfig()
-	cfg.Servers["master"] = Server{Type: "cx23"}
+	cfg.Servers["master"] = Server{Type: "cx23", Role: "master"}
 	errs := Validate(cfg)
 	assertHasError(t, errs, "servers.master.region")
 }
+
+func TestValidate_ServerMissingRole(t *testing.T) {
+	cfg := validConfig()
+	cfg.Servers["master"] = Server{Type: "cx23", Region: "fsn1"} // no role
+	errs := Validate(cfg)
+	assertHasError(t, errs, "role: required")
+}
+
+func TestValidate_ServerInvalidRole(t *testing.T) {
+	cfg := validConfig()
+	cfg.Servers["master"] = Server{Type: "cx23", Region: "fsn1", Role: "leader"}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "must be master or worker")
+}
+
+func TestValidate_MultipleServers_NoMaster(t *testing.T) {
+	cfg := &Config{
+		Servers: map[string]Server{
+			"node-1": {Type: "cx23", Region: "fsn1", Role: "worker"},
+			"node-2": {Type: "cx23", Region: "fsn1", Role: "worker"},
+		},
+		Services: map[string]Service{
+			"web": {Workload: Workload{Image: "nginx"}, Port: 80},
+		},
+	}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "exactly one server must have role: master")
+}
+
+func TestValidate_MultipleServers_TwoMasters(t *testing.T) {
+	cfg := &Config{
+		Servers: map[string]Server{
+			"master-1": {Type: "cx23", Region: "fsn1", Role: "master"},
+			"master-2": {Type: "cx23", Region: "fsn1", Role: "master"},
+		},
+		Services: map[string]Service{
+			"web": {Workload: Workload{Image: "nginx"}, Port: 80},
+		},
+	}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "multiple masters not yet supported")
+}
+
+// ── Cron validation ───────────────────────────────────────────────────────────
+
+func TestValidate_CronMissingImage(t *testing.T) {
+	cfg := validConfig()
+	cfg.Crons = map[string]Cron{"backup": {Schedule: "0 2 * * *"}}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "crons.backup.image: required")
+}
+
+func TestValidate_CronMissingSchedule(t *testing.T) {
+	cfg := validConfig()
+	cfg.Crons = map[string]Cron{"backup": {Workload: Workload{Image: "postgres:17"}}}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "crons.backup.schedule: required")
+}
+
+func TestValidate_CronServerNotDefined(t *testing.T) {
+	cfg := validConfig()
+	cfg.Crons = map[string]Cron{"backup": {Workload: Workload{Image: "pg:17", Server: "nonexistent"}, Schedule: "0 2 * * *"}}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "crons.backup.server")
+}
+
+func TestValidate_CronStorageNotDefined(t *testing.T) {
+	cfg := validConfig()
+	cfg.Crons = map[string]Cron{"backup": {Workload: Workload{Image: "pg:17", Storage: []string{"missing"}}, Schedule: "0 2 * * *"}}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "crons.backup.storage")
+}
+
+func TestValidate_CronVolumeNotDefined(t *testing.T) {
+	cfg := validConfig()
+	cfg.Crons = map[string]Cron{"backup": {Workload: Workload{Image: "pg:17", Volumes: []string{"missing:/data"}}, Schedule: "0 2 * * *"}}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "crons.backup.volumes")
+}
+
+func TestValidate_CronVolumeBadFormat(t *testing.T) {
+	cfg := validConfig()
+	cfg.Crons = map[string]Cron{"backup": {Workload: Workload{Image: "pg:17", Volumes: []string{"nocolon"}}, Schedule: "0 2 * * *"}}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "must be name:/path")
+}
+
+func TestValidate_CronValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Storage = map[string]Storage{"backups": {}}
+	cfg.Volumes = map[string]Volume{"data": {Size: 10, Server: "master"}}
+	cfg.Crons = map[string]Cron{"backup": {
+		Workload: Workload{Image: "pg:17", Server: "master", Storage: []string{"backups"}, Volumes: []string{"data:/data"}},
+		Schedule: "0 2 * * *",
+	}}
+	errs := Validate(cfg)
+	assertNoError(t, errs, "crons")
+}
+
+// ── Services ──────────────────────────────────────────────────────────────────
 
 func TestValidate_NoServices(t *testing.T) {
 	cfg := validConfig()
@@ -59,19 +159,11 @@ func TestValidate_NoServices(t *testing.T) {
 	}
 }
 
-func TestValidate_ServiceNoSource(t *testing.T) {
+func TestValidate_ServiceNoImage(t *testing.T) {
 	cfg := validConfig()
 	cfg.Services["web"] = Service{Port: 80}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "must have one of image, build, or managed")
-}
-
-func TestValidate_ServiceMultipleSources(t *testing.T) {
-	cfg := validConfig()
-	cfg.Build = map[string]Build{"web": {Source: "org/repo"}}
-	cfg.Services["web"] = Service{Image: "nginx", Build: "web", Port: 80}
-	errs := Validate(cfg)
-	assertHasError(t, errs, "mutually exclusive")
+	assertHasError(t, errs, "image is required")
 }
 
 func TestValidate_ServiceManagedValid(t *testing.T) {
@@ -83,68 +175,91 @@ func TestValidate_ServiceManagedValid(t *testing.T) {
 	}
 }
 
-func TestValidate_ServiceManagedPlusImage(t *testing.T) {
+func TestValidate_ServiceManagedPlusImage_Allowed(t *testing.T) {
+	// Image on a managed service is the custom base image — not a separate source.
 	cfg := validConfig()
-	cfg.Services["db"] = Service{Managed: "postgres", Image: "postgres:17"}
+	cfg.Services["db"] = Service{Workload: Workload{Image: "postgres:16"}, Managed: "postgres"}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "mutually exclusive")
+	assertNoError(t, errs, "mutually exclusive")
 }
 
 func TestValidate_ServiceUsesRefValid(t *testing.T) {
 	cfg := validConfig()
 	cfg.Services["db"] = Service{Managed: "postgres"}
-	cfg.Services["web"] = Service{Image: "nginx", Port: 80, Uses: []string{"db"}}
+	cfg.Services["web"] = Service{Workload: Workload{Image: "nginx"}, Port: 80, Uses: []string{"db"}}
 	errs := Validate(cfg)
 	if len(errs) > 0 {
 		t.Errorf("uses ref to managed service should be valid, got: %v", errs)
 	}
 }
 
+func TestValidate_ManagedRejectsIncompatibleFields(t *testing.T) {
+	cfg := validConfig()
+	cfg.Services["db"] = Service{
+		Workload: Workload{Command: "postgres", Env: []string{"FOO=bar"}},
+		Managed:  "postgres",
+		Port:     5432,
+		Replicas: 2,
+		Health:   "/healthz",
+		Uses:     []string{"other"},
+	}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "port not supported on managed")
+	assertHasError(t, errs, "replicas not supported on managed")
+	assertHasError(t, errs, "command not supported on managed")
+	assertHasError(t, errs, "health not supported on managed")
+	assertHasError(t, errs, "env not supported on managed")
+	assertHasError(t, errs, "uses not supported on managed")
+}
+
+func TestValidate_ManagedAllowsSecretsAndImage(t *testing.T) {
+	cfg := validConfig()
+	cfg.Services["db"] = Service{
+		Workload: Workload{Image: "postgres:16", Secrets: []string{"POSTGRES_PASSWORD"}},
+		Managed:  "postgres",
+	}
+	errs := Validate(cfg)
+	assertNoError(t, errs, "not supported on managed")
+}
+
 func TestValidate_ServiceUsesRefInvalid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Services["web"] = Service{Image: "nginx", Uses: []string{"nonexistent"}}
+	cfg.Services["web"] = Service{Workload: Workload{Image: "nginx"}, Uses: []string{"nonexistent"}}
 	errs := Validate(cfg)
 	assertHasError(t, errs, "not a managed service")
 }
 
-func TestValidate_ServiceBuildRefMissing(t *testing.T) {
-	cfg := validConfig()
-	cfg.Services["web"] = Service{Build: "nonexistent", Port: 80}
-	errs := Validate(cfg)
-	assertHasError(t, errs, "not a defined build target")
-}
-
 func TestValidate_ServiceServerRefMissing(t *testing.T) {
 	cfg := validConfig()
-	cfg.Services["web"] = Service{Image: "nginx", Server: "nonexistent"}
+	cfg.Services["web"] = Service{Workload: Workload{Image: "nginx", Server: "nonexistent"}}
 	errs := Validate(cfg)
 	assertHasError(t, errs, "not a defined server")
 }
 
 func TestValidate_ServiceStorageRefMissing(t *testing.T) {
 	cfg := validConfig()
-	cfg.Services["web"] = Service{Image: "nginx", Storage: []string{"nonexistent"}}
+	cfg.Services["web"] = Service{Workload: Workload{Image: "nginx", Storage: []string{"nonexistent"}}}
 	errs := Validate(cfg)
 	assertHasError(t, errs, "not a defined storage")
 }
 
 func TestValidate_ServiceVolumeRefMissing(t *testing.T) {
 	cfg := validConfig()
-	cfg.Services["web"] = Service{Image: "nginx", Volumes: []string{"pgdata:/data"}}
+	cfg.Services["web"] = Service{Workload: Workload{Image: "nginx", Volumes: []string{"pgdata:/data"}}}
 	errs := Validate(cfg)
 	assertHasError(t, errs, "volume \"pgdata\" is not defined")
 }
 
 func TestValidate_ServiceVolumeBadFormat(t *testing.T) {
 	cfg := validConfig()
-	cfg.Services["web"] = Service{Image: "nginx", Volumes: []string{"nopath"}}
+	cfg.Services["web"] = Service{Workload: Workload{Image: "nginx", Volumes: []string{"nopath"}}}
 	errs := Validate(cfg)
 	assertHasError(t, errs, "must be name:/path")
 }
 
 func TestValidate_ServiceVolumeAbsolutePathOK(t *testing.T) {
 	cfg := validConfig()
-	cfg.Services["web"] = Service{Image: "nginx", Volumes: []string{"/host/path:/container/path"}}
+	cfg.Services["web"] = Service{Workload: Workload{Image: "nginx", Volumes: []string{"/host/path:/container/path"}}}
 	errs := Validate(cfg)
 	if len(errs) > 0 {
 		t.Errorf("absolute path volume should be valid, got: %v", errs)
@@ -183,7 +298,7 @@ func TestValidate_DomainServiceMissing(t *testing.T) {
 func TestValidate_DomainServiceNoPort(t *testing.T) {
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "default"}
-	cfg.Services["web"] = Service{Image: "nginx"} // no port
+	cfg.Services["web"] = Service{Workload: Workload{Image: "nginx"}} // no port
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
 	errs := Validate(cfg)
 	assertHasError(t, errs, "has no port")
@@ -208,7 +323,7 @@ func TestValidate_OrphanVolume(t *testing.T) {
 func TestValidate_VolumeUsedByService(t *testing.T) {
 	cfg := validConfig()
 	cfg.Volumes = map[string]Volume{"pgdata": {Size: 30, Server: "master"}}
-	cfg.Services["db"] = Service{Image: "postgres:17", Volumes: []string{"pgdata:/var/lib/postgresql/data"}}
+	cfg.Services["db"] = Service{Workload: Workload{Image: "postgres:17", Volumes: []string{"pgdata:/var/lib/postgresql/data"}}}
 	errs := Validate(cfg)
 	for _, err := range errs {
 		if strings.Contains(err.Error(), "not mounted") {
@@ -220,8 +335,8 @@ func TestValidate_VolumeUsedByService(t *testing.T) {
 func TestValidate_FullConfig(t *testing.T) {
 	cfg := &Config{
 		Servers: map[string]Server{
-			"master":   {Type: "cx23", Region: "fsn1"},
-			"worker-1": {Type: "cx33", Region: "fsn1"},
+			"master":   {Type: "cx23", Region: "fsn1", Role: "master"},
+			"worker-1": {Type: "cx33", Region: "fsn1", Role: "worker"},
 		},
 		Firewall: &FirewallConfig{Preset: "default"},
 		Volumes: map[string]Volume{
@@ -235,10 +350,10 @@ func TestValidate_FullConfig(t *testing.T) {
 			"assets": {CORS: true},
 		},
 		Services: map[string]Service{
-			"db":          {Image: "postgres:17", Volumes: []string{"pgdata:/var/lib/postgresql/data"}, Secrets: []string{"POSTGRES_PASSWORD"}},
-			"meilisearch": {Image: "getmeili/meilisearch:latest", Volumes: []string{"meili-data:/meili_data"}},
-			"web":         {Build: "web", Port: 80, Replicas: 2, Health: "/up", Server: "worker-1", Storage: []string{"assets"}},
-			"jobs":        {Build: "web", Command: "bin/jobs", Server: "worker-1"},
+			"db":          {Workload: Workload{Image: "postgres:17", Volumes: []string{"pgdata:/var/lib/postgresql/data"}, Secrets: []string{"POSTGRES_PASSWORD"}}},
+			"meilisearch": {Workload: Workload{Image: "getmeili/meilisearch:latest", Volumes: []string{"meili-data:/meili_data"}}},
+			"web":         {Workload: Workload{Image: "web", Server: "worker-1", Storage: []string{"assets"}}, Port: 80, Replicas: 2, Health: "/up"},
+			"jobs":        {Workload: Workload{Image: "web", Command: "bin/jobs", Server: "worker-1"}},
 		},
 		Domains: map[string]Domains{
 			"web": {"final.nvoi.to"},
@@ -298,94 +413,77 @@ func TestValidate_NoDomainsNoFirewall(t *testing.T) {
 	assertNoError(t, errs, "firewall")
 }
 
-func TestValidate_ProxyWithDefaultFirewall(t *testing.T) {
-	cfg := validConfig()
-	cfg.Firewall = &FirewallConfig{Preset: "default"}
-	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.Ingress = &IngressConfig{Exposure: "edge_proxied"}
-	errs := Validate(cfg)
-	assertHasError(t, errs, "proxied edge mode currently requires \"firewall: cloudflare\"")
-}
-
-func TestValidate_CloudflareFirewallWithoutProxy(t *testing.T) {
+func TestValidate_CloudflareFirewallWithoutDomains_Valid(t *testing.T) {
+	// During incremental build-up: firewall set before domains/ingress.
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "cloudflare"}
-	cfg.Domains = map[string]Domains{"web": {"example.com"}}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "firewall: preset \"cloudflare\" requires ingress.exposure: edge_proxied")
+	assertNoError(t, errs, "cloudflare")
+	assertNoError(t, errs, "ingress")
 }
 
-func TestValidate_CloudflareFirewallWithProxy(t *testing.T) {
+func TestValidate_CloudflareManagedWithoutDomains_Valid(t *testing.T) {
+	// Ingress config set before domains — no coherence error yet.
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "cloudflare"}
-	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.Ingress = &IngressConfig{
-		Exposure: "edge_proxied",
-		Edge:     &IngressEdgeConfig{Provider: "cloudflare"},
-	}
+	cfg.Ingress = &IngressConfig{CloudflareManaged: true}
 	errs := Validate(cfg)
 	assertNoError(t, errs, "firewall")
 	assertNoError(t, errs, "cloudflare")
 }
 
-func TestValidate_IngressConfigProvidedTLSValid(t *testing.T) {
+func TestValidate_CloudflareManagedWithDefaultFirewall(t *testing.T) {
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "default"}
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.Ingress = &IngressConfig{
-		Exposure: "direct",
-		TLS: &IngressTLSConfig{
-			Mode: "provided",
-			Cert: "TLS_CERT_PEM",
-			Key:  "TLS_KEY_PEM",
-		},
-	}
+	cfg.Ingress = &IngressConfig{CloudflareManaged: true}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "cloudflare-managed requires \"firewall: cloudflare\"")
+}
 
+func TestValidate_CloudflareFirewallWithoutCFManaged(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{Preset: "cloudflare"}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	errs := Validate(cfg)
+	assertHasError(t, errs, "preset \"cloudflare\" requires ingress.cloudflare-managed: true")
+}
+
+func TestValidate_CloudflareFirewallWithCFManaged(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{Preset: "cloudflare"}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	cfg.Ingress = &IngressConfig{CloudflareManaged: true}
+	errs := Validate(cfg)
+	assertNoError(t, errs, "firewall")
+	assertNoError(t, errs, "cloudflare")
+}
+
+func TestValidate_CustomCertValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Firewall = &FirewallConfig{Preset: "default"}
+	cfg.Domains = map[string]Domains{"web": {"example.com"}}
+	cfg.Ingress = &IngressConfig{Cert: "TLS_CERT_PEM", Key: "TLS_KEY_PEM"}
 	errs := Validate(cfg)
 	assertNoError(t, errs, "ingress")
 }
 
-func TestValidate_IngressConfigProvidedTLSRequiresBothRefs(t *testing.T) {
+func TestValidate_CertWithoutKey(t *testing.T) {
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "default"}
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.Ingress = &IngressConfig{
-		Exposure: "direct",
-		TLS: &IngressTLSConfig{
-			Mode: "provided",
-			Cert: "TLS_CERT_PEM",
-		},
-	}
-
+	cfg.Ingress = &IngressConfig{Cert: "TLS_CERT_PEM"}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "cert and key must both be set")
+	assertHasError(t, errs, "cert requires key")
 }
 
-func TestValidate_EdgeOriginRequiresExplicitCloudflareOverlay(t *testing.T) {
+func TestValidate_CloudflareManagedAndCertMutuallyExclusive(t *testing.T) {
 	cfg := validConfig()
 	cfg.Firewall = &FirewallConfig{Preset: "cloudflare"}
 	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.Ingress = &IngressConfig{
-		Exposure: "edge_proxied",
-		TLS: &IngressTLSConfig{
-			Mode: "edge_origin",
-		},
-	}
-
+	cfg.Ingress = &IngressConfig{CloudflareManaged: true, Cert: "x", Key: "y"}
 	errs := Validate(cfg)
-	assertHasError(t, errs, "requires ingress.edge.provider")
-}
-
-func TestValidate_EdgeOverlayRequiresExplicitExposure(t *testing.T) {
-	cfg := validConfig()
-	cfg.Firewall = &FirewallConfig{Preset: "default"}
-	cfg.Domains = map[string]Domains{"web": {"example.com"}}
-	cfg.Ingress = &IngressConfig{
-		Edge: &IngressEdgeConfig{Provider: "cloudflare"},
-	}
-
-	errs := Validate(cfg)
-	assertHasError(t, errs, "edge overlays require ingress.exposure")
+	assertHasError(t, errs, "cloudflare-managed and cert/key are mutually exclusive")
 }
 
 func assertNoError(t *testing.T, errs []error, substr string) {

@@ -1,3 +1,4 @@
+// Package api defines the data model, database setup, encryption, JWT auth, and GitHub verification for the nvoi API.
 package api
 
 import (

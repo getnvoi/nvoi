@@ -3,23 +3,91 @@ set -euo pipefail
 
 # ── Hetzner deploy via cloud CLI ──────────────────────────────────────────────
 # Same topology as examples/core/hetzner/deploy, but through the API.
+# Each command mutates the config. deploy executes.
 
-export COMPUTE_PROVIDER=hetzner
-export DNS_PROVIDER=cloudflare
-export STORAGE_PROVIDER=cloudflare
-export BUILD_PROVIDER=daytona
+set -a; source examples/.env; set +a
 
 bin/cloud login
-bin/cloud workspaces use default
-bin/cloud repos create dummy-rails
 
-bin/cloud push \
-  --config examples/cloud/hetzner/config.yaml \
-  --env examples/.env \
-  --compute-provider hetzner \
-  --dns-provider cloudflare \
-  --storage-provider cloudflare \
-  --build-provider daytona
+# ── Providers (workspace-scoped, set once) ──────────────────────────────────
 
-bin/cloud plan
+bin/cloud provider set compute hetzner
+bin/cloud provider set dns cloudflare
+bin/cloud provider set storage cloudflare
+bin/cloud provider set build daytona
+
+# ── Repo (link to providers) ──────────────────────────────────────────────────
+
+bin/cloud repos use dummy-rails \
+  --compute hetzner --dns cloudflare --storage cloudflare --build daytona
+
+# ── Infrastructure ──────────────────────────────────────────────────────────────
+
+bin/cloud instance set master --compute-type cx23 --compute-region fsn1 --role master
+bin/cloud instance set worker-1 --compute-type cx33 --compute-region fsn1 --role worker
+bin/cloud firewall set cloudflare
+
+# ── Build ───────────────────────────────────────────────────────────────────────
+
+bin/cloud build --target web:benbonnet/dummy-rails
+WEB_IMAGE=$(bin/cloud build latest web)
+
+# ── Secrets (app-level only) ────────────────────────────────────────────────────
+
+bin/cloud secret set RAILS_MASTER_KEY "$RAILS_MASTER_KEY"
+bin/cloud secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+bin/cloud secret set POSTGRES_USER "$POSTGRES_USER"
+bin/cloud secret set POSTGRES_DB "$POSTGRES_DB"
+
+# ── Storage ─────────────────────────────────────────────────────────────────────
+
+bin/cloud storage set assets --cors
+bin/cloud storage set db-backups --expire-days 30
+
+# ── Managed database ───────────────────────────────────────────────────────────
+
+bin/cloud database set db --type postgres \
+  --secret POSTGRES_PASSWORD \
+  --secret POSTGRES_USER \
+  --secret POSTGRES_DB \
+  --backup-storage db-backups \
+  --backup-cron "0 2 * * *"
+
+# ── Services ────────────────────────────────────────────────────────────────────
+
+bin/cloud service set web \
+  --image "$WEB_IMAGE" \
+  --port 80 \
+  --replicas 2 \
+  --health-path /up \
+  --server worker-1 \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --secret POSTGRES_PASSWORD \
+  --secret POSTGRES_USER \
+  --secret POSTGRES_DB \
+  --secret RAILS_MASTER_KEY \
+  --storage assets
+
+bin/cloud service set jobs \
+  --image "$WEB_IMAGE" \
+  --command "bin/jobs" \
+  --server worker-1 \
+  --env RAILS_ENV=production \
+  --env POSTGRES_HOST=db \
+  --secret POSTGRES_PASSWORD \
+  --secret POSTGRES_USER \
+  --secret POSTGRES_DB \
+  --secret RAILS_MASTER_KEY
+
+# ── Ingress + DNS ────────────────────────────────────────────────────────────────
+
+bin/cloud ingress set web:hz-cloud.nvoi.to --cloudflare-managed
+bin/cloud dns set web:hz-cloud.nvoi.to --cloudflare-managed
+
+# ── Deploy ───────────────────────────────────────────────────────────────────────
+
 bin/cloud deploy
+
+echo ""
+echo "==> done. https://hz-cloud.nvoi.to"

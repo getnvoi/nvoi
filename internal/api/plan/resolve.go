@@ -27,18 +27,13 @@ type ResolvedSteps struct {
 // This is the API step resolution layer. The local CLI does not use this — it
 // compiles bundles via pkg/managed and executes operations directly.
 func ResolveDeploymentSteps(cfg, current *config.Config, env map[string]string) (*ResolvedSteps, error) {
-	planCfg := copyConfig(cfg)
-
 	defaultServer := firstServer(cfg)
 
 	var managedSetSteps []Step
 	var managedDeleteSteps []Step
 	flatSecrets := map[string]string{}
-	managedSecretNames := map[string]bool{}
+	owned := map[string]bool{} // all resource names the compiler owns — Build() skips these
 	exportedKeys := map[string][]string{}
-
-	// Track which services in the current (reality) config are managed,
-	// so we can strip them before calling Build().
 	managedNames := map[string]bool{}
 
 	// Compile each managed service into a bundle and collect steps.
@@ -50,58 +45,63 @@ func ResolveDeploymentSteps(cfg, current *config.Config, env map[string]string) 
 		managedNames[name] = true
 
 		result, err := managed.Compile(managed.Request{
-			Kind:    svc.Managed,
-			Name:    name,
-			Env:     env,
+			Kind: svc.Managed,
+			Name: name,
+			Env:  env,
+			Params: map[string]any{
+				"image":          svc.Image,
+				"volume_size":    svc.VolumeSize,
+				"backup_storage": svc.BackupStorage,
+				"backup_cron":    svc.BackupCron,
+			},
 			Context: managed.Context{DefaultVolumeServer: defaultServer},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("services.%s.managed: %w", name, err)
 		}
 
-		// Collect secrets.
+		// Collect secrets + build owned set.
 		for key, value := range result.Bundle.InternalSecrets {
 			flatSecrets[key] = value
-			managedSecretNames[key] = true
+			owned[key] = true
 		}
 		for key, value := range result.Bundle.ExportedSecrets {
 			flatSecrets[key] = value
-			managedSecretNames[key] = true
+			owned[key] = true
+		}
+		owned[name] = true // the service itself
+		for _, vol := range result.Bundle.Volumes {
+			owned[vol.Name] = true
+		}
+		for _, st := range result.Bundle.Storages {
+			owned[st.Name] = true
+		}
+		for _, cr := range result.Bundle.Crons {
+			owned[cr.Name] = true
 		}
 
 		// Track exported keys for uses: injection.
 		keys := sortedMapKeys(result.Bundle.ExportedSecrets)
 		exportedKeys[name] = keys
 
-		// Strip managed-owned resources from the config passed to Build().
-		delete(planCfg.Services, name)
-		for _, vol := range result.Bundle.Volumes {
-			delete(planCfg.Volumes, vol.Name)
-		}
-		for _, st := range result.Bundle.Storages {
-			delete(planCfg.Storage, st.Name)
-		}
-
 		managedSetSteps = append(managedSetSteps, bundleToSetSteps(result.Bundle)...)
 	}
 
-	// Inject managed exports into consuming workloads.
-	for _, name := range utils.SortedKeys(planCfg.Services) {
-		svc := planCfg.Services[name]
+	// Build exports map: service name → injected secret keys from uses: references.
+	// Passed to Build() as an explicit input — no config mutation.
+	exports := map[string][]string{}
+	for _, name := range utils.SortedKeys(cfg.Services) {
+		svc := cfg.Services[name]
 		if len(svc.Uses) == 0 {
 			continue
 		}
-		injected := append([]string{}, svc.Secrets...)
 		for _, ref := range svc.Uses {
 			keys, ok := exportedKeys[ref]
 			if !ok {
 				return nil, fmt.Errorf("services.%s.uses: %q has no managed exports", name, ref)
 			}
-			injected = append(injected, keys...)
+			exports[name] = append(exports[name], keys...)
 		}
-		svc.Secrets = injected
-		svc.Uses = nil
-		planCfg.Services[name] = svc
 	}
 
 	// Generate delete steps for managed services that exist in current (reality)
@@ -121,15 +121,23 @@ func ResolveDeploymentSteps(cfg, current *config.Config, env map[string]string) 
 				continue
 			}
 			for _, key := range shape.SecretKeys {
-				managedSecretNames[key] = true
+				owned[key] = true
+			}
+			for _, v := range shape.Volumes {
+				owned[v] = true
+			}
+			for _, s := range shape.Storages {
+				owned[s] = true
+			}
+			for _, c := range shape.Crons {
+				owned[c] = true
+			}
+			for _, s := range shape.Services {
+				owned[s] = true
 			}
 			managedDeleteSteps = append(managedDeleteSteps, shapeToDeleteSteps(shape)...)
 		}
 	}
-
-	// Strip managed-owned resources from current (reality) config too,
-	// so Build() doesn't generate duplicate deletes for managed children.
-	strippedCurrent := stripManagedFromCurrent(current, managedNames)
 
 	// Merge managed secrets into env for Build() validation.
 	mergedEnv := make(map[string]string, len(env)+len(flatSecrets))
@@ -140,21 +148,25 @@ func ResolveDeploymentSteps(cfg, current *config.Config, env map[string]string) 
 		mergedEnv[k] = v
 	}
 
-	// Build non-managed steps.
-	nonManagedSteps, err := Build(strippedCurrent, planCfg, mergedEnv)
+	// Build non-managed steps — owned set tells Build() what to skip,
+	// exports tells it which secrets to inject into consuming services.
+	nonManagedSteps, err := Build(BuildRequest{
+		Reality: current,
+		Desired: cfg,
+		Env:     mergedEnv,
+		Owned:   owned,
+		Exports: exports,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	// Filter out any secret steps that overlap with managed-owned secrets.
-	nonManagedSteps = filterManagedSecretSteps(nonManagedSteps, managedSecretNames)
 
 	// Merge all steps in deployment phase order.
 	steps := mergeSteps(nonManagedSteps, managedDeleteSteps, managedSetSteps)
 
 	return &ResolvedSteps{
 		Steps:   steps,
-		Config:  planCfg,
+		Config:  cfg,
 		Secrets: flatSecrets,
 	}, nil
 }
@@ -175,43 +187,6 @@ func sortedMapKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func copyConfig(cfg *config.Config) *config.Config {
-	dup := *cfg
-	dup.Services = make(map[string]config.Service, len(cfg.Services))
-	for k, v := range cfg.Services {
-		dup.Services[k] = v
-	}
-	dup.Volumes = make(map[string]config.Volume, len(cfg.Volumes))
-	for k, v := range cfg.Volumes {
-		dup.Volumes[k] = v
-	}
-	dup.Storage = make(map[string]config.Storage, len(cfg.Storage))
-	for k, v := range cfg.Storage {
-		dup.Storage[k] = v
-	}
-	return &dup
-}
-
-func stripManagedFromCurrent(current *config.Config, managedNames map[string]bool) *config.Config {
-	if current == nil {
-		return nil
-	}
-	stripped := copyConfig(current)
-	for name := range managedNames {
-		delete(stripped.Services, name)
-	}
-	// Also strip volumes/storages owned by managed services in current.
-	for name, svc := range current.Services {
-		if svc.Managed == "" {
-			continue
-		}
-		// Remove volumes that follow the naming convention.
-		delete(stripped.Volumes, name+"-data")
-		delete(stripped.Storage, name+"-backups")
-	}
-	return stripped
 }
 
 func bundleToSetSteps(bundle managed.Bundle) []Step {
@@ -244,17 +219,6 @@ func shapeToDeleteSteps(shape managed.BundleShape) []Step {
 		steps = append(steps, Step{Kind: StepVolumeDelete, Name: name})
 	}
 	return steps
-}
-
-func filterManagedSecretSteps(steps []Step, managedSecretNames map[string]bool) []Step {
-	filtered := make([]Step, 0, len(steps))
-	for _, step := range steps {
-		if (step.Kind == StepSecretSet || step.Kind == StepSecretDelete) && managedSecretNames[step.Name] {
-			continue
-		}
-		filtered = append(filtered, step)
-	}
-	return filtered
 }
 
 // mergeSteps interleaves managed steps into the non-managed plan output,
@@ -304,7 +268,7 @@ func mergeSteps(nonManaged, managedDeletes, managedSets []Step) []Step {
 func isSetKind(kind StepKind) bool {
 	switch kind {
 	case StepComputeSet, StepFirewallSet, StepVolumeSet, StepBuild,
-		StepSecretSet, StepStorageSet, StepServiceSet, StepCronSet, StepDNSSet:
+		StepSecretSet, StepStorageSet, StepServiceSet, StepCronSet, StepDNSSet, StepIngressSet:
 		return true
 	}
 	return false

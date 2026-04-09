@@ -24,7 +24,7 @@ func TestSSH_RequiresCommand(t *testing.T) {
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
 	// Push a config so clusterFromLatestConfig works.
-	body := map[string]any{"compute_provider": "hetzner", "config": "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"}
+	body := map[string]any{"compute_provider": "hetzner", "config": "servers:\n  master:\n    type: cx23\n    region: fsn1\n    role: master\nservices:\n  web:\n    image: nginx\n    port: 80\n"}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

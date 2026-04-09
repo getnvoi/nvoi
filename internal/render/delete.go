@@ -1,3 +1,4 @@
+// Package render provides shared output renderers (TUI, Plain, JSON) used by both the direct CLI and cloud CLI.
 package render
 
 import (

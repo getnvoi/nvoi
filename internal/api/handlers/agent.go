@@ -1,3 +1,4 @@
+// Package handlers implements the HTTP API endpoints using huma and Gin.
 package handlers
 
 import (

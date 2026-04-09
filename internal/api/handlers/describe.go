@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
@@ -117,6 +118,9 @@ func latestConfigAndEnv(db *gorm.DB, repo *api.Repo) (*api.RepoConfig, map[strin
 	if err := db.Where("repo_id = ?", repo.ID).Order("version DESC").First(&rc).Error; err != nil {
 		return nil, nil, err
 	}
-	env := config.ParseEnv(rc.Env)
+	env, err := config.ParseEnv(rc.Env)
+	if err != nil {
+		return nil, nil, fmt.Errorf("corrupt env: %w", err)
+	}
 	return &rc, env, nil
 }

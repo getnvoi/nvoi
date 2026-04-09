@@ -1,17 +1,17 @@
 package plan
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/api/config"
+	"github.com/google/go-cmp/cmp"
 )
 
 func managedConfig() *config.Config {
 	return &config.Config{
 		Servers: map[string]config.Server{
-			"master": {Type: "cx23", Region: "fsn1"},
+			"master": {Type: "cx23", Region: "fsn1", Role: "master"},
 		},
 		Volumes:  map[string]config.Volume{},
 		Storage:  map[string]config.Storage{},
@@ -32,33 +32,22 @@ func TestResolveDeploymentSteps_PostgresAndAgent(t *testing.T) {
 	cfg := managedConfig()
 	cfg.Services["db"] = config.Service{Managed: "postgres"}
 	cfg.Services["coder"] = config.Service{Managed: "claude"}
-	cfg.Services["web"] = config.Service{Image: "nginx", Port: 80, Uses: []string{"db", "coder"}}
+	cfg.Services["web"] = config.Service{Workload: config.Workload{Image: "nginx"}, Port: 80, Uses: []string{"db", "coder"}}
 
 	got, err := ResolveDeploymentSteps(cfg, nil, managedEnv)
 	if err != nil {
 		t.Fatalf("ResolveDeploymentSteps() error = %v", err)
 	}
 
-	// Managed roots excluded from stripped config.
-	if _, ok := got.Config.Services["db"]; ok {
-		t.Fatal("Config should exclude managed service db")
-	}
-	if _, ok := got.Config.Services["coder"]; ok {
-		t.Fatal("Config should exclude managed service coder")
+	// Managed services still in config (Build skips them via owned set).
+	if _, ok := got.Config.Services["db"]; !ok {
+		t.Fatal("Config should still contain managed service db")
 	}
 
-	// Consuming workload gets injected secrets, uses: cleared.
+	// Config is returned unmodified — uses: still present, secrets unchanged.
 	web := got.Config.Services["web"]
-	if len(web.Uses) != 0 {
-		t.Fatalf("web.Uses = %v, want nil after resolution", web.Uses)
-	}
-	wantSecrets := []string{
-		"DATABASE_DB_HOST", "DATABASE_DB_NAME", "DATABASE_DB_PASSWORD",
-		"DATABASE_DB_PORT", "DATABASE_DB_URL", "DATABASE_DB_USER",
-		"AGENT_CODER_HOST", "AGENT_CODER_PORT", "AGENT_CODER_TOKEN", "AGENT_CODER_URL",
-	}
-	if !reflect.DeepEqual(web.Secrets, wantSecrets) {
-		t.Fatalf("web.Secrets = %v, want %v", web.Secrets, wantSecrets)
+	if len(web.Uses) == 0 {
+		t.Fatal("web.Uses should still be present (config not mutated)")
 	}
 
 	// Check step sequence.
@@ -77,8 +66,8 @@ func TestResolveDeploymentSteps_PostgresAndAgent(t *testing.T) {
 		"service.set:coder", "service.set:db",
 		"service.set:web",
 	}
-	if !reflect.DeepEqual(gotSteps, wantSteps) {
-		t.Fatalf("Steps =\n  %v\nwant\n  %v", gotSteps, wantSteps)
+	if diff := cmp.Diff(wantSteps, gotSteps); diff != "" {
+		t.Fatalf("Steps (-want +got):\n%s", diff)
 	}
 }
 
@@ -98,7 +87,7 @@ func TestResolveDeploymentSteps_MissingCredential(t *testing.T) {
 func TestResolveDeploymentSteps_NoDuplicates(t *testing.T) {
 	cfg := managedConfig()
 	cfg.Services["db"] = config.Service{Managed: "postgres"}
-	cfg.Services["web"] = config.Service{Image: "nginx", Port: 80, Uses: []string{"db"}}
+	cfg.Services["web"] = config.Service{Workload: config.Workload{Image: "nginx"}, Port: 80, Uses: []string{"db"}}
 
 	got, err := ResolveDeploymentSteps(cfg, nil, managedEnv)
 	if err != nil {
@@ -120,7 +109,7 @@ func TestResolveDeploymentSteps_NoDuplicates(t *testing.T) {
 func TestResolveDeploymentSteps_Deterministic(t *testing.T) {
 	cfg := managedConfig()
 	cfg.Services["db"] = config.Service{Managed: "postgres"}
-	cfg.Services["web"] = config.Service{Image: "nginx", Port: 80, Uses: []string{"db"}}
+	cfg.Services["web"] = config.Service{Workload: config.Workload{Image: "nginx"}, Port: 80, Uses: []string{"db"}}
 
 	got1, err := ResolveDeploymentSteps(cfg, nil, managedEnv)
 	if err != nil {
@@ -133,15 +122,15 @@ func TestResolveDeploymentSteps_Deterministic(t *testing.T) {
 
 	steps1 := stepKindNames(got1.Steps)
 	steps2 := stepKindNames(got2.Steps)
-	if !reflect.DeepEqual(steps1, steps2) {
-		t.Fatalf("not deterministic:\n  first  = %v\n  second = %v", steps1, steps2)
+	if diff := cmp.Diff(steps1, steps2); diff != "" {
+		t.Fatalf("not deterministic (-want +got):\n%s", diff)
 	}
 }
 
 func TestResolveDeploymentSteps_WebStepGetsInjectedSecrets(t *testing.T) {
 	cfg := managedConfig()
 	cfg.Services["db"] = config.Service{Managed: "postgres"}
-	cfg.Services["web"] = config.Service{Image: "nginx", Port: 80, Uses: []string{"db"}}
+	cfg.Services["web"] = config.Service{Workload: config.Workload{Image: "nginx"}, Port: 80, Uses: []string{"db"}}
 
 	got, err := ResolveDeploymentSteps(cfg, nil, managedEnv)
 	if err != nil {

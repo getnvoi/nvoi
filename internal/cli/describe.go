@@ -1,33 +1,39 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+
 	"github.com/getnvoi/nvoi/internal/render"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/spf13/cobra"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
-func newDescribeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "describe",
-		Short: "Describe the cluster — nodes, workloads, pods, services, ingress, secrets",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
-			if err != nil {
-				return err
-			}
-			wsID, repoID, err := requireRepo(cfg)
-			if err != nil {
-				return err
-			}
-
-			var res pkgcore.DescribeResult
-			path := "/workspaces/" + wsID + "/repos/" + repoID + "/describe"
-			if err := client.Do("GET", path, nil, &res); err != nil {
-				return err
-			}
-
-			render.RenderDescribe(&res)
-			return nil
-		},
+func (c *CloudBackend) Describe(ctx context.Context, jsonOutput bool) error {
+	var res pkgcore.DescribeResult
+	if err := c.client.Do("GET", c.repoPath("/describe"), nil, &res); err != nil {
+		return err
 	}
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(res)
+	}
+	render.RenderDescribe(&res)
+	return nil
+}
+
+func (c *CloudBackend) Resources(ctx context.Context, jsonOutput bool) error {
+	var groups []provider.ResourceGroup
+	if err := c.client.Do("GET", c.repoPath("/resources"), nil, &groups); err != nil {
+		return err
+	}
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(groups)
+	}
+	render.RenderResources(groups)
+	return nil
 }

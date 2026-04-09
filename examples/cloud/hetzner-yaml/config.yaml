@@ -1,4 +1,5 @@
-# Hetzner deploy config — equivalent to examples/core/hetzner/deploy
+# Hetzner deploy config — YAML push approach.
+# Alternative to the imperative CLI commands in examples/cloud/hetzner/.
 servers:
   master:
     type: cx23
@@ -17,38 +18,40 @@ storage:
   assets:
     cors: true
 
+ingress:
+  cloudflare-managed: true
+
 services:
   db:
     managed: postgres
   web:
-    build: web
+    image: web
     port: 80
     replicas: 2
     health: /up
     server: worker-1
     env:
       - RAILS_ENV=production
+      - POSTGRES_HOST=db
     secrets:
+      - POSTGRES_PASSWORD
+      - POSTGRES_USER
+      - POSTGRES_DB
       - RAILS_MASTER_KEY
     storage:
       - assets
-    uses: [db]
   jobs:
-    build: web
+    image: web
     command: bin/jobs
     server: worker-1
     env:
       - RAILS_ENV=production
+      - POSTGRES_HOST=db
     secrets:
+      - POSTGRES_PASSWORD
+      - POSTGRES_USER
+      - POSTGRES_DB
       - RAILS_MASTER_KEY
-    uses: [db]
-
-ingress:
-  exposure: edge_proxied
-  tls:
-    mode: edge_origin
-  edge:
-    provider: cloudflare
 
 domains:
-  web: hz-cloud.nvoi.to
+  web: hz-yaml.nvoi.to
