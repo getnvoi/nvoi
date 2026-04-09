@@ -43,7 +43,12 @@ services:
       - RAILS_MASTER_KEY
     uses: [db]
 
+ingress:
+  exposure: edge_proxied
+  tls:
+    mode: edge_origin
+  edge:
+    provider: cloudflare
+
 domains:
-  web:
-    domains: [hz-cloud.nvoi.to]
-    proxy: true
+  web: hz-cloud.nvoi.to

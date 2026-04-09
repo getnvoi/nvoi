@@ -65,7 +65,7 @@ services:
       - GOCACHE=/root/.cache/go-build
       - NVOI_API_BASE=http://api:8080
     working_dir: /app
-    command: ["go", "run", "./cmd/cli"]
+    entrypoint: ["go", "run", "./cmd/cli"]
     depends_on:
       api:
         condition: service_healthy
