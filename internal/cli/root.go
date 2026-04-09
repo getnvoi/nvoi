@@ -48,10 +48,6 @@ func Root() *cobra.Command {
 	addStandalone(root, newWorkspacesCmd())
 	addStandalone(root, newReposCmd())
 	addStandalone(root, newProviderCmd())
-	addStandalone(root, newPushCmd())
-	addStandalone(root, newPlanCmd())
-	addStandalone(root, newDeployCmd())
-	addStandalone(root, newDeployLogsCmd())
 
 	return root
 }

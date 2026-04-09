@@ -15,9 +15,7 @@ import (
 func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 	r := gin.Default()
 
-	// Auth middleware on a group — Gin runs it before huma handles the request.
 	r.Use(func(c *gin.Context) {
-		// Public paths skip auth.
 		switch c.Request.URL.Path {
 		case "/health", "/openapi.json", "/openapi.yaml", "/openapi-3.0.json", "/openapi-3.0.yaml", "/docs":
 			c.Next()
@@ -27,12 +25,11 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 			c.Next()
 			return
 		}
-		// Everything else requires auth.
 		api.AuthRequired(db)(c)
 	})
 
 	config := huma.DefaultConfig("nvoi API", "1.0.0")
-	config.Info.Description = "Deploy containers to cloud servers. Push a config YAML + env, get an ordered deployment plan, execute it."
+	config.Info.Description = "Deploy containers to cloud servers."
 	config.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
 		"BearerAuth": {
 			Type:         "http",
@@ -48,11 +45,8 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 	// ── Public ───────────────────────────────────────────────────────────────
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "health",
-		Method:      http.MethodGet,
-		Path:        "/health",
-		Summary:     "Health check",
-		Tags:        []string{"system"},
+		OperationID: "health", Method: http.MethodGet, Path: "/health",
+		Summary: "Health check", Tags: []string{"system"},
 	}, func(_ context.Context, _ *struct{}) (*struct {
 		Body struct {
 			Status string `json:"status"`
@@ -68,60 +62,36 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 	})
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "login",
-		Method:      http.MethodPost,
-		Path:        "/login",
-		Summary:     "Login with GitHub token",
-		Description: "Verifies a GitHub token and returns a JWT. Creates user and default workspace on first login.",
-		Tags:        []string{"auth"},
+		OperationID: "login", Method: http.MethodPost, Path: "/login",
+		Summary: "Login with GitHub token", Tags: []string{"auth"},
 	}, LoginHandler(db, verify))
 
 	// ── Workspaces ───────────────────────────────────────────────────────────
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "list-workspaces",
-		Method:      http.MethodGet,
-		Path:        "/workspaces",
-		Summary:     "List workspaces",
-		Tags:        []string{"workspaces"},
-		Security:    security,
+		OperationID: "list-workspaces", Method: http.MethodGet, Path: "/workspaces",
+		Summary: "List workspaces", Tags: []string{"workspaces"}, Security: security,
 	}, ListWorkspaces(db))
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID:   "create-workspace",
-		Method:        http.MethodPost,
-		Path:          "/workspaces",
-		Summary:       "Create workspace",
-		Tags:          []string{"workspaces"},
-		Security:      security,
+		OperationID: "create-workspace", Method: http.MethodPost, Path: "/workspaces",
+		Summary: "Create workspace", Tags: []string{"workspaces"}, Security: security,
 		DefaultStatus: http.StatusCreated,
 	}, CreateWorkspace(db))
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "get-workspace",
-		Method:      http.MethodGet,
-		Path:        "/workspaces/{workspace_id}",
-		Summary:     "Get workspace",
-		Tags:        []string{"workspaces"},
-		Security:    security,
+		OperationID: "get-workspace", Method: http.MethodGet, Path: "/workspaces/{workspace_id}",
+		Summary: "Get workspace", Tags: []string{"workspaces"}, Security: security,
 	}, GetWorkspace(db))
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "update-workspace",
-		Method:      http.MethodPut,
-		Path:        "/workspaces/{workspace_id}",
-		Summary:     "Update workspace",
-		Tags:        []string{"workspaces"},
-		Security:    security,
+		OperationID: "update-workspace", Method: http.MethodPut, Path: "/workspaces/{workspace_id}",
+		Summary: "Update workspace", Tags: []string{"workspaces"}, Security: security,
 	}, UpdateWorkspace(db))
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "delete-workspace",
-		Method:      http.MethodDelete,
-		Path:        "/workspaces/{workspace_id}",
-		Summary:     "Delete workspace",
-		Tags:        []string{"workspaces"},
-		Security:    security,
+		OperationID: "delete-workspace", Method: http.MethodDelete, Path: "/workspaces/{workspace_id}",
+		Summary: "Delete workspace", Tags: []string{"workspaces"}, Security: security,
 	}, DeleteWorkspace(db))
 
 	// ── Providers ───────────────────────────────────────────────────────────
@@ -172,59 +142,12 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 		Summary: "Delete repo", Tags: []string{"repos"}, Security: security,
 	}, DeleteRepo(db))
 
-	// ── Config ───────────────────────────────────────────────────────────────
-	cfg := rpID + "/config"
+	// ── Run ──────────────────────────────────────────────────────────────────
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "push-config", Method: http.MethodPost, Path: cfg,
-		Summary: "Push config", Tags: []string{"config"}, Security: security,
-		DefaultStatus: http.StatusCreated,
-	}, PushConfig(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "get-config", Method: http.MethodGet, Path: cfg,
-		Summary: "Get latest config", Tags: []string{"config"}, Security: security,
-	}, GetConfig(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "list-configs", Method: http.MethodGet, Path: rpID + "/configs",
-		Summary: "List config versions", Tags: []string{"config"}, Security: security,
-	}, ListConfigs(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "plan-config", Method: http.MethodGet, Path: cfg + "/plan",
-		Summary: "Get execution plan", Tags: []string{"config"}, Security: security,
-	}, PlanConfig(db))
-
-	// ── Deploy ───────────────────────────────────────────────────────────────
-	dep := rpID + "/deployments"
-	depID := dep + "/{deployment_id}"
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "deploy", Method: http.MethodPost, Path: rpID + "/deploy",
-		Summary: "Create deployment", Tags: []string{"deployments"}, Security: security,
-		DefaultStatus: http.StatusCreated,
-	}, Deploy(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "list-deployments", Method: http.MethodGet, Path: dep,
-		Summary: "List deployments", Tags: []string{"deployments"}, Security: security,
-	}, ListDeployments(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "get-deployment", Method: http.MethodGet, Path: depID,
-		Summary: "Get deployment", Tags: []string{"deployments"}, Security: security,
-	}, GetDeployment(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "run-deployment", Method: http.MethodPost, Path: depID + "/run",
-		Summary: "Run deployment", Tags: []string{"deployments"}, Security: security,
-	}, RunDeployment(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "deployment-logs", Method: http.MethodGet, Path: depID + "/logs",
-		Summary: "Stream deployment logs", Tags: []string{"deployments"}, Security: security,
-	}, DeploymentLogs(db))
+		OperationID: "run-command", Method: http.MethodPost, Path: rpID + "/run",
+		Summary: "Run a command against the cluster", Tags: []string{"run"}, Security: security,
+	}, Run(db))
 
 	// ── Cluster ──────────────────────────────────────────────────────────────
 

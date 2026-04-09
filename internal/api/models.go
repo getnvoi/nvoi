@@ -262,171 +262,30 @@ func (r *Repo) decryptSSHKey() error {
 	return nil
 }
 
-// ── RepoConfig (versioned) ───────────────────────────────────────────────────
+// ── CommandLog ───────────────────────────────────────────────────────────────
 
-// RepoConfig stores a versioned config snapshot for a repo.
-// Every push creates a new version. Config is YAML, env is KEY=VALUE pairs.
-// Provider selection is explicit typed columns. Credentials stay in env (encrypted).
-type RepoConfig struct {
-	ID              string          `gorm:"primaryKey" json:"id"`
-	RepoID          string          `gorm:"not null;index" json:"repo_id"`
-	Version         int             `gorm:"not null" json:"version"`
-	ComputeProvider ComputeProvider `gorm:"not null" json:"compute_provider"`
-	DNSProvider     DNSProvider     `json:"dns_provider,omitempty"`
-	StorageProvider StorageProvider `json:"storage_provider,omitempty"`
-	BuildProvider   BuildProvider   `json:"build_provider,omitempty"`
-	Config          string          `gorm:"type:text;not null" json:"config"` // YAML
-	Env             string          `gorm:"type:text" json:"-"`               // encrypted KEY=VALUE (hidden from JSON)
-	CreatedAt       time.Time       `json:"created_at"`
+// CommandLog records one executed command and its outcome.
+// One row per API /run call. No JSONL blob — the CLI renders in real-time.
+type CommandLog struct {
+	ID         string    `gorm:"primaryKey" json:"id"`
+	RepoID     string    `gorm:"not null;index" json:"repo_id"`
+	UserID     string    `gorm:"not null" json:"user_id"`
+	Kind       string    `gorm:"not null" json:"kind"`   // "instance.set", "service.delete", etc.
+	Name       string    `gorm:"not null" json:"name"`   // "master", "web", etc.
+	Status     string    `gorm:"not null" json:"status"` // "succeeded" | "failed"
+	Error      string    `gorm:"type:text" json:"error,omitempty"`
+	DurationMs int       `json:"duration_ms"`
+	CreatedAt  time.Time `json:"created_at"`
 
 	Repo Repo `gorm:"foreignKey:RepoID" json:"-"`
+	User User `gorm:"foreignKey:UserID" json:"-"`
 }
 
-// ValidateProviders checks that all specified providers are valid enum values.
-func (rc *RepoConfig) ValidateProviders() error {
-	if !rc.ComputeProvider.Valid() {
-		return fmt.Errorf("compute_provider: %q is not valid", rc.ComputeProvider)
-	}
-	if rc.DNSProvider != "" && !rc.DNSProvider.Valid() {
-		return fmt.Errorf("dns_provider: %q is not valid", rc.DNSProvider)
-	}
-	if rc.StorageProvider != "" && !rc.StorageProvider.Valid() {
-		return fmt.Errorf("storage_provider: %q is not valid", rc.StorageProvider)
-	}
-	if rc.BuildProvider != "" && !rc.BuildProvider.Valid() {
-		return fmt.Errorf("build_provider: %q is not valid", rc.BuildProvider)
-	}
-	return nil
-}
+func (CommandLog) TableName() string { return "command_logs" }
 
-func (RepoConfig) TableName() string { return "repo_configs" }
-
-func (rc *RepoConfig) BeforeCreate(tx *gorm.DB) error {
-	if rc.ID == "" {
-		rc.ID = newUUID()
-	}
-	return rc.encryptEnv()
-}
-
-func (rc *RepoConfig) AfterFind(tx *gorm.DB) error {
-	return rc.decryptEnv()
-}
-
-func (rc *RepoConfig) encryptEnv() error {
-	if rc.Env == "" {
-		return nil
-	}
-	enc, err := Encrypt(rc.Env)
-	if err != nil {
-		return err
-	}
-	rc.Env = enc
-	return nil
-}
-
-func (rc *RepoConfig) decryptEnv() error {
-	if rc.Env == "" {
-		return nil
-	}
-	dec, err := Decrypt(rc.Env)
-	if err != nil {
-		return fmt.Errorf("decrypt RepoConfig.Env: %w", err)
-	}
-	rc.Env = dec
-	return nil
-}
-
-// ── Deployment ───────────────────────────────────────────────────────────────
-
-type DeploymentStatus string
-
-const (
-	DeploymentPending   DeploymentStatus = "pending"
-	DeploymentRunning   DeploymentStatus = "running"
-	DeploymentSucceeded DeploymentStatus = "succeeded"
-	DeploymentFailed    DeploymentStatus = "failed"
-)
-
-// Deployment tracks a deploy run for a repo config version.
-type Deployment struct {
-	ID           string           `gorm:"primaryKey" json:"id"`
-	RepoID       string           `gorm:"not null;index" json:"repo_id"`
-	RepoConfigID string           `gorm:"not null" json:"repo_config_id"`
-	Status       DeploymentStatus `gorm:"not null;default:'pending'" json:"status"`
-	CreatedAt    time.Time        `json:"created_at"`
-	StartedAt    *time.Time       `json:"started_at,omitempty"`
-	FinishedAt   *time.Time       `json:"finished_at,omitempty"`
-
-	Repo       Repo             `gorm:"foreignKey:RepoID" json:"-"`
-	RepoConfig RepoConfig       `gorm:"foreignKey:RepoConfigID" json:"-"`
-	Steps      []DeploymentStep `gorm:"foreignKey:DeploymentID" json:"steps,omitempty"`
-}
-
-func (Deployment) TableName() string { return "deployments" }
-
-func (d *Deployment) BeforeCreate(tx *gorm.DB) error {
-	if d.ID == "" {
-		d.ID = newUUID()
-	}
-	return nil
-}
-
-// ── DeploymentStep ───────────────────────────────────────────────────────────
-
-type StepStatus string
-
-const (
-	StepStatusPending   StepStatus = "pending"
-	StepStatusRunning   StepStatus = "running"
-	StepStatusSucceeded StepStatus = "succeeded"
-	StepStatusFailed    StepStatus = "failed"
-	StepStatusSkipped   StepStatus = "skipped"
-)
-
-// DeploymentStep is one action in a deployment plan.
-type DeploymentStep struct {
-	ID           string     `gorm:"primaryKey" json:"id"`
-	DeploymentID string     `gorm:"not null;index" json:"deployment_id"`
-	Position     int        `gorm:"not null" json:"position"`
-	Kind         string     `gorm:"not null" json:"kind"`    // "instance.set", "service.delete", etc.
-	Name         string     `gorm:"not null" json:"name"`    // "master", "web", etc.
-	Params       string     `gorm:"type:text" json:"params"` // JSON
-	Status       StepStatus `gorm:"not null;default:'pending'" json:"status"`
-	Error        string     `gorm:"type:text" json:"error,omitempty"`
-	StartedAt    *time.Time `json:"started_at,omitempty"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-
-	Deployment Deployment          `gorm:"foreignKey:DeploymentID" json:"-"`
-	Logs       []DeploymentStepLog `gorm:"foreignKey:DeploymentStepID" json:"logs,omitempty"`
-}
-
-func (DeploymentStep) TableName() string { return "deployment_steps" }
-
-func (s *DeploymentStep) BeforeCreate(tx *gorm.DB) error {
-	if s.ID == "" {
-		s.ID = newUUID()
-	}
-	return nil
-}
-
-// ── DeploymentStepLog ────────────────────────────────────────────────────────
-
-// DeploymentStepLog stores one JSONL line emitted during step execution.
-// Same event format as --json output: {"type":"progress","message":"..."}
-type DeploymentStepLog struct {
-	ID               string    `gorm:"primaryKey" json:"id"`
-	DeploymentStepID string    `gorm:"not null;index" json:"deployment_step_id"`
-	Line             string    `gorm:"type:text;not null" json:"line"` // JSONL
-	CreatedAt        time.Time `json:"created_at"`
-
-	DeploymentStep DeploymentStep `gorm:"foreignKey:DeploymentStepID" json:"-"`
-}
-
-func (DeploymentStepLog) TableName() string { return "deployment_step_logs" }
-
-func (l *DeploymentStepLog) BeforeCreate(tx *gorm.DB) error {
-	if l.ID == "" {
-		l.ID = newUUID()
+func (cl *CommandLog) BeforeCreate(tx *gorm.DB) error {
+	if cl.ID == "" {
+		cl.ID = newUUID()
 	}
 	return nil
 }

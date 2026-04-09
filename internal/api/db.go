@@ -33,10 +33,7 @@ func OpenDB() (*gorm.DB, error) {
 		&WorkspaceUser{},
 		&InfraProvider{},
 		&Repo{},
-		&RepoConfig{},
-		&Deployment{},
-		&DeploymentStep{},
-		&DeploymentStepLog{},
+		&CommandLog{},
 	); err != nil {
 		return nil, fmt.Errorf("auto-migrate: %w", err)
 	}

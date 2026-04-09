@@ -29,10 +29,7 @@ func RunSSH(db *gorm.DB) func(context.Context, *RunSSHInput) (*huma.StreamRespon
 			return nil, err
 		}
 
-		cluster, err := clusterFromLatestConfig(db, repo)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
+		cluster := clusterFromRepo(repo)
 
 		return &huma.StreamResponse{
 			Body: func(ctx huma.Context) {
