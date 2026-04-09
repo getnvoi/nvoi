@@ -44,6 +44,8 @@ Claude Code review runs on GitHub Actions (`.github/workflows/claude-code-review
 
 Does not run on every push/sync to a PR. Manual trigger for re-reviews.
 
+**PR merges:** Never squash. Use `gh pr merge --merge --delete-branch`. Each commit is a meaningful change — preserve the history.
+
 ## Local development
 
 Compose is for local tooling only. Real deploys use `bin/deploy` / `bin/destroy`, which call `bin/nvoi`.
