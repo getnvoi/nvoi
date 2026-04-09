@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
 
 const defaultAPIBase = "https://api.nvoi.to"
@@ -25,7 +26,7 @@ func NewAPIClient(cfg *AuthConfig) *APIClient {
 	return &APIClient{
 		base:  base,
 		token: cfg.Token,
-		http:  &http.Client{},
+		http:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -37,7 +38,7 @@ func NewUnauthClient() *APIClient {
 	}
 	return &APIClient{
 		base: base,
-		http: &http.Client{},
+		http: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

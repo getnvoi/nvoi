@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/utils/s3"
 )
@@ -84,7 +85,8 @@ func main() {
 func deriveR2Credentials(apiKey string) (accessKey, secretKey string) {
 	req, _ := http.NewRequest("GET", "https://api.cloudflare.com/client/v4/user/tokens/verify", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		slog.Error("verify CF token", "error", err)
 		os.Exit(1)
