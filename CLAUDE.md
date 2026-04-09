@@ -196,7 +196,30 @@ nvoi service set <name> --image postgres:17 --port 5432 --secret DB_PASSWORD
 nvoi service set <name> --image $IMAGE --port 3000 --replicas 2 --secret RAILS_MASTER_KEY --storage assets
 nvoi service delete <name>
 
-# Live view — nodes, workloads, pods, services, ingress, secrets, storage
+# Cron — scheduled workloads (CronJob)
+nvoi cron set <name> --image busybox --schedule "0 1 * * *" --command "echo hello"
+nvoi cron set <name> --image postgres:17 --schedule "0 2 * * *" --storage db-backups --secret PGPASSWORD
+nvoi cron delete <name>
+
+# ── Managed databases ─────────────────────────────────────────────────────────
+# --type is required. --secret reads from cluster. --backup-storage must pre-exist.
+nvoi database set <name> --type postgres --secret POSTGRES_PASSWORD
+nvoi database set <name> --type postgres --secret POSTGRES_PASSWORD --backup-storage db-backups --backup-cron "0 2 * * *"
+nvoi database delete <name> --type postgres
+nvoi database list
+nvoi database backup create <name> --type postgres                              # trigger backup now
+nvoi database backup list <name> --type postgres                                # list S3 objects
+nvoi database backup download <name> --type postgres <artifact>                 # download to stdout
+
+# ── Managed agents ────────────────────────────────────────────────────────────
+# --type is required. --secret reads from cluster.
+nvoi agent set <name> --type claude --secret NVOI_AGENT_TOKEN
+nvoi agent delete <name> --type claude
+nvoi agent list
+nvoi agent exec <name> --type claude -- <command>
+nvoi agent logs <name> --type claude
+
+# Live view — nodes, workloads, pods, services, crons, ingress, secrets, storage
 nvoi describe
 
 # Operate
@@ -227,12 +250,22 @@ cmd/
   core/main.go             Direct CLI entrypoint — signal handling, exit codes
   cli/main.go              Cloud CLI entrypoint — talks to API
   api/main.go              API server entrypoint
+  s3upload/main.go         Standalone S3 upload binary — reads stdin, uploads via Sig V4. Used by database backup CronJobs.
 
 pkg/                       Public library — the execution engine
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
     cluster.go             Cluster struct + ProviderRef type
     output.go              Output interface — the contract between core/ and its viewers
+    cron.go                CronSet, CronDelete — first-class CronJob primitive
+    backup.go              BackupCreate (trigger job), BackupList (S3 list), BackupDownload (S3 get)
+    managed_list.go        ManagedList — discovers managed services by nvoi/managed-kind label
+  managed/                 Pure managed service compiler. One compiler, two interpreters (local + cloud).
+    compiler.go            Definition interface (Kind, Category, Compile, Shape), registry, Compile(), Shape()
+    types.go               Request, Result, Bundle, BundleShape, Operation, Ownership
+    postgres.go            database/postgres — service + volume + secrets + optional backup cron
+    claude.go              agent/claude — service + volume + secrets
   kube/                    K8s YAML generation + kubectl over SSH + Caddy ingress
+    cron.go                CronJob YAML + CreateJobFromCronJob + hostPath support
   infra/                   SSH, server bootstrap, k3s, Docker, volume mounting, WaitHTTPS
   provider/                ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
     hetzner/               Hetzner Cloud (compute + volumes)
@@ -246,13 +279,18 @@ pkg/                       Public library — the execution engine
     sshutil.go             Ed25519 key generation (GenerateEd25519Key) + DerivePublicKey
     params.go              Typed extractors for map[string]any (GetString, GetInt, GetBool, GetStringSlice)
     maps.go                SortedKeys, RemovedKeys, ReverseSorted
-    s3/                    AWS Signature V4 signing for S3-compatible APIs
+    s3/                    AWS Signature V4 signing + ListObjects for S3-compatible APIs
 
 internal/                  Private
   render/                  Shared renderers — TUI, Plain, JSON, Table, Resolve, ReplayLine, Delete, Describe, Resources
   testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
   core/                    Direct CLI. Cobra wrappers. Parse flags → call pkg/core/ → render via internal/render/
+    database.go            nvoi database set/delete/list/backup — managed database category
+    agent_cmd.go           nvoi agent set/delete/list/exec/logs — managed agent category
+    managed.go             Shared helpers: resolveCluster, execOperation, deleteByShape, verifyManagedKind
+    cron.go                nvoi cron set/delete
   api/                     REST API server — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
+    plan/resolve.go        ResolveDeploymentSteps — compiles managed bundles + wraps plan.Build() for cloud
   cli/                     Cloud CLI — login, deploy, stream logs via internal/render/ — see [internal/cli/README.md](internal/cli/README.md)
 ```
 
@@ -391,6 +429,68 @@ POSTGRES_DB=...
 RAILS_MASTER_KEY=...
 ```
 
+## Managed services
+
+Managed services are compiled by `pkg/managed` — a pure, shared compiler that produces deterministic bundles of primitive operations. Two categories, each with concrete kinds:
+
+| Category | Kind | Config YAML | CLI |
+|----------|------|-------------|-----|
+| database | postgres | `managed: postgres` | `nvoi database set db --type postgres` |
+| agent | claude | `managed: claude` | `nvoi agent set coder --type claude` |
+
+### How it works
+
+`pkg/managed.Compile(req)` takes a kind, name, and env (credential values) and returns a `Bundle` containing owned operations. The compiler is pure — same input, same output.
+
+Two interpreters consume the same compiler output:
+
+- **Local CLI:** `database set` reads secrets from cluster via `--secret`, compiles bundle, iterates operations, calls `pkg/core` functions directly.
+- **Cloud API:** `plan.ResolveDeploymentSteps()` compiles bundles, strips managed-owned resources from config, calls `plan.Build()` for non-managed resources, merges into ordered steps, persists for deferred execution.
+
+### Credential model
+
+Credentials are required input. No generation, no persistence, no magic.
+
+```bash
+nvoi secret set POSTGRES_PASSWORD s3cret                    # store in cluster first
+nvoi database set db --type postgres --secret POSTGRES_PASSWORD  # reads value from cluster
+```
+
+Missing credential = hard error: `managed postgres "db": missing required credential POSTGRES_PASSWORD`
+
+### Backup pipeline
+
+Backups use pre-existing storage (operator creates the bucket) and `cmd/s3upload` (a Go binary uploaded to the server).
+
+```bash
+nvoi storage set db-backups --expire-days 30                # prerequisite: create bucket
+nvoi database set db --type postgres \
+  --secret POSTGRES_PASSWORD \
+  --backup-storage db-backups \                             # verified to exist before compile
+  --backup-cron "0 2 * * *"                                 # CronJob: pg_dump | gzip | s3upload
+```
+
+The CronJob mounts `s3upload` from the host via hostPath. Storage credentials (S3 endpoint, bucket, access key, secret key) are injected as env vars from k8s secrets created by `storage set`.
+
+### Category/kind model
+
+`--type` is required on all category commands. No defaults.
+
+```
+Error: --type is required. Available database types: postgres
+Error: --type is required. Available agent types: claude
+```
+
+Adding a new kind = one file in `pkg/managed/` implementing `Definition` (Kind, Category, Compile, Shape). It shows up in `--type` error messages automatically via `KindsForCategory()`.
+
+### Delete uses Shape (no credentials needed)
+
+`database delete db --type postgres` calls `managed.Shape("postgres", "db")` which returns owned names (service, volume, cron, secrets) without needing credential values. No cluster read before deletion.
+
+### Discovery
+
+Managed services are labeled with `nvoi/managed-kind` in k8s. `database list` and `agent list` query by this label. `verifyManagedKind` guards targeted commands (exec, logs, backup) — rejects non-managed or wrong-category services.
+
 ## Apply guardrails
 
 Hard errors before touching k8s.
@@ -402,6 +502,12 @@ Hard errors before touching k8s.
 **Services:**
 - `service set` takes `--image` only. `--image` is required.
 - Build is a separate command. `build` outputs an image ref. `service set` consumes it.
+
+**Cron:**
+- `cron set` takes `--image` and `--schedule`. Both required.
+- Reuses service conventions: secret aliases, storage expansion, volume mounts, node selector.
+- Generates a k8s CronJob. `cron delete` is idempotent (--ignore-not-found).
+- Supports `--host-paths` for mounting host binaries (e.g. s3upload) into the pod.
 
 **Build (`nvoi build`):**
 - `--compute-provider` = compute provider (for SSH tunnel to cluster registry). Required.
