@@ -7,6 +7,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/managed"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -133,84 +134,48 @@ func execOperation(ctx context.Context, cluster app.Cluster, op managed.Operatio
 		return app.SecretSet(ctx, app.SecretSetRequest{
 			Cluster: cluster,
 			Key:     op.Name,
-			Value:   getString(p, "value"),
+			Value:   utils.GetString(p, "value"),
 		})
 	case "volume.set":
 		_, err := app.VolumeSet(ctx, app.VolumeSetRequest{
 			Cluster: cluster,
 			Name:    op.Name,
-			Size:    getInt(p, "size"),
-			Server:  getString(p, "server"),
+			Size:    utils.GetInt(p, "size"),
+			Server:  utils.GetString(p, "server"),
 		})
 		return err
 	case "storage.set":
 		return app.StorageSet(ctx, app.StorageSetRequest{
 			Cluster:    cluster,
 			Name:       op.Name,
-			CORS:       getBool(p, "cors"),
-			ExpireDays: getInt(p, "expire_days"),
+			CORS:       utils.GetBool(p, "cors"),
+			ExpireDays: utils.GetInt(p, "expire_days"),
 		})
 	case "service.set":
 		return app.ServiceSet(ctx, app.ServiceSetRequest{
 			Cluster:     cluster,
 			Name:        op.Name,
-			Image:       getString(p, "image"),
-			Port:        getInt(p, "port"),
-			Command:     getString(p, "command"),
-			EnvVars:     getStringSlice(p, "env"),
-			Secrets:     getStringSlice(p, "secrets"),
-			Volumes:     getStringSlice(p, "volumes"),
-			ManagedKind: getString(p, "managed_kind"),
+			Image:       utils.GetString(p, "image"),
+			Port:        utils.GetInt(p, "port"),
+			Command:     utils.GetString(p, "command"),
+			EnvVars:     utils.GetStringSlice(p, "env"),
+			Secrets:     utils.GetStringSlice(p, "secrets"),
+			Volumes:     utils.GetStringSlice(p, "volumes"),
+			ManagedKind: utils.GetString(p, "managed_kind"),
 		})
 	case "cron.set":
 		return app.CronSet(ctx, app.CronSetRequest{
 			Cluster:  cluster,
 			Name:     op.Name,
-			Image:    getString(p, "image"),
-			Command:  getString(p, "command"),
-			EnvVars:  getStringSlice(p, "env"),
-			Secrets:  getStringSlice(p, "secrets"),
-			Storages: getStringSlice(p, "storage"),
-			Schedule: getString(p, "schedule"),
-			Server:   getString(p, "server"),
+			Image:    utils.GetString(p, "image"),
+			Command:  utils.GetString(p, "command"),
+			EnvVars:  utils.GetStringSlice(p, "env"),
+			Secrets:  utils.GetStringSlice(p, "secrets"),
+			Storages: utils.GetStringSlice(p, "storage"),
+			Schedule: utils.GetString(p, "schedule"),
+			Server:   utils.GetString(p, "server"),
 		})
 	default:
 		return fmt.Errorf("managed: unknown operation kind %q", op.Kind)
 	}
-}
-
-func getString(m map[string]any, key string) string {
-	v, _ := m[key].(string)
-	return v
-}
-
-func getInt(m map[string]any, key string) int {
-	switch v := m[key].(type) {
-	case int:
-		return v
-	case float64:
-		return int(v)
-	}
-	return 0
-}
-
-func getBool(m map[string]any, key string) bool {
-	v, _ := m[key].(bool)
-	return v
-}
-
-func getStringSlice(m map[string]any, key string) []string {
-	switch v := m[key].(type) {
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
 }

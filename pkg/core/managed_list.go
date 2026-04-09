@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/managed"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -45,27 +46,7 @@ func ManagedList(ctx context.Context, req ManagedListRequest) ([]ManagedService,
 		return nil, err
 	}
 
-	var result struct {
-		Items []struct {
-			Metadata struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			} `json:"metadata"`
-			Spec struct {
-				Replicas int `json:"replicas"`
-				Template struct {
-					Spec struct {
-						Containers []struct {
-							Image string `json:"image"`
-						} `json:"containers"`
-					} `json:"spec"`
-				} `json:"template"`
-			} `json:"spec"`
-			Status struct {
-				ReadyReplicas int `json:"readyReplicas"`
-			} `json:"status"`
-		} `json:"items"`
-	}
+	var result kube.WorkloadList
 	if err := json.Unmarshal(out, &result); err != nil {
 		return nil, err
 	}
@@ -74,27 +55,7 @@ func ManagedList(ctx context.Context, req ManagedListRequest) ([]ManagedService,
 	cmd = "get statefulsets -l " + selector + " -o json"
 	out2, err := ssh.Run(ctx, kubectlCmd(ns, cmd))
 	if err == nil {
-		var ssResult struct {
-			Items []struct {
-				Metadata struct {
-					Name   string            `json:"name"`
-					Labels map[string]string `json:"labels"`
-				} `json:"metadata"`
-				Spec struct {
-					Replicas int `json:"replicas"`
-					Template struct {
-						Spec struct {
-							Containers []struct {
-								Image string `json:"image"`
-							} `json:"containers"`
-						} `json:"spec"`
-					} `json:"template"`
-				} `json:"spec"`
-				Status struct {
-					ReadyReplicas int `json:"readyReplicas"`
-				} `json:"status"`
-			} `json:"items"`
-		}
+		var ssResult kube.WorkloadList
 		if json.Unmarshal(out2, &ssResult) == nil {
 			result.Items = append(result.Items, ssResult.Items...)
 		}
