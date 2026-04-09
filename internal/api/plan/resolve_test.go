@@ -70,9 +70,8 @@ func TestResolveDeploymentSteps_PostgresAndAgent(t *testing.T) {
 		"secret.set:DATABASE_DB_HOST", "secret.set:DATABASE_DB_PORT",
 		"secret.set:DATABASE_DB_USER", "secret.set:DATABASE_DB_PASSWORD",
 		"secret.set:DATABASE_DB_NAME", "secret.set:DATABASE_DB_URL",
-		"storage.set:db-backups",
 		"volume.set:coder-data", "volume.set:db-data",
-		"service.set:coder", "service.set:db", "cron.set:db-backup",
+		"service.set:coder", "service.set:db",
 		"service.set:web",
 	}
 	if !reflect.DeepEqual(gotSteps, wantSteps) {

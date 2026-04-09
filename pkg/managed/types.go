@@ -5,10 +5,12 @@ type Context struct {
 }
 
 type Request struct {
-	Kind    string
-	Name    string
-	Env     map[string]string // flat env — credentials come from here
-	Context Context
+	Kind          string
+	Name          string
+	Env           map[string]string // flat env — credentials come from here
+	BackupStorage string            // pre-existing storage name for backups (e.g. "db-backups")
+	BackupCron    string            // cron schedule for backups (e.g. "0 2 * * *")
+	Context       Context
 }
 
 type Result struct {
@@ -53,14 +55,15 @@ type Service struct {
 }
 
 type Cron struct {
-	Name     string
-	Schedule string
-	Image    string
-	Command  string
-	Volumes  []string
-	Env      []string
-	Secrets  []string
-	Storage  []string
+	Name      string
+	Schedule  string
+	Image     string
+	Command   string
+	Volumes   []string
+	Env       []string
+	Secrets   []string
+	Storage   []string
+	HostPaths []string // host:container:mode mounts (e.g. for s3upload binary)
 }
 
 type Operation struct {

@@ -146,7 +146,7 @@ func TestChildResourceNamesStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
-	want := []string{"db", "db-backup", "db-backups", "db-data"}
+	want := []string{"db", "db-data"}
 	if !reflect.DeepEqual(got.Bundle.OwnedChildren, want) {
 		t.Fatalf("OwnedChildren = %v, want %v", got.Bundle.OwnedChildren, want)
 	}
@@ -166,7 +166,7 @@ func TestPrimitiveOperationsSortedAndDeterministic(t *testing.T) {
 	for _, op := range got.Bundle.Operations {
 		gotKinds = append(gotKinds, op.Kind)
 	}
-	wantKinds := []string{"secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "storage.set", "volume.set", "service.set", "cron.set"}
+	wantKinds := []string{"secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "volume.set", "service.set"}
 	if !reflect.DeepEqual(gotKinds, wantKinds) {
 		t.Fatalf("operation kinds = %v, want %v", gotKinds, wantKinds)
 	}
@@ -183,7 +183,7 @@ func TestPostgresShape(t *testing.T) {
 	if shape.RootService != "db" {
 		t.Errorf("RootService = %q", shape.RootService)
 	}
-	want := []string{"db", "db-backup", "db-backups", "db-data"}
+	want := []string{"db", "db-backup", "db-data"}
 	if !reflect.DeepEqual(shape.OwnedChildren, want) {
 		t.Errorf("OwnedChildren = %v, want %v", shape.OwnedChildren, want)
 	}
@@ -193,8 +193,8 @@ func TestPostgresShape(t *testing.T) {
 	if !reflect.DeepEqual(shape.Services, []string{"db"}) {
 		t.Errorf("Services = %v", shape.Services)
 	}
-	if !reflect.DeepEqual(shape.Storages, []string{"db-backups"}) {
-		t.Errorf("Storages = %v", shape.Storages)
+	if len(shape.Storages) != 0 {
+		t.Errorf("Storages = %v, want empty (storage is a prerequisite, not owned)", shape.Storages)
 	}
 	if !reflect.DeepEqual(shape.Volumes, []string{"db-data"}) {
 		t.Errorf("Volumes = %v", shape.Volumes)
@@ -252,17 +252,17 @@ func TestPostgresDeleteTargetsMatchBundle(t *testing.T) {
 	// the same Bundle fields. This test proves the bundle declares all owned
 	// resources that a delete path needs.
 
-	// Crons.
-	if len(b.Crons) != 1 || b.Crons[0].Name != "db-backup" {
-		t.Errorf("Crons = %v, want [{Name:db-backup}]", b.Crons)
+	// Crons — empty without backup config.
+	if len(b.Crons) != 0 {
+		t.Errorf("Crons = %v, want empty (no backup configured)", b.Crons)
 	}
 	// Services.
 	if len(b.Services) != 1 || b.Services[0].Name != "db" {
 		t.Errorf("Services = %v, want [{Name:db}]", b.Services)
 	}
-	// Storages.
-	if len(b.Storages) != 1 || b.Storages[0].Name != "db-backups" {
-		t.Errorf("Storages = %v, want [{Name:db-backups}]", b.Storages)
+	// Storages — not owned (prerequisite).
+	if len(b.Storages) != 0 {
+		t.Errorf("Storages = %v, want empty", b.Storages)
 	}
 	// Volumes.
 	if len(b.Volumes) != 1 || b.Volumes[0].Name != "db-data" {

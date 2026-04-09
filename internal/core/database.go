@@ -38,9 +38,10 @@ func newDatabaseSetCmd() *cobra.Command {
 		Long: `Compiles a database bundle and executes all owned primitive operations.
 
 Required credentials are read from the cluster via --secret.
+Backup storage must be pre-created via 'nvoi storage set'.
 
 Examples:
-  nvoi database set db --type postgres --secret POSTGRES_PASSWORD`,
+  nvoi database set db --type postgres --secret POSTGRES_PASSWORD --backup-storage db-backups --backup-cron "0 2 * * *"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kind, err := resolveDatabaseType(cmd)
@@ -48,6 +49,8 @@ Examples:
 				return err
 			}
 			secrets, _ := cmd.Flags().GetStringArray("secret")
+			backupStorage, _ := cmd.Flags().GetString("backup-storage")
+			backupCron, _ := cmd.Flags().GetString("backup-cron")
 
 			cluster, err := resolveCluster(cmd)
 			if err != nil {
@@ -59,11 +62,27 @@ Examples:
 				return err
 			}
 
+			// Verify backup storage exists if specified.
+			if backupStorage != "" {
+				if err := verifyStorageExists(cmd, cluster, backupStorage); err != nil {
+					return err
+				}
+			}
+
+			// Upload s3upload binary to server if backup is configured.
+			if backupStorage != "" && backupCron != "" {
+				if err := uploadS3UploadBinary(cmd, cluster); err != nil {
+					return err
+				}
+			}
+
 			result, err := managed.Compile(managed.Request{
-				Kind:    kind,
-				Name:    args[0],
-				Env:     env,
-				Context: managed.Context{DefaultVolumeServer: "master"},
+				Kind:          kind,
+				Name:          args[0],
+				Env:           env,
+				BackupStorage: backupStorage,
+				BackupCron:    backupCron,
+				Context:       managed.Context{DefaultVolumeServer: "master"},
 			})
 			if err != nil {
 				return err
@@ -81,6 +100,8 @@ Examples:
 	addAppFlags(cmd)
 	cmd.Flags().String("type", "", "database type (postgres)")
 	cmd.Flags().StringArray("secret", nil, "secret key to read from cluster")
+	cmd.Flags().String("backup-storage", "", "pre-existing storage name for backups")
+	cmd.Flags().String("backup-cron", "", "cron schedule for backups (e.g. \"0 2 * * *\")")
 	return cmd
 }
 

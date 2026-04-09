@@ -1,6 +1,10 @@
 package managed
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
+)
 
 func init() {
 	Register(postgresDefinition{})
@@ -16,10 +20,9 @@ func (postgresDefinition) Shape(name string) BundleShape {
 	return BundleShape{
 		Kind:          "postgres",
 		RootService:   name,
-		OwnedChildren: []string{name, name + "-backup", name + "-backups", name + "-data"},
+		OwnedChildren: []string{name, name + "-backup", name + "-data"},
 		Crons:         []string{name + "-backup"},
 		Services:      []string{name},
-		Storages:      []string{name + "-backups"},
 		Volumes:       []string{name + "-data"},
 		SecretKeys: []string{
 			"POSTGRES_PASSWORD_" + ns,
@@ -74,25 +77,15 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 			"POSTGRES_PASSWORD=" + internalKey,
 		},
 	}
-	storage := Storage{
-		Name:       req.Name + "-backups",
-		ExpireDays: 30,
-	}
-	cron := Cron{
-		Name:     req.Name + "-backup",
-		Schedule: "0 2 * * *",
-		Image:    "postgres:17",
-		Command:  fmt.Sprintf("pg_dump -h %s -U postgres %s > /tmp/%s.sql", req.Name, req.Name, req.Name),
-		Env: []string{
-			"PGPASSWORD=" + password,
-		},
-		Secrets: []string{
-			"POSTGRES_PASSWORD=" + internalKey,
-		},
-		Storage: []string{
-			storage.Name,
-		},
-	}
+
+	// Backup command: pg_dump | gzip | s3upload
+	// s3upload binary is on the host at S3UploadBinaryPath(), mounted into the pod.
+	// Storage env vars (STORAGE_*) are injected by the --storage reference on the cron.
+	s3uploadPath := utils.S3UploadBinaryPath()
+	backupCmd := fmt.Sprintf(
+		"pg_dump -h %s -U postgres %s | gzip | %s",
+		req.Name, req.Name, s3uploadPath,
+	)
 
 	ops := []Operation{
 		{
@@ -152,14 +145,6 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_URL"},
 		},
 		{
-			Kind: "storage.set",
-			Name: storage.Name,
-			Params: map[string]any{
-				"expire_days": storage.ExpireDays,
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: storage.Name},
-		},
-		{
 			Kind: "volume.set",
 			Name: volume.Name,
 			Params: map[string]any{
@@ -181,36 +166,61 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 			},
 			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: service.Name},
 		},
-		{
+	}
+
+	// Add backup cron if backup storage and schedule are provided.
+	var crons []Cron
+	if req.BackupStorage != "" && req.BackupCron != "" {
+		cron := Cron{
+			Name:     req.Name + "-backup",
+			Schedule: req.BackupCron,
+			Image:    "postgres:17",
+			Command:  backupCmd,
+			Env: []string{
+				"PGPASSWORD=" + password,
+			},
+			Secrets: []string{
+				"POSTGRES_PASSWORD=" + internalKey,
+			},
+			Storage: []string{
+				req.BackupStorage,
+			},
+			HostPaths: []string{
+				s3uploadPath + ":" + s3uploadPath + ":ro",
+			},
+		}
+		crons = append(crons, cron)
+		ops = append(ops, Operation{
 			Kind: "cron.set",
 			Name: cron.Name,
 			Params: map[string]any{
-				"command":  cron.Command,
-				"env":      append([]string{}, cron.Env...),
-				"image":    cron.Image,
-				"schedule": cron.Schedule,
-				"secrets":  append([]string{}, cron.Secrets...),
-				"storage":  append([]string{}, cron.Storage...),
+				"command":    cron.Command,
+				"env":        append([]string{}, cron.Env...),
+				"image":      cron.Image,
+				"schedule":   cron.Schedule,
+				"secrets":    append([]string{}, cron.Secrets...),
+				"storage":    append([]string{}, cron.Storage...),
+				"host_paths": append([]string{}, cron.HostPaths...),
 			},
 			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: cron.Name},
-		},
+		})
 	}
+
+	ownedChildren := []string{req.Name, req.Name + "-data"}
+	if len(crons) > 0 {
+		ownedChildren = append(ownedChildren, req.Name+"-backup")
+	}
+
 	return Result{
 		Bundle: Bundle{
-			Kind:        req.Kind,
-			RootService: req.Name,
-			OwnedChildren: []string{
-				req.Name,
-				req.Name + "-backup",
-				req.Name + "-backups",
-				req.Name + "-data",
-			},
+			Kind:            req.Kind,
+			RootService:     req.Name,
+			OwnedChildren:   ownedChildren,
 			InternalSecrets: map[string]string{internalKey: password},
 			ExportedSecrets: exported,
 			Volumes:         []Volume{volume},
-			Storages:        []Storage{storage},
 			Services:        []Service{service},
-			Crons:           []Cron{cron},
+			Crons:           crons,
 			Operations:      ops,
 		},
 	}, nil

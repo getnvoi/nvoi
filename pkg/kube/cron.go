@@ -22,6 +22,7 @@ type CronSpec struct {
 	Secrets    []string
 	SecretName string
 	Volumes    []string
+	HostPaths  []string // host:container:mode mounts (e.g. "/home/deploy/s3upload:/home/deploy/s3upload:ro")
 	Server     string
 }
 
@@ -61,6 +62,25 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 	if err != nil {
 		return "", err
 	}
+
+	// Add hostPath mounts (e.g. s3upload binary).
+	for i, hp := range spec.HostPaths {
+		hostPath, containerPath, readOnly := parseHostPath(hp)
+		volName := fmt.Sprintf("hostpath-%d", i)
+		hostPathType := corev1.HostPathFile
+		volumes = append(volumes, corev1.Volume{
+			Name: volName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{Path: hostPath, Type: &hostPathType},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      volName,
+			MountPath: containerPath,
+			ReadOnly:  readOnly,
+		})
+	}
+
 	container.VolumeMounts = mounts
 
 	podSpec := corev1.PodSpec{
@@ -103,6 +123,20 @@ func CreateJobFromCronJob(ctx context.Context, ssh utils.SSHClient, ns, cronName
 		return fmt.Errorf("create job from cronjob/%s: %w", cronName, err)
 	}
 	return nil
+}
+
+// parseHostPath parses "host:container:mode" into components.
+// If mode is "ro", readOnly is true. Default is read-write.
+func parseHostPath(spec string) (hostPath, containerPath string, readOnly bool) {
+	parts := strings.SplitN(spec, ":", 3)
+	if len(parts) >= 2 {
+		hostPath = parts[0]
+		containerPath = parts[1]
+	}
+	if len(parts) >= 3 && parts[2] == "ro" {
+		readOnly = true
+	}
+	return
 }
 
 func DeleteCronByName(ctx context.Context, ssh utils.SSHClient, ns, name string) error {

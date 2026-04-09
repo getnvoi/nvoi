@@ -511,24 +511,11 @@ func TestConfig_ManagedPlanIncludesExpandedServices(t *testing.T) {
 		}
 	}
 
-	storageCounts := map[string]int{}
-	cronCounts := map[string]int{}
 	volumeCounts := map[string]int{}
 	for _, s := range resp.Steps {
-		switch s.Kind {
-		case "storage.set":
-			storageCounts[s.Name]++
-		case "cron.set":
-			cronCounts[s.Name]++
-		case "volume.set":
+		if s.Kind == "volume.set" {
 			volumeCounts[s.Name]++
 		}
-	}
-	if storageCounts["db-backups"] != 1 {
-		t.Errorf("storage.set count for db-backups = %d, want 1", storageCounts["db-backups"])
-	}
-	if cronCounts["db-backup"] != 1 {
-		t.Errorf("cron.set count for db-backup = %d, want 1", cronCounts["db-backup"])
 	}
 	if volumeCounts["db-data"] != 1 {
 		t.Errorf("volume.set count for db-data = %d, want 1", volumeCounts["db-data"])

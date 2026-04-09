@@ -258,12 +258,6 @@ func TestDeploy_ManagedPostgresAddsOwnedSteps(t *testing.T) {
 		counts[step.Kind+":"+step.Name]++
 	}
 
-	if counts["storage.set:db-backups"] != 1 {
-		t.Fatalf("storage.set:db-backups count = %d, want 1", counts["storage.set:db-backups"])
-	}
-	if counts["cron.set:db-backup"] != 1 {
-		t.Fatalf("cron.set:db-backup count = %d, want 1", counts["cron.set:db-backup"])
-	}
 	if counts["service.set:db"] != 1 {
 		t.Fatalf("service.set:db count = %d, want 1", counts["service.set:db"])
 	}
