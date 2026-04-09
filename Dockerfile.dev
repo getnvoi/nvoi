@@ -1,5 +1,0 @@
-FROM golang:1.25-alpine
-
-RUN apk add --no-cache git openssh-client build-base docker docker-cli-buildx
-
-WORKDIR /app

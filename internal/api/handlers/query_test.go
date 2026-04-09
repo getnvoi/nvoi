@@ -30,15 +30,16 @@ func TestInstances_RepoNotFound(t *testing.T) {
 	}
 }
 
-func TestInstances_NoConfig(t *testing.T) {
+func TestInstances_NoProvider(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/instances", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	// No compute provider → 500 (provider resolution fails).
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (no compute provider)", w.Code)
 	}
 }
 
@@ -66,15 +67,15 @@ func TestVolumes_RepoNotFound(t *testing.T) {
 	}
 }
 
-func TestVolumes_NoConfig(t *testing.T) {
+func TestVolumes_NoProvider(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/volumes", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (no compute provider)", w.Code)
 	}
 }
 
@@ -102,35 +103,13 @@ func TestDNS_RepoNotFound(t *testing.T) {
 	}
 }
 
-func TestDNS_NoConfig(t *testing.T) {
-	r, _ := testRouter(t, "octocat")
-	token, _, wsID := doLogin(t, r, "octocat")
-	repoID := createRepo(t, r, token, wsID, "my-app")
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/dns", nil, token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
-	}
-}
-
 func TestDNS_NoDNSProvider(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
-
-	// Push config with no dns_provider.
-	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"
-	body := map[string]any{"compute_provider": "hetzner", "config": minimalYAML}
-	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	// No DNS provider linked — should 400.
+	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/dns", nil, token)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("push: status = %d, body: %s", w.Code, w.Body.String())
-	}
-
-	req = authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/dns", nil, token)
-	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (no dns provider)", w.Code)
@@ -150,15 +129,15 @@ func TestSecrets_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestSecrets_NoConfig(t *testing.T) {
+func TestSecrets_NoProvider(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/secrets", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (no compute provider)", w.Code)
 	}
 }
 
@@ -175,15 +154,15 @@ func TestStorage_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestStorage_NoConfig(t *testing.T) {
+func TestStorage_NoProvider(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/storage", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (no compute provider)", w.Code)
 	}
 }
 
@@ -198,7 +177,7 @@ func TestStorageEmpty_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestStorageEmpty_NoConfig(t *testing.T) {
+func TestStorageEmpty_NoProvider(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
@@ -206,7 +185,7 @@ func TestStorageEmpty_NoConfig(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+		t.Fatalf("status = %d, want 400 (no storage provider)", w.Code)
 	}
 }
 
@@ -223,15 +202,15 @@ func TestBuilds_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestBuilds_NoConfig(t *testing.T) {
+func TestBuilds_NoProvider(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/builds", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (no compute provider)", w.Code)
 	}
 }
 
@@ -246,15 +225,15 @@ func TestBuildLatest_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestBuildLatest_NoConfig(t *testing.T) {
+func TestBuildLatest_NoProvider(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/builds/web/latest", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (no compute provider)", w.Code)
 	}
 }
 
@@ -269,29 +248,10 @@ func TestBuildPrune_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestBuildPrune_NoConfig(t *testing.T) {
-	r, _ := testRouter(t, "octocat")
-	token, _, wsID := doLogin(t, r, "octocat")
-	repoID := createRepo(t, r, token, wsID, "my-app")
-	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/builds/web/prune", map[string]any{"keep": 3}, token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
-	}
-}
-
 func TestBuildPrune_MissingKeep(t *testing.T) {
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
-
-	// Push config so we get past the no-config check.
-	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"
-	body := map[string]any{"compute_provider": "hetzner", "config": minimalYAML}
-	pushReq := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
-	pw := httptest.NewRecorder()
-	r.ServeHTTP(pw, pushReq)
 
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/builds/web/prune", map[string]any{}, token)
 	w := httptest.NewRecorder()
@@ -325,18 +285,6 @@ func TestServiceLogs_RepoNotFound(t *testing.T) {
 	}
 }
 
-func TestServiceLogs_NoConfig(t *testing.T) {
-	r, _ := testRouter(t, "octocat")
-	token, _, wsID := doLogin(t, r, "octocat")
-	repoID := createRepo(t, r, token, wsID, "my-app")
-	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/services/web/logs", nil, token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
-	}
-}
-
 // ── Exec ─────────────────────────────────────────────────────────────────────
 
 func TestExec_RequiresAuth(t *testing.T) {
@@ -367,31 +315,11 @@ func TestExec_MissingCommand(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	// Push config so we get past findRepo.
-	minimalYAML := "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"
-	body := map[string]any{"compute_provider": "hetzner", "config": minimalYAML}
-	pushReq := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
-	pw := httptest.NewRecorder()
-	r.ServeHTTP(pw, pushReq)
-
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/services/web/exec", map[string]any{}, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (missing command)", w.Code)
-	}
-}
-
-func TestExec_NoConfig(t *testing.T) {
-	r, _ := testRouter(t, "octocat")
-	token, _, wsID := doLogin(t, r, "octocat")
-	repoID := createRepo(t, r, token, wsID, "my-app")
-	body := map[string]any{"command": []string{"echo", "hi"}}
-	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/services/web/exec", body, token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
 

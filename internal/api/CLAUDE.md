@@ -1,28 +1,25 @@
 # CLAUDE.md — internal/api
 
-The SaaS layer on top of `pkg/core/`. Users push a config YAML + env, the API validates it, plans the deploy sequence, and executes `pkg/core/` functions in order. Same result as running `examples/core/{provider}/deploy` scripts by hand.
+Thin relay between the cloud CLI and `pkg/core/`. Each command hits one API endpoint that calls one `pkg/core/` function. No config YAML, no planner, no deployment lifecycle.
 
 ## How it works
 
 ```
-User pushes config YAML + .env
-  → Parse YAML
-  → ResolveDeploymentSteps:
-      compile managed bundles (pkg/managed)
-      strip managed-owned resources from config
-      inject managed exports into uses: consuming workloads
-      call Build() for non-managed resources
-      merge managed + non-managed steps in phase order
-  → Validate stripped config
-  → Executor walks steps, calls pkg/core/ functions
-  → Each step tracked in deployment_steps, each output line in deployment_step_logs (JSONL)
+CLI command (e.g. nvoi instance set master ...)
+  → CloudBackend.run("instance.set", "master", {type, region, role})
+    → POST /repos/:rid/run {kind, name, params}
+      → Load repo + InfraProvider credentials
+      → dispatch() → pkg/core.ComputeSet()
+      → Stream JSONL output back
+      → Log CommandLog row
+    → CLI renders JSONL through TUI
 ```
 
 ## Architecture
 
 ```
 internal/api/
-  models.go              All models + provider enums + deployment lifecycle
+  models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo, CommandLog
   db.go                  PostgreSQL + GORM + AutoMigrate
   testdb.go              In-memory SQLite for tests
   encrypt.go             AES-256-GCM for secrets at rest
@@ -32,28 +29,16 @@ internal/api/
 
   handlers/
     router.go            Huma route registration + Gin auth middleware
-    humaerr.go           Custom error format ({"error":"..."}) for backward compat
+    humaerr.go           Custom error format ({"error":"..."})
     inputs.go            Shared input types (WorkspaceScopedInput, RepoScopedInput)
-    auth.go              POST /login — verify GitHub token → find/create user → issue JWT
-    workspaces.go        CRUD /workspaces — scoped via workspace_users join + findWorkspace
-    repos.go             CRUD /workspaces/:id/repos — scoped through workspace + findRepo
-    config.go            Config push/get/list/plan — the core deploy pipeline entry point
-    deploy.go            POST deploy, POST run, GET deployments, GET deployment, GET logs (JSONL stream)
-    describe.go          GET describe + GET resources — live cluster state
-    ssh.go               POST ssh — run command on master via SSH, stream output
-    query.go             Infrastructure queries (instances, volumes, dns, secrets, storage, builds, logs, exec)
-    executor.go          Execute() — walks deployment steps, calls pkg/core/ functions, writes JSONL logs
-    output.go            dbOutput — implements pkg/core.Output, writes JSONL to deployment_step_logs
-    credentials.go       resolveAllCredentials — maps env vars to provider schema keys
-
-  config/
-    schema.go            Public config YAML struct — servers, volumes, build, storage, services, domains
-    validate.go          Structural validation rules with cross-reference checks
-
-  plan/
-    plan.go              Build(reality, desired, env) → ordered Step sequence for non-managed resources
-    resolve.go           ResolveDeploymentSteps() — compiles managed bundles via pkg/managed, merges with Build()
-    state.go             InfraState() — queries providers + cluster to build reality picture
+    run.go               POST /run — single dispatch endpoint, streams JSONL, logs CommandLog
+    auth.go              POST /login
+    workspaces.go        CRUD /workspaces
+    repos.go             CRUD /repos — scoped through workspace + provider FK links
+    providers.go         Set/list/delete InfraProvider records (workspace-scoped)
+    describe.go          GET /describe + GET /resources + clusterFromRepo helper
+    query.go             Read-only endpoints (instances, volumes, dns, secrets, storage, builds, logs, exec)
+    ssh.go               POST /ssh — run command on master, stream output
 ```
 
 ## Data model
@@ -62,163 +47,32 @@ internal/api/
 User
   └── WorkspaceUser (join, role)
         └── Workspace
+              ├── InfraProvider (kind + name + encrypted credentials)
               └── Repo
-                    ├── RepoConfig (versioned)
-                    │     ├── compute_provider   enum: hetzner | aws | scaleway
-                    │     ├── dns_provider       enum: cloudflare | aws (optional)
-                    │     ├── storage_provider   enum: cloudflare | aws (optional)
-                    │     ├── build_provider     enum: local | daytona | github (optional)
-                    │     ├── config             YAML text
-                    │     └── env                encrypted KEY=VALUE (credentials + app secrets)
-                    │
-                    └── Deployment
-                          ├── status             pending → running → succeeded | failed
-                          └── DeploymentStep
-                                ├── position, kind, name, params (JSON)
-                                ├── status       pending → running → succeeded | failed | skipped
-                                └── DeploymentStepLog
-                                      └── line   JSONL (same format as --json CLI output)
+                    ├── ComputeProviderID → InfraProvider
+                    ├── DNSProviderID → InfraProvider
+                    ├── StorageProviderID → InfraProvider
+                    ├── BuildProviderID → InfraProvider
+                    └── CommandLog (one row per /run call)
 ```
 
-## Config schema (what users write)
+## The /run endpoint
 
-```yaml
-servers:
-  master:
-    type: cx23
-    region: fsn1
-  worker-1:
-    type: cx33
-    region: fsn1
+Single endpoint for all mutation commands. Takes `{kind, name, params}`, dispatches to `pkg/core/`, streams JSONL, logs the result.
 
-volumes:
-  pgdata:
-    size: 30
-    server: master
+Supported kinds: `instance.set`, `instance.delete`, `volume.set`, `volume.delete`, `firewall.set`, `build`, `secret.set`, `secret.delete`, `storage.set`, `storage.delete`, `storage.empty`, `service.set`, `service.delete`, `cron.set`, `cron.delete`, `dns.set`, `dns.delete`, `ingress.set`, `ingress.delete`.
 
-build:
-  web:
-    source: benbonnet/dummy-rails
+The `runner` struct holds per-request state: `Cluster` + provider refs built from `Repo.InfraProvider` links. Constructed once per request. `dispatch()` is the switch statement mapping kind → `pkg/core/` function.
 
-storage:
-  assets:
-    cors: true
+## Provider credentials
 
-services:
-  db:
-    managed: postgres          # managed service — auto image, port, volume, credentials
-  web:
-    build: web                 # references build target
-    port: 80
-    replicas: 2
-    health: /up
-    server: worker-1
-    env:
-      - RAILS_ENV=production   # literal
-      - POSTGRES_USER           # resolved from .env
-    secrets:
-      - RAILS_MASTER_KEY       # resolved from .env, stored as k8s secret
-    storage:
-      - assets                 # expands to STORAGE_ASSETS_* secret refs
-    uses:
-      - db                     # injects DATABASE_DB_* credential secrets
-  jobs:
-    build: web
-    command: bin/jobs
-    uses: [db]
-
-domains:
-  web: final.nvoi.to           # single string or list: [a.com, b.com]
-
-ingress:
-  exposure: direct             # or edge_proxied
-  tls:
-    mode: acme                 # or provided / edge_origin
-```
-
-### Service source (mutually exclusive)
-
-| Field | Meaning |
-|-------|---------|
-| `image: postgres:17` | Pre-built image |
-| `build: web` | References a build target — image resolved at deploy time |
-| `managed: postgres` | Managed service — compiled by `pkg/managed`, resolved by `plan.ResolveDeploymentSteps()` |
-
-### Env resolution
-
-- `RAILS_ENV=production` → literal, passed through
-- `POSTGRES_USER` (no `=`) → looked up from .env, becomes `POSTGRES_USER=<value>`
-- Missing key → hard error at plan time
-
-### Secret aliasing
-
-- `POSTGRES_PASSWORD` → k8s secret key = env var name (same)
-- `POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB` → container reads `POSTGRES_PASSWORD`, backed by namespaced secret key `POSTGRES_PASSWORD_DB`
-
-Convention parsed by `kube.ParseSecretRef()` — shared by YAML generation (`pkg/kube/generate.go`) and validation (`pkg/core/service.go`). Used by managed services to avoid collisions when multiple instances of the same kind exist.
-
-## Managed services
-
-Managed services are compiled by `pkg/managed` — a pure, shared compiler that produces deterministic bundles of primitive operations. The API resolves these bundles into deployment steps via `plan.ResolveDeploymentSteps()`.
-
-Supported managed kinds: `postgres` (category: database), `claude` (category: agent). Each is one file in `pkg/managed/` with a `Compile()` method that returns a `Bundle` containing owned children, secrets, volumes, services, and ordered operations.
-
-### Credential model
-
-Credentials are required input — no generation, no persistence. The user provides them in the env pushed with the config (`POSTGRES_PASSWORD`, `POSTGRES_USER`, `POSTGRES_DB` for postgres; `NVOI_AGENT_TOKEN` for claude). Missing credential = hard error at push time.
-
-### Secret namespacing
-
-Multiple instances of the same kind get unique secret keys:
-- `mydb` (postgres) → `POSTGRES_PASSWORD_MYDB`, `POSTGRES_USER_MYDB`, `POSTGRES_DB_MYDB` (internal), `DATABASE_MYDB_*` (exported)
-- `analytics` (postgres) → `POSTGRES_PASSWORD_ANALYTICS`, `POSTGRES_USER_ANALYTICS`, `POSTGRES_DB_ANALYTICS` (internal), `DATABASE_ANALYTICS_*` (exported)
-
-### Step resolution
+Credentials live on `InfraProvider` records at workspace scope. Repos link to providers via FK columns. No env-based credential resolution on the API side — `InfraProvider.CredentialsMap()` returns schema-mapped credentials directly.
 
 ```
-Config with managed: postgres       Resolved deployment steps
-services:                           secret.set POSTGRES_PASSWORD_MYDB
-  mydb:                             secret.set POSTGRES_USER_MYDB
-    managed: postgres               secret.set POSTGRES_DB_MYDB
-  web:                              secret.set DATABASE_MYDB_HOST ...
-    uses: [mydb]                    volume.set mydb-data
-                                    service.set mydb
-                                    service.set web (with DATABASE_MYDB_* secrets injected)
+nvoi provider set compute hetzner    → InfraProvider row (encrypted)
+nvoi repos use myapp --compute hetzner → Repo.ComputeProviderID FK
+nvoi instance set master ...         → POST /run → repo.ComputeProvider.CredentialsMap()
 ```
-
-Managed-owned resources are excluded from `plan.Build()`. No managed child operation is emitted by both the managed compiler and the planner.
-
-## Plan
-
-`Build(prev, current, env)` produces ordered steps for non-managed resources. `ResolveDeploymentSteps()` wraps `Build()` — it compiles managed bundles first, strips managed-owned resources from the config, calls `Build()` for the remainder, then merges managed and non-managed steps in phase order. Phase ordering is explicit — declared at the top of `Build()`, one line per phase:
-
-**Deletes/reconciliation before DNS delete:**
-
-| Phase | StepKind | Maps to |
-|-------|----------|---------|
-| 1. Ingress reconcile | `ingress.apply` | `pkg/core.IngressApply` |
-| 2. DNS | `dns.delete` | `pkg/core.DNSDelete` |
-| 3. Cron | `cron.delete` | `pkg/core.CronDelete` |
-| 4. Services | `service.delete` | `pkg/core.ServiceDelete` |
-| 5. Storage | `storage.delete` | `pkg/core.StorageDelete` |
-| 6. Secrets | `secret.delete` | `pkg/core.SecretDelete` |
-| 7. Volumes | `volume.delete` | `pkg/core.VolumeDelete` |
-| 8. Compute | `instance.delete` | `pkg/core.ComputeDelete` |
-
-**Then sets (forward deploy order):**
-
-| Phase | StepKind | Maps to |
-|-------|----------|---------|
-| 1. Compute | `instance.set` | `pkg/core.ComputeSet` |
-| 2. Volumes | `volume.set` | `pkg/core.VolumeSet` |
-| 3. Build | `build` | `pkg/core.BuildRun` |
-| 4. Secrets | `secret.set` | `pkg/core.SecretSet` |
-| 5. Storage | `storage.set` | `pkg/core.StorageSet` |
-| 6. Services | `service.set` | `pkg/core.ServiceSet` |
-| 7. Cron | `cron.set` | `pkg/core.CronSet` |
-| 8. DNS | `dns.set` | `pkg/core.DNSSet` |
-
-All steps are deterministic (sorted keys). First server alphabetically = master. Empty config = only delete steps (destroy-via-diff). First deploy (nil prev) = only set steps. Delete commands are idempotent — deleting something that doesn't exist succeeds silently.
 
 ## Authentication
 
@@ -228,111 +82,9 @@ All steps are deterministic (sorted keys). First server alphabetically = master.
 4. CLI stores JWT in `~/.config/nvoi/auth.json`
 5. All subsequent requests: `Authorization: Bearer <jwt>`
 
-Token-type agnostic: PAT, OAuth access token, fine-grained token all work.
-
-## Encryption
-
-- `ENCRYPTION_KEY` env var — 32 bytes hex-encoded (AES-256-GCM)
-- `RepoConfig.Env` encrypted at rest (GORM `BeforeCreate` / `AfterFind` hooks)
-- Env hidden from JSON by default — `?reveal=true` to show
-
-## Compose
-
-```
-core      direct mode CLI (cmd/core via bin/entrypoint)
-api       REST server (cmd/api via `go run ./cmd/api`), depends_on postgres (healthy)
-cli       cloud CLI (cmd/cli via `go run ./cmd/cli`), depends_on api (healthy)
-postgres  PostgreSQL 17
-```
-
-**Compose handles the full dependency chain.** `bin/cloud login` starts postgres → waits healthy → starts api → waits healthy → runs cli. One command, no manual startup. Never run `docker compose up -d postgres` separately — `depends_on` with `condition: service_healthy` handles it.
-
-See [`examples/README.md`](../../examples/README.md) for deploy workflows.
-
-## Deploy flow
-
-```
-CLI: nvoi deploy
-  → POST .../deploy → creates Deployment + Steps (all pending)
-  → POST .../deployments/:id/run → starts executor in goroutine
-  → Poll GET .../deployments/:id (status) + GET .../deployments/:id/logs (JSONL)
-  → Render logs through TUI — same output as examples/core/hetzner/deploy
-
-API: POST .../deploy
-  → Load latest RepoConfig + previous version
-  → ResolveDeploymentSteps(cfg, reality, env) = compile managed bundles + plan non-managed + merge
-  → Create Deployment + DeploymentSteps rows (all pending)
-  → Return deployment with steps
-
-API: POST .../deployments/:id/run
-  → Load Deployment + RepoConfig + Repo
-  → Build executor: map raw env vars to provider schema keys via provider.MapCredentials()
-  → Start Execute() in goroutine
-
-Executor (walks steps in order):
-  → For each step: status → running → call pkg/core/ function
-  → pkg/core/ emits Output events → dbOutput writes JSONL to deployment_step_logs
-  → Each stdout/stderr line = one row in deployment_step_logs
-  → Step done: status → succeeded | failed
-  → On failure: remaining steps → skipped
-  → Deployment: succeeded | failed
-```
-
-### Credential mapping
-
-The executor receives raw `.env` content (parsed from DB). Provider schemas expect internal keys (`token`, not `HETZNER_TOKEN`). `provider.MapCredentials(schema, env)` translates env var names → schema keys. This is the same function the direct CLI uses — single source of truth in `pkg/provider/resolve.go`.
-
-## Rendering
-
-Renderers live in `internal/render/` — shared by both direct CLI and cloud CLI.
-
-- `internal/render/tui.go` — lipgloss styled (terminal)
-- `internal/render/plain.go` — CI/non-TTY
-- `internal/render/json.go` — JSONL
-- `internal/render/table.go` — bordered tables (describe, resources)
-- `internal/render/resolve.go` — pick renderer (--json, --ci, TTY detect)
-- `internal/render/replay.go` — JSONL line → Output call (bridge between API logs and renderers)
-
-The API's `dbOutput` writes JSONL to DB. The CLI reads JSONL from the API and replays it through the same TUI renderer that `pkg/core/` uses directly. Identical output regardless of direct or cloud mode.
-
-## OpenAPI
-
-Interactive docs at `/docs` when the API is running. OpenAPI 3.1 spec at `/openapi.json`. Powered by `danielgtaylor/huma/v2` — spec generated at runtime from Go types. No build step, no generated files.
-
-**How it works:**
-- Each handler has typed input/output structs (e.g. `CreateWorkspaceInput`, `CreateWorkspaceOutput`)
-- Huma reads struct tags (`required`, `format`, `enum`, `doc`, etc.) to generate the OpenAPI spec
-- Routes registered via `huma.Register(api, operation, handler)` in `router.go`
-- Gin remains the underlying router via `humagin` adapter
-
-**Handler pattern:**
-```go
-type CreateWorkspaceInput struct {
-    Body struct {
-        Name string `json:"name" required:"true" minLength:"1" doc:"Workspace name"`
-    }
-}
-
-type CreateWorkspaceOutput struct {
-    Body api.Workspace
-}
-
-func CreateWorkspace(db *gorm.DB) func(context.Context, *CreateWorkspaceInput) (*CreateWorkspaceOutput, error) {
-    return func(ctx context.Context, input *CreateWorkspaceInput) (*CreateWorkspaceOutput, error) {
-        // types ARE the spec — no annotations needed
-    }
-}
-```
-
-**Error format:** Custom `huma.NewError` override in `humaerr.go` returns `{"error": "..."}` to stay backward-compatible with the cloud CLI. Validation errors return 422.
-
-**Streaming:** SSH, service logs, exec, and deployment logs use `huma.StreamResponse` for streaming text/plain or application/x-ndjson.
-
 ## API routes
 
 ```
-GET    /docs                                            Interactive API docs (huma)
-GET    /openapi.json                                    OpenAPI 3.1 spec
 POST   /login                                          public — GitHub token → JWT
 GET    /health                                         public — status check
 
@@ -342,79 +94,42 @@ GET    /workspaces/:id                                 get workspace
 PUT    /workspaces/:id                                 update workspace
 DELETE /workspaces/:id                                 delete workspace
 
+GET    /workspaces/:wid/providers                      list providers
+POST   /workspaces/:wid/providers                      set provider
+DELETE /workspaces/:wid/providers/:kind/:name           delete provider
+
 GET    /workspaces/:wid/repos                          list repos
 POST   /workspaces/:wid/repos                          create repo
 GET    /workspaces/:wid/repos/:rid                     get repo
-PUT    /workspaces/:wid/repos/:rid                     update repo
+PUT    /workspaces/:wid/repos/:rid                     update repo (link providers)
 DELETE /workspaces/:wid/repos/:rid                     delete repo
 
-POST   /workspaces/:wid/repos/:rid/config              push config (versioned)
-GET    /workspaces/:wid/repos/:rid/config               get latest config
-GET    /workspaces/:wid/repos/:rid/configs              list config versions
-GET    /workspaces/:wid/repos/:rid/config/plan          execution plan for latest
+POST   /workspaces/:wid/repos/:rid/run                 execute command (streams JSONL)
 
-POST   /workspaces/:wid/repos/:rid/deploy               trigger deployment
-GET    /workspaces/:wid/repos/:rid/deployments           list deployments
-GET    /workspaces/:wid/repos/:rid/deployments/:did      get deployment + steps + logs
-POST   /workspaces/:wid/repos/:rid/deployments/:did/run  start executing a pending deployment
-GET    /workspaces/:wid/repos/:rid/deployments/:did/logs raw JSONL log stream
+GET    /workspaces/:wid/repos/:rid/describe             live cluster state
+GET    /workspaces/:wid/repos/:rid/resources            provider resources
+POST   /workspaces/:wid/repos/:rid/ssh                  run command on master
 
-GET    /workspaces/:wid/repos/:rid/describe              live cluster state
-GET    /workspaces/:wid/repos/:rid/resources             provider resources
-POST   /workspaces/:wid/repos/:rid/ssh                   run command on master via SSH
+GET    /workspaces/:wid/repos/:rid/instances            list servers
+GET    /workspaces/:wid/repos/:rid/volumes              list volumes
+GET    /workspaces/:wid/repos/:rid/dns                  list DNS records
+GET    /workspaces/:wid/repos/:rid/secrets              list secret keys
+GET    /workspaces/:wid/repos/:rid/storage              list storage buckets
+POST   /workspaces/:wid/repos/:rid/storage/:name/empty  empty bucket
 
-GET    /workspaces/:wid/repos/:rid/instances             list servers from compute provider
-GET    /workspaces/:wid/repos/:rid/volumes               list volumes from compute provider
-GET    /workspaces/:wid/repos/:rid/dns                   list DNS A records
-GET    /workspaces/:wid/repos/:rid/secrets               list secret key names
-GET    /workspaces/:wid/repos/:rid/storage               list storage buckets
-POST   /workspaces/:wid/repos/:rid/storage/:name/empty   delete all objects in bucket
-
-GET    /workspaces/:wid/repos/:rid/builds                list registry images + tags
+GET    /workspaces/:wid/repos/:rid/builds               list registry images
 GET    /workspaces/:wid/repos/:rid/builds/:name/latest   latest image ref
-POST   /workspaces/:wid/repos/:rid/builds/:name/prune    prune old tags (keep N)
+POST   /workspaces/:wid/repos/:rid/builds/:name/prune    prune old tags
 
-GET    /workspaces/:wid/repos/:rid/services/:svc/logs    stream pod logs (text/plain)
-POST   /workspaces/:wid/repos/:rid/services/:svc/exec    run command in pod (text/plain)
+GET    /workspaces/:wid/repos/:rid/services/:svc/logs   stream pod logs
+POST   /workspaces/:wid/repos/:rid/services/:svc/exec    run command in pod
 ```
-
-## Cloud CLI commands (internal/cli/)
-
-```
-nvoi login                   authenticate (gh CLI → GITHUB_TOKEN → prompt)
-nvoi whoami                  show user/workspace/repo context
-nvoi workspaces list         list workspaces (* = active)
-nvoi workspaces create       create workspace
-nvoi workspaces use          set active workspace
-nvoi workspaces delete       delete workspace
-nvoi repos list              list repos in active workspace (* = active)
-nvoi repos create            create repo
-nvoi repos use               set active repo
-nvoi repos delete            delete repo
-nvoi push                    push config YAML + .env to active repo
-nvoi plan                    show execution plan for latest config
-nvoi deploy                  trigger deploy, stream logs through TUI
-nvoi logs <id>               stream deployment logs through TUI
-nvoi describe                live cluster state (nodes, workloads, pods, services)
-nvoi resources               list all provider resources
-```
-
-See [`examples/README.md`](../../examples/README.md) for full deploy workflows (direct + cloud mode).
-See [`examples/cloud/`](../../examples/cloud/) for config YAML examples.
-See [`examples/core/`](../../examples/core/) for imperative command sequences.
 
 ## Key rules
 
-1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.** Same functions the direct CLI uses. Same idempotency guarantees.
-2. **Config describes what. Env provides where + credentials.** Provider selection is on `RepoConfig` columns. Provider credentials are in the encrypted env.
-3. **Managed service credentials are required input.** Provided in the env pushed with the config. No generation, no persistence. Missing = hard error.
-4. **ResolveDeploymentSteps wraps Build().** Compiles managed bundles, strips managed-owned resources, calls `Build()` for the rest, merges into one step sequence. Validates the stripped config.
-5. **Plan is deterministic.** Same config + env always produces the same step sequence. Sorted keys everywhere.
-6. **Plan handles both sets and removals.** `Plan(prev, current, env)` generates delete steps for resources that disappeared between versions, then set steps for the desired state. Set commands are idempotent — no need to diff for changes, only for removals.
-7. **Secrets are always secrets.** Managed service passwords use namespaced k8s secret keys with aliased env vars. Never plain text in specs.
-8. **Renderers are shared.** `internal/render/` is the single source for TUI/Plain/JSON output. Both CLIs and the API use the same event types. No duplicate formatting code.
-9. **JSONL is the transport.** API stores raw JSONL in DB. API returns raw JSONL to CLI. CLI renders through shared renderers. API never formats for display.
-10. **One line = one record.** Each Output event = one JSONL line = one `deployment_step_logs` row. No aggregation, no batching.
-11. **The API NEVER reads env vars for business logic.** `os.Getenv` is only for server startup config (`DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`). Everything else comes from the DB: app name from `Repo.Name`, environment from `Repo.Environment`, provider selection from `RepoConfig` typed columns, SSH keys from `Repo.SSHPrivateKey` (auto-generated, encrypted), credentials from `RepoConfig.Env` (encrypted). Never `env["NVOI_APP_NAME"]`, never `env["COMPUTE_PROVIDER"]`, never `env["SSH_KEY"]`.
-12. **Repo SSH keys are auto-generated.** Ed25519 keypair created at repo creation, private key encrypted at rest. The API uses `Repo.SSHPrivateKey` to SSH into servers — no file paths, no user input.
-13. **Never fail silently.** Encryption errors, SSH key generation errors, DB errors — always return the error. Never swallow, never log-and-continue.
+1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.** Same functions the direct CLI uses.
+2. **Provider credentials come from InfraProvider records.** No env-based resolution. `CredentialsMap()` returns schema-mapped keys.
+3. **Repo SSH keys are auto-generated.** Ed25519 keypair created at repo creation, private key encrypted at rest.
+4. **The API NEVER reads env vars for business logic.** `os.Getenv` is only for server startup config (`DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`).
+5. **CommandLog is the history.** One row per /run call. Kind, name, status, duration. No JSONL replay — the CLI renders in real-time.
+6. **Never fail silently.** Encryption errors, SSH key generation errors, DB errors — always return the error.

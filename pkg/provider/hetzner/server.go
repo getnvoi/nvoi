@@ -113,16 +113,12 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		}
 	}
 
-	// Delete server
+	// Delete server. Firewall and network are shared — not touched here.
 	if err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/servers/%s", srv.ID), nil, nil); err != nil {
 		if !utils.IsNotFound(err) {
 			return fmt.Errorf("delete server: %w", err)
 		}
 	}
-
-	// Clean up firewall + network
-	_ = c.deleteFirewall(ctx, fwName)
-	_ = c.deleteNetwork(ctx, req.NetworkName)
 
 	return nil
 }

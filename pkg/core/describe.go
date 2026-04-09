@@ -58,7 +58,6 @@ type DescribeIngress struct {
 	Domain  string `json:"domain"`
 	Service string `json:"service"`
 	Port    int    `json:"port"`
-	Proxy   bool   `json:"proxy,omitempty"`
 }
 
 type DescribeSecret struct {
@@ -91,17 +90,32 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 
 	result := &DescribeResult{Namespace: ns}
 	result.Nodes = describeNodes(ctx, ssh)
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
 	result.Workloads = describeWorkloads(ctx, ssh, ns)
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
 	result.Pods = describePods(ctx, ssh, ns)
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
 	result.Services = describeServices(ctx, ssh, ns)
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
 	result.Crons = describeCrons(ctx, ssh, ns)
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
 
 	// Ingress (Caddy routes)
 	routes, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
 	for _, r := range routes {
 		for _, d := range r.Domains {
 			result.Ingress = append(result.Ingress, DescribeIngress{
-				Domain: d, Service: r.Service, Port: r.Port, Proxy: r.UseTLSSecret,
+				Domain: d, Service: r.Service, Port: r.Port,
 			})
 		}
 	}
@@ -222,45 +236,22 @@ func describeNodes(ctx context.Context, ssh utils.SSHClient) []DescribeNode {
 	return out
 }
 
-// workloadItem is the shared JSON shape for deployments and statefulsets.
-type workloadItem struct {
-	Metadata struct {
-		Name              string `json:"name"`
-		CreationTimestamp string `json:"creationTimestamp"`
-	} `json:"metadata"`
-	Spec struct {
-		Replicas *int32 `json:"replicas"`
-		Template struct {
-			Spec struct {
-				Containers []struct{ Image string } `json:"containers"`
-			} `json:"spec"`
-		} `json:"template"`
-	} `json:"spec"`
-	Status struct {
-		ReadyReplicas int32 `json:"readyReplicas"`
-	} `json:"status"`
-}
-
 func describeWorkloads(ctx context.Context, ssh utils.SSHClient, ns string) []DescribeWorkload {
 	var out []DescribeWorkload
 	for _, kind := range []string{"deployments", "statefulsets"} {
-		var resp struct{ Items []workloadItem }
+		var resp kube.WorkloadList
 		if kubeGet(ctx, ssh, ns, kind, &resp) != nil {
 			continue
 		}
 		kindName := strings.TrimSuffix(kind, "s")
 		for _, w := range resp.Items {
-			desired := int32(1)
-			if w.Spec.Replicas != nil {
-				desired = *w.Spec.Replicas
-			}
 			image := ""
 			if len(w.Spec.Template.Spec.Containers) > 0 {
 				image = w.Spec.Template.Spec.Containers[0].Image
 			}
 			out = append(out, DescribeWorkload{
 				Name: w.Metadata.Name, Kind: kindName,
-				Ready: fmt.Sprintf("%d/%d", w.Status.ReadyReplicas, desired),
+				Ready: fmt.Sprintf("%d/%d", w.Status.ReadyReplicas, w.Spec.Replicas),
 				Image: image, Age: utils.HumanAge(w.Metadata.CreationTimestamp),
 			})
 		}
@@ -322,25 +313,7 @@ func describeCrons(ctx context.Context, ssh utils.SSHClient, ns string) []Descri
 }
 
 func describePods(ctx context.Context, ssh utils.SSHClient, ns string) []DescribePod {
-	var resp struct {
-		Items []struct {
-			Metadata struct {
-				Name              string `json:"name"`
-				CreationTimestamp string `json:"creationTimestamp"`
-			} `json:"metadata"`
-			Spec   struct{ NodeName string } `json:"spec"`
-			Status struct {
-				Phase             string `json:"phase"`
-				ContainerStatuses []struct {
-					Ready        bool `json:"ready"`
-					RestartCount int  `json:"restartCount"`
-					State        struct {
-						Waiting *struct{ Reason string } `json:"waiting"`
-					} `json:"state"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
+	var resp kube.PodList
 	if kubeGet(ctx, ssh, ns, "pods", &resp) != nil {
 		return nil
 	}

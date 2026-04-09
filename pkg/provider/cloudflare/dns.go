@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -156,20 +155,7 @@ func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup
 		dnsGroup.Rows = append(dnsGroup.Rows, []string{r.Type, r.Domain, r.IP})
 	}
 
-	groups := []provider.ResourceGroup{dnsGroup}
-
-	// Origin CA certificates — listed by zone, shows what certs exist at Cloudflare.
-	ca := NewOriginCA(d.apiKey)
-	certs, err := ca.ListCerts(ctx, d.zoneID)
-	if err == nil && len(certs) > 0 {
-		certGroup := provider.ResourceGroup{Name: "Origin CA Certificates", Columns: []string{"ID", "Hostnames", "Expires"}}
-		for _, c := range certs {
-			certGroup.Rows = append(certGroup.Rows, []string{c.ID, strings.Join(c.Hostnames, ", "), c.ExpiresOn})
-		}
-		groups = append(groups, certGroup)
-	}
-
-	return groups, nil
+	return []provider.ResourceGroup{dnsGroup}, nil
 }
 
 var _ provider.DNSProvider = (*DNSClient)(nil)

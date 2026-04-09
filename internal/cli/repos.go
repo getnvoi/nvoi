@@ -128,10 +128,16 @@ func newReposCreateCmd() *cobra.Command {
 }
 
 func newReposUseCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "use <name-or-id>",
-		Short: "Set active repo",
-		Args:  cobra.ExactArgs(1),
+		Short: "Set active repo and optionally link providers",
+		Long: `Sets the active repo. Pass --compute, --dns, --storage, --build to link
+providers from the workspace.
+
+Examples:
+  nvoi repos use myapp
+  nvoi repos use myapp --compute hetzner --dns cloudflare --storage cloudflare --build daytona`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, cfg, err := authedClient()
 			if err != nil {
@@ -170,10 +176,28 @@ func newReposUseCmd() *cobra.Command {
 				return err
 			}
 
+			// Link providers if any flags are set.
+			body := map[string]string{}
+			for _, kind := range providerKinds {
+				if v, _ := cmd.Flags().GetString(kind); v != "" {
+					body[kind+"_provider"] = v
+				}
+			}
+			if len(body) > 0 {
+				path := "/workspaces/" + wsID + "/repos/" + match.ID
+				if err := client.Do("PUT", path, body, nil); err != nil {
+					return err
+				}
+			}
+
 			fmt.Printf("using repo %s (%s)\n", match.Name, match.ID)
 			return nil
 		},
 	}
+	for _, kind := range providerKinds {
+		cmd.Flags().String(kind, "", "link "+kind+" provider")
+	}
+	return cmd
 }
 
 func newReposDeleteCmd() *cobra.Command {

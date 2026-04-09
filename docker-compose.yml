@@ -1,43 +1,10 @@
 services:
-  # Direct mode — runs cmd/core, talks to providers directly
-  core:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    volumes:
-      - .:/app
-      - go-mod-cache:/go/pkg/mod
-      - go-build-cache:/root/.cache/go-build
-      - ${HOME}/.ssh:/root/.ssh:ro
-      - ${BUILD_SOURCE:-/dev/null}:/build-source # local build source mount
-      - docker-data:/var/lib/docker # persist DinD cache across runs
-    privileged: true # DinD — local builder runs docker daemon + SSH tunnel in same namespace
-    env_file: examples/.env
-    environment:
-      - GOMODCACHE=/go/pkg/mod
-      - GOCACHE=/root/.cache/go-build
-      - SSH_KEY_PATH=/root/.ssh/id_rsa
-    working_dir: /app
-    entrypoint: ["/app/bin/entrypoint"]
-
-  # API server — runs cmd/api, serves REST endpoints
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    volumes:
-      - .:/app
-      - go-mod-cache:/go/pkg/mod
-      - go-build-cache:/root/.cache/go-build
-    env_file: examples/.env
+    build: .
     environment:
-      - GOMODCACHE=/go/pkg/mod
-      - GOCACHE=/root/.cache/go-build
       - DATABASE_URL=postgres://nvoi:nvoi@postgres:5432/nvoi?sslmode=disable
       - JWT_SECRET=dev-jwt-secret-do-not-use-in-production
       - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-    working_dir: /app
-    command: ["go", "run", "./cmd/api"]
     ports:
       - "8080:8080"
     depends_on:
@@ -47,36 +14,7 @@ services:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 2s
       timeout: 5s
-      retries: 10
-
-  # Cloud CLI — runs cmd/cli, talks to the API
-  cli:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    volumes:
-      - .:/app
-      - go-mod-cache:/go/pkg/mod
-      - go-build-cache:/root/.cache/go-build
-      - cli-config:/root/.config/nvoi
-    env_file: examples/.env
-    environment:
-      - GOMODCACHE=/go/pkg/mod
-      - GOCACHE=/root/.cache/go-build
-      - NVOI_API_BASE=http://api:8080
-    working_dir: /app
-    entrypoint: ["go", "run", "./cmd/cli"]
-    depends_on:
-      api:
-        condition: service_healthy
-
-  # Marketing website — runs cmd/web, serves landing page + blog
-  web:
-    build:
-      context: .
-      dockerfile: cmd/web/Dockerfile
-    expose:
-      - "3000"
+      retries: 30
 
   postgres:
     image: postgres:17-alpine
@@ -93,8 +31,4 @@ services:
       retries: 5
 
 volumes:
-  go-mod-cache:
-  go-build-cache:
-  docker-data:
-  cli-config:
   postgres-data:

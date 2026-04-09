@@ -65,15 +65,6 @@ func (n *Names) Labels() map[string]string {
 	}
 }
 
-// ── Origin CA ─────────────────────────────────────────────────────────────
-
-// OriginCACertComment returns a deterministic identifier for Origin CA cert annotations.
-// Cloudflare Origin CA certs have no name field — lookup is by hostname match.
-// This is stored as annotation metadata for auditability.
-func (n *Names) OriginCACertComment() string {
-	return fmt.Sprintf("nvoi-%s-%s-origin-ca", n.app, n.env)
-}
-
 // ── Remote paths ───────────────────────────────────────────────────────────────
 
 func (n *Names) VolumeMountPath(name string) string {
@@ -125,23 +116,15 @@ func CaddyfileStagingPath() string { return fmt.Sprintf("/home/%s/Caddyfile.k8s"
 // ── K8s label keys ─────────────────────────────────────────────────────────────
 
 const (
-	LabelAppName         = "app.kubernetes.io/name"
-	LabelAppManagedBy    = "app.kubernetes.io/managed-by"
-	LabelManagedBy       = "nvoi"
-	LabelNvoiService     = "nvoi/service"
-	LabelNvoiStack       = "nvoi/stack"
-	LabelNvoiRole        = "nvoi-role"
-	LabelNvoiManagedKind = "nvoi/managed-kind"
-	LabelConfigChecksum  = "nvoi/config-checksum"
-	RoleMaster           = "master"
-	CaddyTLSSecretName   = "caddy-origin-cert"
-	OriginCAAnnotation   = "nvoi/origin-ca-id"
+	LabelAppName        = "app.kubernetes.io/name"
+	LabelAppManagedBy   = "app.kubernetes.io/managed-by"
+	LabelManagedBy      = "nvoi"
+	LabelNvoiService    = "nvoi/service"
+	LabelNvoiStack      = "nvoi/stack"
+	LabelNvoiRole       = "nvoi-role"
+	LabelConfigChecksum = "nvoi/config-checksum"
+	RoleMaster          = "master"
 )
-
-// BackupStorageName returns the default backup storage name for a database.
-func BackupStorageName(dbName string) string {
-	return dbName + "-backups"
-}
 
 // ── Storage env naming ─────────────────────────────────────────────────────────
 

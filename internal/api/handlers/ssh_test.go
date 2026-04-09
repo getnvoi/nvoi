@@ -23,15 +23,8 @@ func TestSSH_RequiresCommand(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	// Push a config so clusterFromLatestConfig works.
-	body := map[string]any{"compute_provider": "hetzner", "config": "servers:\n  master:\n    type: cx23\n    region: fsn1\nservices:\n  web:\n    image: nginx\n    port: 80\n"}
-	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/ssh", map[string]any{}, token)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	// No command field.
-	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/ssh", map[string]any{}, token)
-	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d, want 422, body: %s", w.Code, w.Body.String())

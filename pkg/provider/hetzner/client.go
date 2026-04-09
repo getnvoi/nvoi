@@ -1,3 +1,4 @@
+// Package hetzner implements the compute and volume provider for Hetzner Cloud.
 package hetzner
 
 import (
