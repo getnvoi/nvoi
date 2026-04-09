@@ -1,0 +1,57 @@
+app: dummy-rails
+env: production
+
+providers:
+  compute: hetzner
+  dns: cloudflare
+  storage: cloudflare
+  build: daytona
+
+servers:
+  master:
+    type: cx23
+    region: fsn1
+    role: master
+
+firewall: default
+
+volumes:
+  pgdata:
+    size: 20
+    server: master
+
+build:
+  web: benbonnet/dummy-rails
+
+secrets:
+  - RAILS_MASTER_KEY
+  - POSTGRES_PASSWORD
+  - POSTGRES_USER
+  - POSTGRES_DB
+
+storage:
+  assets:
+    cors: true
+
+services:
+  db:
+    image: postgres:17
+    port: 5432
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB]
+  web:
+    build: web
+    port: 80
+    replicas: 2
+    health: /up
+    env: [RAILS_ENV=production, POSTGRES_HOST=db]
+    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB, RAILS_MASTER_KEY]
+    storage: [assets]
+  jobs:
+    build: web
+    command: bin/jobs
+    env: [RAILS_ENV=production, POSTGRES_HOST=db]
+    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB, RAILS_MASTER_KEY]
+
+domains:
+  web: [hz.nvoi.to]

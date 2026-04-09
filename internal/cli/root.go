@@ -1,8 +1,9 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/spf13/cobra"
+)
 
-// Root returns the root command for the cloud CLI.
 func Root() *cobra.Command {
 	root := &cobra.Command{
 		Use:          "nvoi",
@@ -10,19 +11,48 @@ func Root() *cobra.Command {
 		SilenceUsage: true,
 	}
 
-	root.AddCommand(newLoginCmd())
-	root.AddCommand(newWhoamiCmd())
-	root.AddCommand(newWorkspacesCmd())
-	root.AddCommand(newReposCmd())
-	root.AddCommand(newPushCmd())
-	root.AddCommand(newPlanCmd())
-	root.AddCommand(newDeployCmd())
-	root.AddCommand(newLogsCmd())
-	root.AddCommand(newSSHCmd())
-	root.AddCommand(newDescribeCmd())
-	root.AddCommand(newResourcesCmd())
-	root.AddCommand(newDatabaseCmd())
-	root.AddCommand(newAgentCmd())
+	// All commands need auth — PersistentPreRunE loads client.
+	// Standalone commands (login, whoami, etc.) override it.
+	var client *APIClient
+	var wsID, repoID string
+
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		c, cfg, err := authedClient()
+		if err != nil {
+			return err
+		}
+		ws, repo, err := requireRepo(cfg)
+		if err != nil {
+			return err
+		}
+		client = c
+		wsID = ws
+		repoID = repo
+		return nil
+	}
+
+	repoPath := func(suffix string) string {
+		return "/workspaces/" + wsID + "/repos/" + repoID + suffix
+	}
+
+	root.AddCommand(newCloudDeployCmd(&client, &repoPath))
+	root.AddCommand(newCloudDestroyCmd(&client, &repoPath))
+	root.AddCommand(newCloudDescribeCmd(&client, &repoPath))
+	root.AddCommand(newCloudResourcesCmd(&client, &repoPath))
+	root.AddCommand(newCloudLogsCmd(&client, &repoPath))
+	root.AddCommand(newCloudExecCmd(&client, &repoPath))
+	root.AddCommand(newCloudSSHCmd(&client, &repoPath))
+
+	addStandalone(root, newLoginCmd())
+	addStandalone(root, newWhoamiCmd())
+	addStandalone(root, newWorkspacesCmd())
+	addStandalone(root, newReposCmd())
+	addStandalone(root, newProviderCmd())
 
 	return root
+}
+
+func addStandalone(root *cobra.Command, cmd *cobra.Command) {
+	cmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
+	root.AddCommand(cmd)
 }

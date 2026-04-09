@@ -25,19 +25,18 @@ func ParseSecretRef(ref string) (envName, secretKey string) {
 
 // ServiceSpec describes a service to deploy.
 type ServiceSpec struct {
-	Name        string
-	Image       string
-	Port        int
-	Command     string
-	Replicas    int
-	Env         []corev1.EnvVar
-	Secrets     []string // secret key references → env.valueFrom.secretKeyRef
-	SecretName  string   // k8s Secret name (from names.KubeSecrets())
-	Volumes     []string // "pgdata:/var/lib/postgresql/data"
-	HealthPath  string
-	Server      string // node selector (empty = any)
-	Managed     bool   // true if any volume is provider-managed → StatefulSet
-	ManagedKind string // managed service kind for discovery label (empty for non-managed)
+	Name       string
+	Image      string
+	Port       int
+	Command    string
+	Replicas   int
+	Env        []corev1.EnvVar
+	Secrets    []string // secret key references → env.valueFrom.secretKeyRef
+	SecretName string   // k8s Secret name (from names.KubeSecrets())
+	Volumes    []string // "pgdata:/var/lib/postgresql/data"
+	HealthPath string
+	Server     string // node selector (empty = any)
+	Managed    bool   // true if any volume is provider-managed → StatefulSet
 }
 
 // GenerateYAML produces k8s YAML for a single service: workload + Service.
@@ -47,9 +46,6 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 		utils.LabelAppName:      spec.Name,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
 		utils.LabelNvoiService:  spec.Name,
-	}
-	if spec.ManagedKind != "" {
-		labels[utils.LabelNvoiManagedKind] = spec.ManagedKind
 	}
 
 	// Container
@@ -103,9 +99,12 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 		Containers: []corev1.Container{container},
 		Volumes:    volumes,
 	}
-	if spec.Server != "" {
-		podSpec.NodeSelector = map[string]string{utils.LabelNvoiRole: spec.Server}
+	// No server = pin to master. Explicit server = pin to that node.
+	role := spec.Server
+	if role == "" {
+		role = "master"
 	}
+	podSpec.NodeSelector = map[string]string{utils.LabelNvoiRole: role}
 
 	// Workload: StatefulSet or Deployment
 	var workloadKind string
@@ -140,7 +139,13 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 			ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
 			Spec: appsv1.DeploymentSpec{
 				Replicas: &replicas,
-				Strategy: appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType},
+				Strategy: appsv1.DeploymentStrategy{
+					Type: appsv1.RollingUpdateDeploymentStrategyType,
+					RollingUpdate: &appsv1.RollingUpdateDeployment{
+						MaxUnavailable: intOrStr(0),
+						MaxSurge:       intOrStr(1),
+					},
+				},
 				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: spec.Name}},
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
 			},
@@ -214,4 +219,9 @@ func buildVolumes(mounts []string, names *utils.Names, managedVolPaths map[strin
 		vms = append(vms, corev1.VolumeMount{Name: volName, MountPath: target})
 	}
 	return volumes, vms, nil
+}
+
+func intOrStr(val int) *intstr.IntOrString {
+	v := intstr.FromInt32(int32(val))
+	return &v
 }

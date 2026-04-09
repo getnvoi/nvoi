@@ -1,3 +1,4 @@
+// Package daytona implements the build provider using Daytona remote sandboxes.
 package daytona
 
 import (

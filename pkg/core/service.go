@@ -15,18 +15,17 @@ import (
 
 type ServiceSetRequest struct {
 	Cluster
-	Name        string
-	Image       string
-	Port        int
-	Command     string
-	Replicas    int
-	EnvVars     []string // KEY=VALUE pairs
-	Secrets     []string // secret key references (must exist in cluster)
-	Storages    []string // storage names → expands to STORAGE_{NAME}_* secret refs
-	Volumes     []string // name:/path
-	HealthPath  string
-	Server      string
-	ManagedKind string // set by managed bundles for discovery (e.g. "postgres", "claude")
+	Name       string
+	Image      string
+	Port       int
+	Command    string
+	Replicas   int
+	EnvVars    []string // KEY=VALUE pairs
+	Secrets    []string // secret key references (must exist in cluster)
+	Storages   []string // storage names → expands to STORAGE_{NAME}_* secret refs
+	Volumes    []string // name:/path
+	HealthPath string
+	Server     string
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
@@ -102,42 +101,19 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		}
 	}
 
-	// Validate secret references
-	secretName := names.KubeSecrets()
-	if len(req.Secrets) > 0 {
-		existing, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
-		if err != nil {
-			return fmt.Errorf("cannot verify secrets — run 'secret set' first: %w", err)
-		}
-		for _, ref := range req.Secrets {
-			_, secretKey := kube.ParseSecretRef(ref)
-			found := false
-			for _, k := range existing {
-				if k == secretKey {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return fmt.Errorf("secret %q not found — run 'nvoi secret set %s <value>' first", secretKey, secretKey)
-			}
-		}
-	}
-
 	spec := kube.ServiceSpec{
-		Name:        req.Name,
-		Image:       req.Image,
-		Port:        req.Port,
-		Command:     req.Command,
-		Replicas:    req.Replicas,
-		Env:         env,
-		Secrets:     req.Secrets,
-		SecretName:  secretName,
-		Volumes:     req.Volumes,
-		HealthPath:  req.HealthPath,
-		Server:      req.Server,
-		Managed:     managed,
-		ManagedKind: req.ManagedKind,
+		Name:       req.Name,
+		Image:      req.Image,
+		Port:       req.Port,
+		Command:    req.Command,
+		Replicas:   req.Replicas,
+		Env:        env,
+		Secrets:    req.Secrets,
+		SecretName: names.KubeSecrets(),
+		Volumes:    req.Volumes,
+		HealthPath: req.HealthPath,
+		Server:     req.Server,
+		Managed:    managed,
 	}
 
 	out.Command("service", "set", req.Name)
@@ -173,28 +149,5 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	}
 	defer ssh.Close()
 
-	if err := ensureServiceDeleteAllowed(ctx, ssh, names.KubeNamespace(), names.KubeCaddyConfig(), req.Name); err != nil {
-		return err
-	}
-
 	return kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name)
-}
-
-func ensureServiceDeleteAllowed(ctx context.Context, ssh utils.SSHClient, ns, caddyConfig, service string) error {
-	routes, err := kube.GetIngressRoutes(ctx, ssh, ns, caddyConfig)
-	if err != nil {
-		return fmt.Errorf("service delete guard: inspect ingress: %w", err)
-	}
-
-	for _, route := range routes {
-		if route.Service == service {
-			return fmt.Errorf(
-				"service delete blocked: ingress still targets %q (%s) — remove or reconcile ingress first",
-				service,
-				strings.Join(route.Domains, ", "),
-			)
-		}
-	}
-
-	return nil
 }

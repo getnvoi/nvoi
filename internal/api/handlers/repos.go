@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
@@ -40,7 +41,11 @@ type GetRepoOutput struct {
 type UpdateRepoInput struct {
 	RepoScopedInput
 	Body struct {
-		Name string `json:"name" required:"true" minLength:"1" doc:"New repo name"`
+		Name            string `json:"name,omitempty" doc:"New repo name"`
+		ComputeProvider string `json:"compute_provider,omitempty" doc:"Compute provider name (looks up by kind=compute + name in workspace)"`
+		DNSProvider     string `json:"dns_provider,omitempty" doc:"DNS provider name"`
+		StorageProvider string `json:"storage_provider,omitempty" doc:"Storage provider name"`
+		BuildProvider   string `json:"build_provider,omitempty" doc:"Build provider name"`
 	}
 }
 
@@ -113,7 +118,37 @@ func UpdateRepo(db *gorm.DB) func(context.Context, *UpdateRepoInput) (*UpdateRep
 			return nil, err
 		}
 
-		db.Model(repo).Update("name", input.Body.Name)
+		if input.Body.Name != "" {
+			db.Model(repo).Update("name", input.Body.Name)
+		}
+
+		// Link providers by looking up InfraProvider records in the workspace.
+		providerLinks := []struct {
+			name  string
+			kind  api.ProviderKind
+			field string
+		}{
+			{input.Body.ComputeProvider, api.ProviderKindCompute, "compute_provider_id"},
+			{input.Body.DNSProvider, api.ProviderKindDNS, "dns_provider_id"},
+			{input.Body.StorageProvider, api.ProviderKindStorage, "storage_provider_id"},
+			{input.Body.BuildProvider, api.ProviderKindBuild, "build_provider_id"},
+		}
+		for _, link := range providerLinks {
+			if link.name == "" {
+				continue
+			}
+			var prov api.InfraProvider
+			if err := db.Where("workspace_id = ? AND kind = ? AND name = ?", repo.WorkspaceID, link.kind, link.name).First(&prov).Error; err != nil {
+				return nil, huma.Error404NotFound(fmt.Sprintf("provider %s/%s not found in workspace — run 'nvoi provider set %s %s' first", link.kind, link.name, link.kind, link.name))
+			}
+			db.Model(repo).Update(link.field, prov.ID)
+		}
+
+		// Reload with preloaded providers.
+		repo, err = findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		if err != nil {
+			return nil, err
+		}
 		return &UpdateRepoOutput{Body: *repo}, nil
 	}
 }
@@ -142,7 +177,12 @@ func findRepo(db *gorm.DB, userID, workspaceID, repoID string) (*api.Repo, error
 	}
 
 	var repo api.Repo
-	if err := db.Where("id = ? AND workspace_id = ?", repoID, ws.ID).First(&repo).Error; err != nil {
+	q := db.Where("id = ? AND workspace_id = ?", repoID, ws.ID).
+		Preload("ComputeProvider").
+		Preload("DNSProvider").
+		Preload("StorageProvider").
+		Preload("BuildProvider")
+	if err := q.First(&repo).Error; err != nil {
 		return nil, huma.Error404NotFound("repo not found")
 	}
 	return &repo, nil

@@ -1,3 +1,4 @@
+// Package kube handles Kubernetes YAML generation, kubectl operations over SSH, Caddy ingress configuration, and rollout monitoring.
 package kube
 
 import (
@@ -79,27 +80,14 @@ func FirstPod(ctx context.Context, ssh utils.SSHClient, ns, service string) (str
 	return pod, nil
 }
 
-// Apply uploads a YAML manifest and applies it.
-// Uses replace (full overwrite, no leftover fields) when the resource exists,
-// falls back to server-side apply for first creation.
+// Apply uploads a YAML manifest and applies it with server-side apply.
+// Server-side apply does field-level merge — rolling updates work correctly
+// when nodeSelector or other fields change (new pods created before old ones die).
 func Apply(ctx context.Context, ssh utils.SSHClient, ns string, yaml string) error {
 	if err := ssh.Upload(ctx, bytes.NewReader([]byte(yaml)), utils.KubeManifestPath(), 0o644); err != nil {
 		return fmt.Errorf("upload manifest: %w", err)
 	}
-	path := utils.KubeManifestPath()
-	// replace overwrites the entire resource — no leftover fields from previous specs.
-	// Fails if the resource doesn't exist yet, so fall back to apply for creation.
-	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("replace -f %s", path)))
-	if err == nil {
-		return nil
-	}
-	// Only fall through to apply for "not found" — resource doesn't exist yet.
-	// Any other error (schema validation, RBAC, immutable fields) is a real failure.
-	errMsg := strings.ToLower(string(out))
-	if !strings.Contains(errMsg, "not found") && !strings.Contains(errMsg, "notfound") {
-		return fmt.Errorf("kubectl replace: %s: %w", string(out), err)
-	}
-	out, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply --server-side --force-conflicts -f %s", path)))
+	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("apply --server-side --force-conflicts -f %s", utils.KubeManifestPath())))
 	if err != nil {
 		return fmt.Errorf("kubectl apply: %s: %w", string(out), err)
 	}
@@ -263,6 +251,18 @@ func base64Decode(s string) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// DrainAndRemoveNode removes a node from the cluster.
+// If the node is alive, drains it first (evicts pods gracefully).
+// If the node is dead (NotReady), skips drain and force-removes it.
+// Idempotent — succeeds if the node doesn't exist.
+func DrainAndRemoveNode(ctx context.Context, ssh utils.SSHClient, nodeName string) {
+	// Try drain (best-effort, short timeout — dead nodes won't respond).
+	ssh.Run(ctx, kubectlGlobal(fmt.Sprintf(
+		"drain %s --ignore-daemonsets --delete-emptydir-data --force --timeout=30s 2>/dev/null", nodeName)))
+	// Remove the node from the cluster — pods get rescheduled.
+	ssh.Run(ctx, kubectlGlobal(fmt.Sprintf("delete node %s --ignore-not-found 2>/dev/null", nodeName)))
 }
 
 // LabelNode labels a k8s node with nvoi-role={role}. Idempotent — runs every deploy.

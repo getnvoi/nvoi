@@ -72,6 +72,22 @@ func RegisterBucket(name string, schema CredentialSchema, factory func(creds map
 	bucketProviders[name] = bucketEntry{schema: schema, factory: factory}
 }
 
+// GetSchema returns the credential schema for any provider kind + name.
+func GetSchema(kind, name string) (CredentialSchema, error) {
+	switch kind {
+	case "compute":
+		return GetComputeSchema(name)
+	case "dns":
+		return GetDNSSchema(name)
+	case "storage":
+		return GetBucketSchema(name)
+	case "build":
+		return GetBuildSchema(name)
+	default:
+		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
+	}
+}
+
 func GetComputeSchema(name string) (CredentialSchema, error) {
 	entry, ok := computeProviders[name]
 	if !ok {

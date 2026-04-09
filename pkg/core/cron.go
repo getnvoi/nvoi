@@ -29,13 +29,6 @@ type CronSetRequest struct {
 func CronSet(ctx context.Context, req CronSetRequest) error {
 	out := req.Log()
 
-	if req.Image == "" {
-		return fmt.Errorf("--image is required")
-	}
-	if err := validateCronSchedule(req.Schedule); err != nil {
-		return err
-	}
-
 	master, names, prov, err := req.Cluster.Master(ctx)
 	if err != nil {
 		return err
@@ -159,23 +152,4 @@ func CronDelete(ctx context.Context, req CronDeleteRequest) error {
 	defer ssh.Close()
 
 	return kube.DeleteCronByName(ctx, ssh, names.KubeNamespace(), req.Name)
-}
-
-func validateCronSchedule(schedule string) error {
-	schedule = strings.TrimSpace(schedule)
-	if schedule == "" {
-		return fmt.Errorf("--schedule is required")
-	}
-	if strings.HasPrefix(schedule, "@") {
-		switch schedule {
-		case "@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight", "@hourly":
-			return nil
-		default:
-			return fmt.Errorf("invalid cron schedule %q", schedule)
-		}
-	}
-	if len(strings.Fields(schedule)) != 5 {
-		return fmt.Errorf("invalid cron schedule %q", schedule)
-	}
-	return nil
 }

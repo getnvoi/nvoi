@@ -151,6 +151,10 @@ func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
 
 	serverName := names.Server(req.Name)
 	out.Command("instance", "delete", serverName)
+
+	// Node drain + kubectl delete node is handled by the reconciler (DrainNode)
+	// before this function is called. ComputeDelete only deletes the provider server.
+
 	return prov.DeleteServer(ctx, provider.DeleteServerRequest{
 		Name:         serverName,
 		FirewallName: names.Firewall(),

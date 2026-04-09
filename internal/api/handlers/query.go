@@ -120,22 +120,15 @@ func ListDNSRecords(db *gorm.DB) func(context.Context, *ListDNSInput) (*ListDNSO
 			return nil, err
 		}
 
-		rc, env, err := latestConfigAndEnv(db, repo)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-
-		creds, err := resolveAllCredentials(rc, env)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-
-		if rc.DNSProvider == "" {
-			return nil, huma.Error400BadRequest("no dns_provider configured")
+		if repo.DNSProvider == nil {
+			return nil, huma.Error400BadRequest("no dns provider configured — run 'nvoi provider set dns <name>' first")
 		}
 
 		records, err := pkgcore.DNSList(ctx, pkgcore.DNSListRequest{
-			DNS: pkgcore.ProviderRef{Name: string(rc.DNSProvider), Creds: creds.DNS},
+			DNS: pkgcore.ProviderRef{
+				Name:  repo.DNSProvider.Name,
+				Creds: repo.DNSProvider.CredentialsMap(),
+			},
 		})
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
@@ -181,25 +174,18 @@ func EmptyStorage(db *gorm.DB) func(context.Context, *EmptyStorageInput) (*Empty
 			return nil, err
 		}
 
-		rc, env, err := latestConfigAndEnv(db, repo)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
+		if repo.StorageProvider == nil {
+			return nil, huma.Error400BadRequest("no storage provider configured")
 		}
 
-		creds, err := resolveAllCredentials(rc, env)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-
-		cluster, err := clusterFromLatestConfig(db, repo)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-
+		cluster := clusterFromRepo(repo)
 		err = pkgcore.StorageEmpty(ctx, pkgcore.StorageEmptyRequest{
 			Cluster: *cluster,
-			Storage: pkgcore.ProviderRef{Name: string(rc.StorageProvider), Creds: creds.Storage},
-			Name:    input.Name,
+			Storage: pkgcore.ProviderRef{
+				Name:  repo.StorageProvider.Name,
+				Creds: repo.StorageProvider.CredentialsMap(),
+			},
+			Name: input.Name,
 		})
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
@@ -321,20 +307,4 @@ func ExecCommand(db *gorm.DB) func(context.Context, *ExecInput) (*huma.StreamRes
 			},
 		}, nil
 	}
-}
-
-// ── Shared helper ────────────────────────────────────────────────────────────
-
-// repoCluster resolves user → repo → cluster from a RepoScopedInput.
-func repoCluster(ctx context.Context, db *gorm.DB, input RepoScopedInput) (*pkgcore.Cluster, error) {
-	user := api.UserFromContext(ctx)
-	repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
-	if err != nil {
-		return nil, err
-	}
-	cluster, err := clusterFromLatestConfig(db, repo)
-	if err != nil {
-		return nil, huma.Error400BadRequest(err.Error())
-	}
-	return cluster, nil
 }

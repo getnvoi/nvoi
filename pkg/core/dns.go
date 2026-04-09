@@ -2,11 +2,8 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -14,10 +11,9 @@ import (
 
 type DNSSetRequest struct {
 	Cluster
-	DNS         ProviderRef
-	Service     string
-	Domains     []string
-	EdgeProxied bool // edge overlay should proxy DNS through the provider
+	DNS     ProviderRef
+	Service string
+	Domains []string
 }
 
 // DNSSet creates/updates DNS A records. DNS only — no Caddy.
@@ -37,13 +33,9 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	ip := master.IPv4
 	out.Command("dns", "set", req.Service, "ip", ip, "domains", req.Domains)
 
-	if req.EdgeProxied && req.DNS.Name != "cloudflare" {
-		return fmt.Errorf("edge-proxied DNS currently requires Cloudflare as DNS provider (current: %s)", req.DNS.Name)
-	}
-
 	for _, domain := range req.Domains {
 		out.Progress(fmt.Sprintf("ensuring %s → %s", domain, ip))
-		if err := dns.EnsureARecord(ctx, domain, ip, req.EdgeProxied); err != nil {
+		if err := dns.EnsureARecord(ctx, domain, ip, false); err != nil {
 			return fmt.Errorf("dns set %s: %w", domain, err)
 		}
 		out.Success(domain)
@@ -60,17 +52,12 @@ type DNSDeleteRequest struct {
 }
 
 // DNSDelete removes DNS A records.
-// Guarded: fails if ingress still references the service/domains.
 func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	out := req.Log()
 	out.Command("dns", "delete", req.Service)
 
 	dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)
 	if err != nil {
-		return err
-	}
-
-	if err := ensureDNSDeleteAllowed(ctx, req); err != nil {
 		return err
 	}
 
@@ -95,48 +82,4 @@ func DNSList(ctx context.Context, req DNSListRequest) ([]provider.DNSRecord, err
 		return nil, err
 	}
 	return dns.ListARecords(ctx)
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-func ensureDNSDeleteAllowed(ctx context.Context, req DNSDeleteRequest) error {
-	if req.Provider == "" {
-		return nil
-	}
-
-	ssh, names, err := req.Cluster.SSH(ctx)
-	if errors.Is(err, ErrNoMaster) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("dns delete guard: inspect ingress: %w", err)
-	}
-	defer ssh.Close()
-
-	routes, err := kube.GetIngressRoutes(ctx, ssh, names.KubeNamespace(), names.KubeCaddyConfig())
-	if err != nil {
-		return fmt.Errorf("dns delete guard: inspect ingress: %w", err)
-	}
-
-	for _, route := range routes {
-		if routeReferencesDomains(route, req.Domains) {
-			return fmt.Errorf(
-				"dns delete blocked: ingress still references %q (%s) — remove or reconcile ingress first",
-				req.Service, strings.Join(req.Domains, ", "),
-			)
-		}
-	}
-
-	return nil
-}
-
-func routeReferencesDomains(route kube.IngressRoute, domains []string) bool {
-	for _, want := range domains {
-		for _, have := range route.Domains {
-			if have == want {
-				return true
-			}
-		}
-	}
-	return false
 }

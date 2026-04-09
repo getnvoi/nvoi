@@ -1,3 +1,4 @@
+// Package provider defines interfaces and registration for compute, DNS, storage, and build providers.
 package provider
 
 import (
@@ -6,8 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // InternalPorts are always managed by instance set — never user-configurable.
@@ -83,55 +82,9 @@ func resolvePreset(ctx context.Context, name string) (PortAllowList, error) {
 			"443": {"0.0.0.0/0", "::/0"},
 		}, nil
 
-	case "cloudflare":
-		cidrs, err := FetchCloudflareIPs(ctx)
-		if err != nil {
-			cidrs = FallbackCloudflareIPs
-		}
-		return PortAllowList{
-			"80":  cidrs,
-			"443": cidrs,
-		}, nil
-
 	default:
-		return nil, fmt.Errorf("unknown firewall preset: %q (available: default, cloudflare)", name)
+		return nil, fmt.Errorf("unknown firewall preset: %q (available: default)", name)
 	}
-}
-
-// FetchCloudflareIPs fetches Cloudflare's published IP ranges.
-// GET https://api.cloudflare.com/client/v4/ips → {"result": {"ipv4_cidrs": [...]}}
-func FetchCloudflareIPs(ctx context.Context) ([]string, error) {
-	client := &utils.HTTPClient{
-		BaseURL: "https://api.cloudflare.com/client/v4",
-		Label:   "cloudflare ips",
-	}
-	var body struct {
-		Result struct {
-			IPv4CIDRs []string `json:"ipv4_cidrs"`
-			IPv6CIDRs []string `json:"ipv6_cidrs"`
-		} `json:"result"`
-	}
-	if err := client.Do(ctx, "GET", "/ips", nil, &body); err != nil {
-		return nil, fmt.Errorf("fetch cloudflare IPs: %w", err)
-	}
-	cidrs := append([]string{}, body.Result.IPv4CIDRs...)
-	cidrs = append(cidrs, body.Result.IPv6CIDRs...)
-	if len(cidrs) == 0 {
-		return nil, fmt.Errorf("cloudflare IPs API returned empty list")
-	}
-	return cidrs, nil
-}
-
-// FallbackCloudflareIPs is used when the API fetch fails (offline deploys).
-var FallbackCloudflareIPs = []string{
-	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22",
-	"103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
-	"190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
-	"198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
-	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
-	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32",
-	"2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29",
-	"2c0f:f248::/32",
 }
 
 // MergeAllowLists merges base + overrides. Override wins for same port.

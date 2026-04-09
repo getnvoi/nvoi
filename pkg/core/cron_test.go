@@ -35,60 +35,6 @@ func testCronCluster(ssh *testutil.MockSSH) Cluster {
 	}
 }
 
-func TestCronSet_MissingImage(t *testing.T) {
-	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:  testCronCluster(&testutil.MockSSH{}),
-		Name:     "backup",
-		Schedule: "0 1 * * *",
-	})
-	if err == nil || !strings.Contains(err.Error(), "--image is required") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestCronSet_MissingSchedule(t *testing.T) {
-	err := CronSet(context.Background(), CronSetRequest{
-		Cluster: testCronCluster(&testutil.MockSSH{}),
-		Name:    "backup",
-		Image:   "busybox",
-	})
-	if err == nil || !strings.Contains(err.Error(), "--schedule is required") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestCronSet_InvalidSchedule(t *testing.T) {
-	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:  testCronCluster(&testutil.MockSSH{}),
-		Name:     "backup",
-		Image:    "busybox",
-		Schedule: "not-a-cron",
-	})
-	if err == nil || !strings.Contains(err.Error(), "invalid cron schedule") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestCronSet_MissingSecret(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "get secret secrets -o jsonpath", Result: testutil.MockResult{Output: []byte("'{}'")}},
-		},
-	}
-
-	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:  testCronCluster(mock),
-		Name:     "backup",
-		Image:    "busybox",
-		Schedule: "0 1 * * *",
-		Secrets:  []string{"NONEXISTENT"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
 func TestCronSet_ExpandsStorageRefs(t *testing.T) {
 	mock := &testutil.MockSSH{
 		Prefixes: []testutil.MockPrefix{

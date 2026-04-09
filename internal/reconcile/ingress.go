@@ -1,0 +1,30 @@
+package reconcile
+
+import (
+	"context"
+
+	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
+)
+
+func Ingress(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) error {
+	for _, svcName := range utils.SortedKeys(cfg.Domains) {
+		if err := app.IngressSet(ctx, app.IngressSetRequest{
+			Cluster: dc.Cluster,
+			Route:   app.IngressRouteArg{Service: svcName, Domains: cfg.Domains[svcName]},
+		}); err != nil {
+			return err
+		}
+	}
+	if live != nil {
+		for svcName, domains := range live.Domains {
+			if _, ok := cfg.Domains[svcName]; !ok {
+				_ = app.IngressDelete(ctx, app.IngressDeleteRequest{
+					Cluster: dc.Cluster,
+					Route:   app.IngressRouteArg{Service: svcName, Domains: domains},
+				})
+			}
+		}
+	}
+	return nil
+}

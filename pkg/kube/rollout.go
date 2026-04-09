@@ -10,40 +10,9 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// podStatus is the subset of pod JSON we parse.
-type podStatus struct {
-	Metadata struct {
-		Name string `json:"name"`
-	} `json:"metadata"`
-	Status struct {
-		Phase      string `json:"phase"`
-		Conditions []struct {
-			Type    string `json:"type"`
-			Status  string `json:"status"`
-			Reason  string `json:"reason"`
-			Message string `json:"message"`
-		} `json:"conditions"`
-		ContainerStatuses []struct {
-			Ready        bool `json:"ready"`
-			RestartCount int  `json:"restartCount"`
-			State        struct {
-				Waiting *struct {
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"waiting"`
-				Running    *struct{} `json:"running"`
-				Terminated *struct {
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"terminated"`
-			} `json:"state"`
-		} `json:"containerStatuses"`
-	} `json:"status"`
-}
-
-type podList struct {
-	Items []podStatus `json:"items"`
-}
+// podStatus and podList are aliases to the shared types in types.go.
+type podStatus = PodItem
+type podList = PodList
 
 // WaitRollout polls pods by label until all are Ready, printing state changes.
 // Terminal failures (bad image, config error, crash loop) exit immediately.

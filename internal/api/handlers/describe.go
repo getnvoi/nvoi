@@ -5,7 +5,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
-	"github.com/getnvoi/nvoi/internal/api/config"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"gorm.io/gorm"
@@ -33,15 +32,9 @@ type ListResourcesOutput struct {
 
 func DescribeCluster(db *gorm.DB) func(context.Context, *DescribeClusterInput) (*DescribeClusterOutput, error) {
 	return func(ctx context.Context, input *DescribeClusterInput) (*DescribeClusterOutput, error) {
-		user := api.UserFromContext(ctx)
-		repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
 		if err != nil {
 			return nil, err
-		}
-
-		cluster, err := clusterFromLatestConfig(db, repo)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
 		}
 
 		res, err := pkgcore.Describe(ctx, pkgcore.DescribeRequest{Cluster: *cluster})
@@ -61,24 +54,24 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 			return nil, err
 		}
 
-		rc, env, err := latestConfigAndEnv(db, repo)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
+		req := pkgcore.ResourcesRequest{}
+		if repo.ComputeProvider != nil {
+			req.Compute = pkgcore.ProviderRef{
+				Name:  repo.ComputeProvider.Name,
+				Creds: repo.ComputeProvider.CredentialsMap(),
+			}
 		}
-
-		creds, err := resolveAllCredentials(rc, env)
-		if err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
+		if repo.DNSProvider != nil {
+			req.DNS = pkgcore.ProviderRef{
+				Name:  repo.DNSProvider.Name,
+				Creds: repo.DNSProvider.CredentialsMap(),
+			}
 		}
-
-		req := pkgcore.ResourcesRequest{
-			Compute: pkgcore.ProviderRef{Name: string(rc.ComputeProvider), Creds: creds.Compute},
-		}
-		if rc.DNSProvider != "" {
-			req.DNS = pkgcore.ProviderRef{Name: string(rc.DNSProvider), Creds: creds.DNS}
-		}
-		if rc.StorageProvider != "" {
-			req.Storage = pkgcore.ProviderRef{Name: string(rc.StorageProvider), Creds: creds.Storage}
+		if repo.StorageProvider != nil {
+			req.Storage = pkgcore.ProviderRef{
+				Name:  repo.StorageProvider.Name,
+				Creds: repo.StorageProvider.CredentialsMap(),
+			}
 		}
 
 		groups, err := pkgcore.Resources(ctx, req)
@@ -92,31 +85,28 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-func clusterFromLatestConfig(db *gorm.DB, repo *api.Repo) (*pkgcore.Cluster, error) {
-	rc, env, err := latestConfigAndEnv(db, repo)
-	if err != nil {
-		return nil, err
+// clusterFromRepo builds a Cluster from Repo's InfraProvider links. No RepoConfig needed.
+func clusterFromRepo(repo *api.Repo) *pkgcore.Cluster {
+	computeName, computeCreds := "", map[string]string(nil)
+	if repo.ComputeProvider != nil {
+		computeName = repo.ComputeProvider.Name
+		computeCreds = repo.ComputeProvider.CredentialsMap()
 	}
-
-	creds, err := resolveAllCredentials(rc, env)
-	if err != nil {
-		return nil, err
-	}
-
 	return &pkgcore.Cluster{
 		AppName:     repo.Name,
 		Env:         repo.Environment,
-		Provider:    string(rc.ComputeProvider),
-		Credentials: creds.Compute,
+		Provider:    computeName,
+		Credentials: computeCreds,
 		SSHKey:      []byte(repo.SSHPrivateKey),
-	}, nil
+	}
 }
 
-func latestConfigAndEnv(db *gorm.DB, repo *api.Repo) (*api.RepoConfig, map[string]string, error) {
-	var rc api.RepoConfig
-	if err := db.Where("repo_id = ?", repo.ID).Order("version DESC").First(&rc).Error; err != nil {
-		return nil, nil, err
+// repoCluster resolves user -> repo -> cluster from a RepoScopedInput.
+func repoCluster(ctx context.Context, db *gorm.DB, input RepoScopedInput) (*pkgcore.Cluster, error) {
+	user := api.UserFromContext(ctx)
+	repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+	if err != nil {
+		return nil, err
 	}
-	env := config.ParseEnv(rc.Env)
-	return &rc, env, nil
+	return clusterFromRepo(repo), nil
 }
