@@ -18,7 +18,7 @@ bin/core firewall set default
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
-bin/core build --source benbonnet/dummy-rails --name web
+bin/core build --target web:benbonnet/dummy-rails
 WEB_IMAGE=$(bin/core build latest web)
 
 # ── Secrets ─────────────────────────────────────────────────────────────────────

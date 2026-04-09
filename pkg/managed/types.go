@@ -55,15 +55,15 @@ type Service struct {
 }
 
 type Cron struct {
-	Name      string
-	Schedule  string
-	Image     string
-	Command   string
-	Volumes   []string
-	Env       []string
-	Secrets   []string
-	Storage   []string
-	HostPaths []string // host:container:mode mounts (e.g. for s3upload binary)
+	Name     string
+	Schedule string
+	Image    string
+	Command  string
+	Server   string // node selector (e.g. "master")
+	Volumes  []string
+	Env      []string
+	Secrets  []string
+	Storage  []string
 }
 
 type Operation struct {

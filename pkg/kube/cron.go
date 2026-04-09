@@ -2,8 +2,10 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -22,7 +24,6 @@ type CronSpec struct {
 	Secrets    []string
 	SecretName string
 	Volumes    []string
-	HostPaths  []string // host:container:mode mounts (e.g. "/home/deploy/s3upload:/home/deploy/s3upload:ro")
 	Server     string
 }
 
@@ -61,24 +62,6 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 	volumes, mounts, err := buildVolumes(spec.Volumes, names, managedVolPaths)
 	if err != nil {
 		return "", err
-	}
-
-	// Add hostPath mounts (e.g. s3upload binary).
-	for i, hp := range spec.HostPaths {
-		hostPath, containerPath, readOnly := parseHostPath(hp)
-		volName := fmt.Sprintf("hostpath-%d", i)
-		hostPathType := corev1.HostPathFile
-		volumes = append(volumes, corev1.Volume{
-			Name: volName,
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{Path: hostPath, Type: &hostPathType},
-			},
-		})
-		mounts = append(mounts, corev1.VolumeMount{
-			Name:      volName,
-			MountPath: containerPath,
-			ReadOnly:  readOnly,
-		})
 	}
 
 	container.VolumeMounts = mounts
@@ -125,18 +108,73 @@ func CreateJobFromCronJob(ctx context.Context, ssh utils.SSHClient, ns, cronName
 	return nil
 }
 
-// parseHostPath parses "host:container:mode" into components.
-// If mode is "ro", readOnly is true. Default is read-write.
-func parseHostPath(spec string) (hostPath, containerPath string, readOnly bool) {
-	parts := strings.SplitN(spec, ":", 3)
-	if len(parts) >= 2 {
-		hostPath = parts[0]
-		containerPath = parts[1]
-	}
-	if len(parts) >= 3 && parts[2] == "ro" {
-		readOnly = true
-	}
-	return
+// WaitForJob polls a Job's pods until the job succeeds or fails.
+// Detects terminal failures (CrashLoopBackOff, BackOff, OOMKilled) immediately
+// and returns the container logs on failure. Same pattern as WaitRollout.
+func WaitForJob(ctx context.Context, ssh utils.SSHClient, ns, jobName string, emitter ProgressEmitter) error {
+	selector := fmt.Sprintf("job-name=%s", jobName)
+	lastStatus := ""
+
+	return utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
+		// Check job completion status first.
+		jobOut, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get job %s -o json", jobName)))
+		if err != nil {
+			return false, nil
+		}
+		var job struct {
+			Status struct {
+				Succeeded int `json:"succeeded"`
+				Failed    int `json:"failed"`
+			} `json:"status"`
+		}
+		if json.Unmarshal(jobOut, &job) == nil {
+			if job.Status.Succeeded > 0 {
+				return true, nil
+			}
+			if job.Status.Failed > 0 {
+				logs := RecentLogs(ctx, ssh, ns, jobName, "", 30)
+				return false, fmt.Errorf("job %s failed\nlogs:\n%s", jobName, indent(logs, "  "))
+			}
+		}
+
+		// Poll pods for terminal container states.
+		cmd := kubectl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
+		out, err := ssh.Run(ctx, cmd)
+		if err != nil {
+			return false, nil
+		}
+		var pods podList
+		if json.Unmarshal(out, &pods) != nil {
+			return false, nil
+		}
+
+		for _, pod := range pods.Items {
+			for _, cs := range pod.Status.ContainerStatuses {
+				if cs.State.Waiting != nil {
+					reason := cs.State.Waiting.Reason
+					switch reason {
+					case "CrashLoopBackOff", "BackOff":
+						logs := RecentLogs(ctx, ssh, ns, pod.Metadata.Name, "", 30)
+						return false, fmt.Errorf("job %s: %s\nlogs:\n%s", jobName, reason, indent(logs, "  "))
+					case "ImagePullBackOff", "ErrImagePull":
+						return false, fmt.Errorf("job %s: %s — %s", jobName, reason, cs.State.Waiting.Message)
+					case "CreateContainerConfigError":
+						return false, fmt.Errorf("job %s: %s — %s", jobName, reason, cs.State.Waiting.Message)
+					}
+				}
+				if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+					return false, fmt.Errorf("job %s: OOMKilled", jobName)
+				}
+			}
+		}
+
+		status := fmt.Sprintf("job %s running", jobName)
+		if status != lastStatus {
+			emitter.Progress(status)
+			lastStatus = status
+		}
+		return false, nil
+	})
 }
 
 func DeleteCronByName(ctx context.Context, ssh utils.SSHClient, ns, name string) error {

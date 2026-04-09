@@ -15,16 +15,15 @@ import (
 
 type CronSetRequest struct {
 	Cluster
-	Name      string
-	Image     string
-	Command   string
-	EnvVars   []string
-	Secrets   []string
-	Storages  []string
-	Volumes   []string
-	HostPaths []string // host:container:mode mounts
-	Schedule  string
-	Server    string
+	Name     string
+	Image    string
+	Command  string
+	EnvVars  []string
+	Secrets  []string
+	Storages []string
+	Volumes  []string
+	Schedule string
+	Server   string
 }
 
 func CronSet(ctx context.Context, req CronSetRequest) error {
@@ -129,7 +128,6 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 		Secrets:    req.Secrets,
 		SecretName: secretName,
 		Volumes:    req.Volumes,
-		HostPaths:  req.HostPaths,
 		Server:     req.Server,
 	}, names, managedVolPaths)
 	if err != nil {

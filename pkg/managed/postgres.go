@@ -2,8 +2,7 @@ package managed
 
 import (
 	"fmt"
-
-	"github.com/getnvoi/nvoi/pkg/utils"
+	"strings"
 )
 
 func init() {
@@ -78,104 +77,42 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 		},
 	}
 
-	// Backup command: pg_dump | gzip | s3upload
-	// s3upload binary is on the host at S3UploadBinaryPath(), mounted into the pod.
-	// Storage env vars (STORAGE_*) are injected by the --storage reference on the cron.
-	s3uploadPath := utils.S3UploadBinaryPath()
-	backupCmd := fmt.Sprintf(
-		"pg_dump -h %s -U postgres %s | gzip | %s",
-		req.Name, req.Name, s3uploadPath,
-	)
-
 	ops := []Operation{
-		{
-			Kind: "secret.set",
-			Name: internalKey,
-			Params: map[string]any{
-				"value": password,
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: internalKey},
-		},
-		{
-			Kind: "secret.set",
-			Name: "DATABASE_" + namespaced(req.Name) + "_HOST",
-			Params: map[string]any{
-				"value": creds["HOST"],
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_HOST"},
-		},
-		{
-			Kind: "secret.set",
-			Name: "DATABASE_" + namespaced(req.Name) + "_PORT",
-			Params: map[string]any{
-				"value": creds["PORT"],
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_PORT"},
-		},
-		{
-			Kind: "secret.set",
-			Name: "DATABASE_" + namespaced(req.Name) + "_USER",
-			Params: map[string]any{
-				"value": creds["USER"],
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_USER"},
-		},
-		{
-			Kind: "secret.set",
-			Name: "DATABASE_" + namespaced(req.Name) + "_PASSWORD",
-			Params: map[string]any{
-				"value": creds["PASSWORD"],
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_PASSWORD"},
-		},
-		{
-			Kind: "secret.set",
-			Name: "DATABASE_" + namespaced(req.Name) + "_NAME",
-			Params: map[string]any{
-				"value": creds["NAME"],
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_NAME"},
-		},
-		{
-			Kind: "secret.set",
-			Name: "DATABASE_" + namespaced(req.Name) + "_URL",
-			Params: map[string]any{
-				"value": creds["URL"],
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_URL"},
-		},
-		{
-			Kind: "volume.set",
-			Name: volume.Name,
-			Params: map[string]any{
-				"server": volume.Server,
-				"size":   volume.SizeGB,
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: volume.Name},
-		},
-		{
-			Kind: "service.set",
-			Name: service.Name,
-			Params: map[string]any{
-				"env":          append([]string{}, service.Env...),
-				"image":        service.Image,
-				"port":         service.Port,
-				"secrets":      append([]string{}, service.Secrets...),
-				"volumes":      append([]string{}, service.Volumes...),
-				"managed_kind": req.Kind,
-			},
-			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: service.Name},
-		},
+		{Kind: "secret.set", Name: internalKey, Params: map[string]any{"value": password},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: internalKey}},
+		{Kind: "secret.set", Name: "DATABASE_" + namespaced(req.Name) + "_HOST", Params: map[string]any{"value": creds["HOST"]},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_HOST"}},
+		{Kind: "secret.set", Name: "DATABASE_" + namespaced(req.Name) + "_PORT", Params: map[string]any{"value": creds["PORT"]},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_PORT"}},
+		{Kind: "secret.set", Name: "DATABASE_" + namespaced(req.Name) + "_USER", Params: map[string]any{"value": creds["USER"]},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_USER"}},
+		{Kind: "secret.set", Name: "DATABASE_" + namespaced(req.Name) + "_PASSWORD", Params: map[string]any{"value": creds["PASSWORD"]},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_PASSWORD"}},
+		{Kind: "secret.set", Name: "DATABASE_" + namespaced(req.Name) + "_NAME", Params: map[string]any{"value": creds["NAME"]},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_NAME"}},
+		{Kind: "secret.set", Name: "DATABASE_" + namespaced(req.Name) + "_URL", Params: map[string]any{"value": creds["URL"]},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_URL"}},
+		{Kind: "volume.set", Name: volume.Name, Params: map[string]any{"server": volume.Server, "size": volume.SizeGB},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: volume.Name}},
+		{Kind: "service.set", Name: service.Name, Params: map[string]any{
+			"env": append([]string{}, service.Env...), "image": service.Image,
+			"port": service.Port, "secrets": append([]string{}, service.Secrets...),
+			"volumes": append([]string{}, service.Volumes...), "managed_kind": req.Kind,
+		}, Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: service.Name}},
 	}
 
-	// Add backup cron if backup storage and schedule are provided.
+	// Backup cron — only when backup storage and schedule are provided.
 	var crons []Cron
 	if req.BackupStorage != "" && req.BackupCron != "" {
+		prefix := "STORAGE_" + strings.ToUpper(strings.ReplaceAll(req.BackupStorage, "-", "_"))
+		script := backupScript(req.Name, prefix)
+
 		cron := Cron{
 			Name:     req.Name + "-backup",
 			Schedule: req.BackupCron,
 			Image:    "postgres:17",
-			Command:  backupCmd,
+			Command:  script,
+			Server:   req.Context.DefaultVolumeServer,
 			Env: []string{
 				"PGPASSWORD=" + password,
 			},
@@ -185,22 +122,17 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 			Storage: []string{
 				req.BackupStorage,
 			},
-			HostPaths: []string{
-				s3uploadPath + ":" + s3uploadPath + ":ro",
-			},
 		}
 		crons = append(crons, cron)
 		ops = append(ops, Operation{
-			Kind: "cron.set",
-			Name: cron.Name,
-			Params: map[string]any{
-				"command":    cron.Command,
-				"env":        append([]string{}, cron.Env...),
-				"image":      cron.Image,
-				"schedule":   cron.Schedule,
-				"secrets":    append([]string{}, cron.Secrets...),
-				"storage":    append([]string{}, cron.Storage...),
-				"host_paths": append([]string{}, cron.HostPaths...),
+			Kind: "cron.set", Name: cron.Name, Params: map[string]any{
+				"command":  cron.Command,
+				"env":      append([]string{}, cron.Env...),
+				"image":    cron.Image,
+				"schedule": cron.Schedule,
+				"server":   cron.Server,
+				"secrets":  append([]string{}, cron.Secrets...),
+				"storage":  append([]string{}, cron.Storage...),
 			},
 			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: cron.Name},
 		})
@@ -224,4 +156,23 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 			Operations:      ops,
 		},
 	}, nil
+}
+
+// backupScript returns a shell script that installs aws cli and pipes pg_dump to S3.
+// The storage env vars (endpoint, bucket, access key, secret key) are injected
+// by the --storage reference on the cron.
+func backupScript(dbName, storagePrefix string) string {
+	return fmt.Sprintf(
+		`set -e && `+
+			`rm -f /etc/apt/sources.list.d/pgdg.list && `+
+			`apt-get update -qq && apt-get install -y -qq curl unzip > /dev/null && `+
+			`curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip && `+
+			`unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install > /dev/null && `+
+			`export AWS_ACCESS_KEY_ID=$%s_ACCESS_KEY_ID && `+
+			`export AWS_SECRET_ACCESS_KEY=$%s_SECRET_ACCESS_KEY && `+
+			`TIMESTAMP=$(date +%%Y%%m%%d-%%H%%M%%S) && `+
+			`pg_dump -h %s -U postgres %s --no-owner --no-acl | gzip | `+
+			`aws s3 cp - "s3://$%s_BUCKET/backup-$TIMESTAMP.sql.gz" --endpoint-url "$%s_ENDPOINT"`,
+		storagePrefix, storagePrefix, dbName, dbName, storagePrefix, storagePrefix,
+	)
 }

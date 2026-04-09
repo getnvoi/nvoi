@@ -33,7 +33,12 @@ func BackupCreate(ctx context.Context, req BackupCreateRequest) error {
 	if err := kube.CreateJobFromCronJob(ctx, ssh, ns, req.CronName, jobName); err != nil {
 		return err
 	}
-	out.Success("job " + jobName + " created from " + req.CronName)
+	out.Progress("waiting for " + jobName)
+
+	if err := kube.WaitForJob(ctx, ssh, ns, jobName, out); err != nil {
+		return err
+	}
+	out.Success("backup completed")
 	return nil
 }
 

@@ -112,7 +112,6 @@ func KubeManifestPath() string     { return fmt.Sprintf("/home/%s/nvoi-k8s.yaml"
 func EnvFilePath() string          { return fmt.Sprintf("/home/%s/.nvoi.env", DefaultUser) }
 func DeployKeyPath() string        { return fmt.Sprintf("/home/%s/.ssh/nvoi_deploy_key", DefaultUser) }
 func CaddyfileStagingPath() string { return fmt.Sprintf("/home/%s/Caddyfile.k8s", DefaultUser) }
-func S3UploadBinaryPath() string   { return fmt.Sprintf("/home/%s/s3upload", DefaultUser) }
 
 // ── K8s label keys ─────────────────────────────────────────────────────────────
 

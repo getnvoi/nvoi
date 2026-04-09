@@ -1,18 +1,12 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"runtime"
 
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/managed"
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -130,54 +124,6 @@ func verifyStorageExists(cmd *cobra.Command, cluster app.Cluster, storageName st
 	return fmt.Errorf("storage %q not found — run 'nvoi storage set %s' first", storageName, storageName)
 }
 
-// uploadS3UploadBinary cross-compiles s3upload for linux and uploads it to the server.
-func uploadS3UploadBinary(cmd *cobra.Command, cluster app.Cluster) error {
-	cluster.Output.Progress("building s3upload binary")
-
-	// Cross-compile for linux (server target).
-	var buf bytes.Buffer
-	goCmd := exec.CommandContext(cmd.Context(), "go", "build", "-o", "/dev/stdout", "./cmd/s3upload")
-	goCmd.Env = append(goCmd.Environ(), "GOOS=linux", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
-
-	// Build to a temp file since -o /dev/stdout doesn't work with go build.
-	tmpPath := "/tmp/s3upload-" + runtime.GOARCH
-	goCmd = exec.CommandContext(cmd.Context(), "go", "build", "-o", tmpPath, "./cmd/s3upload")
-	goCmd.Env = append(goCmd.Environ(), "GOOS=linux", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
-	goCmd.Stderr = &buf
-	if err := goCmd.Run(); err != nil {
-		return fmt.Errorf("build s3upload: %s: %w", buf.String(), err)
-	}
-
-	cluster.Output.Progress("uploading s3upload to server")
-
-	master, _, _, err := cluster.Master(cmd.Context())
-	if err != nil {
-		return err
-	}
-	ssh, err := infra.ConnectSSH(cmd.Context(), master.IPv4+":22", utils.DefaultUser, cluster.SSHKey)
-	if err != nil {
-		return err
-	}
-	defer ssh.Close()
-
-	data, err := readFileBytes(tmpPath)
-	if err != nil {
-		return fmt.Errorf("read s3upload binary: %w", err)
-	}
-
-	remotePath := utils.S3UploadBinaryPath()
-	if err := ssh.Upload(cmd.Context(), bytes.NewReader(data), remotePath, 0755); err != nil {
-		return fmt.Errorf("upload s3upload: %w", err)
-	}
-
-	cluster.Output.Success("s3upload uploaded to " + remotePath)
-	return nil
-}
-
-func readFileBytes(path string) ([]byte, error) {
-	return os.ReadFile(path)
-}
-
 // execOperation dispatches a single managed bundle operation to the
 // corresponding pkg/core function.
 func execOperation(ctx context.Context, cluster app.Cluster, op managed.Operation) error {
@@ -218,15 +164,15 @@ func execOperation(ctx context.Context, cluster app.Cluster, op managed.Operatio
 		})
 	case "cron.set":
 		return app.CronSet(ctx, app.CronSetRequest{
-			Cluster:   cluster,
-			Name:      op.Name,
-			Image:     getString(p, "image"),
-			Command:   getString(p, "command"),
-			EnvVars:   getStringSlice(p, "env"),
-			Secrets:   getStringSlice(p, "secrets"),
-			Storages:  getStringSlice(p, "storage"),
-			HostPaths: getStringSlice(p, "host_paths"),
-			Schedule:  getString(p, "schedule"),
+			Cluster:  cluster,
+			Name:     op.Name,
+			Image:    getString(p, "image"),
+			Command:  getString(p, "command"),
+			EnvVars:  getStringSlice(p, "env"),
+			Secrets:  getStringSlice(p, "secrets"),
+			Storages: getStringSlice(p, "storage"),
+			Schedule: getString(p, "schedule"),
+			Server:   getString(p, "server"),
 		})
 	default:
 		return fmt.Errorf("managed: unknown operation kind %q", op.Kind)

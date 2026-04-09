@@ -69,13 +69,6 @@ Examples:
 				}
 			}
 
-			// Upload s3upload binary to server if backup is configured.
-			if backupStorage != "" && backupCron != "" {
-				if err := uploadS3UploadBinary(cmd, cluster); err != nil {
-					return err
-				}
-			}
-
 			result, err := managed.Compile(managed.Request{
 				Kind:          kind,
 				Name:          args[0],

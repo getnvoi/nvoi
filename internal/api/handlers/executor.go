@@ -269,17 +269,16 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 			}
 		}
 		return pkgcore.CronSet(ctx, pkgcore.CronSetRequest{
-			Cluster:   e.cluster,
-			Name:      name,
-			Image:     image,
-			Command:   utils.GetString(params, "command"),
-			EnvVars:   utils.GetStringSlice(params, "env"),
-			Secrets:   utils.GetStringSlice(params, "secrets"),
-			Storages:  utils.GetStringSlice(params, "storage"),
-			Volumes:   utils.GetStringSlice(params, "volumes"),
-			HostPaths: utils.GetStringSlice(params, "host_paths"),
-			Schedule:  utils.GetString(params, "schedule"),
-			Server:    utils.GetString(params, "server"),
+			Cluster:  e.cluster,
+			Name:     name,
+			Image:    image,
+			Command:  utils.GetString(params, "command"),
+			EnvVars:  utils.GetStringSlice(params, "env"),
+			Secrets:  utils.GetStringSlice(params, "secrets"),
+			Storages: utils.GetStringSlice(params, "storage"),
+			Volumes:  utils.GetStringSlice(params, "volumes"),
+			Schedule: utils.GetString(params, "schedule"),
+			Server:   utils.GetString(params, "server"),
 		})
 
 	case plan.StepCronDelete:
