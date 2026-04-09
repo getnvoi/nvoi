@@ -50,10 +50,10 @@ bin/core service set web \
   --replicas 2 \
   --health-path /up \
   --env RAILS_ENV=production \
-  --secret POSTGRES_HOST=DATABASE_DB_HOST \
-  --secret POSTGRES_USER=DATABASE_DB_USER \
-  --secret POSTGRES_DB=DATABASE_DB_NAME \
-  --secret POSTGRES_PASSWORD=DATABASE_DB_PASSWORD \
+  --env POSTGRES_HOST=db \
+  --secret POSTGRES_PASSWORD \
+  --secret POSTGRES_USER \
+  --secret POSTGRES_DB \
   --secret RAILS_MASTER_KEY \
   --storage assets
 
@@ -61,10 +61,10 @@ bin/core service set jobs \
   --image "$WEB_IMAGE" \
   --command "bin/jobs" \
   --env RAILS_ENV=production \
-  --secret POSTGRES_HOST=DATABASE_DB_HOST \
-  --secret POSTGRES_USER=DATABASE_DB_USER \
-  --secret POSTGRES_DB=DATABASE_DB_NAME \
-  --secret POSTGRES_PASSWORD=DATABASE_DB_PASSWORD \
+  --env POSTGRES_HOST=db \
+  --secret POSTGRES_PASSWORD \
+  --secret POSTGRES_USER \
+  --secret POSTGRES_DB \
   --secret RAILS_MASTER_KEY
 
 # ── Ingress + DNS ────────────────────────────────────────────────────────────────

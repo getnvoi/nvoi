@@ -367,11 +367,15 @@ func ensureBackupImage(cmd *cobra.Command, cluster app.Cluster, baseImage string
 		return fullRef, nil
 	}
 
-	// Build and push.
-	dockerfile := fmt.Sprintf("FROM %s\nRUN apt-get update && apt-get install -y awscli && rm -rf /var/lib/apt/lists/*", baseImage)
-	buildCmd := fmt.Sprintf("echo '%s' | docker build -t %s - && docker push %s", dockerfile, fullRef, fullRef)
+	// Upload Dockerfile then buildx with insecure push (same as all other builders).
+	dockerfile := fmt.Sprintf("FROM %s\nRUN apt-get update && apt-get install -y awscli && rm -rf /var/lib/apt/lists/*\n", baseImage)
+	dfPath := "/tmp/nvoi-pg-backup.Dockerfile"
+	if err := ssh.Upload(cmd.Context(), strings.NewReader(dockerfile), dfPath, 0644); err != nil {
+		return "", fmt.Errorf("upload Dockerfile: %w", err)
+	}
 
 	cluster.Output.Progress(fmt.Sprintf("building backup image %s", fullRef))
+	buildCmd := fmt.Sprintf("docker buildx build --tag %s --output type=image,push=true,registry.insecure=true -f %s /tmp", fullRef, dfPath)
 	if _, err := ssh.Run(cmd.Context(), buildCmd); err != nil {
 		return "", fmt.Errorf("build backup image: %w", err)
 	}

@@ -42,10 +42,10 @@ Examples:
 			secrets, _ := cmd.Flags().GetStringArray("secret")
 			storages, _ := cmd.Flags().GetStringArray("storage")
 
-			// --secret is a reference, not a setter. KEY only, no KEY=VALUE.
+			// --secret is a reference, not a setter. KEY only, no aliasing.
 			for _, s := range secrets {
 				if strings.Contains(s, "=") {
-					return fmt.Errorf("--secret %q must be a key name only, not KEY=VALUE.\n  Store the value first: nvoi secret set %s <value>\n  Then reference it:     --secret %s", s, strings.SplitN(s, "=", 2)[0], strings.SplitN(s, "=", 2)[0])
+					return fmt.Errorf("--secret %q: use the secret key name directly, not KEY=VALUE", s)
 				}
 			}
 

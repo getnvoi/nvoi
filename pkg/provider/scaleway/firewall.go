@@ -125,10 +125,12 @@ func (c *Client) reconcileFirewallRules(ctx context.Context, sgID string) error 
 		return fmt.Errorf("list rules: %w", err)
 	}
 
-	// Delete all existing rules
+	// Delete all existing rules (404 = already gone, skip).
 	for _, rule := range resp.Rules {
 		if err := c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s/rules/%s", sgID, rule.ID), nil, nil); err != nil {
-			return fmt.Errorf("delete rule %s: %w", rule.ID, err)
+			if !utils.IsNotFound(err) {
+				return fmt.Errorf("delete rule %s: %w", rule.ID, err)
+			}
 		}
 	}
 
@@ -258,7 +260,9 @@ func (c *Client) ReconcileFirewallRules(ctx context.Context, name string, allowe
 	}
 	for _, rule := range resp.Rules {
 		if err := c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s/rules/%s", fw.ID, rule.ID), nil, nil); err != nil {
-			return fmt.Errorf("delete rule %s: %w", rule.ID, err)
+			if !utils.IsNotFound(err) {
+				return fmt.Errorf("delete rule %s: %w", rule.ID, err)
+			}
 		}
 	}
 
