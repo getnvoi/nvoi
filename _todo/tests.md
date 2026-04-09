@@ -255,18 +255,35 @@ ADD: TestResolve_ManagedCronsStripped — managed-owned crons excluded from Buil
 ```
 UPDATE: TestConfig_ManagedPlanIncludesExpandedServices — adjust for new schema fields if any
 UPDATE: any tests using old ingress config format
+ADD: TestConfig_PushManagedWithBackupFields — push config with managed service that has backup_storage + backup_cron, verify plan includes cron.set
+ADD: TestConfig_PushManagedWithImage — push config with managed service that has image: postgres:16, verify plan uses custom image
+ADD: TestConfig_PushCloudflareManaged — push config with ingress.cloudflare-managed: true, verify plan step has edge_proxied + edge_origin params
+ADD: TestConfig_PushCustomCert — push config with ingress.cert + key, verify plan step has provided TLS params
+ADD: TestConfig_PushCronConfig — push config with crons map, verify plan includes cron.set steps
+ADD: TestConfig_PushCronRemoved — push config without cron that existed before, verify cron.delete in plan
 ```
 
 ### internal/api/handlers/deploy_test.go
 
 ```
 UPDATE: any tests using old ingress config format
+ADD: TestDeploy_ManagedWithBackup — deploy managed postgres with backup_storage + backup_cron, verify backup image build step + cron.set step in deployment
+ADD: TestDeploy_CronSteps — deploy config with standalone crons, verify cron.set steps created
 ```
 
 ### internal/api/handlers/executor_test.go
 
 ```
-NO CHANGES — executor dispatches steps, doesn't know about config schema
+ADD: TestExecutor_StepBackupImageBuild — mock SSH, verify registry check + docker buildx command
+ADD: TestExecutor_StepBackupImageBuild_AlreadyExists — mock SSH returns tag exists, verify no build
+```
+
+### internal/api/plan/resolve_test.go (additional)
+
+```
+ADD: TestResolve_ManagedBackupFieldsPassedToCompiler — config with backup_storage/backup_cron/image on managed service, verify compiler receives them
+ADD: TestResolve_BackupImageBuildStepEmitted — managed service with backup config, verify StepBackupImageBuild before StepCronSet
+ADD: TestResolve_NoBackupImageWithoutBackupConfig — managed service without backup, verify no backup image step
 ```
 
 ---
@@ -334,8 +351,8 @@ Renderer tests. Don't depend on CLI structure.
 | internal/core/ | ~7 (DirectBackend) | 0 | 0 (resolve_test stays) |
 | internal/cli/ | ~13 (CloudBackend) | 0 | 0 |
 | internal/api/config/ | ~7 | ~3 | 0 |
-| internal/api/plan/ | ~4 | ~3 | 0 |
-| internal/api/handlers/ | 0 | ~2 | 0 |
+| internal/api/plan/ | ~7 | ~3 | 0 |
+| internal/api/handlers/ | ~10 | ~4 | 0 |
 | pkg/core/ | 0 | 0 | 0 |
 | pkg/managed/ | 0 | 0 | 0 |
 | **Total** | **~91** | **~8** | **0** |
