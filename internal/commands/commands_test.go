@@ -88,39 +88,6 @@ func (m *MockBackend) CronSet(_ context.Context, name string, opts CronOpts) err
 func (m *MockBackend) CronDelete(_ context.Context, name string) error {
 	return m.record("CronDelete", name)
 }
-func (m *MockBackend) DatabaseSet(_ context.Context, name string, opts ManagedOpts) error {
-	return m.record("DatabaseSet", name, opts)
-}
-func (m *MockBackend) DatabaseDelete(_ context.Context, name, kind string) error {
-	return m.record("DatabaseDelete", name, kind)
-}
-func (m *MockBackend) DatabaseList(_ context.Context) error {
-	return m.record("DatabaseList")
-}
-func (m *MockBackend) BackupCreate(_ context.Context, name, kind string) error {
-	return m.record("BackupCreate", name, kind)
-}
-func (m *MockBackend) BackupList(_ context.Context, name, kind, backupStorage string) error {
-	return m.record("BackupList", name, kind, backupStorage)
-}
-func (m *MockBackend) BackupDownload(_ context.Context, name, kind, backupStorage, key string) error {
-	return m.record("BackupDownload", name, kind, backupStorage, key)
-}
-func (m *MockBackend) AgentSet(_ context.Context, name string, opts ManagedOpts) error {
-	return m.record("AgentSet", name, opts)
-}
-func (m *MockBackend) AgentDelete(_ context.Context, name, kind string) error {
-	return m.record("AgentDelete", name, kind)
-}
-func (m *MockBackend) AgentList(_ context.Context) error {
-	return m.record("AgentList")
-}
-func (m *MockBackend) AgentExec(_ context.Context, name, kind string, command []string) error {
-	return m.record("AgentExec", name, kind, command)
-}
-func (m *MockBackend) AgentLogs(_ context.Context, name, kind string, opts LogsOpts) error {
-	return m.record("AgentLogs", name, kind, opts)
-}
 func (m *MockBackend) SecretSet(_ context.Context, key, value string) error {
 	return m.record("SecretSet", key, value)
 }
@@ -147,8 +114,8 @@ func (m *MockBackend) BuildLatest(_ context.Context, name string) (string, error
 func (m *MockBackend) BuildPrune(_ context.Context, name string, keep int) error {
 	return m.record("BuildPrune", name, keep)
 }
-func (m *MockBackend) DNSSet(_ context.Context, routes []RouteArg, cf bool) error {
-	return m.record("DNSSet", routes, cf)
+func (m *MockBackend) DNSSet(_ context.Context, routes []RouteArg) error {
+	return m.record("DNSSet", routes)
 }
 func (m *MockBackend) DNSDelete(_ context.Context, routes []RouteArg) error {
 	return m.record("DNSDelete", routes)
@@ -156,11 +123,11 @@ func (m *MockBackend) DNSDelete(_ context.Context, routes []RouteArg) error {
 func (m *MockBackend) DNSList(_ context.Context) error {
 	return m.record("DNSList")
 }
-func (m *MockBackend) IngressSet(_ context.Context, routes []RouteArg, cf bool, cert, key string) error {
-	return m.record("IngressSet", routes, cf, cert, key)
+func (m *MockBackend) IngressSet(_ context.Context, routes []RouteArg) error {
+	return m.record("IngressSet", routes)
 }
-func (m *MockBackend) IngressDelete(_ context.Context, routes []RouteArg, cf bool) error {
-	return m.record("IngressDelete", routes, cf)
+func (m *MockBackend) IngressDelete(_ context.Context, routes []RouteArg) error {
+	return m.record("IngressDelete", routes)
 }
 func (m *MockBackend) Describe(_ context.Context, jsonOutput bool) error {
 	return m.record("Describe", jsonOutput)

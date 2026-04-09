@@ -49,8 +49,9 @@ require_hex NVOI_JWT_SECRET 64
 require_hex NVOI_ENCRYPTION_KEY 0 64
 
 # Infrastructure
-"$NVOI" instance set master --compute-type cax11 --compute-region nbg1
+"$NVOI" instance set master --compute-type cax11 --compute-region nbg1 --role master
 "$NVOI" volume set pgdata --size 20 --server master
+"$NVOI" firewall set default
 
 # Secrets
 "$NVOI" secret set POSTGRES_PASSWORD "$NVOI_POSTGRES_PASSWORD"
@@ -82,17 +83,12 @@ require_hex NVOI_ENCRYPTION_KEY 0 64
 "$NVOI" service set distribution --image "$("$NVOI" build latest distribution)" --port 3001 \
   --storage releases
 
-# Exposure
-"$NVOI" firewall set cloudflare
+# DNS + Ingress
+"$NVOI" dns set web:nvoi.to,www.nvoi.to
+"$NVOI" dns set api:api.nvoi.to
+"$NVOI" dns set distribution:get.nvoi.to
 
-# DNS: Cloudflare-managed distribution mode
-"$NVOI" dns set web nvoi.to www.nvoi.to --cloudflare-managed
-"$NVOI" dns set api api.nvoi.to --cloudflare-managed
-"$NVOI" dns set distribution get.nvoi.to --cloudflare-managed
-
-# Ingress: one boring Cloudflare-managed mode
-"$NVOI" ingress apply \
+"$NVOI" ingress set \
   web:nvoi.to,www.nvoi.to \
   api:api.nvoi.to \
-  distribution:get.nvoi.to \
-  --cloudflare-managed
+  distribution:get.nvoi.to

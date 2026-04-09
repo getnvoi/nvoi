@@ -8,7 +8,7 @@ set -a; source examples/.env; set +a
 bin/cloud login
 bin/cloud repos use dummy-rails
 
-bin/cloud instance set master --compute-type DEV1-L --compute-region fr-par-1
+bin/cloud instance set master --compute-type DEV1-L --compute-region fr-par-1 --role master
 bin/cloud firewall set default
 
 bin/cloud build --target web:benbonnet/dummy-rails
@@ -20,20 +20,20 @@ bin/cloud secret set POSTGRES_USER "$POSTGRES_USER"
 bin/cloud secret set POSTGRES_DB "$POSTGRES_DB"
 
 bin/cloud storage set assets --cors
-bin/cloud storage set db-backups --expire-days 30
 
-bin/cloud database set db --type postgres \
+bin/cloud service set db \
+  --image postgres:17 \
+  --port 5432 \
+  --volume pgdata:/var/lib/postgresql/data \
   --secret POSTGRES_PASSWORD \
   --secret POSTGRES_USER \
-  --secret POSTGRES_DB \
-  --backup-storage db-backups \
-  --backup-cron "0 2 * * *"
+  --secret POSTGRES_DB
 
 bin/cloud service set web \
   --image "$WEB_IMAGE" \
   --port 80 \
   --replicas 2 \
-  --health /up \
+  --health-path /up \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
   --secret POSTGRES_PASSWORD \

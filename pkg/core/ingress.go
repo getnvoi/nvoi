@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
-	"github.com/getnvoi/nvoi/pkg/provider/cloudflare"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -25,11 +22,7 @@ type IngressRouteArg struct {
 // IngressHooks holds injectable dependencies for testing.
 // Nil fields use production defaults.
 type IngressHooks struct {
-	WaitHTTPS        func(ctx context.Context, domain string) error
-	CreateOriginCert func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error)
-	FindOriginCert   func(ctx context.Context, apiKey, zoneID string, hostnames []string) (*cloudflare.OriginCert, error)
-	RevokeOriginCert func(ctx context.Context, apiKey, certID string) error
-	Now              func() time.Time
+	WaitHTTPS func(ctx context.Context, domain string) error
 }
 
 func (h *IngressHooks) waitHTTPS() func(context.Context, string) error {
@@ -39,63 +32,15 @@ func (h *IngressHooks) waitHTTPS() func(context.Context, string) error {
 	return infra.WaitHTTPS
 }
 
-func (h *IngressHooks) createOriginCert() func(context.Context, string, []string) (*cloudflare.OriginCert, error) {
-	if h != nil && h.CreateOriginCert != nil {
-		return h.CreateOriginCert
-	}
-	return func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
-		return cloudflare.NewOriginCA(apiKey).CreateCert(ctx, domains)
-	}
-}
-
-func (h *IngressHooks) findOriginCert() func(context.Context, string, string, []string) (*cloudflare.OriginCert, error) {
-	if h != nil && h.FindOriginCert != nil {
-		return h.FindOriginCert
-	}
-	return func(ctx context.Context, apiKey, zoneID string, hostnames []string) (*cloudflare.OriginCert, error) {
-		ca := cloudflare.NewOriginCA(apiKey)
-		found, err := ca.FindCertByHostnames(ctx, zoneID, hostnames)
-		if err != nil {
-			return nil, err
-		}
-		if found == nil {
-			return nil, nil
-		}
-		return &cloudflare.OriginCert{ID: found.ID, Certificate: found.Certificate}, nil
-	}
-}
-
-func (h *IngressHooks) revokeOriginCert() func(context.Context, string, string) error {
-	if h != nil && h.RevokeOriginCert != nil {
-		return h.RevokeOriginCert
-	}
-	return func(ctx context.Context, apiKey, certID string) error {
-		return cloudflare.NewOriginCA(apiKey).RevokeCert(ctx, certID)
-	}
-}
-
-func (h *IngressHooks) now() func() time.Time {
-	if h != nil && h.Now != nil {
-		return h.Now
-	}
-	return time.Now
-}
-
 type IngressSetRequest struct {
 	Cluster
-	DNS               ProviderRef
-	Route             IngressRouteArg
-	CloudflareManaged bool
-	CertPEM           string
-	KeyPEM            string
-	Hooks             *IngressHooks // nil = production defaults
+	Route IngressRouteArg
+	Hooks *IngressHooks // nil = production defaults
 }
 
 type IngressDeleteRequest struct {
 	Cluster
-	DNS   ProviderRef
 	Route IngressRouteArg // route to remove
-	Hooks *IngressHooks
 }
 
 // ── ParseIngressArgs ────────────────────────────────────────────────────────
@@ -126,7 +71,7 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 // ── IngressSet ──────────────────────────────────────────────────────────────
 
 // IngressSet adds or updates a single ingress route. Reads the current Caddyfile,
-// merges the new route, resolves TLS material for the full domain set, and redeploys Caddy.
+// merges the new route, and redeploys Caddy with ACME TLS.
 func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	out := req.Log()
 
@@ -150,47 +95,13 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 		return fmt.Errorf("service %q has no port — ingress requires a service with --port: %w", req.Route.Service, err)
 	}
 
-	// TLS mode: cloudflare-managed, provided cert, or ACME.
-	useTLSSecret := req.CloudflareManaged || (req.CertPEM != "" && req.KeyPEM != "")
-
 	// Read current routes and merge.
 	currentRoutes, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
 	merged := mergeRoute(currentRoutes, kube.IngressRoute{
-		Service:      req.Route.Service,
-		Port:         port,
-		Domains:      req.Route.Domains,
-		UseTLSSecret: useTLSSecret,
+		Service: req.Route.Service,
+		Port:    port,
+		Domains: req.Route.Domains,
 	})
-
-	if err := checkFirewallCoherence(ctx, req.Cluster, req.CloudflareManaged); err != nil {
-		return err
-	}
-
-	// Resolve TLS material for the full merged domain set.
-	allDomains := kubeRouteDomains(merged)
-	certPEM, keyPEM, certID, err := resolveTLSMaterial(ctx, req.DNS, req.CloudflareManaged, req.CertPEM, req.KeyPEM, allDomains, out, ssh, ns, req.Hooks)
-	if err != nil {
-		return err
-	}
-
-	// Store TLS cert.
-	hasCert := certPEM != "" && keyPEM != ""
-	if hasCert {
-		out.Progress("storing TLS certificate")
-		var annotations map[string]string
-		if certID != "" {
-			annotations = map[string]string{utils.OriginCAAnnotation: certID}
-		}
-		if err := kube.UpsertTLSSecret(ctx, ssh, ns, kube.CaddyTLSSecretName, certPEM, keyPEM, annotations); err != nil {
-			return fmt.Errorf("store cert: %w", err)
-		}
-		out.Success("certificate stored")
-	} else {
-		// ACME mode — clear any leftover Origin CA secret.
-		if _, err := kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete secret %s --ignore-not-found", kube.CaddyTLSSecretName)); err != nil {
-			return fmt.Errorf("clear tls secret: %w", err)
-		}
-	}
 
 	out.Progress("applying caddy config")
 	if err := kube.ApplyCaddyConfig(ctx, ssh, ns, merged, names); err != nil {
@@ -200,15 +111,11 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 
 	// Verify reachability.
 	firstDomain := req.Route.Domains[0]
-	if req.CloudflareManaged {
-		out.Success(fmt.Sprintf("cloudflare-managed — https://%s", firstDomain))
-	} else {
-		out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
-		if err := waitHTTPS(ctx, firstDomain); err != nil {
-			return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
-		}
-		out.Success(fmt.Sprintf("https://%s live", firstDomain))
+	out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
+	if err := waitHTTPS(ctx, firstDomain); err != nil {
+		return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
 	}
+	out.Success(fmt.Sprintf("https://%s live", firstDomain))
 
 	return nil
 }
@@ -218,30 +125,14 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 // IngressDelete removes a single ingress route.
 //
 // When routes remain after removal: remove the route from Caddyfile, redeploy Caddy.
-// No cert operations — the existing cert stays, next `ingress set` reissues if domains changed.
-//
-// When no routes remain (last route deleted):
-//  1. Revoke Origin CA cert at Cloudflare (--cloudflare-managed only).
-//     Two lookup paths: annotation from cluster (fast), or FindCertByHostnames from args (no SSH).
-//  2. Wipe local: deployment, configmap, TLS secret.
-//
-// ErrNoMaster with --cloudflare-managed: still revokes at Cloudflare via hostname lookup, skips local.
-// ErrNoMaster without --cloudflare-managed: "cluster gone", done.
+// When no routes remain (last route deleted): wipe deployment, configmap.
 func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 	out := req.Log()
 	out.Command("ingress", "delete", req.Route.Service, "domains", req.Route.Domains)
-	revokeCert := req.Hooks.revokeOriginCert()
 
-	// Try SSH to cluster.
 	ssh, names, sshErr := req.Cluster.SSH(ctx)
 	if sshErr != nil {
 		if errors.Is(sshErr, ErrNoMaster) {
-			// Cluster gone. If cloudflare-managed, still try to revoke at Cloudflare.
-			if req.DNS.Name == "cloudflare" {
-				if err := revokeByHostnames(ctx, req, out); err != nil {
-					return err
-				}
-			}
 			out.Success("cluster gone — local resources already absent")
 			return nil
 		}
@@ -259,7 +150,7 @@ func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 	remaining := removeRoute(currentRoutes, req.Route.Service)
 
 	if len(remaining) > 0 {
-		// Routes remain — just remove the route, redeploy. No cert operations.
+		// Routes remain — just remove the route, redeploy.
 		out.Progress(fmt.Sprintf("removing route, %d remaining", len(remaining)))
 		if err := kube.ApplyCaddyConfig(ctx, ssh, ns, remaining, names); err != nil {
 			return fmt.Errorf("caddy: %w", err)
@@ -268,59 +159,11 @@ func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 		return nil
 	}
 
-	// Last route — revoke cert at Cloudflare, then wipe local.
-	if req.DNS.Name == "cloudflare" {
-		// Fast path: read cert ID from annotation.
-		certID := kube.GetTLSSecretAnnotation(ctx, ssh, ns, kube.CaddyTLSSecretName, utils.OriginCAAnnotation)
-		if certID != "" {
-			out.Progress(fmt.Sprintf("revoking Origin CA certificate %s", certID))
-			if err := revokeCert(ctx, req.DNS.Creds["api_key"], certID); err != nil {
-				return fmt.Errorf("revoke Origin CA cert %s: %w — local resources preserved, retry after fixing", certID, err)
-			}
-			out.Success("Origin CA certificate revoked")
-		} else {
-			// Fallback: find by hostname match at Cloudflare.
-			if err := revokeByHostnames(ctx, req, out); err != nil {
-				return err
-			}
-		}
-	}
-
 	out.Progress("removing caddy ingress")
 	if err := deleteAllIngress(ctx, ssh, ns, names); err != nil {
 		return err
 	}
 	out.Success("ingress removed")
-	return nil
-}
-
-// revokeByHostnames finds and revokes the Origin CA cert at Cloudflare by hostname match.
-// Used when the annotation is unavailable (legacy or cluster gone).
-func revokeByHostnames(ctx context.Context, req IngressDeleteRequest, out Output) error {
-	findCert := req.Hooks.findOriginCert()
-	revokeCert := req.Hooks.revokeOriginCert()
-	apiKey := req.DNS.Creds["api_key"]
-	zoneID := req.DNS.Creds["zone_id"]
-	if zoneID == "" || len(req.Route.Domains) == 0 {
-		return nil
-	}
-	domains := append([]string(nil), req.Route.Domains...)
-	sort.Strings(domains)
-
-	out.Progress("finding Origin CA certificate at Cloudflare")
-	found, err := findCert(ctx, apiKey, zoneID, domains)
-	if err != nil {
-		return fmt.Errorf("find Origin CA cert: %w — local resources preserved, retry after fixing", err)
-	}
-	if found != nil {
-		out.Progress(fmt.Sprintf("revoking Origin CA certificate %s", found.ID))
-		if err := revokeCert(ctx, apiKey, found.ID); err != nil {
-			return fmt.Errorf("revoke Origin CA cert %s: %w — local resources preserved, retry after fixing", found.ID, err)
-		}
-		out.Success("Origin CA certificate revoked")
-	} else {
-		out.Success("no matching Origin CA certificate at Cloudflare")
-	}
 	return nil
 }
 
@@ -355,15 +198,6 @@ func removeRoute(current []kube.IngressRoute, service string) []kube.IngressRout
 	return remaining
 }
 
-func kubeRouteDomains(routes []kube.IngressRoute) []string {
-	var domains []string
-	for _, r := range routes {
-		domains = append(domains, r.Domains...)
-	}
-	sort.Strings(domains)
-	return domains
-}
-
 func deleteAllIngress(ctx context.Context, ssh utils.SSHClient, ns string, names *utils.Names) error {
 	if err := kube.DeleteByName(ctx, ssh, ns, names.KubeCaddy()); err != nil {
 		return err
@@ -371,57 +205,5 @@ func deleteAllIngress(ctx context.Context, ssh utils.SSHClient, ns string, names
 	if _, err := kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete configmap %s --ignore-not-found", names.KubeCaddyConfig())); err != nil {
 		return err
 	}
-	if _, err := kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete secret %s --ignore-not-found", kube.CaddyTLSSecretName)); err != nil {
-		return err
-	}
-	return nil
-}
-
-func checkFirewallCoherence(ctx context.Context, c Cluster, cloudflareManaged bool) error {
-	prov, err := c.Compute()
-	if err != nil {
-		return fmt.Errorf("firewall check: %w", err)
-	}
-	fwNames, err := c.Names()
-	if err != nil {
-		return fmt.Errorf("firewall check: %w", err)
-	}
-
-	rules, err := prov.GetFirewallRules(ctx, fwNames.Firewall())
-	if err != nil {
-		if errors.Is(err, utils.ErrNotFound) {
-			return nil // firewall not created yet — skip coherence check
-		}
-		return fmt.Errorf("firewall check: %w", err)
-	}
-
-	has80 := len(rules["80"]) > 0
-	has443 := len(rules["443"]) > 0
-
-	if !has80 || !has443 {
-		if cloudflareManaged {
-			return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set cloudflare' first", fwNames.Firewall())
-		}
-		return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set default' first", fwNames.Firewall())
-	}
-
-	isOpenToAll := false
-	for _, port := range []string{"80", "443"} {
-		for _, cidr := range rules[port] {
-			if cidr == "0.0.0.0/0" || cidr == "::/0" {
-				isOpenToAll = true
-				break
-			}
-		}
-	}
-
-	if cloudflareManaged && isOpenToAll {
-		return fmt.Errorf("cloudflare-managed with firewall open to all leaves the origin directly reachable. Run 'nvoi firewall set cloudflare' to restrict 80/443 to Cloudflare IPs")
-	}
-
-	if !cloudflareManaged && !isOpenToAll {
-		return fmt.Errorf("firewall restricts 80/443 (cloudflare preset) but ingress is not cloudflare-managed — either use --cloudflare-managed or run 'nvoi firewall set default'")
-	}
-
 	return nil
 }

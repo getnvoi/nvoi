@@ -58,7 +58,6 @@ type DescribeIngress struct {
 	Domain  string `json:"domain"`
 	Service string `json:"service"`
 	Port    int    `json:"port"`
-	Proxy   bool   `json:"proxy,omitempty"`
 }
 
 type DescribeSecret struct {
@@ -116,7 +115,7 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 	for _, r := range routes {
 		for _, d := range r.Domains {
 			result.Ingress = append(result.Ingress, DescribeIngress{
-				Domain: d, Service: r.Service, Port: r.Port, Proxy: r.UseTLSSecret,
+				Domain: d, Service: r.Service, Port: r.Port,
 			})
 		}
 	}

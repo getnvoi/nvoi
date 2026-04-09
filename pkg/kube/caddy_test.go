@@ -125,182 +125,6 @@ func TestParseCaddyfileEmpty(t *testing.T) {
 	}
 }
 
-// ── Proxy mode tests ─────────────────────────────────────────────────────────
-
-func TestGenerateCaddyfileProxy(t *testing.T) {
-	routes := []IngressRoute{
-		{Service: "web", Port: 3000, Domains: []string{"example.com"}, UseTLSSecret: true},
-	}
-	out := generateCaddyfile(routes, "ns")
-
-	if !strings.Contains(out, "tls /etc/caddy/tls/tls.crt /etc/caddy/tls/tls.key") {
-		t.Errorf("proxy route should have tls directive, got:\n%s", out)
-	}
-	if !strings.Contains(out, "reverse_proxy web.ns.svc.cluster.local:3000") {
-		t.Errorf("proxy route should still have reverse_proxy, got:\n%s", out)
-	}
-}
-
-func TestGenerateCaddyfileMixedProxyAndDirect(t *testing.T) {
-	routes := []IngressRoute{
-		{Service: "web", Port: 3000, Domains: []string{"web.example.com"}, UseTLSSecret: true},
-		{Service: "api", Port: 8080, Domains: []string{"api.example.com"}, UseTLSSecret: false},
-	}
-	out := generateCaddyfile(routes, "ns")
-
-	// Direct route should not have tls directive
-	apiIdx := strings.Index(out, "api.example.com")
-	tlsIdx := strings.Index(out, "tls /etc/caddy/tls/")
-	if apiIdx < 0 || tlsIdx < 0 {
-		t.Fatalf("expected both routes in output, got:\n%s", out)
-	}
-	// api (direct) should come before web (proxy) because direct routes are first
-	if apiIdx >= tlsIdx {
-		t.Errorf("direct routes should appear before proxy routes, got:\n%s", out)
-	}
-}
-
-func TestParseCaddyfileProxy(t *testing.T) {
-	caddyfile := `api.example.com {
-	reverse_proxy api.ns.svc.cluster.local:8080
-}
-
-web.example.com {
-	tls /etc/caddy/tls/tls.crt /etc/caddy/tls/tls.key
-	reverse_proxy web.ns.svc.cluster.local:3000
-}
-`
-	routes := parseCaddyfile(caddyfile)
-	if len(routes) != 2 {
-		t.Fatalf("expected 2 routes, got %d", len(routes))
-	}
-
-	// First route: api (direct)
-	if routes[0].Service != "api" {
-		t.Errorf("route[0] service = %q, want api", routes[0].Service)
-	}
-	if routes[0].UseTLSSecret {
-		t.Error("route[0] should not be proxy")
-	}
-
-	// Second route: web (proxy)
-	if routes[1].Service != "web" {
-		t.Errorf("route[1] service = %q, want web", routes[1].Service)
-	}
-	if !routes[1].UseTLSSecret {
-		t.Error("route[1] should be proxy")
-	}
-	if routes[1].Port != 3000 {
-		t.Errorf("route[1] port = %d, want 3000", routes[1].Port)
-	}
-}
-
-func TestRoundTripProxy(t *testing.T) {
-	original := []IngressRoute{
-		{Service: "api", Port: 8080, Domains: []string{"api.example.com"}, UseTLSSecret: false},
-		{Service: "web", Port: 3000, Domains: []string{"example.com", "www.example.com"}, UseTLSSecret: true},
-	}
-	ns := "nvoi-myapp-production"
-	caddyfile := generateCaddyfile(original, ns)
-	parsed := parseCaddyfile(caddyfile)
-
-	if len(parsed) != 2 {
-		t.Fatalf("expected 2 routes, got %d", len(parsed))
-	}
-
-	// Direct routes come first in output, so api is [0]
-	if parsed[0].Service != "api" || parsed[0].UseTLSSecret {
-		t.Errorf("route[0]: got service=%q tls=%v, want api/false", parsed[0].Service, parsed[0].UseTLSSecret)
-	}
-	if parsed[1].Service != "web" || !parsed[1].UseTLSSecret {
-		t.Errorf("route[1]: got service=%q tls=%v, want web/true", parsed[1].Service, parsed[1].UseTLSSecret)
-	}
-	if len(parsed[1].Domains) != 2 {
-		t.Errorf("route[1] domains = %v, want 2 domains", parsed[1].Domains)
-	}
-}
-
-func TestGenerateCaddyManifestProxy_TLSVolume(t *testing.T) {
-	names, err := utils.NewNames("myapp", "production")
-	if err != nil {
-		t.Fatalf("NewNames: %v", err)
-	}
-
-	routes := []IngressRoute{
-		{Service: "web", Port: 3000, Domains: []string{"example.com"}, UseTLSSecret: true},
-	}
-	manifest, err := GenerateCaddyManifest(routes, names)
-	if err != nil {
-		t.Fatalf("GenerateCaddyManifest: %v", err)
-	}
-
-	docs := strings.SplitN(manifest, "---", 2)
-	if len(docs) != 2 {
-		t.Fatalf("expected 2 YAML documents, got %d", len(docs))
-	}
-
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[1]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
-	}
-
-	// Verify TLS volume mount exists
-	mounts := dep.Spec.Template.Spec.Containers[0].VolumeMounts
-	foundTLS := false
-	for _, m := range mounts {
-		if m.Name == "tls" && m.MountPath == "/etc/caddy/tls" {
-			foundTLS = true
-		}
-	}
-	if !foundTLS {
-		t.Error("proxy deployment should have TLS volume mount at /etc/caddy/tls")
-	}
-
-	// Verify TLS volume references the secret
-	vols := dep.Spec.Template.Spec.Volumes
-	foundSecret := false
-	for _, v := range vols {
-		if v.Name == "tls" && v.Secret != nil && v.Secret.SecretName == "caddy-origin-cert" {
-			foundSecret = true
-		}
-	}
-	if !foundSecret {
-		t.Error("proxy deployment should have TLS volume from caddy-origin-cert secret")
-	}
-}
-
-func TestGenerateCaddyManifestNonProxy_NoTLSVolume(t *testing.T) {
-	names, err := utils.NewNames("myapp", "production")
-	if err != nil {
-		t.Fatalf("NewNames: %v", err)
-	}
-
-	routes := []IngressRoute{
-		{Service: "web", Port: 3000, Domains: []string{"example.com"}, UseTLSSecret: false},
-	}
-	manifest, err := GenerateCaddyManifest(routes, names)
-	if err != nil {
-		t.Fatalf("GenerateCaddyManifest: %v", err)
-	}
-
-	docs := strings.SplitN(manifest, "---", 2)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[1]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
-	}
-
-	for _, m := range dep.Spec.Template.Spec.Containers[0].VolumeMounts {
-		if m.Name == "tls" {
-			t.Error("non-proxy deployment should not have TLS volume mount")
-		}
-	}
-	for _, v := range dep.Spec.Template.Spec.Volumes {
-		if v.Name == "tls" {
-			t.Error("non-proxy deployment should not have TLS volume")
-		}
-	}
-}
-
 // ── ApplyCaddyConfig tests ──────────────────────────────────────────────────
 
 func applyCaddySSH(deploymentExists bool, expectedHash string) *testutil.MockSSH {
@@ -452,55 +276,19 @@ func TestGenerateCaddyManifest(t *testing.T) {
 	if !dep.Spec.Template.Spec.HostNetwork {
 		t.Error("expected hostNetwork=true on pod spec")
 	}
-
-	// No checksum annotation — Caddy uses hot reload, not pod restarts.
 	if dep.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
 		t.Errorf("expected Recreate strategy, got %q", dep.Spec.Strategy.Type)
 	}
-}
 
-// ── UpsertTLSSecret annotation tests ────────────────────────────────────────
-
-func TestUpsertTLSSecret_WithAnnotations(t *testing.T) {
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "replace", Result: testutil.MockResult{}},
-			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
-		},
+	// Should NOT have TLS volume
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == "tls" {
+			t.Error("deployment should not have TLS volume")
+		}
 	}
-	annotations := map[string]string{"nvoi/origin-ca-id": "cert-123"}
-	err := UpsertTLSSecret(context.Background(), ssh, "ns", "caddy-origin-cert", "cert-pem", "key-pem", annotations)
-	if err != nil {
-		t.Fatalf("UpsertTLSSecret: %v", err)
-	}
-	if len(ssh.Uploads) == 0 {
-		t.Fatal("expected at least 1 upload")
-	}
-	yaml := string(ssh.Uploads[0].Content)
-	if !strings.Contains(yaml, "nvoi/origin-ca-id") {
-		t.Errorf("expected annotation in YAML, got:\n%s", yaml)
-	}
-	if !strings.Contains(yaml, "cert-123") {
-		t.Errorf("expected cert ID value in YAML, got:\n%s", yaml)
-	}
-}
-
-func TestUpsertTLSSecret_NilAnnotations(t *testing.T) {
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "replace", Result: testutil.MockResult{}},
-			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
-		},
-	}
-	err := UpsertTLSSecret(context.Background(), ssh, "ns", "caddy-origin-cert", "cert-pem", "key-pem", nil)
-	if err != nil {
-		t.Fatalf("UpsertTLSSecret: %v", err)
-	}
-	if len(ssh.Uploads) == 0 {
-		t.Fatal("expected at least 1 upload")
-	}
-	yaml := string(ssh.Uploads[0].Content)
-	if strings.Contains(yaml, "nvoi/origin-ca-id") {
-		t.Errorf("nil annotations should not produce annotation block, got:\n%s", yaml)
+	for _, m := range dep.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.Name == "tls" {
+			t.Error("deployment should not have TLS volume mount")
+		}
 	}
 }

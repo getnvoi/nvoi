@@ -2,7 +2,6 @@
 set -euo pipefail
 
 # ── Scaleway teardown ─────────────────────────────────────────────────────────
-# Reverse order of deploy.
 
 set -a; source examples/.env; set +a
 
@@ -14,9 +13,7 @@ bin/core ingress delete web:scw.nvoi.to -y
 bin/core dns delete web:scw.nvoi.to -y
 bin/core service delete jobs -y
 bin/core service delete web -y
-bin/core database delete db --type postgres -y
-bin/core storage empty db-backups -y
-bin/core storage delete db-backups -y
+bin/core service delete db -y
 bin/core storage empty assets -y
 bin/core storage delete assets -y
 bin/core secret delete RAILS_MASTER_KEY

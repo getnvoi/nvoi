@@ -51,10 +51,6 @@ func Root() *cobra.Command {
 	root.AddCommand(commands.NewCronCmd(d))
 	root.AddCommand(commands.NewSecretCmd(d))
 
-	// Managed categories.
-	root.AddCommand(commands.NewDatabaseCmd(d))
-	root.AddCommand(commands.NewAgentCmd(d))
-
 	// Build.
 	root.AddCommand(commands.NewBuildCmd(d))
 

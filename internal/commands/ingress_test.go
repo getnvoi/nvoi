@@ -13,9 +13,6 @@ func TestIngressSet_SingleRoute(t *testing.T) {
 	if len(routes) != 1 || routes[0].Service != "web" || routes[0].Domains[0] != "a.com" {
 		t.Fatalf("routes = %+v", routes)
 	}
-	assertArg(t, m, 1, false) // cloudflare-managed
-	assertArg(t, m, 2, "")    // cert
-	assertArg(t, m, 3, "")    // key
 }
 
 func TestIngressSet_MultiRoute(t *testing.T) {
@@ -33,15 +30,6 @@ func TestIngressSet_MultiRoute(t *testing.T) {
 	}
 }
 
-func TestIngressSet_CloudflareManaged(t *testing.T) {
-	m := &MockBackend{}
-	err := runCmd(t, NewIngressCmd(m), "set", "web:a.com", "--cloudflare-managed")
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertArg(t, m, 1, true)
-}
-
 func TestIngressDelete_SingleRoute(t *testing.T) {
 	m := &MockBackend{}
 	err := runCmd(t, NewIngressCmd(m), "delete", "web:a.com")
@@ -53,7 +41,6 @@ func TestIngressDelete_SingleRoute(t *testing.T) {
 	if len(routes) != 1 || routes[0].Service != "web" {
 		t.Fatalf("routes = %+v", routes)
 	}
-	assertArg(t, m, 1, false)
 }
 
 func TestIngressDelete_MultiRoute(t *testing.T) {
@@ -66,13 +53,4 @@ func TestIngressDelete_MultiRoute(t *testing.T) {
 	if len(routes) != 2 {
 		t.Fatalf("expected 2 routes, got %d", len(routes))
 	}
-}
-
-func TestIngressDelete_CloudflareManaged(t *testing.T) {
-	m := &MockBackend{}
-	err := runCmd(t, NewIngressCmd(m), "delete", "web:a.com", "--cloudflare-managed")
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertArg(t, m, 1, true)
 }

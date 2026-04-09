@@ -35,8 +35,6 @@ func Root() *cobra.Command {
 	root.AddCommand(commands.NewServiceCmd(d))
 	root.AddCommand(commands.NewCronCmd(d))
 	root.AddCommand(commands.NewSecretCmd(d))
-	root.AddCommand(commands.NewDatabaseCmd(d))
-	root.AddCommand(commands.NewAgentCmd(d))
 	root.AddCommand(commands.NewBuildCmd(d))
 	root.AddCommand(commands.NewDescribeCmd(d))
 	root.AddCommand(commands.NewLogsCmd(d))

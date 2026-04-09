@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ── Scaleway deploy ───────────────────────────────────────────────────────────
-# 1 server, managed postgres with backups, web, jobs. Scaleway compute + DNS. Cloudflare R2.
+# 1 server, postgres, web, jobs. Scaleway compute. Cloudflare DNS + R2.
 
 set -a; source examples/.env; set +a
 
@@ -13,7 +13,7 @@ export BUILD_PROVIDER=daytona
 
 # ── Infrastructure ──────────────────────────────────────────────────────────────
 
-bin/core instance set master --compute-type DEV1-L --compute-region fr-par-1
+bin/core instance set master --compute-type DEV1-L --compute-region fr-par-1 --role master
 bin/core firewall set default
 
 # ── Build ───────────────────────────────────────────────────────────────────────
@@ -31,18 +31,16 @@ bin/core secret set POSTGRES_DB "$POSTGRES_DB"
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
 bin/core storage set assets --cors
-bin/core storage set db-backups --expire-days 30
-
-# ── Managed database ───────────────────────────────────────────────────────────
-
-bin/core database set db --type postgres \
-  --secret POSTGRES_PASSWORD \
-  --secret POSTGRES_USER \
-  --secret POSTGRES_DB \
-  --backup-storage db-backups \
-  --backup-cron "0 2 * * *"
 
 # ── Services ────────────────────────────────────────────────────────────────────
+
+bin/core service set db \
+  --image postgres:17 \
+  --port 5432 \
+  --volume pgdata:/var/lib/postgresql/data \
+  --secret POSTGRES_PASSWORD \
+  --secret POSTGRES_USER \
+  --secret POSTGRES_DB
 
 bin/core service set web \
   --image "$WEB_IMAGE" \

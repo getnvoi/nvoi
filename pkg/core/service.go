@@ -15,18 +15,17 @@ import (
 
 type ServiceSetRequest struct {
 	Cluster
-	Name        string
-	Image       string
-	Port        int
-	Command     string
-	Replicas    int
-	EnvVars     []string // KEY=VALUE pairs
-	Secrets     []string // secret key references (must exist in cluster)
-	Storages    []string // storage names → expands to STORAGE_{NAME}_* secret refs
-	Volumes     []string // name:/path
-	HealthPath  string
-	Server      string
-	ManagedKind string // set by managed bundles for discovery (e.g. "postgres", "claude")
+	Name       string
+	Image      string
+	Port       int
+	Command    string
+	Replicas   int
+	EnvVars    []string // KEY=VALUE pairs
+	Secrets    []string // secret key references (must exist in cluster)
+	Storages   []string // storage names → expands to STORAGE_{NAME}_* secret refs
+	Volumes    []string // name:/path
+	HealthPath string
+	Server     string
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
@@ -125,19 +124,18 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 	}
 
 	spec := kube.ServiceSpec{
-		Name:        req.Name,
-		Image:       req.Image,
-		Port:        req.Port,
-		Command:     req.Command,
-		Replicas:    req.Replicas,
-		Env:         env,
-		Secrets:     req.Secrets,
-		SecretName:  secretName,
-		Volumes:     req.Volumes,
-		HealthPath:  req.HealthPath,
-		Server:      req.Server,
-		Managed:     managed,
-		ManagedKind: req.ManagedKind,
+		Name:       req.Name,
+		Image:      req.Image,
+		Port:       req.Port,
+		Command:    req.Command,
+		Replicas:   req.Replicas,
+		Env:        env,
+		Secrets:    req.Secrets,
+		SecretName: secretName,
+		Volumes:    req.Volumes,
+		HealthPath: req.HealthPath,
+		Server:     req.Server,
+		Managed:    managed,
 	}
 
 	out.Command("service", "set", req.Name)

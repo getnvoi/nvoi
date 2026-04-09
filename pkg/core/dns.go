@@ -14,10 +14,9 @@ import (
 
 type DNSSetRequest struct {
 	Cluster
-	DNS               ProviderRef
-	Service           string
-	Domains           []string
-	CloudflareManaged bool
+	DNS     ProviderRef
+	Service string
+	Domains []string
 }
 
 // DNSSet creates/updates DNS A records. DNS only — no Caddy.
@@ -37,13 +36,9 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	ip := master.IPv4
 	out.Command("dns", "set", req.Service, "ip", ip, "domains", req.Domains)
 
-	if req.CloudflareManaged && req.DNS.Name != "cloudflare" {
-		return fmt.Errorf("cloudflare-managed DNS requires Cloudflare as DNS provider (current: %s)", req.DNS.Name)
-	}
-
 	for _, domain := range req.Domains {
 		out.Progress(fmt.Sprintf("ensuring %s → %s", domain, ip))
-		if err := dns.EnsureARecord(ctx, domain, ip, req.CloudflareManaged); err != nil {
+		if err := dns.EnsureARecord(ctx, domain, ip, false); err != nil {
 			return fmt.Errorf("dns set %s: %w", domain, err)
 		}
 		out.Success(domain)

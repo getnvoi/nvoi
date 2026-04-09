@@ -293,45 +293,6 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 		Summary: "Prune build images", Tags: []string{"builds"}, Security: security,
 	}, PruneBuild(db))
 
-	// ── Managed database ─────────────────────────────────────────────────────
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "database-list", Method: http.MethodGet, Path: rpID + "/database",
-		Summary: "List managed databases", Tags: []string{"database"}, Security: security,
-	}, DatabaseList(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "backup-create", Method: http.MethodPost, Path: rpID + "/database/{name}/backup/create",
-		Summary: "Create database backup", Tags: []string{"database"}, Security: security,
-	}, BackupCreate(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "backup-list", Method: http.MethodGet, Path: rpID + "/database/{name}/backup",
-		Summary: "List database backups", Tags: []string{"database"}, Security: security,
-	}, BackupList(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "backup-download", Method: http.MethodGet, Path: rpID + "/database/{name}/backup/{key}",
-		Summary: "Download database backup", Tags: []string{"database"}, Security: security,
-	}, BackupDownload(db))
-
-	// ── Managed agent ────────────────────────────────────────────────────────
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "agent-list", Method: http.MethodGet, Path: rpID + "/agent",
-		Summary: "List managed agents", Tags: []string{"agent"}, Security: security,
-	}, AgentList(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "agent-exec", Method: http.MethodPost, Path: rpID + "/agent/{name}/exec",
-		Summary: "Exec in agent pod", Tags: []string{"agent"}, Security: security,
-	}, AgentExec(db))
-
-	huma.Register(humaAPI, huma.Operation{
-		OperationID: "agent-logs", Method: http.MethodGet, Path: rpID + "/agent/{name}/logs",
-		Summary: "Stream agent logs", Tags: []string{"agent"}, Security: security,
-	}, AgentLogs(db))
-
 	// ── Services ─────────────────────────────────────────────────────────────
 	svc := rpID + "/services/{service}"
 

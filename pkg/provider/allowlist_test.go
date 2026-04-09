@@ -2,9 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"sort"
 	"testing"
 
@@ -72,34 +69,6 @@ func TestResolveFirewallArgs_PresetDefault(t *testing.T) {
 	// SSH should NOT be in the preset — managed by instance set
 	if _, ok := got["22"]; ok {
 		t.Errorf("SSH (22) should not be in preset, got %v", got["22"])
-	}
-}
-
-func TestResolveFirewallArgs_PresetCloudflare(t *testing.T) {
-	// Mock the Cloudflare API
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
-			"result": map[string]any{
-				"ipv4_cidrs": []string{"173.245.48.0/20", "103.21.244.0/22"},
-			},
-		})
-	}))
-	defer ts.Close()
-
-	// Can't easily override the URL in the current API, so test with fallback
-	got, err := ResolveFirewallArgs(context.Background(), []string{"cloudflare"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got["80"]) == 0 || len(got["443"]) == 0 {
-		t.Errorf("cloudflare preset should have 80 and 443, got %v", got)
-	}
-	// Should have Cloudflare IPs (either live or fallback)
-	if len(got["80"]) < 2 {
-		t.Errorf("cloudflare preset should have multiple IPs, got %v", got["80"])
-	}
-	if !hasIPv6CIDR(got["80"]) || !hasIPv6CIDR(got["443"]) {
-		t.Errorf("cloudflare preset should include IPv6 CIDRs, got %v", got)
 	}
 }
 
@@ -175,21 +144,6 @@ func TestMergeAllowLists_BothNil(t *testing.T) {
 	}
 }
 
-func TestFallbackCloudflareIPs(t *testing.T) {
-	if len(FallbackCloudflareIPs) < 10 {
-		t.Errorf("expected at least 10 fallback IPs, got %d", len(FallbackCloudflareIPs))
-	}
-	// Verify all are valid CIDRs (contain /)
-	for _, cidr := range FallbackCloudflareIPs {
-		if !containsStr(cidr, "/") {
-			t.Errorf("fallback IP %q is not a CIDR", cidr)
-		}
-	}
-	if !hasIPv6CIDR(FallbackCloudflareIPs) {
-		t.Errorf("fallback Cloudflare CIDRs should include IPv6, got %v", FallbackCloudflareIPs)
-	}
-}
-
 func TestParseRawRules_MultipleCIDRsPerPort(t *testing.T) {
 	got := ParseRawRules([]string{"80:1.2.3.4,5.6.7.8/32,10.0.0.0/8"})
 	if len(got["80"]) != 3 {
@@ -218,15 +172,6 @@ func containsStr(s, substr string) bool {
 func containsCIDR(cidrs []string, want string) bool {
 	for _, cidr := range cidrs {
 		if cidr == want {
-			return true
-		}
-	}
-	return false
-}
-
-func hasIPv6CIDR(cidrs []string) bool {
-	for _, cidr := range cidrs {
-		if containsStr(cidr, ":") {
 			return true
 		}
 	}

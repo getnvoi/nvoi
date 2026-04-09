@@ -1,17 +1,5 @@
 package handlers
 
-import (
-	"errors"
-
-	"github.com/getnvoi/nvoi/pkg/managed"
-)
-
-// isMissingCredential checks if an error wraps managed.ErrMissingCredential.
-func isMissingCredential(err error) bool {
-	var e *managed.ErrMissingCredential
-	return errors.As(err, &e)
-}
-
 // ── Shared input types for path params ───────────────────────────────────────
 
 // WorkspaceScopedInput provides the workspace_id path param.

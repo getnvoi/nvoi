@@ -12,8 +12,7 @@ bin/cloud ingress delete web:aws-cloud.nvoi.to
 bin/cloud dns delete web:aws-cloud.nvoi.to
 bin/cloud service delete jobs
 bin/cloud service delete web
-bin/cloud database delete db --type postgres
-bin/cloud storage delete db-backups
+bin/cloud service delete db
 bin/cloud storage delete assets
 bin/cloud secret delete RAILS_MASTER_KEY
 bin/cloud secret delete POSTGRES_PASSWORD

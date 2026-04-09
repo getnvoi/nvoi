@@ -170,12 +170,53 @@ func (c *APIClient) doRawWithBody(method, path string, body any) (*http.Response
 }
 
 func parseAPIError(status int, body []byte) *APIError {
-	var apiErr struct {
+	// Try our app format: {"error": "..."}
+	var appErr struct {
 		Err string `json:"error"`
 	}
-	msg := string(body)
-	if json.Unmarshal(body, &apiErr) == nil && apiErr.Err != "" {
-		msg = apiErr.Err
+	if json.Unmarshal(body, &appErr) == nil && appErr.Err != "" {
+		return &APIError{Status: status, Message: appErr.Err}
 	}
-	return &APIError{Status: status, Message: msg}
+
+	// Try Huma validation format: {"title": "...", "detail": "...", "errors": [...]}
+	var humaErr struct {
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
+		Errors []struct {
+			Message  string `json:"message"`
+			Location string `json:"location"`
+			Value    any    `json:"value"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &humaErr) == nil && len(humaErr.Errors) > 0 {
+		parts := make([]string, len(humaErr.Errors))
+		for i, e := range humaErr.Errors {
+			if e.Location != "" {
+				parts[i] = e.Location + ": " + e.Message
+			} else {
+				parts[i] = e.Message
+			}
+		}
+		msg := humaErr.Detail
+		if msg == "" {
+			msg = humaErr.Title
+		}
+		return &APIError{Status: status, Message: msg + ": " + fmt.Sprintf("%s", joinStrings(parts))}
+	}
+	if json.Unmarshal(body, &humaErr) == nil && humaErr.Detail != "" {
+		return &APIError{Status: status, Message: humaErr.Detail}
+	}
+
+	return &APIError{Status: status, Message: string(body)}
+}
+
+func joinStrings(parts []string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += "; "
+		}
+		result += p
+	}
+	return result
 }

@@ -8,14 +8,13 @@ import (
 	app "github.com/getnvoi/nvoi/pkg/core"
 )
 
-func (d *DirectBackend) DNSSet(ctx context.Context, routes []commands.RouteArg, cloudflareManaged bool) error {
+func (d *DirectBackend) DNSSet(ctx context.Context, routes []commands.RouteArg) error {
 	for _, route := range routes {
 		if err := app.DNSSet(ctx, app.DNSSetRequest{
-			Cluster:           d.cluster,
-			DNS:               d.dns,
-			Service:           route.Service,
-			Domains:           route.Domains,
-			CloudflareManaged: cloudflareManaged,
+			Cluster: d.cluster,
+			DNS:     d.dns,
+			Service: route.Service,
+			Domains: route.Domains,
 		}); err != nil {
 			return err
 		}

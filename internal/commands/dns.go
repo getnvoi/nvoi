@@ -15,7 +15,7 @@ func NewDNSCmd(b Backend) *cobra.Command {
 }
 
 func newDNSSetCmd(b Backend) *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "set service:domain,domain [...]",
 		Short: "Create or update DNS A records pointing to the service server",
 		Long: `Points domains at the server running the service.
@@ -23,20 +23,16 @@ func newDNSSetCmd(b Backend) *cobra.Command {
 Examples:
   nvoi dns set web:myapp.com
   nvoi dns set web:myapp.com,www.myapp.com
-  nvoi dns set web:myapp.com api:api.myapp.com
-  nvoi dns set web:myapp.com --cloudflare-managed`,
+  nvoi dns set web:myapp.com api:api.myapp.com`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			routes, err := parseRouteArgs(args)
 			if err != nil {
 				return err
 			}
-			cloudflareManaged, _ := cmd.Flags().GetBool("cloudflare-managed")
-			return b.DNSSet(cmd.Context(), routes, cloudflareManaged)
+			return b.DNSSet(cmd.Context(), routes)
 		},
 	}
-	cmd.Flags().Bool("cloudflare-managed", false, "enable Cloudflare-managed DNS proxying")
-	return cmd
 }
 
 func newDNSDeleteCmd(b Backend) *cobra.Command {

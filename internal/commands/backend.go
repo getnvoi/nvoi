@@ -30,19 +30,6 @@ type Backend interface {
 	CronSet(ctx context.Context, name string, opts CronOpts) error
 	CronDelete(ctx context.Context, name string) error
 
-	// Managed
-	DatabaseSet(ctx context.Context, name string, opts ManagedOpts) error
-	DatabaseDelete(ctx context.Context, name, kind string) error
-	DatabaseList(ctx context.Context) error
-	BackupCreate(ctx context.Context, name, kind string) error
-	BackupList(ctx context.Context, name, kind, backupStorage string) error
-	BackupDownload(ctx context.Context, name, kind, backupStorage, key string) error
-	AgentSet(ctx context.Context, name string, opts ManagedOpts) error
-	AgentDelete(ctx context.Context, name, kind string) error
-	AgentList(ctx context.Context) error
-	AgentExec(ctx context.Context, name, kind string, command []string) error
-	AgentLogs(ctx context.Context, name, kind string, opts LogsOpts) error
-
 	// Secrets
 	SecretSet(ctx context.Context, key, value string) error
 	SecretDelete(ctx context.Context, key string) error
@@ -56,11 +43,11 @@ type Backend interface {
 	BuildPrune(ctx context.Context, name string, keep int) error
 
 	// DNS + Ingress
-	DNSSet(ctx context.Context, routes []RouteArg, cloudflareManaged bool) error
+	DNSSet(ctx context.Context, routes []RouteArg) error
 	DNSDelete(ctx context.Context, routes []RouteArg) error
 	DNSList(ctx context.Context) error
-	IngressSet(ctx context.Context, routes []RouteArg, cloudflareManaged bool, certPEM, keyPEM string) error
-	IngressDelete(ctx context.Context, routes []RouteArg, cloudflareManaged bool) error
+	IngressSet(ctx context.Context, routes []RouteArg) error
+	IngressDelete(ctx context.Context, routes []RouteArg) error
 
 	// Operational
 	Describe(ctx context.Context, jsonOutput bool) error
@@ -95,16 +82,6 @@ type ServiceOpts struct {
 type CronOpts struct {
 	WorkloadOpts
 	Schedule string
-}
-
-// ManagedOpts holds flags for managed service commands (database set, agent set).
-type ManagedOpts struct {
-	Kind          string
-	Secrets       []string
-	Image         string
-	VolumeSize    int
-	BackupStorage string
-	BackupCron    string
 }
 
 // BuildOpts holds all flags for build.

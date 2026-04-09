@@ -10,71 +10,13 @@ import (
 	"gorm.io/gorm"
 )
 
+// NOTE: Provider enums (ComputeProvider, DNSProvider, etc.) are gone.
+// Provider selection lives on InfraProvider.Name — no enum validation needed.
+// Repos link to InfraProviders via FK columns.
+
 func newUUID() string {
 	return uuid.NewString()
 }
-
-// ── Provider enums ───────────────────────────────────────────────────────────
-
-type ComputeProvider string
-
-const (
-	ComputeHetzner  ComputeProvider = "hetzner"
-	ComputeAWS      ComputeProvider = "aws"
-	ComputeScaleway ComputeProvider = "scaleway"
-)
-
-var validComputeProviders = map[ComputeProvider]bool{
-	ComputeHetzner:  true,
-	ComputeAWS:      true,
-	ComputeScaleway: true,
-}
-
-func (p ComputeProvider) Valid() bool { return validComputeProviders[p] }
-
-type DNSProvider string
-
-const (
-	DNSCloudflare DNSProvider = "cloudflare"
-	DNSAWS        DNSProvider = "aws"
-)
-
-var validDNSProviders = map[DNSProvider]bool{
-	DNSCloudflare: true,
-	DNSAWS:        true,
-}
-
-func (p DNSProvider) Valid() bool { return validDNSProviders[p] }
-
-type StorageProvider string
-
-const (
-	StorageCloudflare StorageProvider = "cloudflare"
-	StorageAWS        StorageProvider = "aws"
-)
-
-var validStorageProviders = map[StorageProvider]bool{
-	StorageCloudflare: true,
-	StorageAWS:        true,
-}
-
-func (p StorageProvider) Valid() bool { return validStorageProviders[p] }
-
-type BuildProvider string
-
-const (
-	BuildLocal   BuildProvider = "local"
-	BuildDaytona BuildProvider = "daytona"
-	BuildGitHub  BuildProvider = "github"
-)
-
-var validBuildProviders = map[BuildProvider]bool{
-	BuildLocal:   true,
-	BuildDaytona: true,
-	BuildGitHub:  true,
-}
-
-func (p BuildProvider) Valid() bool { return validBuildProviders[p] }
 
 type User struct {
 	ID             string         `gorm:"primaryKey" json:"id"`
