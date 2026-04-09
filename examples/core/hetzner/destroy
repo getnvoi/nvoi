@@ -21,5 +21,7 @@ bin/core storage empty assets -y
 bin/core storage delete assets -y
 bin/core secret delete RAILS_MASTER_KEY
 bin/core secret delete POSTGRES_PASSWORD
+bin/core secret delete POSTGRES_USER
+bin/core secret delete POSTGRES_DB
 bin/core instance delete worker-1 -y
 bin/core instance delete master -y

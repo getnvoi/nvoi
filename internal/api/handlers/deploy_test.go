@@ -27,7 +27,7 @@ domains:
   web: example.com
 `
 
-const deployEnv = "POSTGRES_PASSWORD=s3cret\n"
+const deployEnv = "POSTGRES_PASSWORD=s3cret\nPOSTGRES_USER=a1b2c3d4\nPOSTGRES_DB=e5f6a7b8\n"
 
 func TestDeploy_CreatesDeploymentWithSteps(t *testing.T) {
 	r, db := testRouter(t, "octocat")

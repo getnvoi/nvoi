@@ -8,7 +8,11 @@ import (
 )
 
 func postgresEnv() map[string]string {
-	return map[string]string{"POSTGRES_PASSWORD": "s3cret"}
+	return map[string]string{
+		"POSTGRES_PASSWORD": "s3cret",
+		"POSTGRES_USER":     "a1b2c3d4",
+		"POSTGRES_DB":       "e5f6a7b8",
+	}
 }
 
 func agentEnv() map[string]string {
@@ -166,7 +170,7 @@ func TestPrimitiveOperationsSortedAndDeterministic(t *testing.T) {
 	for _, op := range got.Bundle.Operations {
 		gotKinds = append(gotKinds, op.Kind)
 	}
-	wantKinds := []string{"secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "volume.set", "service.set"}
+	wantKinds := []string{"secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "volume.set", "service.set"}
 	if !reflect.DeepEqual(gotKinds, wantKinds) {
 		t.Fatalf("operation kinds = %v, want %v", gotKinds, wantKinds)
 	}
@@ -200,7 +204,9 @@ func TestPostgresShape(t *testing.T) {
 		t.Errorf("Volumes = %v", shape.Volumes)
 	}
 	wantKeys := []string{
+		"POSTGRES_DB_DB",
 		"POSTGRES_PASSWORD_DB",
+		"POSTGRES_USER_DB",
 		"DATABASE_DB_HOST", "DATABASE_DB_NAME", "DATABASE_DB_PASSWORD",
 		"DATABASE_DB_PORT", "DATABASE_DB_URL", "DATABASE_DB_USER",
 	}
@@ -277,7 +283,9 @@ func TestPostgresDeleteTargetsMatchBundle(t *testing.T) {
 		allSecrets[k] = true
 	}
 	wantSecrets := []string{
+		"POSTGRES_DB_DB",
 		"POSTGRES_PASSWORD_DB",
+		"POSTGRES_USER_DB",
 		"DATABASE_DB_HOST", "DATABASE_DB_NAME", "DATABASE_DB_PASSWORD",
 		"DATABASE_DB_PORT", "DATABASE_DB_URL", "DATABASE_DB_USER",
 	}

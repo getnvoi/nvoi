@@ -437,6 +437,8 @@ services:
 `
 
 const managedEnvStr = `POSTGRES_PASSWORD=s3cret
+POSTGRES_USER=a1b2c3d4
+POSTGRES_DB=e5f6a7b8
 NVOI_AGENT_TOKEN=tok123
 `
 
@@ -566,7 +568,7 @@ services:
 	body := map[string]any{
 		"compute_provider": "hetzner",
 		"config":           multiYAML,
-		"env":              "POSTGRES_PASSWORD=s3cret\n",
+		"env":              "POSTGRES_PASSWORD=s3cret\nPOSTGRES_USER=a1b2c3d4\nPOSTGRES_DB=e5f6a7b8\n",
 	}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()

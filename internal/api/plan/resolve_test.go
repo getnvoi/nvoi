@@ -23,6 +23,8 @@ func managedConfig() *config.Config {
 
 var managedEnv = map[string]string{
 	"POSTGRES_PASSWORD": "s3cret",
+	"POSTGRES_USER":     "a1b2c3d4",
+	"POSTGRES_DB":       "e5f6a7b8",
 	"NVOI_AGENT_TOKEN":  "tok123",
 }
 
@@ -67,6 +69,7 @@ func TestResolveDeploymentSteps_PostgresAndAgent(t *testing.T) {
 		"secret.set:AGENT_CODER_HOST", "secret.set:AGENT_CODER_PORT",
 		"secret.set:AGENT_CODER_TOKEN", "secret.set:AGENT_CODER_URL",
 		"secret.set:POSTGRES_PASSWORD_DB",
+		"secret.set:POSTGRES_USER_DB", "secret.set:POSTGRES_DB_DB",
 		"secret.set:DATABASE_DB_HOST", "secret.set:DATABASE_DB_PORT",
 		"secret.set:DATABASE_DB_USER", "secret.set:DATABASE_DB_PASSWORD",
 		"secret.set:DATABASE_DB_NAME", "secret.set:DATABASE_DB_URL",

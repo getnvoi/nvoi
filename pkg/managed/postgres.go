@@ -24,7 +24,9 @@ func (postgresDefinition) Shape(name string) BundleShape {
 		Services:      []string{name},
 		Volumes:       []string{name + "-data"},
 		SecretKeys: []string{
+			"POSTGRES_DB_" + ns,
 			"POSTGRES_PASSWORD_" + ns,
+			"POSTGRES_USER_" + ns,
 			"DATABASE_" + ns + "_HOST",
 			"DATABASE_" + ns + "_NAME",
 			"DATABASE_" + ns + "_PASSWORD",
@@ -40,17 +42,28 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	user, err := requireEnv(req.Env, "POSTGRES_USER", "postgres", req.Name)
+	if err != nil {
+		return Result{}, err
+	}
+	dbName, err := requireEnv(req.Env, "POSTGRES_DB", "postgres", req.Name)
+	if err != nil {
+		return Result{}, err
+	}
 
 	creds := map[string]string{
 		"HOST":     req.Name,
 		"PORT":     "5432",
-		"USER":     "postgres",
+		"USER":     user,
 		"PASSWORD": password,
-		"NAME":     req.Name,
-		"URL":      fmt.Sprintf("postgres://postgres:%s@%s:5432/%s", password, req.Name, req.Name),
+		"NAME":     dbName,
+		"URL":      fmt.Sprintf("postgres://%s:%s@%s:5432/%s", user, password, req.Name, dbName),
 	}
 
 	internalKey := "POSTGRES_PASSWORD_" + namespaced(req.Name)
+	userKey := "POSTGRES_USER_" + namespaced(req.Name)
+	dbKey := "POSTGRES_DB_" + namespaced(req.Name)
+
 	exported := map[string]string{}
 	for _, key := range sortedKeys(creds) {
 		exported["DATABASE_"+namespaced(req.Name)+"_"+key] = creds[key]
@@ -68,18 +81,20 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 		Volumes: []string{
 			volume.Name + ":/var/lib/postgresql/data",
 		},
-		Env: []string{
-			"POSTGRES_DB=" + req.Name,
-			"POSTGRES_USER=postgres",
-		},
 		Secrets: []string{
 			"POSTGRES_PASSWORD=" + internalKey,
+			"POSTGRES_USER=" + userKey,
+			"POSTGRES_DB=" + dbKey,
 		},
 	}
 
 	ops := []Operation{
 		{Kind: "secret.set", Name: internalKey, Params: map[string]any{"value": password},
 			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: internalKey}},
+		{Kind: "secret.set", Name: userKey, Params: map[string]any{"value": user},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: userKey}},
+		{Kind: "secret.set", Name: dbKey, Params: map[string]any{"value": dbName},
+			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: dbKey}},
 		{Kind: "secret.set", Name: "DATABASE_" + namespaced(req.Name) + "_HOST", Params: map[string]any{"value": creds["HOST"]},
 			Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: "DATABASE_" + namespaced(req.Name) + "_HOST"}},
 		{Kind: "secret.set", Name: "DATABASE_" + namespaced(req.Name) + "_PORT", Params: map[string]any{"value": creds["PORT"]},
@@ -113,11 +128,10 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 			Image:    "postgres:17",
 			Command:  script,
 			Server:   req.Context.DefaultVolumeServer,
-			Env: []string{
-				"PGPASSWORD=" + password,
-			},
 			Secrets: []string{
 				"POSTGRES_PASSWORD=" + internalKey,
+				"POSTGRES_USER=" + userKey,
+				"POSTGRES_DB=" + dbKey,
 			},
 			Storage: []string{
 				req.BackupStorage,
@@ -148,7 +162,7 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 			Kind:            req.Kind,
 			RootService:     req.Name,
 			OwnedChildren:   ownedChildren,
-			InternalSecrets: map[string]string{internalKey: password},
+			InternalSecrets: map[string]string{internalKey: password, userKey: user, dbKey: dbName},
 			ExportedSecrets: exported,
 			Volumes:         []Volume{volume},
 			Services:        []Service{service},
@@ -161,7 +175,7 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 // backupScript returns a shell script that installs aws cli and pipes pg_dump to S3.
 // The storage env vars (endpoint, bucket, access key, secret key) are injected
 // by the --storage reference on the cron.
-func backupScript(dbName, storagePrefix string) string {
+func backupScript(host, storagePrefix string) string {
 	return fmt.Sprintf(
 		`set -e && `+
 			`rm -f /etc/apt/sources.list.d/pgdg.list && `+
@@ -170,9 +184,10 @@ func backupScript(dbName, storagePrefix string) string {
 			`unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install > /dev/null && `+
 			`export AWS_ACCESS_KEY_ID=$%s_ACCESS_KEY_ID && `+
 			`export AWS_SECRET_ACCESS_KEY=$%s_SECRET_ACCESS_KEY && `+
+			`export PGPASSWORD=$POSTGRES_PASSWORD && `+
 			`TIMESTAMP=$(date +%%Y%%m%%d-%%H%%M%%S) && `+
-			`pg_dump -h %s -U postgres %s --no-owner --no-acl | gzip | `+
+			`pg_dump -h %s -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-acl | gzip | `+
 			`aws s3 cp - "s3://$%s_BUCKET/backup-$TIMESTAMP.sql.gz" --endpoint-url "$%s_ENDPOINT"`,
-		storagePrefix, storagePrefix, dbName, dbName, storagePrefix, storagePrefix,
+		storagePrefix, storagePrefix, host, storagePrefix, storagePrefix,
 	)
 }
