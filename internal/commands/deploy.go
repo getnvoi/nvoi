@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -25,5 +28,9 @@ func loadConfig(cmd *cobra.Command) (*reconcile.AppConfig, error) {
 	if path == "" {
 		path = "nvoi.yaml"
 	}
-	return reconcile.ParseAppConfig(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return reconcile.ParseAppConfig(data)
 }

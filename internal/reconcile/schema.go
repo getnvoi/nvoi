@@ -2,7 +2,6 @@ package reconcile
 
 import (
 	"fmt"
-	"os"
 
 	"gopkg.in/yaml.v3"
 )
@@ -97,14 +96,10 @@ func (c *AppConfig) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func ParseAppConfig(path string) (*AppConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
+func ParseAppConfig(data []byte) (*AppConfig, error) {
 	var cfg AppConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, err
 	}
 	return &cfg, nil
 }
