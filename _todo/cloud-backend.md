@@ -2,6 +2,34 @@
 
 Every stubbed method in `internal/cli/stubs.go` must be implemented. No stubs. No error placeholders.
 
+## How it works
+
+The cloud API stores config + env in `RepoConfig` rows (see `internal/api/models.go`):
+
+```
+RepoConfig
+  ID              string (UUID)
+  RepoID          string (FK)
+  Version         int (auto-incremented per push)
+  ComputeProvider enum (hetzner | aws | scaleway)
+  DNSProvider     enum (cloudflare | aws)
+  StorageProvider enum (cloudflare | aws)
+  BuildProvider   enum (local | daytona | github)
+  Config          text (YAML string — the config we mutate)
+  Env             text (encrypted KEY=VALUE pairs — secrets + credentials)
+```
+
+Each imperative command does:
+1. `GET /config?reveal=true` → load latest RepoConfig (YAML + decrypted env)
+2. Parse YAML into `config.Config` struct
+3. Mutate the struct (add server, add service, etc.)
+4. Marshal back to YAML
+5. `POST /config` with YAML + env + provider enums → creates new version
+
+State accumulates: `instance set` pushes version 1. `service set` loads version 1, adds service, pushes version 2. `deploy` reads version 2 with both.
+
+`deploy` triggers `ResolveDeploymentSteps` which compiles managed bundles, plans non-managed resources, creates deployment steps, and the executor runs them.
+
 ---
 
 ## Pattern
