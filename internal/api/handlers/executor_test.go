@@ -334,67 +334,6 @@ func TestParseFirewallFromParams_Nil(t *testing.T) {
 	}
 }
 
-// ── parseIngressRoutesFromParams tests ───────────────────────────────────────
-
-func TestParseIngressRoutesFromParams_Valid(t *testing.T) {
-	params := map[string]any{
-		"exposure": "edge_proxied",
-		"routes": []any{
-			map[string]any{"service": "web", "domains": []any{"example.com"}},
-		},
-	}
-	routes, err := parseIngressRoutesFromParams(params)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 1 {
-		t.Fatalf("routes = %d, want 1", len(routes))
-	}
-	if routes[0].Service != "web" {
-		t.Errorf("service = %q", routes[0].Service)
-	}
-	if !routes[0].EdgeProxied {
-		t.Error("EdgeProxied should be true")
-	}
-}
-
-func TestParseIngressRoutesFromParams_MissingService(t *testing.T) {
-	params := map[string]any{
-		"routes": []any{
-			map[string]any{"domains": []any{"example.com"}},
-		},
-	}
-	routes, err := parseIngressRoutesFromParams(params)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 0 {
-		t.Fatalf("routes = %d, want 0", len(routes))
-	}
-}
-
-func TestParseIngressRoutesFromParams_NoDomains(t *testing.T) {
-	params := map[string]any{
-		"routes": []any{
-			map[string]any{"service": "web"},
-		},
-	}
-	routes, err := parseIngressRoutesFromParams(params)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 0 {
-		t.Fatalf("routes = %d, want 0", len(routes))
-	}
-}
-
-func TestParseIngressRoutesFromParams_MissingRoutes(t *testing.T) {
-	_, err := parseIngressRoutesFromParams(map[string]any{})
-	if err == nil {
-		t.Fatal("expected error for missing routes")
-	}
-}
-
 // seedData creates a user + workspace for executor tests. Returns workspace ID.
 func seedData(t *testing.T, db *gorm.DB) string {
 	t.Helper()

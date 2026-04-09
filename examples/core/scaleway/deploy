@@ -69,8 +69,8 @@ bin/core service set jobs \
 
 # ── Ingress + DNS ────────────────────────────────────────────────────────────────
 
-bin/core ingress apply web:scw.nvoi.to
-bin/core dns set web scw.nvoi.to
+bin/core ingress set web:scw.nvoi.to
+bin/core dns set web:scw.nvoi.to
 
 echo ""
 echo "==> done. https://scw.nvoi.to"

@@ -65,6 +65,15 @@ func (n *Names) Labels() map[string]string {
 	}
 }
 
+// ── Origin CA ─────────────────────────────────────────────────────────────
+
+// OriginCACertComment returns a deterministic identifier for Origin CA cert annotations.
+// Cloudflare Origin CA certs have no name field — lookup is by hostname match.
+// This is stored as annotation metadata for auditability.
+func (n *Names) OriginCACertComment() string {
+	return fmt.Sprintf("nvoi-%s-%s-origin-ca", n.app, n.env)
+}
+
 // ── Remote paths ───────────────────────────────────────────────────────────────
 
 func (n *Names) VolumeMountPath(name string) string {
@@ -126,6 +135,7 @@ const (
 	LabelConfigChecksum  = "nvoi/config-checksum"
 	RoleMaster           = "master"
 	CaddyTLSSecretName   = "caddy-origin-cert"
+	OriginCAAnnotation   = "nvoi/origin-ca-id"
 )
 
 // ── Storage env naming ─────────────────────────────────────────────────────────

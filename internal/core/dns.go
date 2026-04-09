@@ -24,18 +24,21 @@ func newDNSCmd() *cobra.Command {
 
 func newDNSSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "set [service] [domain...]",
+		Use:   "set service:domain,domain [...]",
 		Short: "Create or update DNS A records pointing to the service server",
 		Long: `Points domains at the server running the service.
 
 Examples:
-  nvoi dns set web myapp.com --zone myapp.com
-  nvoi dns set web api.myapp.com www.myapp.com --zone myapp.com
-  nvoi dns set web myapp.com --cloudflare-managed`,
-		Args: cobra.MinimumNArgs(2),
+  nvoi dns set web:myapp.com
+  nvoi dns set web:myapp.com,www.myapp.com
+  nvoi dns set web:myapp.com api:api.myapp.com
+  nvoi dns set web:myapp.com --cloudflare-managed`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			service := args[0]
-			domains := args[1:]
+			routes, err := app.ParseIngressArgs(args)
+			if err != nil {
+				return err
+			}
 
 			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
@@ -63,20 +66,25 @@ Examples:
 			}
 			cloudflareManaged, _ := cmd.Flags().GetBool("cloudflare-managed")
 
-			return app.DNSSet(cmd.Context(), app.DNSSetRequest{
-				Cluster: app.Cluster{
-					AppName:     appName,
-					Env:         env,
-					Provider:    computeProvider,
-					Credentials: computeCreds,
-					SSHKey:      sshKey,
-					Output:      resolveOutput(cmd),
-				},
-				DNS:         app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
-				Service:     service,
-				Domains:     domains,
-				EdgeProxied: cloudflareManaged,
-			})
+			for _, route := range routes {
+				if err := app.DNSSet(cmd.Context(), app.DNSSetRequest{
+					Cluster: app.Cluster{
+						AppName:     appName,
+						Env:         env,
+						Provider:    computeProvider,
+						Credentials: computeCreds,
+						SSHKey:      sshKey,
+						Output:      resolveOutput(cmd),
+					},
+					DNS:         app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
+					Service:     route.Service,
+					Domains:     route.Domains,
+					EdgeProxied: cloudflareManaged,
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 	addComputeProviderFlags(cmd)
@@ -89,16 +97,24 @@ Examples:
 
 func newDNSDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete [service] [domain...]",
+		Use:   "delete service:domain,domain [...]",
 		Short: "Delete DNS records (fails if ingress still uses them)",
-		Args:  cobra.MinimumNArgs(2),
+		Long: `Deletes DNS A records for the specified service:domain pairs.
+
+Examples:
+  nvoi dns delete web:myapp.com -y
+  nvoi dns delete web:myapp.com,www.myapp.com -y
+  nvoi dns delete web:myapp.com api:api.myapp.com -y`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			service := args[0]
-			domains := args[1:]
+			routes, err := app.ParseIngressArgs(args)
+			if err != nil {
+				return err
+			}
 			yes, _ := cmd.Flags().GetBool("yes")
 
 			if !yes {
-				fmt.Printf("Delete DNS records for %v? [y/N] ", domains)
+				fmt.Printf("Delete DNS records for %s? [y/N] ", args)
 				var confirm string
 				fmt.Scanln(&confirm)
 				if confirm != "y" && confirm != "yes" {
@@ -132,20 +148,25 @@ func newDNSDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			err = app.DNSDelete(cmd.Context(), app.DNSDeleteRequest{
-				Cluster: app.Cluster{
-					AppName:     appName,
-					Env:         env,
-					Provider:    computeProvider,
-					Credentials: computeCreds,
-					SSHKey:      sshKey,
-					Output:      resolveOutput(cmd),
-				},
-				DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
-				Service: service,
-				Domains: domains,
-			})
-			return render.HandleDeleteResult(err, resolveOutput(cmd))
+			for _, route := range routes {
+				err = app.DNSDelete(cmd.Context(), app.DNSDeleteRequest{
+					Cluster: app.Cluster{
+						AppName:     appName,
+						Env:         env,
+						Provider:    computeProvider,
+						Credentials: computeCreds,
+						SSHKey:      sshKey,
+						Output:      resolveOutput(cmd),
+					},
+					DNS:     app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
+					Service: route.Service,
+					Domains: route.Domains,
+				})
+				if rerr := render.HandleDeleteResult(err, resolveOutput(cmd)); rerr != nil {
+					return rerr
+				}
+			}
+			return nil
 		},
 	}
 	addComputeProviderFlags(cmd)

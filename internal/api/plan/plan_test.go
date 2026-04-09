@@ -85,8 +85,8 @@ func TestPlan_PhaseOrder(t *testing.T) {
 		StepSecretSet, StepSecretSet, // POSTGRES_PASSWORD, RAILS_MASTER_KEY (sorted)
 		StepStorageSet,                                                 // assets
 		StepServiceSet, StepServiceSet, StepServiceSet, StepServiceSet, // db, jobs, meilisearch, web (sorted)
-		StepDNSSet,       // web
-		StepIngressApply, // single caddy deploy
+		StepDNSSet,     // web
+		StepIngressSet, // single caddy deploy
 	}
 
 	if len(kinds) != len(phases) {
@@ -119,7 +119,7 @@ func TestPlan_IngressConfigProvidedTLSResolvedFromEnv(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 
-	ingress := findStep(steps, StepIngressApply, "ingress")
+	ingress := findStep(steps, StepIngressSet, "web")
 	if ingress == nil {
 		t.Fatal("expected ingress.apply step")
 	}
@@ -157,7 +157,7 @@ func TestPlan_EdgeOverlayCarriesProviderAndProxyToIngressAndDNS(t *testing.T) {
 		t.Fatalf("expected proxied dns.set, got %+v", dns)
 	}
 
-	ingress := findStep(steps, StepIngressApply, "ingress")
+	ingress := findStep(steps, StepIngressSet, "web")
 	if ingress == nil {
 		t.Fatal("expected ingress.apply step")
 	}
@@ -482,9 +482,9 @@ func TestPlan_DNSRemoved(t *testing.T) {
 	domains := toStringSlice(s.Params["domains"])
 	assertContains(t, domains, "final.nvoi.to")
 
-	ingress := findStep(steps, StepIngressApply, "ingress")
+	ingress := findStep(steps, StepIngressDelete, "web")
 	if ingress == nil {
-		t.Fatal("expected ingress.apply before dns.delete for domain removal")
+		t.Fatal("expected ingress.delete before dns.delete for domain removal")
 	}
 }
 
@@ -508,7 +508,7 @@ func TestPlan_DNSPartialRemoval(t *testing.T) {
 	ingressIdx := -1
 	dnsIdx := -1
 	for i, step := range steps {
-		if step.Kind == StepIngressApply && ingressIdx == -1 {
+		if step.Kind == StepIngressSet && ingressIdx == -1 {
 			ingressIdx = i
 		}
 		if step.Kind == StepDNSDelete && step.Name == "web" {
@@ -535,7 +535,7 @@ func TestPlan_DNSPartialAdditionDoesNotEmitDelete(t *testing.T) {
 		t.Fatalf("did not expect dns.delete for domain addition, got %+v", *s)
 	}
 
-	ingress := findStep(steps, StepIngressApply, "ingress")
+	ingress := findStep(steps, StepIngressSet, "web")
 	if ingress == nil {
 		t.Fatal("expected ingress.apply for domain addition")
 	}
@@ -643,9 +643,9 @@ func TestPlan_EmptyConfigDeletesAll(t *testing.T) {
 		t.Fatal("empty config against full prev should produce delete steps")
 	}
 
-	// Empty desired config still needs ingress reconciliation before guarded DNS delete.
+	// Empty desired config should produce only deletes.
 	for _, s := range steps {
-		if s.Kind != StepIngressApply && !isDelete(s.Kind) {
+		if !isDelete(s.Kind) && s.Kind != StepIngressDelete {
 			t.Errorf("empty config should only produce deletes, got %s %s", s.Kind, s.Name)
 		}
 	}
@@ -675,9 +675,9 @@ func TestPlan_EmptyConfigDeletesAll(t *testing.T) {
 		t.Errorf("compute deletes = %d, want 2", kinds[StepComputeDelete])
 	}
 
-	// Verify guarded order: ingress first, dns second, compute last.
-	if steps[0].Kind != StepIngressApply {
-		t.Errorf("first step = %s, want ingress.apply", steps[0].Kind)
+	// Verify guarded order: ingress delete first, dns delete second, compute last.
+	if steps[0].Kind != StepIngressDelete {
+		t.Errorf("first step = %s, want ingress.delete", steps[0].Kind)
 	}
 	if steps[1].Kind != StepDNSDelete {
 		t.Errorf("second step = %s, want dns.delete", steps[1].Kind)
@@ -701,7 +701,7 @@ func TestPlan_DomainRemovalOrdersIngressBeforeDNS(t *testing.T) {
 	ingressIdx := -1
 	dnsIdx := -1
 	for i, s := range steps {
-		if s.Kind == StepIngressApply && ingressIdx == -1 {
+		if s.Kind == StepIngressDelete && ingressIdx == -1 {
 			ingressIdx = i
 		}
 		if s.Kind == StepDNSDelete && s.Name == "web" {
@@ -709,13 +709,13 @@ func TestPlan_DomainRemovalOrdersIngressBeforeDNS(t *testing.T) {
 		}
 	}
 	if ingressIdx == -1 {
-		t.Fatal("expected ingress.apply step")
+		t.Fatal("expected ingress.delete step")
 	}
 	if dnsIdx == -1 {
 		t.Fatal("expected dns.delete step")
 	}
 	if ingressIdx >= dnsIdx {
-		t.Fatalf("ingress.apply at %d should come before dns.delete at %d", ingressIdx, dnsIdx)
+		t.Fatalf("ingress.delete at %d should come before dns.delete at %d", ingressIdx, dnsIdx)
 	}
 }
 

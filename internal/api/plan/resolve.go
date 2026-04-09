@@ -307,7 +307,7 @@ func mergeSteps(nonManaged, managedDeletes, managedSets []Step) []Step {
 	// Insert managed deletes after ingress/dns deletes but before other deletes.
 	deleteAnchor := len(deletePhase)
 	for i, step := range deletePhase {
-		if step.Kind != StepIngressApply && step.Kind != StepDNSDelete {
+		if step.Kind != StepIngressDelete && step.Kind != StepIngressSet && step.Kind != StepDNSDelete {
 			deleteAnchor = i
 			break
 		}
@@ -316,7 +316,7 @@ func mergeSteps(nonManaged, managedDeletes, managedSets []Step) []Step {
 	// Insert managed sets before the first non-infra set step.
 	setAnchor := len(setPhase)
 	for i, step := range setPhase {
-		if step.Kind == StepSecretSet || step.Kind == StepStorageSet || step.Kind == StepServiceSet || step.Kind == StepDNSSet || step.Kind == StepIngressApply {
+		if step.Kind == StepSecretSet || step.Kind == StepStorageSet || step.Kind == StepServiceSet || step.Kind == StepDNSSet || step.Kind == StepIngressSet {
 			setAnchor = i
 			break
 		}

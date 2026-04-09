@@ -14,22 +14,23 @@ func newIngressCmd() *cobra.Command {
 		Use:   "ingress",
 		Short: "Manage Caddy ingress",
 	}
-	cmd.AddCommand(newIngressApplyCmd())
+	cmd.AddCommand(newIngressSetCmd())
 	cmd.AddCommand(newIngressDeleteCmd())
 	return cmd
 }
 
-func newIngressApplyCmd() *cobra.Command {
+func newIngressSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "apply [service:domain,domain ...]",
-		Short: "Deploy Caddy with all specified routes in a single rollout",
-		Long: `Builds the Caddyfile from service:domain mappings and deploys Caddy once.
+		Use:   "set service:domain,domain",
+		Short: "Add or update a single ingress route",
+		Long: `Adds or updates an ingress route for a service. Reads the current Caddyfile,
+merges the new route, and redeploys Caddy.
 
 Examples:
-  nvoi ingress apply web:example.com api:api.example.com
-  nvoi ingress apply web:example.com --cert cert.pem --key key.pem
-  nvoi ingress apply web:example.com --cloudflare-managed`,
-		Args: cobra.MinimumNArgs(1),
+  nvoi ingress set web:example.com
+  nvoi ingress set web:example.com,www.example.com --cloudflare-managed
+  nvoi ingress set web:example.com --cert cert.pem --key key.pem`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			appName, env, err := resolveAppEnv(cmd)
 			if err != nil {
@@ -52,6 +53,7 @@ Examples:
 			if err != nil {
 				return err
 			}
+			route := routes[0]
 
 			certPath, _ := cmd.Flags().GetString("cert")
 			keyPath, _ := cmd.Flags().GetString("key")
@@ -61,7 +63,6 @@ Examples:
 
 			// Resolve cert + key (BYO cert only — auto-generation handled by pkg/core)
 			var certPEM, keyPEM string
-
 			if certPath != "" && keyPath != "" {
 				certData, err := os.ReadFile(certPath)
 				if err != nil {
@@ -77,19 +78,17 @@ Examples:
 				return fmt.Errorf("--cert and --key must both be provided")
 			}
 
-			// Resolve DNS provider ref — needed for overlay TLS helpers when explicitly used.
+			// Resolve DNS provider ref.
 			dnsProviderName, _ := resolveDNSProvider(cmd)
 			var dnsCreds map[string]string
 			if dnsProviderName != "" {
 				dnsCreds, _ = resolveDNSCredentials(cmd, dnsProviderName)
 			}
 			if cloudflareManaged {
-				for i := range routes {
-					routes[i].EdgeProxied = true
-				}
+				route.EdgeProxied = true
 			}
 
-			err = app.IngressApply(cmd.Context(), app.IngressApplyRequest{
+			return app.IngressSet(cmd.Context(), app.IngressSetRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -99,13 +98,11 @@ Examples:
 					Output:      out,
 				},
 				DNS:          app.ProviderRef{Name: dnsProviderName, Creds: dnsCreds},
-				Routes:       routes,
-				TLSMode:      resolveIngressTLSMode(cloudflareManaged, certPEM, keyPEM),
-				EdgeProvider: resolveIngressEdgeProvider(cloudflareManaged),
+				Route:        route,
+				EdgeProvider: resolveEdgeProvider(cloudflareManaged),
 				CertPEM:      certPEM,
 				KeyPEM:       keyPEM,
 			})
-			return err
 		},
 	}
 	addComputeProviderFlags(cmd)
@@ -117,17 +114,7 @@ Examples:
 	return cmd
 }
 
-func resolveIngressTLSMode(cloudflareManaged bool, certPEM, keyPEM string) string {
-	if certPEM != "" || keyPEM != "" {
-		return "provided"
-	}
-	if cloudflareManaged {
-		return "edge_origin"
-	}
-	return "acme"
-}
-
-func resolveIngressEdgeProvider(cloudflareManaged bool) string {
+func resolveEdgeProvider(cloudflareManaged bool) string {
 	if cloudflareManaged {
 		return "cloudflare"
 	}
@@ -136,14 +123,22 @@ func resolveIngressEdgeProvider(cloudflareManaged bool) string {
 
 func newIngressDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete",
-		Short: "Remove Caddy ingress",
-		Args:  cobra.NoArgs,
+		Use:   "delete service:domain,domain",
+		Short: "Remove a single ingress route",
+		Long: `Removes an ingress route for a service. Reads the current Caddyfile,
+removes the route, and redeploys Caddy with remaining routes.
+
+Use --cloudflare-managed to also revoke the Origin CA certificate at Cloudflare.
+
+Examples:
+  nvoi ingress delete web:example.com -y
+  nvoi ingress delete web:example.com --cloudflare-managed -y`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			yes, _ := cmd.Flags().GetBool("yes")
 
 			if !yes {
-				fmt.Printf("Delete ingress? [y/N] ")
+				fmt.Printf("Delete ingress route %s? [y/N] ", args[0])
 				var confirm string
 				fmt.Scanln(&confirm)
 				if confirm != "y" && confirm != "yes" {
@@ -169,7 +164,24 @@ func newIngressDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			err = app.IngressApply(cmd.Context(), app.IngressApplyRequest{
+			routes, err := app.ParseIngressArgs(args)
+			if err != nil {
+				return err
+			}
+			route := routes[0]
+
+			cloudflareManaged, _ := cmd.Flags().GetBool("cloudflare-managed")
+
+			var dnsProviderName string
+			var dnsCreds map[string]string
+			if cloudflareManaged {
+				dnsProviderName, _ = resolveDNSProvider(cmd)
+				if dnsProviderName != "" {
+					dnsCreds, _ = resolveDNSCredentials(cmd, dnsProviderName)
+				}
+			}
+
+			err = app.IngressDelete(cmd.Context(), app.IngressDeleteRequest{
 				Cluster: app.Cluster{
 					AppName:     appName,
 					Env:         env,
@@ -178,13 +190,16 @@ func newIngressDeleteCmd() *cobra.Command {
 					SSHKey:      sshKey,
 					Output:      resolveOutput(cmd),
 				},
-				Routes: nil,
+				DNS:   app.ProviderRef{Name: dnsProviderName, Creds: dnsCreds},
+				Route: route,
 			})
 			return render.HandleDeleteResult(err, resolveOutput(cmd))
 		},
 	}
 	addComputeProviderFlags(cmd)
+	addDNSProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().BoolP("yes", "y", false, "skip confirmation")
+	cmd.Flags().Bool("cloudflare-managed", false, "revoke Cloudflare Origin CA cert on delete")
 	return cmd
 }

@@ -83,8 +83,8 @@ func TestDeploy_CreatesDeploymentWithSteps(t *testing.T) {
 		t.Errorf("first step = %s, want instance.set", first.Kind)
 	}
 	last := deployment.Steps[len(deployment.Steps)-1]
-	if last.Kind != "ingress.apply" {
-		t.Errorf("last step = %s, want ingress.apply", last.Kind)
+	if last.Kind != "ingress.set" {
+		t.Errorf("last step = %s, want ingress.set", last.Kind)
 	}
 
 	// All steps should be pending.

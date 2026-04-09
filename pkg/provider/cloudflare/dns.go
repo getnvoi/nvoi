@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -12,20 +13,23 @@ import (
 // DNSClient manages A/AAAA records via the Cloudflare API.
 type DNSClient struct {
 	api    *utils.HTTPClient
+	apiKey string
 	zoneID string
 	zone   string // domain name for FQDN construction
 }
 
 // NewDNS creates a Cloudflare DNS provider.
 func NewDNS(creds map[string]string) *DNSClient {
+	apiKey := creds["api_key"]
 	return &DNSClient{
 		api: &utils.HTTPClient{
 			BaseURL: cfBaseURL,
 			SetAuth: func(r *http.Request) {
-				r.Header.Set("Authorization", "Bearer "+creds["api_key"])
+				r.Header.Set("Authorization", "Bearer "+apiKey)
 			},
 			Label: "cloudflare dns",
 		},
+		apiKey: apiKey,
 		zoneID: creds["zone_id"],
 		zone:   creds["zone"],
 	}
@@ -147,11 +151,25 @@ func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup
 	if err != nil {
 		return nil, err
 	}
-	g := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "IP"}}
+	dnsGroup := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "IP"}}
 	for _, r := range records {
-		g.Rows = append(g.Rows, []string{r.Type, r.Domain, r.IP})
+		dnsGroup.Rows = append(dnsGroup.Rows, []string{r.Type, r.Domain, r.IP})
 	}
-	return []provider.ResourceGroup{g}, nil
+
+	groups := []provider.ResourceGroup{dnsGroup}
+
+	// Origin CA certificates — listed by zone, shows what certs exist at Cloudflare.
+	ca := NewOriginCA(d.apiKey)
+	certs, err := ca.ListCerts(ctx, d.zoneID)
+	if err == nil && len(certs) > 0 {
+		certGroup := provider.ResourceGroup{Name: "Origin CA Certificates", Columns: []string{"ID", "Hostnames", "Expires"}}
+		for _, c := range certs {
+			certGroup.Rows = append(certGroup.Rows, []string{c.ID, strings.Join(c.Hostnames, ", "), c.ExpiresOn})
+		}
+		groups = append(groups, certGroup)
+	}
+
+	return groups, nil
 }
 
 var _ provider.DNSProvider = (*DNSClient)(nil)

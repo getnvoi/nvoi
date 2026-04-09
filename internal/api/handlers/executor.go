@@ -296,19 +296,31 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 			EdgeProxied: utils.GetBool(params, "edge_proxied"),
 		})
 
-	case plan.StepIngressApply:
-		routes, err := parseIngressRoutesFromParams(params)
-		if err != nil {
-			return err
+	case plan.StepIngressSet:
+		route := pkgcore.IngressRouteArg{
+			Service: utils.GetString(params, "service"),
+			Domains: utils.GetStringSlice(params, "domains"),
 		}
-		return pkgcore.IngressApply(ctx, pkgcore.IngressApplyRequest{
+		if utils.GetString(params, "exposure") == "edge_proxied" {
+			route.EdgeProxied = true
+		}
+		return pkgcore.IngressSet(ctx, pkgcore.IngressSetRequest{
 			Cluster:      e.cluster,
 			DNS:          e.dns,
-			Routes:       routes,
-			TLSMode:      utils.GetString(params, "tls_mode"),
+			Route:        route,
 			EdgeProvider: utils.GetString(params, "edge_provider"),
 			CertPEM:      utils.GetString(params, "cert_pem"),
 			KeyPEM:       utils.GetString(params, "key_pem"),
+		})
+
+	case plan.StepIngressDelete:
+		return pkgcore.IngressDelete(ctx, pkgcore.IngressDeleteRequest{
+			Cluster: e.cluster,
+			DNS:     e.dns,
+			Route: pkgcore.IngressRouteArg{
+				Service: utils.GetString(params, "service"),
+				Domains: utils.GetStringSlice(params, "domains"),
+			},
 		})
 
 	case plan.StepDNSDelete:
@@ -360,36 +372,6 @@ func parseFirewallFromParams(ctx context.Context, params map[string]any) (provid
 	}
 
 	return provider.ResolveFirewallArgs(ctx, args)
-}
-
-// parseIngressRoutesFromParams extracts routes from step params.
-func parseIngressRoutesFromParams(params map[string]any) ([]pkgcore.IngressRouteArg, error) {
-	routesRaw, ok := params["routes"]
-	if !ok {
-		return nil, fmt.Errorf("ingress.apply: missing routes param")
-	}
-	routesList, ok := routesRaw.([]any)
-	if !ok {
-		return nil, fmt.Errorf("ingress.apply: routes must be a list")
-	}
-	edgeProxied := utils.GetString(params, "exposure") == "edge_proxied"
-	var routes []pkgcore.IngressRouteArg
-	for _, item := range routesList {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		svc := utils.GetString(m, "service")
-		domains := utils.GetStringSlice(m, "domains")
-		if svc != "" && len(domains) > 0 {
-			routes = append(routes, pkgcore.IngressRouteArg{
-				Service:     svc,
-				Domains:     domains,
-				EdgeProxied: edgeProxied,
-			})
-		}
-	}
-	return routes, nil
 }
 
 // ── status helpers ─────────────────────────────────────────────────────────────

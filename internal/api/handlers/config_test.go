@@ -272,10 +272,10 @@ func TestConfig_Plan(t *testing.T) {
 	if resp.Steps[0].Kind != "instance.set" {
 		t.Errorf("first step = %s, want instance.set", resp.Steps[0].Kind)
 	}
-	// Last step should be ingress.apply.
+	// Last step should be ingress.set.
 	last := resp.Steps[len(resp.Steps)-1]
-	if last.Kind != "ingress.apply" {
-		t.Errorf("last step = %s, want ingress.apply", last.Kind)
+	if last.Kind != "ingress.set" {
+		t.Errorf("last step = %s, want ingress.set", last.Kind)
 	}
 }
 

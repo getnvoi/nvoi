@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -34,8 +35,17 @@ func NewOriginCA(apiKey string) *OriginCAClient {
 
 // OriginCert holds a PEM-encoded certificate and private key.
 type OriginCert struct {
+	ID          string // Cloudflare cert ID — needed for revocation
 	Certificate string // PEM
 	PrivateKey  string // PEM
+}
+
+// cfOriginCert is the Cloudflare API representation of an Origin CA certificate.
+type cfOriginCert struct {
+	ID          string   `json:"id"`
+	Hostnames   []string `json:"hostnames"`
+	ExpiresOn   string   `json:"expires_on"`
+	Certificate string   `json:"certificate"`
 }
 
 // CreateCert generates a new Origin CA certificate for the given hostnames.
@@ -61,6 +71,7 @@ func (c *OriginCAClient) CreateCert(ctx context.Context, hostnames []string) (*O
 	// Request cert from Cloudflare Origin CA
 	var resp struct {
 		Result struct {
+			ID          string `json:"id"`
 			Certificate string `json:"certificate"`
 		} `json:"result"`
 	}
@@ -82,7 +93,61 @@ func (c *OriginCAClient) CreateCert(ctx context.Context, hostnames []string) (*O
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
 
 	return &OriginCert{
+		ID:          resp.Result.ID,
 		Certificate: resp.Result.Certificate,
 		PrivateKey:  string(keyPEM),
 	}, nil
+}
+
+// ListCerts returns all Origin CA certificates for the given zone.
+func (c *OriginCAClient) ListCerts(ctx context.Context, zoneID string) ([]cfOriginCert, error) {
+	var resp struct {
+		Result []cfOriginCert `json:"result"`
+	}
+	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/certificates?zone_id=%s", zoneID), nil, &resp); err != nil {
+		return nil, fmt.Errorf("list origin certs: %w", err)
+	}
+	return resp.Result, nil
+}
+
+// FindCertByHostnames looks up an existing Origin CA cert matching the exact hostname set.
+// Returns nil if no match — caller should create a new cert.
+func (c *OriginCAClient) FindCertByHostnames(ctx context.Context, zoneID string, hostnames []string) (*cfOriginCert, error) {
+	certs, err := c.ListCerts(ctx, zoneID)
+	if err != nil {
+		return nil, err
+	}
+	want := append([]string(nil), hostnames...)
+	sort.Strings(want)
+	for _, cert := range certs {
+		got := append([]string(nil), cert.Hostnames...)
+		sort.Strings(got)
+		if len(got) != len(want) {
+			continue
+		}
+		match := true
+		for i := range got {
+			if got[i] != want[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return &cert, nil
+		}
+	}
+	return nil, nil
+}
+
+// RevokeCert revokes an Origin CA certificate by ID.
+// Idempotent — returns nil if the cert is already revoked (404).
+func (c *OriginCAClient) RevokeCert(ctx context.Context, certID string) error {
+	err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/certificates/%s", certID), nil, nil)
+	if err != nil {
+		if utils.IsNotFound(err) {
+			return nil // already revoked
+		}
+		return fmt.Errorf("revoke origin cert: %w", err)
+	}
+	return nil
 }
