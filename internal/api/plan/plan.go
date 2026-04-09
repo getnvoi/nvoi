@@ -28,6 +28,8 @@ const (
 	StepStorageDelete StepKind = "storage.delete"
 	StepServiceSet    StepKind = "service.set"
 	StepServiceDelete StepKind = "service.delete"
+	StepCronSet       StepKind = "cron.set"
+	StepCronDelete    StepKind = "cron.delete"
 	StepDNSSet        StepKind = "dns.set"
 	StepDNSDelete     StepKind = "dns.delete"
 	StepIngressApply  StepKind = "ingress.apply"

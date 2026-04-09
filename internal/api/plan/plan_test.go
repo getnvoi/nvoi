@@ -230,6 +230,15 @@ func TestPlan_BuildParams(t *testing.T) {
 	}
 }
 
+func TestStepKinds_IncludeCron(t *testing.T) {
+	if StepCronSet != "cron.set" {
+		t.Fatalf("StepCronSet = %q", StepCronSet)
+	}
+	if StepCronDelete != "cron.delete" {
+		t.Fatalf("StepCronDelete = %q", StepCronDelete)
+	}
+}
+
 func TestPlan_SecretsDeduplicated(t *testing.T) {
 	steps, err := Build(nil, hetznerConfig(), hetznerEnv())
 	if err != nil {

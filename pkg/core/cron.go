@@ -13,27 +13,27 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-type ServiceSetRequest struct {
+type CronSetRequest struct {
 	Cluster
-	Name        string
-	Image       string
-	Port        int
-	Command     string
-	Replicas    int
-	EnvVars     []string // KEY=VALUE pairs
-	Secrets     []string // secret key references (must exist in cluster)
-	Storages    []string // storage names → expands to STORAGE_{NAME}_* secret refs
-	Volumes     []string // name:/path
-	HealthPath  string
-	Server      string
-	ManagedKind string // set by managed bundles for discovery (e.g. "postgres", "claude")
+	Name     string
+	Image    string
+	Command  string
+	EnvVars  []string
+	Secrets  []string
+	Storages []string
+	Volumes  []string
+	Schedule string
+	Server   string
 }
 
-func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
+func CronSet(ctx context.Context, req CronSetRequest) error {
 	out := req.Log()
 
 	if req.Image == "" {
 		return fmt.Errorf("--image is required")
+	}
+	if err := validateCronSchedule(req.Schedule); err != nil {
+		return err
 	}
 
 	master, names, prov, err := req.Cluster.Master(ctx)
@@ -59,9 +59,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return err
 	}
 
-	// Resolve volumes — named volumes must exist as provider volumes
 	managedVolPaths := map[string]string{}
-	managed := false
 	vols, _ := prov.ListVolumes(ctx, names.Labels())
 	for _, mount := range req.Volumes {
 		source, _, named, ok := utils.ParseVolumeMount(mount)
@@ -74,18 +72,16 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 			for _, v := range vols {
 				if v.Name == volName {
 					managedVolPaths[source] = names.VolumeMountPath(source)
-					managed = true
 					found = true
 					break
 				}
 			}
 			if !found {
-				return fmt.Errorf("volume %q not found — run 'volume set %s' first", source, source)
+				return fmt.Errorf("volume %q not found", source)
 			}
 		}
 	}
 
-	// Parse env vars
 	var env []corev1.EnvVar
 	for _, e := range req.EnvVars {
 		k, v, ok := strings.Cut(e, "=")
@@ -95,14 +91,12 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}
 
-	// Expand --storage names into secret refs
 	for _, storageName := range req.Storages {
 		for _, key := range StorageSecretKeys(storageName) {
 			req.Secrets = append(req.Secrets, key)
 		}
 	}
 
-	// Validate secret references
 	secretName := names.KubeSecrets()
 	if len(req.Secrets) > 0 {
 		existing, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
@@ -124,45 +118,36 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		}
 	}
 
-	spec := kube.ServiceSpec{
-		Name:        req.Name,
-		Image:       req.Image,
-		Port:        req.Port,
-		Command:     req.Command,
-		Replicas:    req.Replicas,
-		Env:         env,
-		Secrets:     req.Secrets,
-		SecretName:  secretName,
-		Volumes:     req.Volumes,
-		HealthPath:  req.HealthPath,
-		Server:      req.Server,
-		Managed:     managed,
-		ManagedKind: req.ManagedKind,
-	}
-
-	out.Command("service", "set", req.Name)
-
-	yaml, _, err := kube.GenerateYAML(spec, names, managedVolPaths)
+	out.Command("cron", "set", req.Name)
+	yaml, err := kube.GenerateCronYAML(kube.CronSpec{
+		Name:       req.Name,
+		Schedule:   req.Schedule,
+		Image:      req.Image,
+		Command:    req.Command,
+		Env:        env,
+		Secrets:    req.Secrets,
+		SecretName: secretName,
+		Volumes:    req.Volumes,
+		Server:     req.Server,
+	}, names, managedVolPaths)
 	if err != nil {
 		return fmt.Errorf("generate manifest: %w", err)
 	}
-
 	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
 		return err
 	}
 	out.Success("applied")
-
 	return nil
 }
 
-type ServiceDeleteRequest struct {
+type CronDeleteRequest struct {
 	Cluster
 	Name string
 }
 
-func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
+func CronDelete(ctx context.Context, req CronDeleteRequest) error {
 	out := req.Log()
-	out.Command("service", "delete", req.Name)
+	out.Command("cron", "delete", req.Name)
 
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if errors.Is(err, ErrNoMaster) {
@@ -173,28 +158,24 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	}
 	defer ssh.Close()
 
-	if err := ensureServiceDeleteAllowed(ctx, ssh, names.KubeNamespace(), names.KubeCaddyConfig(), req.Name); err != nil {
-		return err
-	}
-
-	return kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name)
+	return kube.DeleteCronByName(ctx, ssh, names.KubeNamespace(), req.Name)
 }
 
-func ensureServiceDeleteAllowed(ctx context.Context, ssh utils.SSHClient, ns, caddyConfig, service string) error {
-	routes, err := kube.GetIngressRoutes(ctx, ssh, ns, caddyConfig)
-	if err != nil {
-		return fmt.Errorf("service delete guard: inspect ingress: %w", err)
+func validateCronSchedule(schedule string) error {
+	schedule = strings.TrimSpace(schedule)
+	if schedule == "" {
+		return fmt.Errorf("--schedule is required")
 	}
-
-	for _, route := range routes {
-		if route.Service == service {
-			return fmt.Errorf(
-				"service delete blocked: ingress still targets %q (%s) — remove or reconcile ingress first",
-				service,
-				strings.Join(route.Domains, ", "),
-			)
+	if strings.HasPrefix(schedule, "@") {
+		switch schedule {
+		case "@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight", "@hourly":
+			return nil
+		default:
+			return fmt.Errorf("invalid cron schedule %q", schedule)
 		}
 	}
-
+	if len(strings.Fields(schedule)) != 5 {
+		return fmt.Errorf("invalid cron schedule %q", schedule)
+	}
 	return nil
 }

@@ -6,6 +6,10 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/plan"
+	"github.com/getnvoi/nvoi/internal/testutil"
+	pkgcore "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"gorm.io/gorm"
 
 	// Providers must be registered for newExecutor to map credentials.
@@ -15,6 +19,28 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
 )
+
+func init() {
+	provider.RegisterCompute("handlers-test", provider.CredentialSchema{Name: "handlers-test"}, func(creds map[string]string) provider.ComputeProvider {
+		return &testutil.MockCompute{
+			Servers: []*provider.Server{{
+				ID: "1", Name: "nvoi-myapp-prod-master", Status: "running",
+				IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
+			}},
+		}
+	})
+}
+
+func testExecutorCluster(ssh *testutil.MockSSH) pkgcore.Cluster {
+	return pkgcore.Cluster{
+		AppName: "myapp", Env: "prod",
+		Provider: "handlers-test", Credentials: map[string]string{},
+		Output: &testutil.MockOutput{},
+		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+			return ssh, nil
+		},
+	}
+}
 
 func TestNewExecutor_BuildsFromParams(t *testing.T) {
 	db := api.TestDB()
@@ -92,6 +118,43 @@ func TestExecutor_StepUnknownKind(t *testing.T) {
 	}
 	if err.Error() != "unknown step kind: bogus.step" {
 		t.Errorf("error = %q", err)
+	}
+}
+
+func TestExecutor_StepCronSet(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "create namespace", Result: testutil.MockResult{}},
+			{Prefix: "replace -f", Result: testutil.MockResult{Output: []byte("not found"), Err: context.DeadlineExceeded}},
+			{Prefix: "apply --server-side --force-conflicts -f", Result: testutil.MockResult{}},
+		},
+	}
+	e := &executor{
+		cluster:     testExecutorCluster(mock),
+		builtImages: map[string]string{},
+	}
+	err := e.step(context.Background(), plan.StepCronSet, "backup", map[string]any{
+		"image":    "busybox:latest",
+		"schedule": "0 1 * * *",
+	})
+	if err != nil {
+		t.Fatalf("cron.set dispatch: %v", err)
+	}
+}
+
+func TestExecutor_StepCronDelete(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "delete cronjob/backup --ignore-not-found", Result: testutil.MockResult{}},
+		},
+	}
+	e := &executor{
+		cluster:     testExecutorCluster(mock),
+		builtImages: map[string]string{},
+	}
+	err := e.step(context.Background(), plan.StepCronDelete, "backup", map[string]any{})
+	if err != nil {
+		t.Fatalf("cron.delete dispatch: %v", err)
 	}
 }
 

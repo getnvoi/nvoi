@@ -27,6 +27,8 @@ domains:
   web: example.com
 `
 
+const deployEnv = "POSTGRES_PASSWORD=s3cret\n"
+
 func TestDeploy_CreatesDeploymentWithSteps(t *testing.T) {
 	r, db := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
@@ -37,6 +39,7 @@ func TestDeploy_CreatesDeploymentWithSteps(t *testing.T) {
 		"compute_provider": "hetzner",
 		"dns_provider":     "cloudflare",
 		"config":           deployYAML,
+		"env":              deployEnv,
 	}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
@@ -118,7 +121,7 @@ func TestDeploy_GetDeployment(t *testing.T) {
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
 	// Push + deploy.
-	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML, "env": deployEnv}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -157,7 +160,7 @@ func TestDeploy_ListDeployments(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML, "env": deployEnv}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -188,7 +191,7 @@ func TestDeploy_NoInfra_OnlySetSteps(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML, "env": deployEnv}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -217,12 +220,112 @@ func TestDeploy_NoInfra_OnlySetSteps(t *testing.T) {
 	}
 }
 
+func TestDeploy_ManagedPostgresAddsOwnedSteps(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	body := map[string]any{
+		"compute_provider": "hetzner",
+		"dns_provider":     "cloudflare",
+		"config":           deployYAML,
+		"env":              deployEnv,
+	}
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("push config: status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deploy", nil, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("deploy: status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var deployment struct {
+		Steps []struct {
+			Kind string `json:"kind"`
+			Name string `json:"name"`
+		} `json:"steps"`
+	}
+	decode(t, w, &deployment)
+
+	counts := map[string]int{}
+	for _, step := range deployment.Steps {
+		counts[step.Kind+":"+step.Name]++
+	}
+
+	if counts["storage.set:db-backups"] != 1 {
+		t.Fatalf("storage.set:db-backups count = %d, want 1", counts["storage.set:db-backups"])
+	}
+	if counts["cron.set:db-backup"] != 1 {
+		t.Fatalf("cron.set:db-backup count = %d, want 1", counts["cron.set:db-backup"])
+	}
+	if counts["service.set:db"] != 1 {
+		t.Fatalf("service.set:db count = %d, want 1", counts["service.set:db"])
+	}
+	if counts["volume.set:db-data"] != 1 {
+		t.Fatalf("volume.set:db-data count = %d, want 1", counts["volume.set:db-data"])
+	}
+}
+
+func TestDeploy_ManagedRemovalDeletesOwnedSteps(t *testing.T) {
+	r, _ := testRouter(t, "octocat")
+	token, _, wsID := doLogin(t, r, "octocat")
+	repoID := createRepo(t, r, token, wsID, "my-app")
+
+	pushBody := map[string]any{
+		"compute_provider": "hetzner",
+		"dns_provider":     "cloudflare",
+		"config":           deployYAML,
+		"env":              deployEnv,
+	}
+	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", pushBody, token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("initial push: status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Push again without managed services — removal should produce only non-managed steps.
+	removeYAML := `
+servers:
+  master:
+    type: cx23
+    region: fsn1
+firewall: default
+services:
+  web:
+    image: nginx
+    port: 80
+domains:
+  web: example.com
+`
+	pushBody["config"] = removeYAML
+	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", pushBody, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("removal push: status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	req = authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/deploy", nil, token)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("removal deploy: status = %d, body: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDeploy_CrossUserIsolation(t *testing.T) {
 	rA, db := testRouter(t, "alice")
 	tokenA, _, wsA := doLogin(t, rA, "alice")
 	repoA := createRepo(t, rA, tokenA, wsA, "app")
 
-	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML, "env": deployEnv}
 	req := authRequest("POST", "/workspaces/"+wsA+"/repos/"+repoA+"/config", body, tokenA)
 	w := httptest.NewRecorder()
 	rA.ServeHTTP(w, req)
@@ -250,7 +353,7 @@ func TestRunDeployment_StartsPending(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML, "env": deployEnv}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -294,7 +397,7 @@ func TestRunDeployment_RejectsNonPending(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML, "env": deployEnv}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -323,7 +426,7 @@ func TestDeploy_LogsEndpoint(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML, "env": deployEnv}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -417,7 +520,7 @@ func TestDeploy_LogsEmpty(t *testing.T) {
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 
-	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML}
+	body := map[string]any{"compute_provider": "hetzner", "dns_provider": "cloudflare", "config": deployYAML, "env": deployEnv}
 	req := authRequest("POST", "/workspaces/"+wsID+"/repos/"+repoID+"/config", body, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

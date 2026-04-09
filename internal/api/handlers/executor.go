@@ -230,22 +230,59 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 		}
 
 		return pkgcore.ServiceSet(ctx, pkgcore.ServiceSetRequest{
-			Cluster:    e.cluster,
-			Name:       name,
-			Image:      image,
-			Port:       utils.GetInt(params, "port"),
-			Command:    utils.GetString(params, "command"),
-			Replicas:   utils.GetInt(params, "replicas"),
-			EnvVars:    utils.GetStringSlice(params, "env"),
-			Secrets:    utils.GetStringSlice(params, "secrets"),
-			Storages:   utils.GetStringSlice(params, "storage"),
-			Volumes:    utils.GetStringSlice(params, "volumes"),
-			HealthPath: utils.GetString(params, "health"),
-			Server:     utils.GetString(params, "server"),
+			Cluster:     e.cluster,
+			Name:        name,
+			Image:       image,
+			Port:        utils.GetInt(params, "port"),
+			Command:     utils.GetString(params, "command"),
+			Replicas:    utils.GetInt(params, "replicas"),
+			EnvVars:     utils.GetStringSlice(params, "env"),
+			Secrets:     utils.GetStringSlice(params, "secrets"),
+			Storages:    utils.GetStringSlice(params, "storage"),
+			Volumes:     utils.GetStringSlice(params, "volumes"),
+			HealthPath:  utils.GetString(params, "health"),
+			Server:      utils.GetString(params, "server"),
+			ManagedKind: utils.GetString(params, "managed_kind"),
 		})
 
 	case plan.StepServiceDelete:
 		return pkgcore.ServiceDelete(ctx, pkgcore.ServiceDeleteRequest{
+			Cluster: e.cluster,
+			Name:    name,
+		})
+
+	case plan.StepCronSet:
+		image := utils.GetString(params, "image")
+		if buildRef := utils.GetString(params, "build"); buildRef != "" {
+			if ref, ok := e.builtImages[buildRef]; ok {
+				image = ref
+			} else {
+				ref, err := pkgcore.BuildLatest(ctx, pkgcore.BuildLatestRequest{
+					Cluster: e.cluster,
+					Name:    buildRef,
+				})
+				if err != nil {
+					return fmt.Errorf("resolve image for build %q: %w", buildRef, err)
+				}
+				image = ref
+				e.builtImages[buildRef] = ref
+			}
+		}
+		return pkgcore.CronSet(ctx, pkgcore.CronSetRequest{
+			Cluster:  e.cluster,
+			Name:     name,
+			Image:    image,
+			Command:  utils.GetString(params, "command"),
+			EnvVars:  utils.GetStringSlice(params, "env"),
+			Secrets:  utils.GetStringSlice(params, "secrets"),
+			Storages: utils.GetStringSlice(params, "storage"),
+			Volumes:  utils.GetStringSlice(params, "volumes"),
+			Schedule: utils.GetString(params, "schedule"),
+			Server:   utils.GetString(params, "server"),
+		})
+
+	case plan.StepCronDelete:
+		return pkgcore.CronDelete(ctx, pkgcore.CronDeleteRequest{
 			Cluster: e.cluster,
 			Name:    name,
 		})

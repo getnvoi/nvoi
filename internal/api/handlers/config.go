@@ -2,13 +2,11 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
-	"github.com/getnvoi/nvoi/internal/api/managed"
 	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"gorm.io/gorm"
@@ -104,48 +102,19 @@ func PushConfig(db *gorm.DB) func(context.Context, *PushConfigInput) (*PushConfi
 			return nil, huma.Error400BadRequest("invalid yaml: " + err.Error())
 		}
 
-		// Load stored managed service credentials for this repo.
-		storedCreds := loadManagedCreds(db, repo.ID)
-
-		// Expand managed services (replace with real specs, inject creds, add volumes).
-		expanded, newCreds, err := managed.Expand(cfg, storedCreds)
+		env := config.ParseEnv(input.Body.Env)
+		resolved, err := plan.ResolveDeploymentSteps(cfg, nil, env)
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 
-		// Validate the expanded config (after managed services are resolved).
-		errs := config.Validate(expanded)
+		errs := config.Validate(resolved.Config)
 		if len(errs) > 0 {
 			msgs := make([]string, len(errs))
 			for i, e := range errs {
 				msgs[i] = e.Error()
 			}
 			return nil, huma.Error400BadRequest(strings.Join(msgs, "; "))
-		}
-
-		// Merge managed service credential secrets into env for plan validation.
-		env := config.ParseEnv(input.Body.Env)
-		for k, v := range managed.CredentialSecrets(mergeCreds(storedCreds, newCreds), cfg) {
-			env[k] = v
-		}
-
-		// Validate that the plan can be built (env references resolve).
-		if _, err := plan.Build(nil, expanded, env); err != nil {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-
-		// Persist new managed service credentials.
-		for name, creds := range newCreds {
-			svc := cfg.Services[name]
-			credsJSON, _ := json.Marshal(creds)
-			if err := db.Create(&api.RepoManagedServiceConfig{
-				RepoID:      repo.ID,
-				Name:        name,
-				Kind:        svc.Managed,
-				Credentials: string(credsJSON),
-			}).Error; err != nil {
-				return nil, huma.Error500InternalServerError("failed to save managed credentials")
-			}
 		}
 
 		// Next version number.
@@ -234,16 +203,7 @@ func PlanConfig(db *gorm.DB) func(context.Context, *PlanConfigInput) (*PlanConfi
 			return nil, huma.Error500InternalServerError("corrupt config: " + err.Error())
 		}
 
-		storedCreds := loadManagedCreds(db, repo.ID)
-		expanded, _, err := managed.Expand(cfg, storedCreds)
-		if err != nil {
-			return nil, huma.Error500InternalServerError("expand failed: " + err.Error())
-		}
-
 		env := config.ParseEnv(rc.Env)
-		for k, v := range managed.CredentialSecrets(storedCreds, cfg) {
-			env[k] = v
-		}
 
 		// Query reality — what's actually deployed.
 		creds, credErr := resolveAllCredentials(&rc, env)
@@ -262,42 +222,21 @@ func PlanConfig(db *gorm.DB) func(context.Context, *PlanConfigInput) (*PlanConfi
 			})
 		}
 
-		steps, err := plan.Build(reality, expanded, env)
+		resolved, err := plan.ResolveDeploymentSteps(cfg, reality, env)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("plan failed: " + err.Error())
 		}
 
 		return &PlanConfigOutput{Body: planResponseBody{
 			Version: rc.Version,
-			Steps:   steps,
+			Steps:   resolved.Steps,
 		}}, nil
 	}
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
-func loadManagedCreds(db *gorm.DB, repoID string) map[string]map[string]string {
-	var rows []api.RepoManagedServiceConfig
-	db.Where("repo_id = ?", repoID).Find(&rows)
-
-	creds := make(map[string]map[string]string, len(rows))
-	for _, row := range rows {
-		var m map[string]string
-		if err := json.Unmarshal([]byte(row.Credentials), &m); err != nil {
-			continue
-		}
-		creds[row.Name] = m
-	}
-	return creds
-}
-
-func mergeCreds(stored, newCreds map[string]map[string]string) map[string]map[string]string {
-	merged := make(map[string]map[string]string, len(stored)+len(newCreds))
-	for k, v := range stored {
-		merged[k] = v
-	}
-	for k, v := range newCreds {
-		merged[k] = v
-	}
-	return merged
+func stringParam(params map[string]any, key string) string {
+	v, _ := params[key].(string)
+	return v
 }

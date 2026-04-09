@@ -116,14 +116,15 @@ func CaddyfileStagingPath() string { return fmt.Sprintf("/home/%s/Caddyfile.k8s"
 // ── K8s label keys ─────────────────────────────────────────────────────────────
 
 const (
-	LabelAppName        = "app.kubernetes.io/name"
-	LabelAppManagedBy   = "app.kubernetes.io/managed-by"
-	LabelManagedBy      = "nvoi"
-	LabelNvoiService    = "nvoi/service"
-	LabelNvoiStack      = "nvoi/stack"
-	LabelNvoiRole       = "nvoi-role"
-	LabelConfigChecksum = "nvoi/config-checksum"
-	RoleMaster          = "master"
+	LabelAppName         = "app.kubernetes.io/name"
+	LabelAppManagedBy    = "app.kubernetes.io/managed-by"
+	LabelManagedBy       = "nvoi"
+	LabelNvoiService     = "nvoi/service"
+	LabelNvoiStack       = "nvoi/stack"
+	LabelNvoiRole        = "nvoi-role"
+	LabelNvoiManagedKind = "nvoi/managed-kind"
+	LabelConfigChecksum  = "nvoi/config-checksum"
+	RoleMaster           = "master"
 )
 
 // ── Storage env naming ─────────────────────────────────────────────────────────

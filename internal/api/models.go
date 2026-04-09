@@ -268,59 +268,6 @@ func (rc *RepoConfig) ValidateProviders() error {
 
 func (RepoConfig) TableName() string { return "repo_configs" }
 
-// ── RepoManagedServiceConfig (permanent credentials) ─────────────────────────
-
-// RepoManagedServiceConfig stores generated credentials for a managed service.
-// Created once when a managed service first appears in a config push.
-// Not versioned. Row exists = inject at deploy time. Row deleted = stop injecting.
-type RepoManagedServiceConfig struct {
-	ID          string    `gorm:"primaryKey" json:"id"`
-	RepoID      string    `gorm:"not null;uniqueIndex:idx_repo_managed_svc" json:"repo_id"`
-	Name        string    `gorm:"not null;uniqueIndex:idx_repo_managed_svc" json:"name"` // "db", "cache", "search"
-	Kind        string    `gorm:"not null" json:"kind"`                                  // "postgres", "redis", "meilisearch"
-	Credentials string    `gorm:"type:text;not null" json:"-"`                           // encrypted JSON
-	CreatedAt   time.Time `json:"created_at"`
-
-	Repo Repo `gorm:"foreignKey:RepoID" json:"-"`
-}
-
-func (RepoManagedServiceConfig) TableName() string { return "repo_managed_service_configs" }
-
-func (r *RepoManagedServiceConfig) BeforeCreate(tx *gorm.DB) error {
-	if r.ID == "" {
-		r.ID = newUUID()
-	}
-	return r.encryptCredentials()
-}
-
-func (r *RepoManagedServiceConfig) AfterFind(tx *gorm.DB) error {
-	return r.decryptCredentials()
-}
-
-func (r *RepoManagedServiceConfig) encryptCredentials() error {
-	if r.Credentials == "" {
-		return nil
-	}
-	enc, err := Encrypt(r.Credentials)
-	if err != nil {
-		return err
-	}
-	r.Credentials = enc
-	return nil
-}
-
-func (r *RepoManagedServiceConfig) decryptCredentials() error {
-	if r.Credentials == "" {
-		return nil
-	}
-	dec, err := Decrypt(r.Credentials)
-	if err != nil {
-		return fmt.Errorf("decrypt RepoManagedServiceConfig.Credentials: %w", err)
-	}
-	r.Credentials = dec
-	return nil
-}
-
 func (rc *RepoConfig) BeforeCreate(tx *gorm.DB) error {
 	if rc.ID == "" {
 		rc.ID = newUUID()

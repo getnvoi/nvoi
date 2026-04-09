@@ -7,7 +7,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/config"
-	"github.com/getnvoi/nvoi/internal/api/managed"
 	"github.com/getnvoi/nvoi/internal/api/plan"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"gorm.io/gorm"
@@ -76,16 +75,7 @@ func Deploy(db *gorm.DB) func(context.Context, *DeployInput) (*DeployOutput, err
 			return nil, huma.Error500InternalServerError("corrupt config: " + err.Error())
 		}
 
-		storedCreds := loadManagedCreds(db, repo.ID)
-		expanded, _, err := managed.Expand(cfg, storedCreds)
-		if err != nil {
-			return nil, huma.Error500InternalServerError("expand failed: " + err.Error())
-		}
-
 		env := config.ParseEnv(rc.Env)
-		for k, v := range managed.CredentialSecrets(storedCreds, cfg) {
-			env[k] = v
-		}
 
 		// Query reality — what's actually deployed.
 		creds, credErr := resolveAllCredentials(&rc, env)
@@ -104,7 +94,7 @@ func Deploy(db *gorm.DB) func(context.Context, *DeployInput) (*DeployOutput, err
 			})
 		}
 
-		steps, err := plan.Build(reality, expanded, env)
+		resolved, err := plan.ResolveDeploymentSteps(cfg, reality, env)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("plan failed: " + err.Error())
 		}
@@ -120,7 +110,7 @@ func Deploy(db *gorm.DB) func(context.Context, *DeployInput) (*DeployOutput, err
 				return err
 			}
 
-			for i, step := range steps {
+			for i, step := range resolved.Steps {
 				paramsJSON, _ := json.Marshal(step.Params)
 				if err := tx.Create(&api.DeploymentStep{
 					DeploymentID: deployment.ID,

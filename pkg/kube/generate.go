@@ -25,18 +25,19 @@ func ParseSecretRef(ref string) (envName, secretKey string) {
 
 // ServiceSpec describes a service to deploy.
 type ServiceSpec struct {
-	Name       string
-	Image      string
-	Port       int
-	Command    string
-	Replicas   int
-	Env        []corev1.EnvVar
-	Secrets    []string // secret key references → env.valueFrom.secretKeyRef
-	SecretName string   // k8s Secret name (from names.KubeSecrets())
-	Volumes    []string // "pgdata:/var/lib/postgresql/data"
-	HealthPath string
-	Server     string // node selector (empty = any)
-	Managed    bool   // true if any volume is provider-managed → StatefulSet
+	Name        string
+	Image       string
+	Port        int
+	Command     string
+	Replicas    int
+	Env         []corev1.EnvVar
+	Secrets     []string // secret key references → env.valueFrom.secretKeyRef
+	SecretName  string   // k8s Secret name (from names.KubeSecrets())
+	Volumes     []string // "pgdata:/var/lib/postgresql/data"
+	HealthPath  string
+	Server      string // node selector (empty = any)
+	Managed     bool   // true if any volume is provider-managed → StatefulSet
+	ManagedKind string // managed service kind for discovery label (empty for non-managed)
 }
 
 // GenerateYAML produces k8s YAML for a single service: workload + Service.
@@ -46,6 +47,9 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 		utils.LabelAppName:      spec.Name,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
 		utils.LabelNvoiService:  spec.Name,
+	}
+	if spec.ManagedKind != "" {
+		labels[utils.LabelNvoiManagedKind] = spec.ManagedKind
 	}
 
 	// Container
