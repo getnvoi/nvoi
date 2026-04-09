@@ -24,7 +24,8 @@ type IngressRoute struct {
 	UseTLSSecret bool // Render this site with mounted TLS material instead of ACME
 }
 
-const CaddyTLSSecretName = "caddy-origin-cert"
+// CaddyTLSSecretName is defined in pkg/utils/naming.go.
+var CaddyTLSSecretName = utils.CaddyTLSSecretName
 
 // ApplyCaddyConfig updates the ConfigMap and hot-reloads Caddy.
 // If Caddy isn't running yet, deploys it. Zero downtime for config changes.

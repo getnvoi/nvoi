@@ -125,6 +125,7 @@ const (
 	LabelNvoiManagedKind = "nvoi/managed-kind"
 	LabelConfigChecksum  = "nvoi/config-checksum"
 	RoleMaster           = "master"
+	CaddyTLSSecretName   = "caddy-origin-cert"
 )
 
 // ── Storage env naming ─────────────────────────────────────────────────────────
