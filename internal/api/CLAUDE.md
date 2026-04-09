@@ -161,32 +161,29 @@ Convention parsed by `kube.ParseSecretRef()` — shared by YAML generation (`pkg
 
 Managed services are compiled by `pkg/managed` — a pure, shared compiler that produces deterministic bundles of primitive operations. The API resolves these bundles into deployment steps via `plan.ResolveDeploymentSteps()`.
 
-Supported managed kinds: `postgres`, `agent`. Each is one file in `pkg/managed/` with a `Compile()` method that returns a `Bundle` containing owned children, secrets, volumes, storages, crons, services, and ordered operations.
+Supported managed kinds: `postgres` (category: database), `claude` (category: agent). Each is one file in `pkg/managed/` with a `Compile()` method that returns a `Bundle` containing owned children, secrets, volumes, services, and ordered operations.
 
-### Credential lifecycle
+### Credential model
 
-1. First config push with `managed: postgres` for `db` → `pkg/managed.Compile()` generates random password → stored in `repo_managed_service_configs` (encrypted)
-2. Every subsequent push → stored credentials loaded and passed to compiler → same password forever
-3. Managed root removed from config → owned delete steps generated from persisted state → row cleaned up after successful deployment
+Credentials are required input — no generation, no persistence. The user provides them in the env pushed with the config (`POSTGRES_PASSWORD`, `POSTGRES_USER`, `POSTGRES_DB` for postgres; `NVOI_AGENT_TOKEN` for claude). Missing credential = hard error at push time.
 
 ### Secret namespacing
 
 Multiple instances of the same kind get unique secret keys:
-- `db` (postgres) → `POSTGRES_PASSWORD_DB` (internal), `DATABASE_DB_*` (exported)
-- `analytics` (postgres) → `POSTGRES_PASSWORD_ANALYTICS` (internal), `DATABASE_ANALYTICS_*` (exported)
+- `mydb` (postgres) → `POSTGRES_PASSWORD_MYDB`, `POSTGRES_USER_MYDB`, `POSTGRES_DB_MYDB` (internal), `DATABASE_MYDB_*` (exported)
+- `analytics` (postgres) → `POSTGRES_PASSWORD_ANALYTICS`, `POSTGRES_USER_ANALYTICS`, `POSTGRES_DB_ANALYTICS` (internal), `DATABASE_ANALYTICS_*` (exported)
 
 ### Step resolution
 
 ```
 Config with managed: postgres       Resolved deployment steps
-services:                           secret.set POSTGRES_PASSWORD_DB
-  db:                               secret.set DATABASE_DB_HOST
-    managed: postgres               secret.set DATABASE_DB_PORT ...
-  web:                              storage.set db-backups
-    uses: [db]                      volume.set db-data
-                                    service.set db
-                                    cron.set db-backup
-                                    service.set web (with DATABASE_DB_* secrets injected)
+services:                           secret.set POSTGRES_PASSWORD_MYDB
+  mydb:                             secret.set POSTGRES_USER_MYDB
+    managed: postgres               secret.set POSTGRES_DB_MYDB
+  web:                              secret.set DATABASE_MYDB_HOST ...
+    uses: [mydb]                    volume.set mydb-data
+                                    service.set mydb
+                                    service.set web (with DATABASE_MYDB_* secrets injected)
 ```
 
 Managed-owned resources are excluded from `plan.Build()`. No managed child operation is emitted by both the managed compiler and the planner.
@@ -263,8 +260,7 @@ CLI: nvoi deploy
 
 API: POST .../deploy
   → Load latest RepoConfig + previous version
-  → Expand managed services (load stored creds from repo_managed_service_configs)
-  → Plan(prev, current, env) = deletes for removed resources + sets for desired state
+  → ResolveDeploymentSteps(cfg, reality, env) = compile managed bundles + plan non-managed + merge
   → Create Deployment + DeploymentSteps rows (all pending)
   → Return deployment with steps
 
@@ -411,8 +407,8 @@ See [`examples/core/`](../../examples/core/) for imperative command sequences.
 
 1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.** Same functions the direct CLI uses. Same idempotency guarantees.
 2. **Config describes what. Env provides where + credentials.** Provider selection is on `RepoConfig` columns. Provider credentials are in the encrypted env.
-3. **Managed service credentials are permanent.** Generated once, stored forever in `repo_managed_service_configs`. Not versioned. Row exists = inject.
-4. **Expand happens before validation.** Public config (with `managed:`) → internal config (with real specs) → validate the expanded result.
+3. **Managed service credentials are required input.** Provided in the env pushed with the config. No generation, no persistence. Missing = hard error.
+4. **ResolveDeploymentSteps wraps Build().** Compiles managed bundles, strips managed-owned resources, calls `Build()` for the rest, merges into one step sequence. Validates the stripped config.
 5. **Plan is deterministic.** Same config + env always produces the same step sequence. Sorted keys everywhere.
 6. **Plan handles both sets and removals.** `Plan(prev, current, env)` generates delete steps for resources that disappeared between versions, then set steps for the desired state. Set commands are idempotent — no need to diff for changes, only for removals.
 7. **Secrets are always secrets.** Managed service passwords use namespaced k8s secret keys with aliased env vars. Never plain text in specs.
