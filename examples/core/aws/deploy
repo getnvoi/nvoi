@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ── AWS deploy ────────────────────────────────────────────────────────────────
-# 1 server, postgres, web, jobs. AWS compute (EC2) + S3. Cloudflare DNS.
+# 1 server, managed postgres with backups, web, jobs. AWS compute (EC2) + S3. Cloudflare DNS.
 
 set -a; source examples/.env; set +a
 
@@ -15,7 +15,6 @@ export BUILD_PROVIDER=daytona
 
 bin/core instance set master --compute-type t3.medium --compute-region eu-west-3
 bin/core firewall set default
-bin/core volume set pgdata --size 30 --server master
 
 # ── Build ───────────────────────────────────────────────────────────────────────
 
@@ -30,15 +29,16 @@ bin/core secret set POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
 # ── Storage ─────────────────────────────────────────────────────────────────────
 
 bin/core storage set assets --cors
+bin/core storage set db-backups --expire-days 30
+
+# ── Managed database ───────────────────────────────────────────────────────────
+
+bin/core database set db --type postgres \
+  --secret POSTGRES_PASSWORD \
+  --backup-storage db-backups \
+  --backup-cron "0 2 * * *"
 
 # ── Services ────────────────────────────────────────────────────────────────────
-
-bin/core service set db \
-  --image postgres:17 \
-  --volume pgdata:/var/lib/postgresql/data \
-  --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_DB="$POSTGRES_DB" \
-  --secret POSTGRES_PASSWORD
 
 bin/core service set web \
   --image "$WEB_IMAGE" \
@@ -47,8 +47,8 @@ bin/core service set web \
   --health-path /up \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
-  --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_DB="$POSTGRES_DB" \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_DB=db \
   --secret POSTGRES_PASSWORD \
   --secret RAILS_MASTER_KEY \
   --storage assets
@@ -58,8 +58,8 @@ bin/core service set jobs \
   --command "bin/jobs" \
   --env RAILS_ENV=production \
   --env POSTGRES_HOST=db \
-  --env POSTGRES_USER="$POSTGRES_USER" \
-  --env POSTGRES_DB="$POSTGRES_DB" \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_DB=db \
   --secret POSTGRES_PASSWORD \
   --secret RAILS_MASTER_KEY
 
