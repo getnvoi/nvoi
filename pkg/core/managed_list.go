@@ -52,6 +52,9 @@ func ManagedList(ctx context.Context, req ManagedListRequest) ([]ManagedService,
 	}
 
 	// Also check statefulsets.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	cmd = "get statefulsets -l " + selector + " -o json"
 	out2, err := ssh.Run(ctx, kubectlCmd(ns, cmd))
 	if err == nil {

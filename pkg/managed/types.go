@@ -5,14 +5,11 @@ type Context struct {
 }
 
 type Request struct {
-	Kind          string
-	Name          string
-	Image         string            // base image (e.g. "postgres:16"), empty = kind default
-	Env           map[string]string // flat env — credentials come from here
-	BackupStorage string            // pre-existing storage name for backups (e.g. "db-backups")
-	BackupCron    string            // cron schedule for backups (e.g. "0 2 * * *")
-	BackupImage   string            // full backup image ref from registry (e.g. "10.0.1.1:5000/nvoi-pg-backup:16")
-	Context       Context
+	Kind    string
+	Name    string
+	Env     map[string]string // flat env — credentials come from here
+	Params  map[string]any    // kind-specific options — each compiler reads what it needs
+	Context Context
 }
 
 type Result struct {

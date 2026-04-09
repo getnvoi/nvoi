@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestParseRawRules(t *testing.T) {
@@ -16,8 +17,8 @@ func TestParseRawRules(t *testing.T) {
 		"80":  {"0.0.0.0/0"},
 		"443": {"10.0.0.0/8", "192.168.1.0/24"},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ParseRawRules = %v, want %v", got, want)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("ParseRawRules (-want +got):\n%s", diff)
 	}
 }
 
@@ -28,8 +29,8 @@ func TestParseRawRules_EnvVar(t *testing.T) {
 		"80":  {"0.0.0.0/0"},
 		"443": {"0.0.0.0/0"},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ParseRawRules = %v, want %v", got, want)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("ParseRawRules (-want +got):\n%s", diff)
 	}
 }
 
@@ -38,8 +39,8 @@ func TestParseRawRules_BareIPs(t *testing.T) {
 	want := PortAllowList{
 		"22": {"1.2.3.4/32"},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("bare IP not normalized to /32: got %v, want %v", got, want)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("bare IP not normalized to /32 (-want +got):\n%s", diff)
 	}
 }
 
@@ -154,16 +155,16 @@ func TestMergeAllowLists(t *testing.T) {
 	got := MergeAllowLists(base, overrides)
 
 	// 80 from base
-	if !reflect.DeepEqual(got["80"], []string{"1.2.3.4/32"}) {
-		t.Errorf("80 should be from base, got %v", got["80"])
+	if diff := cmp.Diff([]string{"1.2.3.4/32"}, got["80"]); diff != "" {
+		t.Errorf("80 should be from base (-want +got):\n%s", diff)
 	}
 	// 443 overridden
-	if !reflect.DeepEqual(got["443"], []string{"0.0.0.0/0"}) {
-		t.Errorf("443 should be overridden, got %v", got["443"])
+	if diff := cmp.Diff([]string{"0.0.0.0/0"}, got["443"]); diff != "" {
+		t.Errorf("443 should be overridden (-want +got):\n%s", diff)
 	}
 	// 8080 added
-	if !reflect.DeepEqual(got["8080"], []string{"10.0.0.0/8"}) {
-		t.Errorf("8080 should be added, got %v", got["8080"])
+	if diff := cmp.Diff([]string{"10.0.0.0/8"}, got["8080"]); diff != "" {
+		t.Errorf("8080 should be added (-want +got):\n%s", diff)
 	}
 }
 
@@ -196,8 +197,8 @@ func TestParseRawRules_MultipleCIDRsPerPort(t *testing.T) {
 	}
 	sort.Strings(got["80"])
 	want := []string{"1.2.3.4/32", "10.0.0.0/8", "5.6.7.8/32"}
-	if !reflect.DeepEqual(got["80"], want) {
-		t.Errorf("got %v, want %v", got["80"], want)
+	if diff := cmp.Diff(want, got["80"]); diff != "" {
+		t.Errorf("ParseRawRules multiple CIDRs (-want +got):\n%s", diff)
 	}
 }
 

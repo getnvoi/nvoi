@@ -6,49 +6,96 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider/cloudflare"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
-
-// waitHTTPSFunc is the HTTPS reachability check. Variable for testing.
-var waitHTTPSFunc = infra.WaitHTTPS
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 // IngressRouteArg is a parsed service:domain,domain arg.
 type IngressRouteArg struct {
-	Service     string
-	Domains     []string
-	EdgeProxied bool
+	Service string
+	Domains []string
 }
 
-type ingressExposureMode string
-type ingressTLSMode string
+// IngressHooks holds injectable dependencies for testing.
+// Nil fields use production defaults.
+type IngressHooks struct {
+	WaitHTTPS        func(ctx context.Context, domain string) error
+	CreateOriginCert func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error)
+	FindOriginCert   func(ctx context.Context, apiKey, zoneID string, hostnames []string) (*cloudflare.OriginCert, error)
+	RevokeOriginCert func(ctx context.Context, apiKey, certID string) error
+	Now              func() time.Time
+}
 
-const (
-	exposureDirect      ingressExposureMode = "direct"
-	exposureEdgeProxied ingressExposureMode = "edge_proxied"
+func (h *IngressHooks) waitHTTPS() func(context.Context, string) error {
+	if h != nil && h.WaitHTTPS != nil {
+		return h.WaitHTTPS
+	}
+	return infra.WaitHTTPS
+}
 
-	tlsACME       ingressTLSMode = "acme"
-	tlsProvided   ingressTLSMode = "provided"
-	tlsEdgeOrigin ingressTLSMode = "edge_origin"
-)
+func (h *IngressHooks) createOriginCert() func(context.Context, string, []string) (*cloudflare.OriginCert, error) {
+	if h != nil && h.CreateOriginCert != nil {
+		return h.CreateOriginCert
+	}
+	return func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
+		return cloudflare.NewOriginCA(apiKey).CreateCert(ctx, domains)
+	}
+}
+
+func (h *IngressHooks) findOriginCert() func(context.Context, string, string, []string) (*cloudflare.OriginCert, error) {
+	if h != nil && h.FindOriginCert != nil {
+		return h.FindOriginCert
+	}
+	return func(ctx context.Context, apiKey, zoneID string, hostnames []string) (*cloudflare.OriginCert, error) {
+		ca := cloudflare.NewOriginCA(apiKey)
+		found, err := ca.FindCertByHostnames(ctx, zoneID, hostnames)
+		if err != nil {
+			return nil, err
+		}
+		if found == nil {
+			return nil, nil
+		}
+		return &cloudflare.OriginCert{ID: found.ID, Certificate: found.Certificate}, nil
+	}
+}
+
+func (h *IngressHooks) revokeOriginCert() func(context.Context, string, string) error {
+	if h != nil && h.RevokeOriginCert != nil {
+		return h.RevokeOriginCert
+	}
+	return func(ctx context.Context, apiKey, certID string) error {
+		return cloudflare.NewOriginCA(apiKey).RevokeCert(ctx, certID)
+	}
+}
+
+func (h *IngressHooks) now() func() time.Time {
+	if h != nil && h.Now != nil {
+		return h.Now
+	}
+	return time.Now
+}
 
 type IngressSetRequest struct {
 	Cluster
-	DNS          ProviderRef
-	Route        IngressRouteArg // single route to add/update
-	EdgeProvider string
-	CertPEM      string
-	KeyPEM       string
+	DNS               ProviderRef
+	Route             IngressRouteArg
+	CloudflareManaged bool
+	CertPEM           string
+	KeyPEM            string
+	Hooks             *IngressHooks // nil = production defaults
 }
 
 type IngressDeleteRequest struct {
 	Cluster
 	DNS   ProviderRef
 	Route IngressRouteArg // route to remove
+	Hooks *IngressHooks
 }
 
 // ── ParseIngressArgs ────────────────────────────────────────────────────────
@@ -95,6 +142,7 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	}
 
 	out.Command("ingress", "set", req.Route.Service, "domains", req.Route.Domains)
+	waitHTTPS := req.Hooks.waitHTTPS()
 
 	// Resolve the service port from the cluster.
 	port, err := kube.GetServicePort(ctx, ssh, ns, req.Route.Service)
@@ -102,8 +150,8 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 		return fmt.Errorf("service %q has no port — ingress requires a service with --port: %w", req.Route.Service, err)
 	}
 
-	// Resolve TLS mode.
-	tlsMode := resolveTLSMode(req.Route.EdgeProxied, req.CertPEM, req.KeyPEM)
+	// TLS mode: cloudflare-managed, provided cert, or ACME.
+	useTLSSecret := req.CloudflareManaged || (req.CertPEM != "" && req.KeyPEM != "")
 
 	// Read current routes and merge.
 	currentRoutes, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
@@ -111,22 +159,16 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 		Service:      req.Route.Service,
 		Port:         port,
 		Domains:      req.Route.Domains,
-		UseTLSSecret: tlsMode != tlsACME,
+		UseTLSSecret: useTLSSecret,
 	})
 
-	// Exposure mode — all routes must be the same.
-	exposure := exposureDirect
-	if req.Route.EdgeProxied {
-		exposure = exposureEdgeProxied
-	}
-
-	if err := checkFirewallCoherence(ctx, req.Cluster, exposure); err != nil {
+	if err := checkFirewallCoherence(ctx, req.Cluster, req.CloudflareManaged); err != nil {
 		return err
 	}
 
 	// Resolve TLS material for the full merged domain set.
 	allDomains := kubeRouteDomains(merged)
-	certPEM, keyPEM, certID, err := resolveTLSMaterial(ctx, req.DNS, req.EdgeProvider, req.CertPEM, req.KeyPEM, tlsMode, allDomains, out, ssh, ns)
+	certPEM, keyPEM, certID, err := resolveTLSMaterial(ctx, req.DNS, req.CloudflareManaged, req.CertPEM, req.KeyPEM, allDomains, out, ssh, ns, req.Hooks)
 	if err != nil {
 		return err
 	}
@@ -158,11 +200,11 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 
 	// Verify reachability.
 	firstDomain := req.Route.Domains[0]
-	if exposure == exposureEdgeProxied {
-		out.Success(fmt.Sprintf("edge proxied — https://%s", firstDomain))
+	if req.CloudflareManaged {
+		out.Success(fmt.Sprintf("cloudflare-managed — https://%s", firstDomain))
 	} else {
 		out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
-		if err := waitHTTPSFunc(ctx, firstDomain); err != nil {
+		if err := waitHTTPS(ctx, firstDomain); err != nil {
 			return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
 		}
 		out.Success(fmt.Sprintf("https://%s live", firstDomain))
@@ -188,6 +230,7 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 	out := req.Log()
 	out.Command("ingress", "delete", req.Route.Service, "domains", req.Route.Domains)
+	revokeCert := req.Hooks.revokeOriginCert()
 
 	// Try SSH to cluster.
 	ssh, names, sshErr := req.Cluster.SSH(ctx)
@@ -231,7 +274,7 @@ func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 		certID := kube.GetTLSSecretAnnotation(ctx, ssh, ns, kube.CaddyTLSSecretName, utils.OriginCAAnnotation)
 		if certID != "" {
 			out.Progress(fmt.Sprintf("revoking Origin CA certificate %s", certID))
-			if err := revokeOriginCertFunc(ctx, req.DNS.Creds["api_key"], certID); err != nil {
+			if err := revokeCert(ctx, req.DNS.Creds["api_key"], certID); err != nil {
 				return fmt.Errorf("revoke Origin CA cert %s: %w — local resources preserved, retry after fixing", certID, err)
 			}
 			out.Success("Origin CA certificate revoked")
@@ -254,6 +297,8 @@ func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 // revokeByHostnames finds and revokes the Origin CA cert at Cloudflare by hostname match.
 // Used when the annotation is unavailable (legacy or cluster gone).
 func revokeByHostnames(ctx context.Context, req IngressDeleteRequest, out Output) error {
+	findCert := req.Hooks.findOriginCert()
+	revokeCert := req.Hooks.revokeOriginCert()
 	apiKey := req.DNS.Creds["api_key"]
 	zoneID := req.DNS.Creds["zone_id"]
 	if zoneID == "" || len(req.Route.Domains) == 0 {
@@ -263,13 +308,13 @@ func revokeByHostnames(ctx context.Context, req IngressDeleteRequest, out Output
 	sort.Strings(domains)
 
 	out.Progress("finding Origin CA certificate at Cloudflare")
-	found, err := findOriginCertFunc(ctx, apiKey, zoneID, domains)
+	found, err := findCert(ctx, apiKey, zoneID, domains)
 	if err != nil {
 		return fmt.Errorf("find Origin CA cert: %w — local resources preserved, retry after fixing", err)
 	}
 	if found != nil {
 		out.Progress(fmt.Sprintf("revoking Origin CA certificate %s", found.ID))
-		if err := revokeOriginCertFunc(ctx, apiKey, found.ID); err != nil {
+		if err := revokeCert(ctx, apiKey, found.ID); err != nil {
 			return fmt.Errorf("revoke Origin CA cert %s: %w — local resources preserved, retry after fixing", found.ID, err)
 		}
 		out.Success("Origin CA certificate revoked")
@@ -332,7 +377,7 @@ func deleteAllIngress(ctx context.Context, ssh utils.SSHClient, ns string, names
 	return nil
 }
 
-func checkFirewallCoherence(ctx context.Context, c Cluster, exposure ingressExposureMode) error {
+func checkFirewallCoherence(ctx context.Context, c Cluster, cloudflareManaged bool) error {
 	prov, err := c.Compute()
 	if err != nil {
 		return fmt.Errorf("firewall check: %w", err)
@@ -354,8 +399,8 @@ func checkFirewallCoherence(ctx context.Context, c Cluster, exposure ingressExpo
 	has443 := len(rules["443"]) > 0
 
 	if !has80 || !has443 {
-		if exposure == exposureEdgeProxied {
-			return fmt.Errorf("firewall %s does not have ports 80/443 open for the configured edge overlay — run 'nvoi firewall set cloudflare' first", fwNames.Firewall())
+		if cloudflareManaged {
+			return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set cloudflare' first", fwNames.Firewall())
 		}
 		return fmt.Errorf("firewall %s does not have ports 80/443 open — run 'nvoi firewall set default' first", fwNames.Firewall())
 	}
@@ -370,23 +415,13 @@ func checkFirewallCoherence(ctx context.Context, c Cluster, exposure ingressExpo
 		}
 	}
 
-	if exposure == exposureEdgeProxied && isOpenToAll {
-		return fmt.Errorf("edge overlay with firewall open to all leaves the origin directly reachable. Run 'nvoi firewall set cloudflare' to restrict 80/443 to Cloudflare IPs")
+	if cloudflareManaged && isOpenToAll {
+		return fmt.Errorf("cloudflare-managed with firewall open to all leaves the origin directly reachable. Run 'nvoi firewall set cloudflare' to restrict 80/443 to Cloudflare IPs")
 	}
 
-	if exposure == exposureDirect && !isOpenToAll {
-		return fmt.Errorf("firewall restricts 80/443 but ingress exposure is direct — remove the edge overlay or run 'nvoi firewall set default'")
+	if !cloudflareManaged && !isOpenToAll {
+		return fmt.Errorf("firewall restricts 80/443 (cloudflare preset) but ingress is not cloudflare-managed — either use --cloudflare-managed or run 'nvoi firewall set default'")
 	}
 
 	return nil
-}
-
-func resolveTLSMode(edgeProxied bool, certPEM, keyPEM string) ingressTLSMode {
-	if certPEM != "" || keyPEM != "" {
-		return tlsProvided
-	}
-	if edgeProxied {
-		return tlsEdgeOrigin
-	}
-	return tlsACME
 }

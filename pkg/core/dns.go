@@ -14,10 +14,10 @@ import (
 
 type DNSSetRequest struct {
 	Cluster
-	DNS         ProviderRef
-	Service     string
-	Domains     []string
-	EdgeProxied bool // edge overlay should proxy DNS through the provider
+	DNS               ProviderRef
+	Service           string
+	Domains           []string
+	CloudflareManaged bool
 }
 
 // DNSSet creates/updates DNS A records. DNS only — no Caddy.
@@ -37,13 +37,13 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	ip := master.IPv4
 	out.Command("dns", "set", req.Service, "ip", ip, "domains", req.Domains)
 
-	if req.EdgeProxied && req.DNS.Name != "cloudflare" {
-		return fmt.Errorf("edge-proxied DNS currently requires Cloudflare as DNS provider (current: %s)", req.DNS.Name)
+	if req.CloudflareManaged && req.DNS.Name != "cloudflare" {
+		return fmt.Errorf("cloudflare-managed DNS requires Cloudflare as DNS provider (current: %s)", req.DNS.Name)
 	}
 
 	for _, domain := range req.Domains {
 		out.Progress(fmt.Sprintf("ensuring %s → %s", domain, ip))
-		if err := dns.EnsureARecord(ctx, domain, ip, req.EdgeProxied); err != nil {
+		if err := dns.EnsureARecord(ctx, domain, ip, req.CloudflareManaged); err != nil {
 			return fmt.Errorf("dns set %s: %w", domain, err)
 		}
 		out.Success(domain)

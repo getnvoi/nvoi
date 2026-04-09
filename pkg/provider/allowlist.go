@@ -1,3 +1,4 @@
+// Package provider defines interfaces and registration for compute, DNS, storage, and build providers.
 package provider
 
 import (

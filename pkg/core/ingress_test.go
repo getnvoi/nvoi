@@ -66,16 +66,6 @@ func TestParseIngressArgs(t *testing.T) {
 	}
 }
 
-func TestParseIngressArgs_EdgeProxiedDefaultsFalse(t *testing.T) {
-	routes, err := ParseIngressArgs([]string{"web:example.com"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if routes[0].EdgeProxied {
-		t.Error("EdgeProxied should default to false")
-	}
-}
-
 func TestParseIngressArgs_Invalid(t *testing.T) {
 	_, err := ParseIngressArgs([]string{"nodomain"})
 	if err == nil {
@@ -115,12 +105,6 @@ func TestIngressSet_FailsWhenFirewallClosed(t *testing.T) {
 }
 
 func TestIngressSet_HardErrorWhenUnreachable(t *testing.T) {
-	origWait := waitHTTPSFunc
-	waitHTTPSFunc = func(ctx context.Context, domain string) error {
-		return fmt.Errorf("timeout")
-	}
-	defer func() { waitHTTPSFunc = origWait }()
-
 	origDelay := kube.CaddyReloadDelay
 	kube.CaddyReloadDelay = 0
 	defer func() { kube.CaddyReloadDelay = origDelay }()
@@ -136,6 +120,9 @@ func TestIngressSet_HardErrorWhenUnreachable(t *testing.T) {
 	err := IngressSet(context.Background(), IngressSetRequest{
 		Cluster: ingressCluster(out, ingressSetSSH(), mock),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Hooks: &IngressHooks{
+			WaitHTTPS: func(ctx context.Context, domain string) error { return fmt.Errorf("timeout") },
+		},
 	})
 	if err == nil {
 		t.Fatal("expected hard error when domain unreachable")
@@ -168,8 +155,9 @@ func TestIngressSet_ProxyWithOpenFirewall(t *testing.T) {
 	}
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}, EdgeProxied: true},
+		Cluster:           ingressCluster(out, ingressSetSSH(), mock),
+		Route:             IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		CloudflareManaged: true,
 	})
 	if err == nil {
 		t.Fatal("expected error: edge overlay + open firewall")
@@ -193,22 +181,23 @@ func TestIngressSet_ProxyWithCFFirewall(t *testing.T) {
 	}
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}, EdgeProxied: true},
-		CertPEM: "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-		KeyPEM:  "-----BEGIN EC PRIVATE KEY-----\ntest\n-----END EC PRIVATE KEY-----",
+		Cluster:           ingressCluster(out, ingressSetSSH(), mock),
+		Route:             IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		CloudflareManaged: true,
+		CertPEM:           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		KeyPEM:            "-----BEGIN EC PRIVATE KEY-----\ntest\n-----END EC PRIVATE KEY-----",
 	})
 	if err != nil {
 		t.Fatalf("edge overlay + CF firewall should pass, got: %v", err)
 	}
 	foundProxied := false
 	for _, msg := range out.Successes {
-		if strings.Contains(msg, "edge proxied") {
+		if strings.Contains(msg, "cloudflare-managed") {
 			foundProxied = true
 		}
 	}
 	if !foundProxied {
-		t.Errorf("expected edge proxied success, got: %v", out.Successes)
+		t.Errorf("expected cloudflare-managed success, got: %v", out.Successes)
 	}
 }
 
@@ -220,14 +209,11 @@ func TestIngressSet_ACMEClearsOwnedOriginSecret(t *testing.T) {
 			return provider.PortAllowList{"80": {"0.0.0.0/0"}, "443": {"0.0.0.0/0"}}, nil
 		},
 	}
-	origWait := waitHTTPSFunc
-	waitHTTPSFunc = func(ctx context.Context, domain string) error { return nil }
-	defer func() { waitHTTPSFunc = origWait }()
-
 	ssh := ingressSetSSH()
 	err := IngressSet(context.Background(), IngressSetRequest{
 		Cluster: ingressCluster(out, ssh, mock),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Hooks:   &IngressHooks{WaitHTTPS: func(ctx context.Context, domain string) error { return nil }},
 	})
 	if err != nil {
 		t.Fatalf("expected direct ACME path to succeed: %v", err)
@@ -246,14 +232,7 @@ func TestIngressSet_ACMEClearsOwnedOriginSecret(t *testing.T) {
 // ── IngressDelete ───────────────────────────────────────────────────────────
 
 func TestIngressDelete_LastRoute_WipesEverything(t *testing.T) {
-	origRevoke := revokeOriginCertFunc
 	revokedIDs := []string{}
-	revokeOriginCertFunc = func(ctx context.Context, apiKey, certID string) error {
-		revokedIDs = append(revokedIDs, certID)
-		return nil
-	}
-	defer func() { revokeOriginCertFunc = origRevoke }()
-
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
@@ -278,6 +257,12 @@ func TestIngressDelete_LastRoute_WipesEverything(t *testing.T) {
 		Cluster: ingressCluster(out, ssh, mock),
 		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Hooks: &IngressHooks{
+			RevokeOriginCert: func(ctx context.Context, apiKey, certID string) error {
+				revokedIDs = append(revokedIDs, certID)
+				return nil
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
@@ -289,12 +274,6 @@ func TestIngressDelete_LastRoute_WipesEverything(t *testing.T) {
 
 func TestIngressDelete_RemovesRoute_KeepsOthers_NoReissue(t *testing.T) {
 	createCalled := false
-	origCreate := createOriginCertFunc
-	createOriginCertFunc = func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
-		createCalled = true
-		return nil, fmt.Errorf("should not create")
-	}
-	defer func() { createOriginCertFunc = origCreate }()
 
 	origDelay := kube.CaddyReloadDelay
 	kube.CaddyReloadDelay = 0
@@ -325,6 +304,12 @@ func TestIngressDelete_RemovesRoute_KeepsOthers_NoReissue(t *testing.T) {
 		Cluster: ingressCluster(out, ssh, mock),
 		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Hooks: &IngressHooks{
+			CreateOriginCert: func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
+				createCalled = true
+				return nil, fmt.Errorf("should not create")
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
@@ -346,19 +331,6 @@ func TestIngressDelete_RemovesRoute_KeepsOthers_NoReissue(t *testing.T) {
 
 func TestIngressDelete_ClusterGone_StillRevokes(t *testing.T) {
 	revokedIDs := []string{}
-	origRevoke := revokeOriginCertFunc
-	revokeOriginCertFunc = func(ctx context.Context, apiKey, certID string) error {
-		revokedIDs = append(revokedIDs, certID)
-		return nil
-	}
-	defer func() { revokeOriginCertFunc = origRevoke }()
-
-	origFind := findOriginCertFunc
-	findOriginCertFunc = func(ctx context.Context, apiKey, zoneID string, hostnames []string) (*cloudflare.OriginCert, error) {
-		return &cloudflare.OriginCert{ID: "orphaned-cert"}, nil
-	}
-	defer func() { findOriginCertFunc = origFind }()
-
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{Servers: nil} // ErrNoMaster
 
@@ -366,6 +338,15 @@ func TestIngressDelete_ClusterGone_StillRevokes(t *testing.T) {
 		Cluster: ingressCluster(out, nil, mock),
 		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Hooks: &IngressHooks{
+			FindOriginCert: func(ctx context.Context, apiKey, zoneID string, hostnames []string) (*cloudflare.OriginCert, error) {
+				return &cloudflare.OriginCert{ID: "orphaned-cert"}, nil
+			},
+			RevokeOriginCert: func(ctx context.Context, apiKey, certID string) error {
+				revokedIDs = append(revokedIDs, certID)
+				return nil
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
@@ -376,12 +357,6 @@ func TestIngressDelete_ClusterGone_StillRevokes(t *testing.T) {
 }
 
 func TestIngressDelete_RevocationFailure_PreservesLocal(t *testing.T) {
-	origFind := findOriginCertFunc
-	findOriginCertFunc = func(ctx context.Context, apiKey, zoneID string, hostnames []string) (*cloudflare.OriginCert, error) {
-		return nil, fmt.Errorf("cloudflare api down")
-	}
-	defer func() { findOriginCertFunc = origFind }()
-
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{Servers: nil} // ErrNoMaster — cluster gone path
 
@@ -389,6 +364,11 @@ func TestIngressDelete_RevocationFailure_PreservesLocal(t *testing.T) {
 		Cluster: ingressCluster(out, nil, mock),
 		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Hooks: &IngressHooks{
+			FindOriginCert: func(ctx context.Context, apiKey, zoneID string, hostnames []string) (*cloudflare.OriginCert, error) {
+				return nil, fmt.Errorf("cloudflare api down")
+			},
+		},
 	})
 	if err == nil {
 		t.Fatal("expected hard error when revocation fails")

@@ -1,3 +1,4 @@
+// Package local implements the build provider using local Docker buildx.
 package local
 
 import (

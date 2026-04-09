@@ -1,10 +1,11 @@
 package managed
 
 import (
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func postgresEnv() map[string]string {
@@ -22,8 +23,8 @@ func agentEnv() map[string]string {
 func TestRegistered_NarrowKinds(t *testing.T) {
 	got := Registered()
 	want := []string{"claude", "postgres"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Registered() = %v, want %v", got, want)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("Registered() (-want +got):\n%s", diff)
 	}
 }
 
@@ -43,8 +44,8 @@ func TestCompilePostgresDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
-	if !reflect.DeepEqual(got1, got2) {
-		t.Fatalf("Compile() not deterministic")
+	if diff := cmp.Diff(got1, got2); diff != "" {
+		t.Fatalf("Compile() not deterministic (-want +got):\n%s", diff)
 	}
 }
 
@@ -64,8 +65,8 @@ func TestCompileClaudeDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
-	if !reflect.DeepEqual(got1, got2) {
-		t.Fatalf("Compile() not deterministic")
+	if diff := cmp.Diff(got1, got2); diff != "" {
+		t.Fatalf("Compile() not deterministic (-want +got):\n%s", diff)
 	}
 }
 
@@ -135,8 +136,8 @@ func TestExportedDependencyKeysStable(t *testing.T) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	if !reflect.DeepEqual(keys, want) {
-		t.Fatalf("exported keys = %v, want %v", keys, want)
+	if diff := cmp.Diff(want, keys); diff != "" {
+		t.Fatalf("exported keys (-want +got):\n%s", diff)
 	}
 }
 
@@ -151,8 +152,8 @@ func TestChildResourceNamesStable(t *testing.T) {
 		t.Fatalf("Compile() error = %v", err)
 	}
 	want := []string{"db", "db-data"}
-	if !reflect.DeepEqual(got.Bundle.OwnedChildren, want) {
-		t.Fatalf("OwnedChildren = %v, want %v", got.Bundle.OwnedChildren, want)
+	if diff := cmp.Diff(want, got.Bundle.OwnedChildren); diff != "" {
+		t.Fatalf("OwnedChildren (-want +got):\n%s", diff)
 	}
 }
 
@@ -160,8 +161,8 @@ func TestCompilePostgresCustomImage(t *testing.T) {
 	got, err := Compile(Request{
 		Kind:    "postgres",
 		Name:    "db",
-		Image:   "postgres:16",
 		Env:     postgresEnv(),
+		Params:  map[string]any{"image": "postgres:16"},
 		Context: Context{DefaultVolumeServer: "master"},
 	})
 	if err != nil {
@@ -190,14 +191,16 @@ func TestCompilePostgresDefaultImage(t *testing.T) {
 
 func TestCompilePostgresBackupImage(t *testing.T) {
 	got, err := Compile(Request{
-		Kind:          "postgres",
-		Name:          "db",
-		Image:         "postgres:16",
-		Env:           postgresEnv(),
-		BackupStorage: "db-backups",
-		BackupCron:    "0 2 * * *",
-		BackupImage:   "10.0.1.1:5000/nvoi-pg-backup:16",
-		Context:       Context{DefaultVolumeServer: "master"},
+		Kind: "postgres",
+		Name: "db",
+		Env:  postgresEnv(),
+		Params: map[string]any{
+			"image":          "postgres:16",
+			"backup_storage": "db-backups",
+			"backup_cron":    "0 2 * * *",
+			"backup_image":   "10.0.1.1:5000/nvoi-pg-backup:16",
+		},
+		Context: Context{DefaultVolumeServer: "master"},
 	})
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
@@ -221,12 +224,14 @@ func TestCompilePostgresBackupImage(t *testing.T) {
 
 func TestCompilePostgresNoCronWithoutBackupImage(t *testing.T) {
 	got, err := Compile(Request{
-		Kind:          "postgres",
-		Name:          "db",
-		Env:           postgresEnv(),
-		BackupStorage: "db-backups",
-		BackupCron:    "0 2 * * *",
-		// BackupImage not set — no cron should be emitted.
+		Kind: "postgres",
+		Name: "db",
+		Env:  postgresEnv(),
+		Params: map[string]any{
+			"backup_storage": "db-backups",
+			"backup_cron":    "0 2 * * *",
+			// backup_image not set — no cron should be emitted.
+		},
 		Context: Context{DefaultVolumeServer: "master"},
 	})
 	if err != nil {
@@ -252,8 +257,8 @@ func TestPrimitiveOperationsSortedAndDeterministic(t *testing.T) {
 		gotKinds = append(gotKinds, op.Kind)
 	}
 	wantKinds := []string{"secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "secret.set", "volume.set", "service.set"}
-	if !reflect.DeepEqual(gotKinds, wantKinds) {
-		t.Fatalf("operation kinds = %v, want %v", gotKinds, wantKinds)
+	if diff := cmp.Diff(wantKinds, gotKinds); diff != "" {
+		t.Fatalf("operation kinds (-want +got):\n%s", diff)
 	}
 }
 
@@ -269,20 +274,20 @@ func TestPostgresShape(t *testing.T) {
 		t.Errorf("RootService = %q", shape.RootService)
 	}
 	want := []string{"db", "db-backup", "db-data"}
-	if !reflect.DeepEqual(shape.OwnedChildren, want) {
-		t.Errorf("OwnedChildren = %v, want %v", shape.OwnedChildren, want)
+	if diff := cmp.Diff(want, shape.OwnedChildren); diff != "" {
+		t.Errorf("OwnedChildren (-want +got):\n%s", diff)
 	}
-	if !reflect.DeepEqual(shape.Crons, []string{"db-backup"}) {
-		t.Errorf("Crons = %v", shape.Crons)
+	if diff := cmp.Diff([]string{"db-backup"}, shape.Crons); diff != "" {
+		t.Errorf("Crons (-want +got):\n%s", diff)
 	}
-	if !reflect.DeepEqual(shape.Services, []string{"db"}) {
-		t.Errorf("Services = %v", shape.Services)
+	if diff := cmp.Diff([]string{"db"}, shape.Services); diff != "" {
+		t.Errorf("Services (-want +got):\n%s", diff)
 	}
 	if len(shape.Storages) != 0 {
 		t.Errorf("Storages = %v, want empty (storage is a prerequisite, not owned)", shape.Storages)
 	}
-	if !reflect.DeepEqual(shape.Volumes, []string{"db-data"}) {
-		t.Errorf("Volumes = %v", shape.Volumes)
+	if diff := cmp.Diff([]string{"db-data"}, shape.Volumes); diff != "" {
+		t.Errorf("Volumes (-want +got):\n%s", diff)
 	}
 	wantKeys := []string{
 		"POSTGRES_DB_DB",
@@ -291,8 +296,8 @@ func TestPostgresShape(t *testing.T) {
 		"DATABASE_DB_HOST", "DATABASE_DB_NAME", "DATABASE_DB_PASSWORD",
 		"DATABASE_DB_PORT", "DATABASE_DB_URL", "DATABASE_DB_USER",
 	}
-	if !reflect.DeepEqual(shape.SecretKeys, wantKeys) {
-		t.Errorf("SecretKeys = %v, want %v", shape.SecretKeys, wantKeys)
+	if diff := cmp.Diff(wantKeys, shape.SecretKeys); diff != "" {
+		t.Errorf("SecretKeys (-want +got):\n%s", diff)
 	}
 }
 
@@ -301,11 +306,11 @@ func TestClaudeShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Shape() error = %v", err)
 	}
-	if !reflect.DeepEqual(shape.Services, []string{"coder"}) {
-		t.Errorf("Services = %v", shape.Services)
+	if diff := cmp.Diff([]string{"coder"}, shape.Services); diff != "" {
+		t.Errorf("Services (-want +got):\n%s", diff)
 	}
-	if !reflect.DeepEqual(shape.Volumes, []string{"coder-data"}) {
-		t.Errorf("Volumes = %v", shape.Volumes)
+	if diff := cmp.Diff([]string{"coder-data"}, shape.Volumes); diff != "" {
+		t.Errorf("Volumes (-want +got):\n%s", diff)
 	}
 	if len(shape.Crons) != 0 {
 		t.Errorf("Crons = %v, want empty", shape.Crons)
@@ -317,8 +322,8 @@ func TestClaudeShape(t *testing.T) {
 		"NVOI_AGENT_TOKEN_CODER",
 		"AGENT_CODER_HOST", "AGENT_CODER_PORT", "AGENT_CODER_TOKEN", "AGENT_CODER_URL",
 	}
-	if !reflect.DeepEqual(shape.SecretKeys, wantKeys) {
-		t.Errorf("SecretKeys = %v, want %v", shape.SecretKeys, wantKeys)
+	if diff := cmp.Diff(wantKeys, shape.SecretKeys); diff != "" {
+		t.Errorf("SecretKeys (-want +got):\n%s", diff)
 	}
 }
 
@@ -445,5 +450,25 @@ func TestOwnershipMetadataComplete(t *testing.T) {
 		if op.Owner.ChildName == "" {
 			t.Fatal("Owner.ChildName should not be empty")
 		}
+	}
+}
+
+func TestCompile_EmptyName(t *testing.T) {
+	_, err := Compile(Request{Kind: "postgres", Name: "", Env: postgresEnv()})
+	if err == nil {
+		t.Fatal("expected error for empty name")
+	}
+	if !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("wrong error: %v", err)
+	}
+}
+
+func TestShape_EmptyName(t *testing.T) {
+	_, err := Shape("postgres", "")
+	if err == nil {
+		t.Fatal("expected error for empty name")
+	}
+	if !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("wrong error: %v", err)
 	}
 }

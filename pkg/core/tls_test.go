@@ -53,13 +53,7 @@ func makeTestCert(t *testing.T, domains []string, notAfter time.Time) string {
 // ── Origin cert reuse ───────────────────────────────────────────────────────
 
 func TestIngressSet_OriginCertReusedWhenDomainsMatch(t *testing.T) {
-	origCreate := createOriginCertFunc
 	createCalled := false
-	createOriginCertFunc = func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
-		createCalled = true
-		return nil, fmt.Errorf("should not create")
-	}
-	defer func() { createOriginCertFunc = origCreate }()
 
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
@@ -76,9 +70,16 @@ func TestIngressSet_OriginCertReusedWhenDomainsMatch(t *testing.T) {
 	}, ssh.Prefixes...)
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x"}},
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}, EdgeProxied: true},
+		Cluster:           ingressCluster(out, ssh, mock),
+		DNS:               ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x"}},
+		Route:             IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		CloudflareManaged: true,
+		Hooks: &IngressHooks{
+			CreateOriginCert: func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
+				createCalled = true
+				return nil, fmt.Errorf("should not create")
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected reuse path to succeed: %v", err)
@@ -89,17 +90,7 @@ func TestIngressSet_OriginCertReusedWhenDomainsMatch(t *testing.T) {
 }
 
 func TestIngressSet_OriginCertReplacedWhenDomainsChange(t *testing.T) {
-	origCreate := createOriginCertFunc
 	createCalled := false
-	createOriginCertFunc = func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
-		createCalled = true
-		return &cloudflare.OriginCert{ID: "new-id", Certificate: "new-cert", PrivateKey: "new-key"}, nil
-	}
-	defer func() { createOriginCertFunc = origCreate }()
-
-	origRevoke := revokeOriginCertFunc
-	revokeOriginCertFunc = func(ctx context.Context, apiKey, certID string) error { return nil }
-	defer func() { revokeOriginCertFunc = origRevoke }()
 
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
@@ -116,9 +107,17 @@ func TestIngressSet_OriginCertReplacedWhenDomainsChange(t *testing.T) {
 	}, ssh.Prefixes...)
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x"}},
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}, EdgeProxied: true},
+		Cluster:           ingressCluster(out, ssh, mock),
+		DNS:               ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x"}},
+		Route:             IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		CloudflareManaged: true,
+		Hooks: &IngressHooks{
+			CreateOriginCert: func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
+				createCalled = true
+				return &cloudflare.OriginCert{ID: "new-id", Certificate: "new-cert", PrivateKey: "new-key"}, nil
+			},
+			RevokeOriginCert: func(ctx context.Context, apiKey, certID string) error { return nil },
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected replacement path to succeed: %v", err)
@@ -129,17 +128,7 @@ func TestIngressSet_OriginCertReplacedWhenDomainsChange(t *testing.T) {
 }
 
 func TestIngressSet_OriginCertReplacedWhenExpired(t *testing.T) {
-	origCreate := createOriginCertFunc
 	createCalled := false
-	createOriginCertFunc = func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
-		createCalled = true
-		return &cloudflare.OriginCert{ID: "new-id", Certificate: "new-cert", PrivateKey: "new-key"}, nil
-	}
-	defer func() { createOriginCertFunc = origCreate }()
-
-	origRevoke := revokeOriginCertFunc
-	revokeOriginCertFunc = func(ctx context.Context, apiKey, certID string) error { return nil }
-	defer func() { revokeOriginCertFunc = origRevoke }()
 
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
@@ -156,9 +145,17 @@ func TestIngressSet_OriginCertReplacedWhenExpired(t *testing.T) {
 	}, ssh.Prefixes...)
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x"}},
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}, EdgeProxied: true},
+		Cluster:           ingressCluster(out, ssh, mock),
+		DNS:               ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x"}},
+		Route:             IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		CloudflareManaged: true,
+		Hooks: &IngressHooks{
+			CreateOriginCert: func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
+				createCalled = true
+				return &cloudflare.OriginCert{ID: "new-id", Certificate: "new-cert", PrivateKey: "new-key"}, nil
+			},
+			RevokeOriginCert: func(ctx context.Context, apiKey, certID string) error { return nil },
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected expired replacement path to succeed: %v", err)
@@ -171,16 +168,6 @@ func TestIngressSet_OriginCertReplacedWhenExpired(t *testing.T) {
 // ── Origin CA lifecycle — annotation storage ────────────────────────────────
 
 func TestIngressSet_OriginCertIDStoredAsAnnotation(t *testing.T) {
-	origCreate := createOriginCertFunc
-	createOriginCertFunc = func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
-		return &cloudflare.OriginCert{ID: "new-cert-id", Certificate: "new-cert", PrivateKey: "new-key"}, nil
-	}
-	defer func() { createOriginCertFunc = origCreate }()
-
-	origRevoke := revokeOriginCertFunc
-	revokeOriginCertFunc = func(ctx context.Context, apiKey, certID string) error { return nil }
-	defer func() { revokeOriginCertFunc = origRevoke }()
-
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
@@ -203,9 +190,16 @@ func TestIngressSet_OriginCertIDStoredAsAnnotation(t *testing.T) {
 	}
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}, EdgeProxied: true},
+		Cluster:           ingressCluster(out, ssh, mock),
+		DNS:               ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
+		Route:             IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		CloudflareManaged: true,
+		Hooks: &IngressHooks{
+			CreateOriginCert: func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
+				return &cloudflare.OriginCert{ID: "new-cert-id", Certificate: "new-cert", PrivateKey: "new-key"}, nil
+			},
+			RevokeOriginCert: func(ctx context.Context, apiKey, certID string) error { return nil },
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
@@ -226,19 +220,7 @@ func TestIngressSet_OriginCertIDStoredAsAnnotation(t *testing.T) {
 // ── Origin CA lifecycle — revocation on domain change ───────────────────────
 
 func TestIngressSet_OldCertRevokedOnDomainChange(t *testing.T) {
-	origCreate := createOriginCertFunc
-	createOriginCertFunc = func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
-		return &cloudflare.OriginCert{ID: "new-cert-id", Certificate: "new-cert", PrivateKey: "new-key"}, nil
-	}
-	defer func() { createOriginCertFunc = origCreate }()
-
 	revokedIDs := []string{}
-	origRevoke := revokeOriginCertFunc
-	revokeOriginCertFunc = func(ctx context.Context, apiKey, certID string) error {
-		revokedIDs = append(revokedIDs, certID)
-		return nil
-	}
-	defer func() { revokeOriginCertFunc = origRevoke }()
 
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
@@ -264,9 +246,19 @@ func TestIngressSet_OldCertRevokedOnDomainChange(t *testing.T) {
 	}
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}, EdgeProxied: true},
+		Cluster:           ingressCluster(out, ssh, mock),
+		DNS:               ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
+		Route:             IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		CloudflareManaged: true,
+		Hooks: &IngressHooks{
+			CreateOriginCert: func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
+				return &cloudflare.OriginCert{ID: "new-cert-id", Certificate: "new-cert", PrivateKey: "new-key"}, nil
+			},
+			RevokeOriginCert: func(ctx context.Context, apiKey, certID string) error {
+				revokedIDs = append(revokedIDs, certID)
+				return nil
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
@@ -280,18 +272,6 @@ func TestIngressSet_OldCertRevokedOnDomainChange(t *testing.T) {
 
 func TestIngressSet_RevocationFailurePreventsReplacement(t *testing.T) {
 	createCalled := false
-	origCreate := createOriginCertFunc
-	createOriginCertFunc = func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
-		createCalled = true
-		return nil, fmt.Errorf("should not create")
-	}
-	defer func() { createOriginCertFunc = origCreate }()
-
-	origRevoke := revokeOriginCertFunc
-	revokeOriginCertFunc = func(ctx context.Context, apiKey, certID string) error {
-		return fmt.Errorf("cloudflare api down")
-	}
-	defer func() { revokeOriginCertFunc = origRevoke }()
 
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
@@ -313,9 +293,19 @@ func TestIngressSet_RevocationFailurePreventsReplacement(t *testing.T) {
 	}
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		DNS:     ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}, EdgeProxied: true},
+		Cluster:           ingressCluster(out, ssh, mock),
+		DNS:               ProviderRef{Name: "cloudflare", Creds: map[string]string{"api_key": "x", "zone_id": "z"}},
+		Route:             IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		CloudflareManaged: true,
+		Hooks: &IngressHooks{
+			CreateOriginCert: func(ctx context.Context, apiKey string, domains []string) (*cloudflare.OriginCert, error) {
+				createCalled = true
+				return nil, fmt.Errorf("should not create")
+			},
+			RevokeOriginCert: func(ctx context.Context, apiKey, certID string) error {
+				return fmt.Errorf("cloudflare api down")
+			},
+		},
 	})
 	if err == nil {
 		t.Fatal("expected hard error when revocation fails during replacement")

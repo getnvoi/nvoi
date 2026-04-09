@@ -1,3 +1,4 @@
+// Package managed compiles managed service definitions into deterministic bundles of primitive operations.
 package managed
 
 import (
@@ -33,6 +34,9 @@ func Registered() []string {
 }
 
 func Compile(req Request) (Result, error) {
+	if req.Name == "" {
+		return Result{}, fmt.Errorf("managed %s: name is required", req.Kind)
+	}
 	def, ok := Get(req.Kind)
 	if !ok {
 		return Result{}, fmt.Errorf("managed kind %q is not registered", req.Kind)
@@ -55,6 +59,9 @@ func KindsForCategory(category string) []string {
 // Shape returns the topology of a managed bundle: owned names only, no values.
 // Used for delete operations where credential values are not needed.
 func Shape(kind, name string) (BundleShape, error) {
+	if name == "" {
+		return BundleShape{}, fmt.Errorf("managed %s: name is required", kind)
+	}
 	def, ok := Get(kind)
 	if !ok {
 		return BundleShape{}, fmt.Errorf("managed kind %q is not registered", kind)

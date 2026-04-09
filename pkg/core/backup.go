@@ -1,8 +1,10 @@
+// Package core contains the business logic for all nvoi operations — compute, service, DNS, ingress, storage, secrets, builds, and managed services.
 package core
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
@@ -100,10 +102,10 @@ type BackupDownloadRequest struct {
 	Key     string // object key to download
 }
 
-func BackupDownload(ctx context.Context, req BackupDownloadRequest) ([]byte, error) {
+func BackupDownload(ctx context.Context, req BackupDownloadRequest, w io.Writer) error {
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer ssh.Close()
 
@@ -112,14 +114,17 @@ func BackupDownload(ctx context.Context, req BackupDownloadRequest) ([]byte, err
 
 	creds, err := readStorageCreds(ctx, ssh, ns, secretName, req.Name)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	data, _, err := s3.Get(creds.endpoint, creds.accessKey, creds.secretKey, creds.bucket, req.Key)
+	reader, _, _, err := s3.GetStream(creds.endpoint, creds.accessKey, creds.secretKey, creds.bucket, req.Key)
 	if err != nil {
-		return nil, fmt.Errorf("download backup %q: %w", req.Key, err)
+		return fmt.Errorf("download backup %q: %w", req.Key, err)
 	}
-	return data, nil
+	defer reader.Close()
+
+	_, err = io.Copy(w, reader)
+	return err
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -141,6 +146,9 @@ func readStorageCreds(ctx context.Context, ssh utils.SSHClient, ns, secretName, 
 	keys[prefix+"_SECRET_ACCESS_KEY"] = &c.secretKey
 
 	for key, dest := range keys {
+		if ctx.Err() != nil {
+			return storageCreds{}, ctx.Err()
+		}
 		val, err := kube.GetSecretValue(ctx, ssh, ns, secretName, key)
 		if err != nil {
 			return storageCreds{}, fmt.Errorf("storage credential %q: %w", key, err)

@@ -2,7 +2,10 @@ package managed
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func init() {
@@ -53,7 +56,7 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 		return Result{}, err
 	}
 
-	image := req.Image
+	image := utils.GetString(req.Params, "image")
 	if image == "" {
 		image = defaultPostgresImage
 	}
@@ -64,7 +67,7 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 		"USER":     user,
 		"PASSWORD": password,
 		"NAME":     dbName,
-		"URL":      fmt.Sprintf("postgres://%s:%s@%s:5432/%s", user, password, req.Name, dbName),
+		"URL":      fmt.Sprintf("postgres://%s:%s@%s:5432/%s", url.PathEscape(user), url.PathEscape(password), req.Name, url.PathEscape(dbName)),
 	}
 
 	internalKey := "POSTGRES_PASSWORD_" + namespaced(req.Name)
@@ -76,9 +79,13 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 		exported["DATABASE_"+namespaced(req.Name)+"_"+key] = creds[key]
 	}
 
+	volumeSize := utils.GetInt(req.Params, "volume_size")
+	if volumeSize == 0 {
+		volumeSize = 10
+	}
 	volume := Volume{
 		Name:   req.Name + "-data",
-		SizeGB: 10,
+		SizeGB: volumeSize,
 		Server: req.Context.DefaultVolumeServer,
 	}
 	service := Service{
@@ -124,15 +131,19 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 	}
 
 	// Backup cron — only when backup image and schedule are provided.
+	backupImage := utils.GetString(req.Params, "backup_image")
+	backupCron := utils.GetString(req.Params, "backup_cron")
+	backupStorage := utils.GetString(req.Params, "backup_storage")
+
 	var crons []Cron
-	if req.BackupImage != "" && req.BackupCron != "" {
-		prefix := "STORAGE_" + strings.ToUpper(strings.ReplaceAll(req.BackupStorage, "-", "_"))
+	if backupImage != "" && backupCron != "" {
+		prefix := "STORAGE_" + strings.ToUpper(strings.ReplaceAll(backupStorage, "-", "_"))
 		script := backupScript(req.Name, prefix)
 
 		cron := Cron{
 			Name:     req.Name + "-backup",
-			Schedule: req.BackupCron,
-			Image:    req.BackupImage,
+			Schedule: backupCron,
+			Image:    backupImage,
 			Command:  script,
 			Server:   req.Context.DefaultVolumeServer,
 			Secrets: []string{
@@ -141,7 +152,7 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 				"POSTGRES_DB=" + dbKey,
 			},
 			Storage: []string{
-				req.BackupStorage,
+				backupStorage,
 			},
 		}
 		crons = append(crons, cron)

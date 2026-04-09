@@ -1,3 +1,4 @@
+// Package utils provides pure utility functions — naming, polling, HTTP client, SSH keys, maps, and formatting.
 package utils
 
 import (

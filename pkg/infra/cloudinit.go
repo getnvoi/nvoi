@@ -1,3 +1,4 @@
+// Package infra handles SSH connections, server bootstrap, k3s installation, Docker setup, and cloud-init rendering.
 package infra
 
 import (
