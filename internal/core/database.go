@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/managed"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -41,13 +43,15 @@ Required credentials are read from the cluster via --secret.
 Backup storage must be pre-created via 'nvoi storage set'.
 
 Examples:
-  nvoi database set db --type postgres --secret POSTGRES_PASSWORD --backup-storage db-backups --backup-cron "0 2 * * *"`,
+  nvoi database set db --type postgres --secret POSTGRES_PASSWORD --secret POSTGRES_USER --secret POSTGRES_DB
+  nvoi database set db --type postgres --image postgres:16 --secret POSTGRES_PASSWORD --secret POSTGRES_USER --secret POSTGRES_DB --backup-storage db-backups --backup-cron "0 2 * * *"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kind, err := resolveDatabaseType(cmd)
 			if err != nil {
 				return err
 			}
+			image, _ := cmd.Flags().GetString("image")
 			secrets, _ := cmd.Flags().GetStringArray("secret")
 			backupStorage, _ := cmd.Flags().GetString("backup-storage")
 			backupCron, _ := cmd.Flags().GetString("backup-cron")
@@ -69,12 +73,24 @@ Examples:
 				}
 			}
 
+			// Build backup image if backup is configured.
+			var backupImage string
+			if backupStorage != "" && backupCron != "" {
+				var err error
+				backupImage, err = ensureBackupImage(cmd, cluster, image)
+				if err != nil {
+					return err
+				}
+			}
+
 			result, err := managed.Compile(managed.Request{
 				Kind:          kind,
 				Name:          args[0],
+				Image:         image,
 				Env:           env,
 				BackupStorage: backupStorage,
 				BackupCron:    backupCron,
+				BackupImage:   backupImage,
 				Context:       managed.Context{DefaultVolumeServer: "master"},
 			})
 			if err != nil {
@@ -92,6 +108,7 @@ Examples:
 	addComputeProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().String("type", "", "database type (postgres)")
+	cmd.Flags().String("image", "", "database image (default: postgres:17)")
 	cmd.Flags().StringArray("secret", nil, "secret key to read from cluster")
 	cmd.Flags().String("backup-storage", "", "pre-existing storage name for backups")
 	cmd.Flags().String("backup-cron", "", "cron schedule for backups (e.g. \"0 2 * * *\")")
@@ -312,4 +329,53 @@ func newDatabaseBackupDownloadCmd() *cobra.Command {
 	addAppFlags(cmd)
 	cmd.Flags().String("type", "", "database type (postgres)")
 	return cmd
+}
+
+// ensureBackupImage builds and pushes the postgres backup image if it doesn't
+// exist in the cluster registry. Returns the full image ref.
+// The image is postgres + aws cli. One per postgres version, shared across databases.
+func ensureBackupImage(cmd *cobra.Command, cluster app.Cluster, baseImage string) (string, error) {
+	if baseImage == "" {
+		baseImage = "postgres:17"
+	}
+
+	version := "latest"
+	if parts := strings.SplitN(baseImage, ":", 2); len(parts) == 2 {
+		version = parts[1]
+	}
+
+	imageName := "nvoi-pg-backup"
+	cluster.Output.Progress(fmt.Sprintf("ensuring backup image %s:%s", imageName, version))
+
+	master, _, _, err := cluster.Master(cmd.Context())
+	if err != nil {
+		return "", err
+	}
+	registryAddr := master.PrivateIP + ":5000"
+	fullRef := registryAddr + "/" + imageName + ":" + version
+
+	ssh, err := infra.ConnectSSH(cmd.Context(), master.IPv4+":22", utils.DefaultUser, cluster.SSHKey)
+	if err != nil {
+		return "", err
+	}
+	defer ssh.Close()
+
+	// Check if image already exists in registry.
+	checkCmd := fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list 2>/dev/null | grep -q %q", registryAddr, imageName, version)
+	if _, err := ssh.Run(cmd.Context(), checkCmd); err == nil {
+		cluster.Output.Success(fmt.Sprintf("backup image %s exists", fullRef))
+		return fullRef, nil
+	}
+
+	// Build and push.
+	dockerfile := fmt.Sprintf("FROM %s\nRUN apt-get update && apt-get install -y awscli && rm -rf /var/lib/apt/lists/*", baseImage)
+	buildCmd := fmt.Sprintf("echo '%s' | docker build -t %s - && docker push %s", dockerfile, fullRef, fullRef)
+
+	cluster.Output.Progress(fmt.Sprintf("building backup image %s", fullRef))
+	if _, err := ssh.Run(cmd.Context(), buildCmd); err != nil {
+		return "", fmt.Errorf("build backup image: %w", err)
+	}
+
+	cluster.Output.Success(fmt.Sprintf("backup image %s ready", fullRef))
+	return fullRef, nil
 }

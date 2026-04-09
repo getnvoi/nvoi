@@ -156,6 +156,87 @@ func TestChildResourceNamesStable(t *testing.T) {
 	}
 }
 
+func TestCompilePostgresCustomImage(t *testing.T) {
+	got, err := Compile(Request{
+		Kind:    "postgres",
+		Name:    "db",
+		Image:   "postgres:16",
+		Env:     postgresEnv(),
+		Context: Context{DefaultVolumeServer: "master"},
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	// Service should use custom image.
+	if len(got.Bundle.Services) != 1 || got.Bundle.Services[0].Image != "postgres:16" {
+		t.Errorf("service image = %q, want postgres:16", got.Bundle.Services[0].Image)
+	}
+}
+
+func TestCompilePostgresDefaultImage(t *testing.T) {
+	got, err := Compile(Request{
+		Kind:    "postgres",
+		Name:    "db",
+		Env:     postgresEnv(),
+		Context: Context{DefaultVolumeServer: "master"},
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if len(got.Bundle.Services) != 1 || got.Bundle.Services[0].Image != "postgres:17" {
+		t.Errorf("service image = %q, want postgres:17 (default)", got.Bundle.Services[0].Image)
+	}
+}
+
+func TestCompilePostgresBackupImage(t *testing.T) {
+	got, err := Compile(Request{
+		Kind:          "postgres",
+		Name:          "db",
+		Image:         "postgres:16",
+		Env:           postgresEnv(),
+		BackupStorage: "db-backups",
+		BackupCron:    "0 2 * * *",
+		BackupImage:   "10.0.1.1:5000/nvoi-pg-backup:16",
+		Context:       Context{DefaultVolumeServer: "master"},
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if len(got.Bundle.Crons) != 1 {
+		t.Fatalf("crons = %d, want 1", len(got.Bundle.Crons))
+	}
+	if got.Bundle.Crons[0].Image != "10.0.1.1:5000/nvoi-pg-backup:16" {
+		t.Errorf("cron image = %q, want backup image ref", got.Bundle.Crons[0].Image)
+	}
+	// Command should NOT contain apt-get (aws cli baked in).
+	for _, op := range got.Bundle.Operations {
+		if op.Kind == "cron.set" {
+			cmd, _ := op.Params["command"].(string)
+			if strings.Contains(cmd, "apt-get") {
+				t.Error("backup command should not install packages — aws cli is baked into backup image")
+			}
+		}
+	}
+}
+
+func TestCompilePostgresNoCronWithoutBackupImage(t *testing.T) {
+	got, err := Compile(Request{
+		Kind:          "postgres",
+		Name:          "db",
+		Env:           postgresEnv(),
+		BackupStorage: "db-backups",
+		BackupCron:    "0 2 * * *",
+		// BackupImage not set — no cron should be emitted.
+		Context: Context{DefaultVolumeServer: "master"},
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if len(got.Bundle.Crons) != 0 {
+		t.Errorf("crons = %d, want 0 (no backup image = no cron)", len(got.Bundle.Crons))
+	}
+}
+
 func TestPrimitiveOperationsSortedAndDeterministic(t *testing.T) {
 	got, err := Compile(Request{
 		Kind:    "postgres",

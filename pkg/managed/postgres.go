@@ -37,6 +37,8 @@ func (postgresDefinition) Shape(name string) BundleShape {
 	}
 }
 
+const defaultPostgresImage = "postgres:17"
+
 func (postgresDefinition) Compile(req Request) (Result, error) {
 	password, err := requireEnv(req.Env, "POSTGRES_PASSWORD", "postgres", req.Name)
 	if err != nil {
@@ -49,6 +51,11 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 	dbName, err := requireEnv(req.Env, "POSTGRES_DB", "postgres", req.Name)
 	if err != nil {
 		return Result{}, err
+	}
+
+	image := req.Image
+	if image == "" {
+		image = defaultPostgresImage
 	}
 
 	creds := map[string]string{
@@ -76,7 +83,7 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 	}
 	service := Service{
 		Name:  req.Name,
-		Image: "postgres:17",
+		Image: image,
 		Port:  5432,
 		Volumes: []string{
 			volume.Name + ":/var/lib/postgresql/data",
@@ -116,16 +123,16 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 		}, Owner: Ownership{ManagedKind: req.Kind, RootService: req.Name, ChildName: service.Name}},
 	}
 
-	// Backup cron — only when backup storage and schedule are provided.
+	// Backup cron — only when backup image and schedule are provided.
 	var crons []Cron
-	if req.BackupStorage != "" && req.BackupCron != "" {
+	if req.BackupImage != "" && req.BackupCron != "" {
 		prefix := "STORAGE_" + strings.ToUpper(strings.ReplaceAll(req.BackupStorage, "-", "_"))
 		script := backupScript(req.Name, prefix)
 
 		cron := Cron{
 			Name:     req.Name + "-backup",
 			Schedule: req.BackupCron,
-			Image:    "postgres:17",
+			Image:    req.BackupImage,
 			Command:  script,
 			Server:   req.Context.DefaultVolumeServer,
 			Secrets: []string{
@@ -172,16 +179,13 @@ func (postgresDefinition) Compile(req Request) (Result, error) {
 	}, nil
 }
 
-// backupScript returns a shell script that installs aws cli and pipes pg_dump to S3.
-// The storage env vars (endpoint, bucket, access key, secret key) are injected
+// backupScript returns a shell script that pipes pg_dump to S3 via aws cli.
+// aws cli is pre-installed in the backup image (nvoi-pg-backup).
+// Storage env vars (endpoint, bucket, access key, secret key) are injected
 // by the --storage reference on the cron.
 func backupScript(host, storagePrefix string) string {
 	return fmt.Sprintf(
 		`set -e && `+
-			`rm -f /etc/apt/sources.list.d/pgdg.list && `+
-			`apt-get update -qq && apt-get install -y -qq curl unzip > /dev/null && `+
-			`curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip && `+
-			`unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install > /dev/null && `+
 			`export AWS_ACCESS_KEY_ID=$%s_ACCESS_KEY_ID && `+
 			`export AWS_SECRET_ACCESS_KEY=$%s_SECRET_ACCESS_KEY && `+
 			`export PGPASSWORD=$POSTGRES_PASSWORD && `+
