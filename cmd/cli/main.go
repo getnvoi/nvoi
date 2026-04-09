@@ -7,13 +7,6 @@ import (
 	"syscall"
 
 	"github.com/getnvoi/nvoi/internal/cli"
-	_ "github.com/getnvoi/nvoi/pkg/provider/aws"        // register
-	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare" // register
-	_ "github.com/getnvoi/nvoi/pkg/provider/daytona"    // register
-	_ "github.com/getnvoi/nvoi/pkg/provider/github"     // register
-	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"    // register
-	_ "github.com/getnvoi/nvoi/pkg/provider/local"      // register
-	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"   // register
 )
 
 func main() {
