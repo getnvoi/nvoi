@@ -335,7 +335,7 @@ func TestPostgresDeleteTargetsMatchBundle(t *testing.T) {
 	b := got.Bundle
 
 	// Both local delete (iterates bundle.Crons/Services/Storages/Secrets/Volumes)
-	// and cloud delete (bundleToDeleteSteps in plan/resolve.go) derive targets from
+	// and cloud delete (shapeToDeleteSteps in plan/resolve.go) derive targets from
 	// the same Bundle fields. This test proves the bundle declares all owned
 	// resources that a delete path needs.
 

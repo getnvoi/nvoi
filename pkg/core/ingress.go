@@ -390,12 +390,3 @@ func resolveTLSMode(edgeProxied bool, certPEM, keyPEM string) ingressTLSMode {
 	}
 	return tlsACME
 }
-
-func ingressDomains(routes []IngressRouteArg) []string {
-	var domains []string
-	for _, route := range routes {
-		domains = append(domains, route.Domains...)
-	}
-	sort.Strings(domains)
-	return domains
-}

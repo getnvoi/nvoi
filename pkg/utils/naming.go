@@ -138,6 +138,11 @@ const (
 	OriginCAAnnotation   = "nvoi/origin-ca-id"
 )
 
+// BackupStorageName returns the default backup storage name for a database.
+func BackupStorageName(dbName string) string {
+	return dbName + "-backups"
+}
+
 // ── Storage env naming ─────────────────────────────────────────────────────────
 
 func StorageEnvPrefix(bucketName string) string {

@@ -246,37 +246,6 @@ func shapeToDeleteSteps(shape managed.BundleShape) []Step {
 	return steps
 }
 
-func bundleToDeleteSteps(bundle managed.Bundle) []Step {
-	var steps []Step
-
-	for _, cron := range bundle.Crons {
-		steps = append(steps, Step{Kind: StepCronDelete, Name: cron.Name})
-	}
-	for _, svc := range bundle.Services {
-		steps = append(steps, Step{Kind: StepServiceDelete, Name: svc.Name})
-	}
-	for _, st := range bundle.Storages {
-		steps = append(steps, Step{Kind: StepStorageDelete, Name: st.Name})
-	}
-
-	var secretKeys []string
-	for key := range bundle.ExportedSecrets {
-		secretKeys = append(secretKeys, key)
-	}
-	for key := range bundle.InternalSecrets {
-		secretKeys = append(secretKeys, key)
-	}
-	sort.Strings(secretKeys)
-	for _, key := range secretKeys {
-		steps = append(steps, Step{Kind: StepSecretDelete, Name: key})
-	}
-
-	for _, vol := range bundle.Volumes {
-		steps = append(steps, Step{Kind: StepVolumeDelete, Name: vol.Name})
-	}
-	return steps
-}
-
 func filterManagedSecretSteps(steps []Step, managedSecretNames map[string]bool) []Step {
 	filtered := make([]Step, 0, len(steps))
 	for _, step := range steps {

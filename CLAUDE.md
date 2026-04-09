@@ -250,7 +250,6 @@ cmd/
   core/main.go             Direct CLI entrypoint — signal handling, exit codes
   cli/main.go              Cloud CLI entrypoint — talks to API
   api/main.go              API server entrypoint
-  s3upload/main.go         Standalone S3 upload binary — reads stdin, uploads via Sig V4. Used by database backup CronJobs.
 
 pkg/                       Public library — the execution engine
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
@@ -349,17 +348,17 @@ Missing credential = hard error: `managed postgres "db": missing required creden
 
 ### Backup pipeline
 
-Backups use pre-existing storage (operator creates the bucket) and `cmd/s3upload` (a Go binary uploaded to the server).
+Backups use pre-existing storage (operator creates the bucket) and a pre-built backup image (`nvoi-pg-backup:{version}`) with pg_dump + aws cli baked in.
 
 ```bash
 nvoi storage set db-backups --expire-days 30                # prerequisite: create bucket
 nvoi database set db --type postgres \
   --secret POSTGRES_PASSWORD \
   --backup-storage db-backups \                             # verified to exist before compile
-  --backup-cron "0 2 * * *"                                 # CronJob: pg_dump | gzip | s3upload
+  --backup-cron "0 2 * * *"                                 # CronJob: pg_dump | gzip | aws s3 cp
 ```
 
-The CronJob mounts `s3upload` from the host via hostPath. Storage credentials (S3 endpoint, bucket, access key, secret key) are injected as env vars from k8s secrets created by `storage set`.
+The backup image is built once on the server (`FROM postgres:{version} + awscli`), pushed to the cluster registry, and shared across databases on the same postgres version. Storage credentials are injected as env vars from k8s secrets created by `storage set`.
 
 ### Category/kind model
 

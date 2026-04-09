@@ -266,7 +266,13 @@ func newDatabaseBackupListCmd() *cobra.Command {
 				return err
 			}
 
-			storageName := args[0] + "-backups"
+			storageName, _ := cmd.Flags().GetString("backup-storage")
+			if storageName == "" {
+				storageName = utils.BackupStorageName(args[0])
+			}
+			if err := verifyStorageExists(cmd, cluster, storageName); err != nil {
+				return err
+			}
 			artifacts, err := app.BackupList(cmd.Context(), app.BackupListRequest{
 				Cluster: cluster,
 				Name:    storageName,
@@ -288,6 +294,7 @@ func newDatabaseBackupListCmd() *cobra.Command {
 	addComputeProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().String("type", "", "database type (postgres)")
+	cmd.Flags().String("backup-storage", "", "storage name for backups (default: {name}-backups)")
 	return cmd
 }
 
@@ -311,7 +318,13 @@ func newDatabaseBackupDownloadCmd() *cobra.Command {
 				return err
 			}
 
-			storageName := args[0] + "-backups"
+			storageName, _ := cmd.Flags().GetString("backup-storage")
+			if storageName == "" {
+				storageName = utils.BackupStorageName(args[0])
+			}
+			if err := verifyStorageExists(cmd, cluster, storageName); err != nil {
+				return err
+			}
 			data, err := app.BackupDownload(cmd.Context(), app.BackupDownloadRequest{
 				Cluster: cluster,
 				Name:    storageName,
@@ -328,6 +341,7 @@ func newDatabaseBackupDownloadCmd() *cobra.Command {
 	addComputeProviderFlags(cmd)
 	addAppFlags(cmd)
 	cmd.Flags().String("type", "", "database type (postgres)")
+	cmd.Flags().String("backup-storage", "", "storage name for backups (default: {name}-backups)")
 	return cmd
 }
 
