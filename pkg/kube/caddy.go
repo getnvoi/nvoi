@@ -24,7 +24,8 @@ type IngressRoute struct {
 	UseTLSSecret bool // Render this site with mounted TLS material instead of ACME
 }
 
-const CaddyTLSSecretName = "caddy-origin-cert"
+// CaddyTLSSecretName is defined in pkg/utils/naming.go.
+var CaddyTLSSecretName = utils.CaddyTLSSecretName
 
 // ApplyCaddyConfig updates the ConfigMap and hot-reloads Caddy.
 // If Caddy isn't running yet, deploys it. Zero downtime for config changes.
@@ -139,11 +140,12 @@ func caddyPodName(ctx context.Context, ssh utils.SSHClient, ns, deploymentName s
 	return name, nil
 }
 
-// UpsertTLSSecret creates or updates a k8s TLS secret with cert and key.
-func UpsertTLSSecret(ctx context.Context, ssh utils.SSHClient, ns, name, cert, key string) error {
+// UpsertTLSSecret creates or updates a k8s TLS secret with cert, key, and optional annotations.
+// Pass nil annotations to omit them (backwards compatible).
+func UpsertTLSSecret(ctx context.Context, ssh utils.SSHClient, ns, name, cert, key string, annotations map[string]string) error {
 	secret := corev1.Secret{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Annotations: annotations},
 		Type:       corev1.SecretTypeTLS,
 		StringData: map[string]string{
 			"tls.crt": cert,
@@ -155,6 +157,18 @@ func UpsertTLSSecret(ctx context.Context, ssh utils.SSHClient, ns, name, cert, k
 		return fmt.Errorf("marshal tls secret: %w", err)
 	}
 	return Apply(ctx, ssh, ns, strings.TrimSpace(string(b)))
+}
+
+// GetTLSSecretAnnotation reads a single annotation from a k8s secret.
+// Returns empty string if the secret or annotation doesn't exist.
+func GetTLSSecretAnnotation(ctx context.Context, ssh utils.SSHClient, ns, secretName, key string) string {
+	jsonpath := fmt.Sprintf(`'{.metadata.annotations["%s"]}'`, key)
+	cmd := kubectl(ns, fmt.Sprintf("get secret %s -o jsonpath=%s 2>/dev/null", secretName, jsonpath))
+	out, err := ssh.Run(ctx, cmd)
+	if err != nil {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(string(out)), "'")
 }
 
 // GenerateCaddyManifest produces the full Caddy ConfigMap + Deployment YAML.

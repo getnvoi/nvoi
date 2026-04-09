@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,6 +92,75 @@ func GetStream(endpoint, accessKey, secretKey, bucket, key string) (io.ReadClose
 		return nil, "", 0, fmt.Errorf("s3 get %d: %s/%s", resp.StatusCode, bucket, key)
 	}
 	return resp.Body, resp.Header.Get("Content-Type"), resp.ContentLength, nil
+}
+
+// Object represents an item in an S3 bucket listing.
+type Object struct {
+	Key          string
+	Size         int64
+	LastModified string
+}
+
+// ListObjects lists objects in an S3-compatible bucket.
+// Returns all objects (handles pagination via IsTruncated).
+func ListObjects(endpoint, accessKey, secretKey, bucket, prefix string) ([]Object, error) {
+	var all []Object
+	continuation := ""
+	for {
+		url := fmt.Sprintf("%s/%s?list-type=2&max-keys=1000", endpoint, bucket)
+		if prefix != "" {
+			url += "&prefix=" + prefix
+		}
+		if continuation != "" {
+			url += "&continuation-token=" + continuation
+		}
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/xml")
+		Sign(req, nil, accessKey, secretKey, "auto")
+
+		resp, err := s3Client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("s3 list %s: read body: %w", bucket, err)
+		}
+		if resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("s3 list %s: %d: %s", bucket, resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+
+		var result listBucketResult
+		if err := parseXML(body, &result); err != nil {
+			return nil, fmt.Errorf("s3 list %s: parse: %w", bucket, err)
+		}
+		for _, c := range result.Contents {
+			all = append(all, Object{Key: c.Key, Size: c.Size, LastModified: c.LastModified})
+		}
+		if !result.IsTruncated {
+			break
+		}
+		continuation = result.NextContinuationToken
+	}
+	return all, nil
+}
+
+type listBucketResult struct {
+	Contents []struct {
+		Key          string `xml:"Key"`
+		Size         int64  `xml:"Size"`
+		LastModified string `xml:"LastModified"`
+	} `xml:"Contents"`
+	IsTruncated           bool   `xml:"IsTruncated"`
+	NextContinuationToken string `xml:"NextContinuationToken"`
+}
+
+func parseXML(data []byte, v any) error {
+	return xml.Unmarshal(data, v)
 }
 
 // Sign adds AWS Signature V4 headers to an HTTP request.

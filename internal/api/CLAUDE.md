@@ -7,11 +7,13 @@ The SaaS layer on top of `pkg/core/`. Users push a config YAML + env, the API va
 ```
 User pushes config YAML + .env
   → Parse YAML
-  → Expand managed services (postgres, redis, meilisearch → real service specs)
-  → Validate expanded config
-  → Plan: config → ordered []Step sequence
-  → Diff: previous config vs current → delete steps for removed resources
-  → Plan(prev, current, env): deletes first (reverse order) + sets (forward order, idempotent)
+  → ResolveDeploymentSteps:
+      compile managed bundles (pkg/managed)
+      strip managed-owned resources from config
+      inject managed exports into uses: consuming workloads
+      call Build() for non-managed resources
+      merge managed + non-managed steps in phase order
+  → Validate stripped config
   → Executor walks steps, calls pkg/core/ functions
   → Each step tracked in deployment_steps, each output line in deployment_step_logs (JSONL)
 ```
@@ -49,14 +51,9 @@ internal/api/
     validate.go          Structural validation rules with cross-reference checks
 
   plan/
-    plan.go              Build(reality, desired, env) → ordered Step sequence
+    plan.go              Build(reality, desired, env) → ordered Step sequence for non-managed resources
+    resolve.go           ResolveDeploymentSteps() — compiles managed bundles via pkg/managed, merges with Build()
     state.go             InfraState() — queries providers + cluster to build reality picture
-
-  managed/
-    service.go           ManagedService interface + registry + Expand()
-    postgres.go          PostgreSQL — image, port, volume, credentials, DATABASE_ prefix
-    redis.go             Redis — image, port, REDIS_ prefix
-    meilisearch.go       Meilisearch — image, port, volume, master key, MEILI_ prefix
 ```
 
 ## Data model
@@ -73,11 +70,6 @@ User
                     │     ├── build_provider     enum: local | daytona | github (optional)
                     │     ├── config             YAML text
                     │     └── env                encrypted KEY=VALUE (credentials + app secrets)
-                    │
-                    ├── RepoManagedServiceConfig (permanent, not versioned)
-                    │     ├── name               "db", "cache", "search"
-                    │     ├── kind               "postgres", "redis", "meilisearch"
-                    │     └── credentials        encrypted JSON (generated once, stored forever)
                     │
                     └── Deployment
                           ├── status             pending → running → succeeded | failed
@@ -150,7 +142,7 @@ ingress:
 |-------|---------|
 | `image: postgres:17` | Pre-built image |
 | `build: web` | References a build target — image resolved at deploy time |
-| `managed: postgres` | Managed service — Expand() replaces with real spec + generates credentials |
+| `managed: postgres` | Managed service — compiled by `pkg/managed`, resolved by `plan.ResolveDeploymentSteps()` |
 
 ### Env resolution
 
@@ -167,45 +159,38 @@ Convention parsed by `kube.ParseSecretRef()` — shared by YAML generation (`pkg
 
 ## Managed services
 
-Interface: `Kind()`, `Spec(name)`, `Credentials(name)`, `EnvPrefix()`, `InternalSecrets(name, creds)`.
+Managed services are compiled by `pkg/managed` — a pure, shared compiler that produces deterministic bundles of primitive operations. The API resolves these bundles into deployment steps via `plan.ResolveDeploymentSteps()`.
 
-One file per implementation. Registration via `init()`. Adding a new managed service = one new file, five methods.
+Supported managed kinds: `postgres` (category: database), `claude` (category: agent). Each is one file in `pkg/managed/` with a `Compile()` method that returns a `Bundle` containing owned children, secrets, volumes, services, and ordered operations.
 
-`Spec()` returns what the managed service itself consumes (image, port, volumes, its own env/secrets). `InternalSecrets()` returns what other services consume when they `uses:` it (namespaced credential keys).
+### Credential model
 
-### Credential lifecycle
-
-1. First config push with `managed: postgres` for `db` → `Credentials("db")` generates random password → stored in `repo_managed_service_configs` (encrypted)
-2. Every subsequent push → `Expand()` loads stored credentials → same password forever
-3. Row deleted → credentials gone, service stops being injected
+Credentials are required input — no generation, no persistence. The user provides them in the env pushed with the config (`POSTGRES_PASSWORD`, `POSTGRES_USER`, `POSTGRES_DB` for postgres; `NVOI_AGENT_TOKEN` for claude). Missing credential = hard error at push time.
 
 ### Secret namespacing
 
 Multiple instances of the same kind get unique secret keys:
-- `db` (postgres) → `POSTGRES_PASSWORD_DB`
-- `analytics` (postgres) → `POSTGRES_PASSWORD_ANALYTICS`
+- `mydb` (postgres) → `POSTGRES_PASSWORD_MYDB`, `POSTGRES_USER_MYDB`, `POSTGRES_DB_MYDB` (internal), `DATABASE_MYDB_*` (exported)
+- `analytics` (postgres) → `POSTGRES_PASSWORD_ANALYTICS`, `POSTGRES_USER_ANALYTICS`, `POSTGRES_DB_ANALYTICS` (internal), `DATABASE_ANALYTICS_*` (exported)
 
-Spec uses aliased format: `POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB` so the container reads the standard env var while the k8s secret key is namespaced.
-
-### Expand() transformation
+### Step resolution
 
 ```
-Config (public)                    Config (internal)
-services:                          services:
-  db:                                db:
-    managed: postgres        →         image: postgres:17
-                                       port: 5432
-                                       volumes: [db-data:/var/lib/postgresql/data]
-                                       secrets: [POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB]
-  web:                               web:
-    uses: [db]               →         secrets: [DATABASE_DB_HOST, DATABASE_DB_PORT, ...]
+Config with managed: postgres       Resolved deployment steps
+services:                           secret.set POSTGRES_PASSWORD_MYDB
+  mydb:                             secret.set POSTGRES_USER_MYDB
+    managed: postgres               secret.set POSTGRES_DB_MYDB
+  web:                              secret.set DATABASE_MYDB_HOST ...
+    uses: [mydb]                    volume.set mydb-data
+                                    service.set mydb
+                                    service.set web (with DATABASE_MYDB_* secrets injected)
 ```
 
-Expand also auto-adds volumes required by managed services to the config.
+Managed-owned resources are excluded from `plan.Build()`. No managed child operation is emitted by both the managed compiler and the planner.
 
 ## Plan
 
-`Plan(prev, current, env)` is the single function that produces the full deploy sequence. Phase ordering is explicit — declared at the top of the function, one line per phase:
+`Build(prev, current, env)` produces ordered steps for non-managed resources. `ResolveDeploymentSteps()` wraps `Build()` — it compiles managed bundles first, strips managed-owned resources from the config, calls `Build()` for the remainder, then merges managed and non-managed steps in phase order. Phase ordering is explicit — declared at the top of `Build()`, one line per phase:
 
 **Deletes/reconciliation before DNS delete:**
 
@@ -213,11 +198,12 @@ Expand also auto-adds volumes required by managed services to the config.
 |-------|----------|---------|
 | 1. Ingress reconcile | `ingress.apply` | `pkg/core.IngressApply` |
 | 2. DNS | `dns.delete` | `pkg/core.DNSDelete` |
-| 3. Services | `service.delete` | `pkg/core.ServiceDelete` |
-| 4. Storage | `storage.delete` | `pkg/core.StorageDelete` |
-| 5. Secrets | `secret.delete` | `pkg/core.SecretDelete` |
-| 6. Volumes | `volume.delete` | `pkg/core.VolumeDelete` |
-| 7. Compute | `instance.delete` | `pkg/core.ComputeDelete` |
+| 3. Cron | `cron.delete` | `pkg/core.CronDelete` |
+| 4. Services | `service.delete` | `pkg/core.ServiceDelete` |
+| 5. Storage | `storage.delete` | `pkg/core.StorageDelete` |
+| 6. Secrets | `secret.delete` | `pkg/core.SecretDelete` |
+| 7. Volumes | `volume.delete` | `pkg/core.VolumeDelete` |
+| 8. Compute | `instance.delete` | `pkg/core.ComputeDelete` |
 
 **Then sets (forward deploy order):**
 
@@ -229,7 +215,8 @@ Expand also auto-adds volumes required by managed services to the config.
 | 4. Secrets | `secret.set` | `pkg/core.SecretSet` |
 | 5. Storage | `storage.set` | `pkg/core.StorageSet` |
 | 6. Services | `service.set` | `pkg/core.ServiceSet` |
-| 7. DNS | `dns.set` | `pkg/core.DNSSet` |
+| 7. Cron | `cron.set` | `pkg/core.CronSet` |
+| 8. DNS | `dns.set` | `pkg/core.DNSSet` |
 
 All steps are deterministic (sorted keys). First server alphabetically = master. Empty config = only delete steps (destroy-via-diff). First deploy (nil prev) = only set steps. Delete commands are idempotent — deleting something that doesn't exist succeeds silently.
 
@@ -247,7 +234,6 @@ Token-type agnostic: PAT, OAuth access token, fine-grained token all work.
 
 - `ENCRYPTION_KEY` env var — 32 bytes hex-encoded (AES-256-GCM)
 - `RepoConfig.Env` encrypted at rest (GORM `BeforeCreate` / `AfterFind` hooks)
-- `RepoManagedServiceConfig.Credentials` encrypted at rest (same hooks)
 - Env hidden from JSON by default — `?reveal=true` to show
 
 ## Compose
@@ -274,8 +260,7 @@ CLI: nvoi deploy
 
 API: POST .../deploy
   → Load latest RepoConfig + previous version
-  → Expand managed services (load stored creds from repo_managed_service_configs)
-  → Plan(prev, current, env) = deletes for removed resources + sets for desired state
+  → ResolveDeploymentSteps(cfg, reality, env) = compile managed bundles + plan non-managed + merge
   → Create Deployment + DeploymentSteps rows (all pending)
   → Return deployment with steps
 
@@ -422,8 +407,8 @@ See [`examples/core/`](../../examples/core/) for imperative command sequences.
 
 1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.** Same functions the direct CLI uses. Same idempotency guarantees.
 2. **Config describes what. Env provides where + credentials.** Provider selection is on `RepoConfig` columns. Provider credentials are in the encrypted env.
-3. **Managed service credentials are permanent.** Generated once, stored forever in `repo_managed_service_configs`. Not versioned. Row exists = inject.
-4. **Expand happens before validation.** Public config (with `managed:`) → internal config (with real specs) → validate the expanded result.
+3. **Managed service credentials are required input.** Provided in the env pushed with the config. No generation, no persistence. Missing = hard error.
+4. **ResolveDeploymentSteps wraps Build().** Compiles managed bundles, strips managed-owned resources, calls `Build()` for the rest, merges into one step sequence. Validates the stripped config.
 5. **Plan is deterministic.** Same config + env always produces the same step sequence. Sorted keys everywhere.
 6. **Plan handles both sets and removals.** `Plan(prev, current, env)` generates delete steps for resources that disappeared between versions, then set steps for the desired state. Set commands are idempotent — no need to diff for changes, only for removals.
 7. **Secrets are always secrets.** Managed service passwords use namespaced k8s secret keys with aliased env vars. Never plain text in specs.

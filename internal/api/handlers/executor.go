@@ -230,22 +230,59 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 		}
 
 		return pkgcore.ServiceSet(ctx, pkgcore.ServiceSetRequest{
-			Cluster:    e.cluster,
-			Name:       name,
-			Image:      image,
-			Port:       utils.GetInt(params, "port"),
-			Command:    utils.GetString(params, "command"),
-			Replicas:   utils.GetInt(params, "replicas"),
-			EnvVars:    utils.GetStringSlice(params, "env"),
-			Secrets:    utils.GetStringSlice(params, "secrets"),
-			Storages:   utils.GetStringSlice(params, "storage"),
-			Volumes:    utils.GetStringSlice(params, "volumes"),
-			HealthPath: utils.GetString(params, "health"),
-			Server:     utils.GetString(params, "server"),
+			Cluster:     e.cluster,
+			Name:        name,
+			Image:       image,
+			Port:        utils.GetInt(params, "port"),
+			Command:     utils.GetString(params, "command"),
+			Replicas:    utils.GetInt(params, "replicas"),
+			EnvVars:     utils.GetStringSlice(params, "env"),
+			Secrets:     utils.GetStringSlice(params, "secrets"),
+			Storages:    utils.GetStringSlice(params, "storage"),
+			Volumes:     utils.GetStringSlice(params, "volumes"),
+			HealthPath:  utils.GetString(params, "health"),
+			Server:      utils.GetString(params, "server"),
+			ManagedKind: utils.GetString(params, "managed_kind"),
 		})
 
 	case plan.StepServiceDelete:
 		return pkgcore.ServiceDelete(ctx, pkgcore.ServiceDeleteRequest{
+			Cluster: e.cluster,
+			Name:    name,
+		})
+
+	case plan.StepCronSet:
+		image := utils.GetString(params, "image")
+		if buildRef := utils.GetString(params, "build"); buildRef != "" {
+			if ref, ok := e.builtImages[buildRef]; ok {
+				image = ref
+			} else {
+				ref, err := pkgcore.BuildLatest(ctx, pkgcore.BuildLatestRequest{
+					Cluster: e.cluster,
+					Name:    buildRef,
+				})
+				if err != nil {
+					return fmt.Errorf("resolve image for build %q: %w", buildRef, err)
+				}
+				image = ref
+				e.builtImages[buildRef] = ref
+			}
+		}
+		return pkgcore.CronSet(ctx, pkgcore.CronSetRequest{
+			Cluster:  e.cluster,
+			Name:     name,
+			Image:    image,
+			Command:  utils.GetString(params, "command"),
+			EnvVars:  utils.GetStringSlice(params, "env"),
+			Secrets:  utils.GetStringSlice(params, "secrets"),
+			Storages: utils.GetStringSlice(params, "storage"),
+			Volumes:  utils.GetStringSlice(params, "volumes"),
+			Schedule: utils.GetString(params, "schedule"),
+			Server:   utils.GetString(params, "server"),
+		})
+
+	case plan.StepCronDelete:
+		return pkgcore.CronDelete(ctx, pkgcore.CronDeleteRequest{
 			Cluster: e.cluster,
 			Name:    name,
 		})
@@ -259,19 +296,31 @@ func (e *executor) step(ctx context.Context, kind plan.StepKind, name string, pa
 			EdgeProxied: utils.GetBool(params, "edge_proxied"),
 		})
 
-	case plan.StepIngressApply:
-		routes, err := parseIngressRoutesFromParams(params)
-		if err != nil {
-			return err
+	case plan.StepIngressSet:
+		route := pkgcore.IngressRouteArg{
+			Service: utils.GetString(params, "service"),
+			Domains: utils.GetStringSlice(params, "domains"),
 		}
-		return pkgcore.IngressApply(ctx, pkgcore.IngressApplyRequest{
+		if utils.GetString(params, "exposure") == "edge_proxied" {
+			route.EdgeProxied = true
+		}
+		return pkgcore.IngressSet(ctx, pkgcore.IngressSetRequest{
 			Cluster:      e.cluster,
 			DNS:          e.dns,
-			Routes:       routes,
-			TLSMode:      utils.GetString(params, "tls_mode"),
+			Route:        route,
 			EdgeProvider: utils.GetString(params, "edge_provider"),
 			CertPEM:      utils.GetString(params, "cert_pem"),
 			KeyPEM:       utils.GetString(params, "key_pem"),
+		})
+
+	case plan.StepIngressDelete:
+		return pkgcore.IngressDelete(ctx, pkgcore.IngressDeleteRequest{
+			Cluster: e.cluster,
+			DNS:     e.dns,
+			Route: pkgcore.IngressRouteArg{
+				Service: utils.GetString(params, "service"),
+				Domains: utils.GetStringSlice(params, "domains"),
+			},
 		})
 
 	case plan.StepDNSDelete:
@@ -323,36 +372,6 @@ func parseFirewallFromParams(ctx context.Context, params map[string]any) (provid
 	}
 
 	return provider.ResolveFirewallArgs(ctx, args)
-}
-
-// parseIngressRoutesFromParams extracts routes from step params.
-func parseIngressRoutesFromParams(params map[string]any) ([]pkgcore.IngressRouteArg, error) {
-	routesRaw, ok := params["routes"]
-	if !ok {
-		return nil, fmt.Errorf("ingress.apply: missing routes param")
-	}
-	routesList, ok := routesRaw.([]any)
-	if !ok {
-		return nil, fmt.Errorf("ingress.apply: routes must be a list")
-	}
-	edgeProxied := utils.GetString(params, "exposure") == "edge_proxied"
-	var routes []pkgcore.IngressRouteArg
-	for _, item := range routesList {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		svc := utils.GetString(m, "service")
-		domains := utils.GetStringSlice(m, "domains")
-		if svc != "" && len(domains) > 0 {
-			routes = append(routes, pkgcore.IngressRouteArg{
-				Service:     svc,
-				Domains:     domains,
-				EdgeProxied: edgeProxied,
-			})
-		}
-	}
-	return routes, nil
 }
 
 // ── status helpers ─────────────────────────────────────────────────────────────

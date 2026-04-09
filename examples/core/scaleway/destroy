@@ -10,13 +10,17 @@ export COMPUTE_PROVIDER=scaleway
 export DNS_PROVIDER=cloudflare
 export STORAGE_PROVIDER=cloudflare
 
-bin/core dns delete web scw.nvoi.to -y
+bin/core ingress delete web:scw.nvoi.to -y
+bin/core dns delete web:scw.nvoi.to -y
+bin/core service delete jobs -y
+bin/core service delete web -y
+bin/core database delete db --type postgres -y
+bin/core storage empty db-backups -y
+bin/core storage delete db-backups -y
 bin/core storage empty assets -y
 bin/core storage delete assets -y
 bin/core secret delete RAILS_MASTER_KEY
 bin/core secret delete POSTGRES_PASSWORD
-bin/core service delete jobs -y
-bin/core service delete web -y
-bin/core service delete db -y
-bin/core volume delete pgdata -y
+bin/core secret delete POSTGRES_USER
+bin/core secret delete POSTGRES_DB
 bin/core instance delete master -y

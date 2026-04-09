@@ -196,7 +196,30 @@ nvoi service set <name> --image postgres:17 --port 5432 --secret DB_PASSWORD
 nvoi service set <name> --image $IMAGE --port 3000 --replicas 2 --secret RAILS_MASTER_KEY --storage assets
 nvoi service delete <name>
 
-# Live view — nodes, workloads, pods, services, ingress, secrets, storage
+# Cron — scheduled workloads (CronJob)
+nvoi cron set <name> --image busybox --schedule "0 1 * * *" --command "echo hello"
+nvoi cron set <name> --image postgres:17 --schedule "0 2 * * *" --storage db-backups --secret PGPASSWORD
+nvoi cron delete <name>
+
+# ── Managed databases ─────────────────────────────────────────────────────────
+# --type is required. --secret reads from cluster. --backup-storage must pre-exist.
+nvoi database set <name> --type postgres --secret POSTGRES_PASSWORD
+nvoi database set <name> --type postgres --secret POSTGRES_PASSWORD --backup-storage db-backups --backup-cron "0 2 * * *"
+nvoi database delete <name> --type postgres
+nvoi database list
+nvoi database backup create <name> --type postgres                              # trigger backup now
+nvoi database backup list <name> --type postgres                                # list S3 objects
+nvoi database backup download <name> --type postgres <artifact>                 # download to stdout
+
+# ── Managed agents ────────────────────────────────────────────────────────────
+# --type is required. --secret reads from cluster.
+nvoi agent set <name> --type claude --secret NVOI_AGENT_TOKEN
+nvoi agent delete <name> --type claude
+nvoi agent list
+nvoi agent exec <name> --type claude -- <command>
+nvoi agent logs <name> --type claude
+
+# Live view — nodes, workloads, pods, services, crons, ingress, secrets, storage
 nvoi describe
 
 # Operate
@@ -232,7 +255,16 @@ pkg/                       Public library — the execution engine
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
     cluster.go             Cluster struct + ProviderRef type
     output.go              Output interface — the contract between core/ and its viewers
+    cron.go                CronSet, CronDelete — first-class CronJob primitive
+    backup.go              BackupCreate (trigger job), BackupList (S3 list), BackupDownload (S3 get)
+    managed_list.go        ManagedList — discovers managed services by nvoi/managed-kind label
+  managed/                 Pure managed service compiler. One compiler, two interpreters (local + cloud).
+    compiler.go            Definition interface (Kind, Category, Compile, Shape), registry, Compile(), Shape()
+    types.go               Request, Result, Bundle, BundleShape, Operation, Ownership
+    postgres.go            database/postgres — service + volume + secrets + optional backup cron
+    claude.go              agent/claude — service + volume + secrets
   kube/                    K8s YAML generation + kubectl over SSH + Caddy ingress
+    cron.go                CronJob YAML + CreateJobFromCronJob + hostPath support
   infra/                   SSH, server bootstrap, k3s, Docker, volume mounting, WaitHTTPS
   provider/                ComputeProvider + DNSProvider + BucketProvider + Builder interfaces
     hetzner/               Hetzner Cloud (compute + volumes)
@@ -246,13 +278,18 @@ pkg/                       Public library — the execution engine
     sshutil.go             Ed25519 key generation (GenerateEd25519Key) + DerivePublicKey
     params.go              Typed extractors for map[string]any (GetString, GetInt, GetBool, GetStringSlice)
     maps.go                SortedKeys, RemovedKeys, ReverseSorted
-    s3/                    AWS Signature V4 signing for S3-compatible APIs
+    s3/                    AWS Signature V4 signing + ListObjects for S3-compatible APIs
 
 internal/                  Private
   render/                  Shared renderers — TUI, Plain, JSON, Table, Resolve, ReplayLine, Delete, Describe, Resources
   testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
   core/                    Direct CLI. Cobra wrappers. Parse flags → call pkg/core/ → render via internal/render/
+    database.go            nvoi database set/delete/list/backup — managed database category
+    agent_cmd.go           nvoi agent set/delete/list/exec/logs — managed agent category
+    managed.go             Shared helpers: resolveCluster, execOperation, deleteByShape, verifyManagedKind
+    cron.go                nvoi cron set/delete
   api/                     REST API server — see [internal/api/CLAUDE.md](internal/api/CLAUDE.md)
+    plan/resolve.go        ResolveDeploymentSteps — compiles managed bundles + wraps plan.Build() for cloud
   cli/                     Cloud CLI — login, deploy, stream logs via internal/render/ — see [internal/cli/README.md](internal/cli/README.md)
 ```
 
@@ -271,13 +308,6 @@ Both CLIs produce identical output. The direct CLI calls `pkg/core/` → `Output
 
 Everything pluggable is a provider. Same pattern for all four kinds: interface + credential schema + `init()` register + factory.
 
-```go
-// Registration pattern (same for all provider kinds):
-provider.RegisterX("name", CredentialSchema{...}, func(creds map[string]string) XProvider {
-    return New(creds)
-})
-```
-
 | Kind | Flag | Env var | Interface | Implementations |
 |------|------|---------|-----------|----------------|
 | Compute | `--compute-provider` | `COMPUTE_PROVIDER` | `ComputeProvider` | hetzner, aws, scaleway |
@@ -285,340 +315,97 @@ provider.RegisterX("name", CredentialSchema{...}, func(creds map[string]string) 
 | Storage | `--storage-provider` | `STORAGE_PROVIDER` | `BucketProvider` | cloudflare (R2), aws (S3) |
 | Build | `--build-provider` | `BUILD_PROVIDER` | `BuildProvider` | local, daytona, github |
 
-`--compute-provider` is on every command that touches infrastructure.
-`--build-provider` is only on `build`. It's the only command that needs two providers (compute for registry access + builder for building).
+See [`pkg/provider/CLAUDE.md`](pkg/provider/CLAUDE.md) for registration pattern, credential resolution, credential pairs, and `.env` reference.
 
-### Provider registration
+## Managed services
 
-All providers follow the same architecture:
+Managed services are compiled by `pkg/managed` — a pure, shared compiler that produces deterministic bundles of primitive operations. Two categories, each with concrete kinds:
 
-1. **Interface** — `pkg/provider/{kind}.go` defines the interface
-2. **Credential schema** — `pkg/provider/{impl}/register.go` declares required fields with env var mappings
-3. **Registration** — `init()` calls `provider.RegisterX(name, schema, factory)`
-4. **Blank import** — `internal/core/{command}.go` imports `_ "pkg/provider/{impl}"` to trigger `init()`
-5. **Resolution** — `provider.ResolveX(name, creds)` validates schema + returns instance
+| Category | Kind | Config YAML | CLI |
+|----------|------|-------------|-----|
+| database | postgres | `managed: postgres` | `nvoi database set db --type postgres` |
+| agent | claude | `managed: claude` | `nvoi agent set coder --type claude` |
 
-### Provider-owned operations
+### How it works
 
-Some operations are provider-specific by design. Each provider implements them according to its own conventions:
+`pkg/managed.Compile(req)` takes a kind, name, and env (credential values) and returns a `Bundle` containing owned operations. The compiler is pure — same input, same output.
 
-- **`ResolveDevicePath(vol) string`** on `ComputeProvider` — returns the OS block device path for an attached volume. Hetzner returns `LinuxDevice` from the API. AWS computes the NVMe symlink (`/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol<id>`). No SSH needed — the provider knows its device naming convention.
+Two interpreters consume the same compiler output:
 
-- **`ListResources(ctx) ([]ResourceGroup, error)`** on all three provider interfaces (`ComputeProvider`, `DNSProvider`, `BucketProvider`) — returns every resource the provider created as display groups. `ResourceGroup` has `Name`, `Columns`, `Rows`. The `resources` command renders whatever comes back. Hetzner lists servers, firewalls, networks, volumes. AWS lists instances, security groups, VPCs, subnets, IGWs, route tables, EBS volumes. Each provider lists everything — no leftovers go unnoticed.
+- **Local CLI:** `database set` reads secrets from cluster via `--secret`, compiles bundle, iterates operations, calls `pkg/core` functions directly.
+- **Cloud API:** `plan.ResolveDeploymentSteps()` compiles bundles, strips managed-owned resources from config, calls `plan.Build()` for non-managed resources, merges into ordered steps, persists for deferred execution.
 
-- **`RenderCloudInit(sshPublicKey, hostname)`** in `infra/` — cloud-init sets the hostname, which becomes the k3s node name. Critical for AWS where the default hostname is the private DNS name (`ip-10-0-1-x`), not the server name. Hetzner sets hostname via its API, but cloud-init is the single path for all providers.
+### Credential model
 
-### Credential resolution
-
-Two layers. The pure mapping lives in `pkg/provider/resolve.go` — shared by both CLIs and the API:
-
-```go
-provider.MapCredentials(schema, env) → map[string]string  // HETZNER_TOKEN=xxx → token=xxx
-provider.MapComputeCredentials("hetzner", env) → map[string]string  // convenience wrapper
-```
-
-The direct CLI adds flag resolution on top in `internal/core/resolve.go`:
-
-```go
-resolveCredentials(cmd, schema, flagName) → map[string]string
-```
-
-Resolution order: `--xxx-credentials KEY=VALUE` flag → direct command flag (e.g. `--zone`) → env var from schema → `MapCredentials` for the env-var-to-key translation. One pattern for all providers. DNS zone is declared in the Cloudflare DNS schema (`EnvVar: "DNS_ZONE"`, `Flag: "zone"`) — no special-casing.
-
-The API executor uses `MapCredentials` directly — no flags, env comes from the DB.
-
-**Region override:** `--compute-region` overrides `creds["region"]` after credential resolution. This ensures the flag wins over `AWS_REGION` in `.env`. The AWS SDK client is initialized from the creds map, so the override must happen before provider construction.
-
-### Credential pairs
-
-Every provider has a name flag + credentials flag. Always a pair. Credentials are `key=value` pairs.
+Credentials are required input. No generation, no persistence, no magic.
 
 ```bash
-# Common: env vars set, no credential flags needed
-bin/core instance set master --compute-type cx23 --compute-region fsn1
-
-# Override: --compute-credentials takes priority over env var
-bin/core instance set master \
-  --compute-provider hetzner \
-  --compute-credentials HETZNER_TOKEN=$OTHER_TOKEN \
-  --compute-type cx23 \
-  --compute-region fsn1
-
-# Build uses two providers — compute for registry, builder for building
-bin/core build \
-  --compute-provider hetzner \
-  --compute-credentials HETZNER_TOKEN=xxx \
-  --build-provider daytona \
-  --build-credentials api_key=xxx \
-  --source myorg/app \
-  --name web
-
-# Error when missing
-# hetzner: token is required (--compute-credentials HETZNER_TOKEN=..., env: HETZNER_TOKEN)
+nvoi secret set POSTGRES_PASSWORD s3cret                    # store in cluster first
+nvoi database set db --type postgres --secret POSTGRES_PASSWORD  # reads value from cluster
 ```
 
-### .env
+Missing credential = hard error: `managed postgres "db": missing required credential POSTGRES_PASSWORD`
 
-Single file. Everything. Compose loads it via `env_file`. Deploy scripts source it for host-side variable expansion. No `.env.deploy`, no split.
+### Backup pipeline
+
+Backups use pre-existing storage (operator creates the bucket) and a pre-built backup image (`nvoi-pg-backup:{version}`) with pg_dump + aws cli baked in.
+
+```bash
+nvoi storage set db-backups --expire-days 30                # prerequisite: create bucket
+nvoi database set db --type postgres \
+  --secret POSTGRES_PASSWORD \
+  --backup-storage db-backups \                             # verified to exist before compile
+  --backup-cron "0 2 * * *"                                 # CronJob: pg_dump | gzip | aws s3 cp
+```
+
+The backup image is built once on the server (`FROM postgres:{version} + awscli`), pushed to the cluster registry, and shared across databases on the same postgres version. Storage credentials are injected as env vars from k8s secrets created by `storage set`.
+
+### Category/kind model
+
+`--type` is required on all category commands. No defaults.
 
 ```
-# App identity
-NVOI_APP_NAME=rails
-NVOI_ENV=production
-
-# Provider selection
-COMPUTE_PROVIDER=aws          # hetzner | aws | scaleway
-DNS_PROVIDER=cloudflare       # cloudflare | aws | scaleway
-STORAGE_PROVIDER=aws          # cloudflare | aws
-BUILD_PROVIDER=daytona        # local | daytona | github
-DNS_ZONE=nvoi.to
-
-# Provider credentials
-HETZNER_TOKEN=...
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_REGION=eu-west-3
-CF_API_KEY=...
-CF_ACCOUNT_ID=...
-CF_ZONE_ID=...
-DAYTONA_API_KEY=...
-SSH_KEY_PATH=~/.ssh/id_ed25519
-
-# App secrets
-POSTGRES_USER=...
-POSTGRES_PASSWORD=...
-POSTGRES_DB=...
-RAILS_MASTER_KEY=...
+Error: --type is required. Available database types: postgres
+Error: --type is required. Available agent types: claude
 ```
+
+Adding a new kind = one file in `pkg/managed/` implementing `Definition` (Kind, Category, Compile, Shape). It shows up in `--type` error messages automatically via `KindsForCategory()`.
+
+### Delete uses Shape (no credentials needed)
+
+`database delete db --type postgres` calls `managed.Shape("postgres", "db")` which returns owned names (service, volume, cron, secrets) without needing credential values. No cluster read before deletion.
+
+### Discovery
+
+Managed services are labeled with `nvoi/managed-kind` in k8s. `database list` and `agent list` query by this label. `verifyManagedKind` guards targeted commands (exec, logs, backup) — rejects non-managed or wrong-category services.
 
 ## Apply guardrails
 
 Hard errors before touching k8s.
 
-**Cluster:**
-- Server named `master` must exist (resolved from provider API by name `nvoi-{app}-{env}-master`).
-- Cluster must have k3s installed (`instance set` handles this — kubectl get nodes succeeds over SSH).
-
-**Services:**
-- `service set` takes `--image` only. `--image` is required.
-- Build is a separate command. `build` outputs an image ref. `service set` consumes it.
-
-**Build (`nvoi build`):**
-- `--compute-provider` = compute provider (for SSH tunnel to cluster registry). Required.
-- `--build-provider` = build provider (local, daytona, github). Required.
-- `--source` = what to build. Local path (`.`, `./path`) or remote repo (`org/repo`, `https://...`, `git@...`).
-- `--dockerfile-path` = override Dockerfile location (optional).
-- `--name` = image name in the registry. Required.
-- `build list` = query registry for all tags. Uses `--compute-provider` only (no builder needed).
-- `build latest <name>` = return latest image ref. Pipeable.
-- Source + builder validation:
-  - Local path (`.` or `/`) + `--build-provider local` → ok.
-  - Local path + `--build-provider daytona` → error (Daytona needs a git repo).
-  - Remote repo + `--build-provider daytona` → ok.
-  - Remote repo + `--build-provider local` → error (local can't clone remote repos).
-  - Detection: `--source` starts with `.` or `/` → local. Otherwise → remote.
-- The registry IS the state. No build database. `build list` queries the registry directly over SSH.
-
-**Build — Dockerfile resolution (local source only):**
-
-`--source` is where the code is. The builder resolves the Dockerfile and build context automatically.
-
-When `--dockerfile-path` is **not set** (default):
-- Dockerfile: `{source}/Dockerfile` — standard docker convention.
-- Build context: project root, detected by walking up from `{source}` to find `.git` or `go.mod`. If source IS the project root, context = source.
-
-When `--dockerfile-path` **is set**:
-1. Try `{source}/{dockerfile-path}` — relative to source first.
-2. Try `{dockerfile-path}` — absolute or relative to cwd.
-3. Neither exists → hard error.
-- Build context: project root (same walk-up logic).
-
-Examples:
-```bash
-# Source is a subdirectory — Dockerfile found at ./cmd/web/Dockerfile,
-# build context is . (project root, where go.mod lives).
-nvoi build --build-provider local --source ./cmd/web --name web
-
-# Source is project root — Dockerfile at ./Dockerfile, context is .
-nvoi build --build-provider local --source . --name myapp
-
-# Explicit Dockerfile override
-nvoi build --build-provider local --source . --dockerfile-path docker/Dockerfile.prod --name web
-```
-
-For remote sources (`org/repo`, `https://...`): `--dockerfile-path` is passed through to the remote builder as-is. Build context logic is the builder's responsibility.
-
-**Node labeling:**
-- `instance set` labels k8s nodes with `nvoi-role={name}` after k3s install/join. Idempotent — runs every deploy.
-- This is what `--server` on `service set` matches against (k8s `nodeSelector: {nvoi-role: name}`).
-
-**Placement:**
-- `--server` pins a service to a node via k8s node selector matching `nvoi-role`. Defaults to master.
-- Services with managed volumes pinned to the volume's server.
-
-**Volumes:**
-- Service volume refs must point to volumes that exist (checked via provider API).
-- Service with managed volume → StatefulSet, replicas forced to 1.
-- `volume delete` unmounts on all servers, then calls `DeleteVolume` (which detaches + deletes the cloud volume). Not just detach.
-
-**DNS / Ingress:**
-- `dns set <service> <domain...>` creates DNS A records pointing at master. Ingress is a separate subsystem.
-- Caddy runs as a Deployment with `hostNetwork: true` on the master node (binds port 80/443 directly).
-- Caddy reverse-proxies to the k8s Service by name: `domain → service.namespace.svc.cluster.local:port`.
-- Baseline ingress uses ACME automatically, but the declarative ingress surface can also express provided TLS material and explicit edge overlay behavior.
-- Ingress reconciliation owns Caddy route creation, update, and deletion.
-- `dns delete` is DNS-only and fails if ingress still references the service/domain. Remove or reconcile ingress first.
-- Provider-specific edge/proxy behavior is an overlay on top of the baseline DNS + ingress model, not part of DNS ownership itself.
-- Service must have `port > 0`. Hard error if service has no port.
-
-**Storage:**
-- `storage set <name>` creates the cloud bucket AND stores S3 credentials as 4 k8s secrets: `STORAGE_{NAME}_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`.
-- Bucket name derived from naming convention: `nvoi-{app}-{env}-{name}`. Override with `--bucket`.
-- `--storage <name>` on `service set` expands to the 4 secret refs. Repeatable for multiple buckets.
-- `storage empty <name>` deletes all objects (required before bucket deletion on most providers).
-- `storage delete <name>` deletes the bucket from the provider AND removes the 4 secrets from the cluster.
-- `storage list` discovers configured storages by scanning k8s secrets for `STORAGE_*_BUCKET` keys.
-
-**Secrets:**
-- `--secret KEY` on `service set` references a pre-existing secret. Must exist (validated via kubectl before apply). Hard error if not found.
-- `--secret KEY=VALUE` is rejected in the direct CLI — use `secret set KEY VALUE` first.
-- **Secret aliasing:** `--secret ENV_VAR=SECRET_KEY` mounts k8s secret key `SECRET_KEY` as env var `ENV_VAR`. Without `=`, both are the same. `kube.ParseSecretRef()` handles the split — used by both YAML generation and validation. Convention used by managed services for namespaced credentials (e.g. `POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB`).
-- Injected as `env.valueFrom.secretKeyRef` — value never in the manifest.
-- `secret delete` is idempotent — no error if key or secret doesn't exist.
-
-**Rollout:**
-- `service set` polls pods via `kubectl get pods -o json` with live feedback: `"web: 2/3 ready (ContainerCreating)"`.
-- Terminal states exit immediately with error + logs: `CrashLoopBackOff`, `ImagePullBackOff`, `ErrImagePull`, `CreateContainerConfigError`, `OOMKilled`, `Unschedulable`.
-- Transient states keep polling: `ContainerCreating`, `PodInitializing`, `Scheduling`.
-
-**Env vars:**
-- No rewriting. `POSTGRES_HOST=db` stays `POSTGRES_HOST=db`. K8s namespaces handle isolation — each app+env gets its own namespace, service names stay short.
+- **Cluster:** master must exist. k3s must be installed.
+- **Services:** `--image` required. Build is separate (`build` outputs image ref, `service set` consumes it).
+- **Cron:** `--image` and `--schedule` required. Reuses service conventions (secrets, storage, volumes, node selector).
+- **Build:** `--compute-provider` + `--build-provider` + `--source` + `--name` required. Local path + remote builder = error. Remote repo + local builder = error. Registry is the state.
+- **Node labeling:** `instance set` labels nodes `nvoi-role={name}`. `--server` on `service set` matches via `nodeSelector`.
+- **Placement:** `--server` pins to node. Managed volume services pinned to volume's server.
+- **Volumes:** refs must exist (checked via provider API). Managed volume → StatefulSet, replicas=1. `volume delete` unmounts then deletes.
+- **DNS / Ingress:** `dns set` creates A records. `ingress set` deploys Caddy with `hostNetwork`. TLS mode per-deployment (ACME or cloudflare-managed, never mixed). `ingress delete` with `--cloudflare-managed` revokes Origin CA cert. Service must have `port > 0`.
+- **Storage:** `storage set` creates bucket + stores S3 creds as 4 k8s secrets. `--storage` on `service set` expands to secret refs.
+- **Secrets:** `--secret KEY` references pre-existing secret (hard error if missing). `--secret ENV=KEY` aliases. `secret delete` is idempotent. All credentials should be opaque hex.
+- **Rollout:** polls pods with live feedback. Terminal states (`CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`) exit immediately with logs.
 
 ## Output contract
 
 **Providers are silent. `pkg/core/` narrates. `internal/core/` renders. No exceptions.**
 
-Strictly enforced across all layers:
+- `pkg/core/` communicates through the `Output` interface (Command, Progress, Success, Warning, Info, Error, Writer)
+- `pkg/core/` returns errors. Never renders them. Never calls `Output.Error()`.
+- Cobra handles all errors via `root.SetErr()` → `Output.Error()`. Single path.
+- Three renderers: TUI (terminal), JSONL (`--json`), Plain (`--ci` or non-TTY)
+- Both CLIs produce identical output. Direct CLI calls `pkg/core/` → `Output`. Cloud CLI replays JSONL from the API through the same renderers.
 
-| Layer | Writes to stdout? | `fmt.Printf`? | `os.Stdout`? | `"os"` import? |
-|-------|-------------------|---------------|-------------|---------------|
-| `provider/` | Never | Never | Never | File ops only |
-| `pkg/core/` | Never | Never | Never | Never |
-| `infra/` | Never (writes to `io.Writer` param) | Never | Never | File ops only |
-| `kube/` | Never | Never | Never | Never |
-| `utils/` | Never | Never | Never | Never |
-| `internal/render/` | Yes — it's the renderer | Yes | Yes | Yes |
-| `internal/core/` | Via `internal/render/` | Via render | Via render | Via render |
-| `internal/cli/` | Via `internal/render/` | Via render | Via render | Via render |
-
-### Output interface
-
-`pkg/core/` communicates through the `Output` interface on `Cluster`. Seven event types:
-
-```go
-type Output interface {
-    Command(command, action, name string, extra ...any)  // opens a group
-    Progress(msg string)                                  // transient status
-    Success(msg string)                                   // step completed
-    Warning(msg string)                                   // non-fatal issue
-    Info(msg string)                                      // informational
-    Error(err error)                                      // terminal failure
-    Writer() io.Writer                                    // streaming (build logs, SSH, k3s install)
-}
-```
-
-`pkg/core/output.go` also defines the shared JSONL event types: `Event`, `MarshalEvent`, `ParseEvent`, `ReplayEvent`. These are the transport format between API and CLI.
-
-`internal/render/` provides three implementations (shared by both CLIs):
-
-- **TUI** (`tui.go`) — lipgloss-styled: bold commands, dimmed progress, green success, yellow warnings, red errors. Default for terminals.
-- **JSONL** (`json.go`) — one JSON object per line. `--json` flag.
-- **Plain** (`plain.go`) — aligned tags `[command]` `[progress]` `[success]` etc., no ANSI codes. `--ci` flag or auto-detected in non-TTY.
-
-`render.Resolve(jsonFlag, ciFlag)` picks the right renderer. `render.ReplayLine(jsonlLine, output)` bridges JSONL from the API to any renderer.
-
-### JSONL event format
-
-```jsonl
-{"type":"command","command":"instance","action":"set","name":"nvoi-rails-production-master","role":"master"}
-{"type":"progress","message":"waiting for SSH on 91.98.91.222"}
-{"type":"success","message":"SSH ready"}
-{"type":"error","message":"SSH not reachable on 91.98.91.222: timeout"}
-```
-
-`type:"command"` opens a group. Everything after belongs to it until the next command or error.
-
-### Error handling
-
-- `pkg/core/` returns errors. It never renders them. It never calls `Output.Error()`.
-- Cobra handles all errors. `root.SetErr()` wires cobra's error output through our `Output.Error()` renderer.
-- No `SilenceErrors`. Cobra is the single error path — we style it, not suppress it.
-- Single rendering path. No double-printing. No silent swallowing.
-- Ctrl+C: `signal.NotifyContext` cancels the context → operations abort → exit 1.
-
-### Streaming
-
-`infra/` functions (k3s install, volume mount) accept `io.Writer` for streaming output. `pkg/core/` passes `Output.Writer()`. In TUI mode, lines are dimmed and indented. In JSONL mode, each line becomes a `{"type":"stream","message":"..."}` event. The API streams to SSE through the same interface.
-
-### Cluster struct + ProviderRef
-
-Every `pkg/core/` request type embeds `Cluster`:
-
-```go
-type Cluster struct {
-    AppName, Env, Provider string
-    Credentials            map[string]string
-    SSHKey                 []byte
-    Output                 Output
-    SSHFunc                func(ctx, addr) (SSHClient, error)  // nil = real SSH, set in tests
-}
-```
-
-`Cluster` provides methods: `Names()`, `Compute()`, `Master()`, `SSH()`, `Log()`. Eliminates the 4-line resolve-connect preamble that was duplicated 22 times. `internal/core/` constructs `Cluster` with `resolveOutput(cmd)` to wire TUI or JSONL.
-
-Secondary providers (DNS, storage) use `ProviderRef`:
-
-```go
-type ProviderRef struct {
-    Name  string
-    Creds map[string]string
-}
-
-// Used on request types:
-type DNSSetRequest struct {
-    Cluster
-    DNS     ProviderRef   // not bare DNSProvider string + DNSCreds map
-    Service string
-    Domains []string
-}
-```
-
-### infra.Node
-
-Groups public + private IP for server functions. Eliminates the 5-string parameter explosion in k3s join:
-
-```go
-type Node struct {
-    PublicIP  string
-    PrivateIP string
-}
-
-// Before: JoinK3sWorker(ctx, workerIP, workerPrivateIP, masterIP, masterPrivateIP, privKey, w)
-// After:  JoinK3sWorker(ctx, worker, master Node, privKey, w)
-```
-
-### ServerStatus
-
-Typed enum for server status instead of bare `string`:
-
-```go
-type ServerStatus string
-const (
-    ServerRunning   ServerStatus = "running"
-    ServerOff       ServerStatus = "off"
-    // ...
-)
-```
+See [`internal/render/CLAUDE.md`](internal/render/CLAUDE.md) for renderer details, JSONL format, streaming, Cluster/ProviderRef types.
 
 ## Key rules
 

@@ -28,9 +28,12 @@ const (
 	StepStorageDelete StepKind = "storage.delete"
 	StepServiceSet    StepKind = "service.set"
 	StepServiceDelete StepKind = "service.delete"
+	StepCronSet       StepKind = "cron.set"
+	StepCronDelete    StepKind = "cron.delete"
 	StepDNSSet        StepKind = "dns.set"
 	StepDNSDelete     StepKind = "dns.delete"
-	StepIngressApply  StepKind = "ingress.apply"
+	StepIngressSet    StepKind = "ingress.set"
+	StepIngressDelete StepKind = "ingress.delete"
 )
 
 // Step is one action in the deploy plan.
@@ -254,47 +257,76 @@ func setIngress(cfg *Cfg, env map[string]string) ([]Step, error) {
 	if len(cfg.Domains) == 0 {
 		return nil, nil
 	}
-	routes := ingressRoutes(cfg, nil)
-	params, err := ingressParams(cfg, routes, env)
-	if err != nil {
-		return nil, err
+	var steps []Step
+	for _, svcName := range utils.SortedKeys(cfg.Domains) {
+		params, err := ingressRouteParams(cfg, svcName, env)
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, Step{Kind: StepIngressSet, Name: svcName, Params: params})
 	}
-	return []Step{{Kind: StepIngressApply, Name: "ingress", Params: params}}, nil
+	return steps, nil
 }
 
-func ingressRoutes(cfg *Cfg, allowedServices map[string]bool) []map[string]any {
-	var routes []map[string]any
-	for _, svcName := range utils.SortedKeys(cfg.Domains) {
-		if allowedServices != nil && !allowedServices[svcName] {
-			continue
-		}
-		routes = append(routes, map[string]any{
-			"service": svcName,
-			"domains": []string(cfg.Domains[svcName]),
-		})
+func ingressRouteParams(cfg *Cfg, svcName string, env map[string]string) (map[string]any, error) {
+	params := map[string]any{
+		"service":  svcName,
+		"domains":  []string(cfg.Domains[svcName]),
+		"tls_mode": desiredIngressTLSMode(cfg),
+		"exposure": desiredIngressExposure(cfg),
 	}
-	return routes
+	if cfg.Ingress != nil && cfg.Ingress.Edge != nil && cfg.Ingress.Edge.Provider != "" {
+		params["edge_provider"] = cfg.Ingress.Edge.Provider
+	}
+	if cfg.Ingress != nil && cfg.Ingress.TLS != nil && desiredIngressTLSMode(cfg) == ingressTLSProvided {
+		certPEM, ok := env[cfg.Ingress.TLS.Cert]
+		if !ok {
+			return nil, fmt.Errorf("ingress.tls.cert: %q not found in env", cfg.Ingress.TLS.Cert)
+		}
+		keyPEM, ok := env[cfg.Ingress.TLS.Key]
+		if !ok {
+			return nil, fmt.Errorf("ingress.tls.key: %q not found in env", cfg.Ingress.TLS.Key)
+		}
+		params["cert_pem"] = certPEM
+		params["key_pem"] = keyPEM
+	}
+	return params, nil
 }
 
 // ── Diff phases (reverse deploy order) ─────────────────────────────────────
 
 func diffIngress(reality, desired *Cfg, env map[string]string) ([]Step, error) {
-	if reality == nil || !domainsChanged(reality, desired) {
+	if reality == nil {
 		return nil, nil
 	}
 
-	allowed := map[string]bool{}
-	for name := range reality.Services {
-		if _, ok := desired.Services[name]; ok {
-			allowed[name] = true
+	var steps []Step
+
+	// Delete steps for removed domains.
+	for _, svcName := range utils.SortedKeys(reality.Domains) {
+		if _, ok := desired.Domains[svcName]; !ok {
+			steps = append(steps, Step{Kind: StepIngressDelete, Name: svcName, Params: map[string]any{
+				"service": svcName,
+				"domains": []string(reality.Domains[svcName]),
+			}})
 		}
 	}
-	routes := ingressRoutes(desired, allowed)
-	params, err := ingressParams(desired, routes, env)
-	if err != nil {
-		return nil, err
+
+	// Set steps for changed or new domains.
+	if domainsChanged(reality, desired) {
+		for _, svcName := range utils.SortedKeys(desired.Domains) {
+			if _, ok := desired.Services[svcName]; !ok {
+				continue
+			}
+			params, err := ingressRouteParams(desired, svcName, env)
+			if err != nil {
+				return nil, err
+			}
+			steps = append(steps, Step{Kind: StepIngressSet, Name: svcName, Params: params})
+		}
 	}
-	return []Step{{Kind: StepIngressApply, Name: "ingress", Params: params}}, nil
+
+	return steps, nil
 }
 
 func diffDNS(reality, desired *Cfg) []Step {
@@ -488,33 +520,4 @@ func desiredIngressTLSMode(cfg *Cfg) string {
 		return ingressTLSEdgeOrigin
 	}
 	return ingressTLSACME
-}
-
-func ingressParams(cfg *Cfg, routes []map[string]any, env map[string]string) (map[string]any, error) {
-	params := map[string]any{
-		"routes":   routes,
-		"tls_mode": desiredIngressTLSMode(cfg),
-		"exposure": desiredIngressExposure(cfg),
-	}
-
-	if cfg != nil && cfg.Ingress != nil && cfg.Ingress.Edge != nil && cfg.Ingress.Edge.Provider != "" {
-		params["edge_provider"] = cfg.Ingress.Edge.Provider
-	}
-
-	if cfg != nil && cfg.Ingress != nil && cfg.Ingress.TLS != nil && desiredIngressTLSMode(cfg) == ingressTLSProvided {
-		certRef := cfg.Ingress.TLS.Cert
-		keyRef := cfg.Ingress.TLS.Key
-		certPEM, ok := env[certRef]
-		if !ok {
-			return nil, fmt.Errorf("ingress.tls.cert: %q not found in env", certRef)
-		}
-		keyPEM, ok := env[keyRef]
-		if !ok {
-			return nil, fmt.Errorf("ingress.tls.key: %q not found in env", keyRef)
-		}
-		params["cert_pem"] = certPEM
-		params["key_pem"] = keyPEM
-	}
-
-	return params, nil
 }

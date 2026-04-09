@@ -31,6 +31,14 @@ type DescribeWorkload struct {
 	Age   string `json:"age"`
 }
 
+type DescribeCron struct {
+	Name     string `json:"name"`
+	Schedule string `json:"schedule"`
+	Image    string `json:"image"`
+	Age      string `json:"age"`
+	Status   string `json:"status"`
+}
+
 type DescribePod struct {
 	Name     string `json:"name"`
 	Status   string `json:"status"`
@@ -64,6 +72,7 @@ type DescribeResult struct {
 	Workloads []DescribeWorkload `json:"workloads"`
 	Pods      []DescribePod      `json:"pods"`
 	Services  []DescribeService  `json:"services"`
+	Crons     []DescribeCron     `json:"crons"`
 	Ingress   []DescribeIngress  `json:"ingress"`
 	Secrets   []DescribeSecret   `json:"secrets"`
 	Storage   []StorageItem      `json:"storage"`
@@ -85,6 +94,7 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 	result.Workloads = describeWorkloads(ctx, ssh, ns)
 	result.Pods = describePods(ctx, ssh, ns)
 	result.Services = describeServices(ctx, ssh, ns)
+	result.Crons = describeCrons(ctx, ssh, ns)
 
 	// Ingress (Caddy routes)
 	routes, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
@@ -139,6 +149,7 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 		{"statefulsets", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "statefulsets", sel) }},
 		{"pods", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "pods", sel) }},
 		{"services", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "services", sel) }},
+		{"cronjobs", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "cronjobs", sel) }},
 		{"secrets", func() ([]byte, error) { return kube.GetNamedJSON(ctx, ssh, ns, "secret", names.KubeSecrets()) }},
 		{"configmaps", func() ([]byte, error) { return kube.GetNamedJSON(ctx, ssh, ns, "configmap", names.KubeCaddyConfig()) }},
 	}
@@ -253,6 +264,59 @@ func describeWorkloads(ctx context.Context, ssh utils.SSHClient, ns string) []De
 				Image: image, Age: utils.HumanAge(w.Metadata.CreationTimestamp),
 			})
 		}
+	}
+	return out
+}
+
+func describeCrons(ctx context.Context, ssh utils.SSHClient, ns string) []DescribeCron {
+	var resp struct {
+		Items []struct {
+			Metadata struct {
+				Name              string `json:"name"`
+				CreationTimestamp string `json:"creationTimestamp"`
+			} `json:"metadata"`
+			Spec struct {
+				Schedule    string `json:"schedule"`
+				JobTemplate struct {
+					Spec struct {
+						Template struct {
+							Spec struct {
+								Containers []struct {
+									Image string `json:"image"`
+								} `json:"containers"`
+							} `json:"spec"`
+						} `json:"template"`
+					} `json:"spec"`
+				} `json:"jobTemplate"`
+			} `json:"spec"`
+			Status struct {
+				LastScheduleTime *string `json:"lastScheduleTime"`
+				Active           []any   `json:"active"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if kubeGet(ctx, ssh, ns, "cronjobs", &resp) != nil {
+		return nil
+	}
+	var out []DescribeCron
+	for _, item := range resp.Items {
+		status := "idle"
+		if len(item.Status.Active) > 0 {
+			status = "active"
+		} else if item.Status.LastScheduleTime != nil && *item.Status.LastScheduleTime != "" {
+			status = "scheduled"
+		}
+		image := ""
+		if len(item.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
+			image = item.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
+		}
+		out = append(out, DescribeCron{
+			Name:     item.Metadata.Name,
+			Schedule: item.Spec.Schedule,
+			Image:    image,
+			Age:      utils.HumanAge(item.Metadata.CreationTimestamp),
+			Status:   status,
+		})
 	}
 	return out
 }

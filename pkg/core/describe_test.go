@@ -197,3 +197,109 @@ func TestDescribeServices(t *testing.T) {
 		t.Errorf("Ports = %q, want %q", s.Ports, "3000/TCP")
 	}
 }
+
+// TestDescribeManagedChildrenVisible verifies that all resource types owned by
+// a managed bundle (workloads, crons, services, secrets, storage) are represented
+// in the describe output. Managed children are real k8s resources — they must be
+// visible in describe identically in local and cloud modes.
+func TestDescribeManagedChildrenVisible(t *testing.T) {
+	// A managed postgres named "db" creates: deployment db, cronjob db-backup,
+	// service db, secrets POSTGRES_PASSWORD_DB + DATABASE_DB_*, storage db-backups.
+	// Describe must surface all of these through its existing parsers.
+
+	deploymentsJSON := `{"items": [{
+		"metadata": {"name": "db", "creationTimestamp": "2026-04-03T10:00:00Z"},
+		"spec": {"replicas": 1, "template": {"spec": {"containers": [{"image": "postgres:17"}]}}},
+		"status": {"readyReplicas": 1}
+	}]}`
+	statefulJSON := `{"items": []}`
+	cronsJSON := `{"items": [{
+		"metadata": {"name": "db-backup", "creationTimestamp": "2026-04-03T10:00:00Z"},
+		"spec": {"schedule": "0 2 * * *", "jobTemplate": {"spec": {"template": {"spec": {"containers": [{"image": "postgres:17"}]}}}}},
+		"status": {}
+	}]}`
+	servicesJSON := `{"items": [{
+		"metadata": {"name": "db"},
+		"spec": {"type": "ClusterIP", "clusterIP": "10.43.0.50", "ports": [{"port": 5432, "protocol": "TCP"}]}
+	}]}`
+
+	ssh := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "get deployments", Result: testutil.MockResult{Output: []byte(deploymentsJSON)}},
+			{Prefix: "get statefulsets", Result: testutil.MockResult{Output: []byte(statefulJSON)}},
+			{Prefix: "get cronjobs", Result: testutil.MockResult{Output: []byte(cronsJSON)}},
+			{Prefix: "get services", Result: testutil.MockResult{Output: []byte(servicesJSON)}},
+		},
+	}
+
+	ctx := context.Background()
+	ns := "nvoi-myapp-prod"
+
+	workloads := describeWorkloads(ctx, ssh, ns)
+	if len(workloads) != 1 || workloads[0].Name != "db" {
+		t.Errorf("workloads = %v, want db deployment", workloads)
+	}
+
+	crons := describeCrons(ctx, ssh, ns)
+	if len(crons) != 1 || crons[0].Name != "db-backup" {
+		t.Errorf("crons = %v, want db-backup", crons)
+	}
+
+	services := describeServices(ctx, ssh, ns)
+	if len(services) != 1 || services[0].Name != "db" {
+		t.Errorf("services = %v, want db service", services)
+	}
+	if services[0].Ports != "5432/TCP" {
+		t.Errorf("db service ports = %q, want 5432/TCP", services[0].Ports)
+	}
+}
+
+func TestDescribeCrons(t *testing.T) {
+	cronsJSON := `{
+		"items": [{
+			"metadata": {
+				"name": "backup",
+				"creationTimestamp": "2026-04-03T10:00:00Z"
+			},
+			"spec": {
+				"schedule": "0 1 * * *",
+				"jobTemplate": {
+					"spec": {
+						"template": {
+							"spec": {
+								"containers": [{"image": "busybox:latest"}]
+							}
+						}
+					}
+				}
+			},
+			"status": {
+				"active": [{}]
+			}
+		}]
+	}`
+
+	ssh := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "get cronjobs", Result: testutil.MockResult{Output: []byte(cronsJSON)}},
+		},
+	}
+
+	crons := describeCrons(context.Background(), ssh, "nvoi-myapp-prod")
+	if len(crons) != 1 {
+		t.Fatalf("len(crons) = %d, want 1", len(crons))
+	}
+	c := crons[0]
+	if c.Name != "backup" {
+		t.Errorf("Name = %q, want backup", c.Name)
+	}
+	if c.Schedule != "0 1 * * *" {
+		t.Errorf("Schedule = %q", c.Schedule)
+	}
+	if c.Image != "busybox:latest" {
+		t.Errorf("Image = %q", c.Image)
+	}
+	if c.Status != "active" {
+		t.Errorf("Status = %q", c.Status)
+	}
+}

@@ -458,3 +458,49 @@ func TestGenerateCaddyManifest(t *testing.T) {
 		t.Errorf("expected Recreate strategy, got %q", dep.Spec.Strategy.Type)
 	}
 }
+
+// ── UpsertTLSSecret annotation tests ────────────────────────────────────────
+
+func TestUpsertTLSSecret_WithAnnotations(t *testing.T) {
+	ssh := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "replace", Result: testutil.MockResult{}},
+			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
+		},
+	}
+	annotations := map[string]string{"nvoi/origin-ca-id": "cert-123"}
+	err := UpsertTLSSecret(context.Background(), ssh, "ns", "caddy-origin-cert", "cert-pem", "key-pem", annotations)
+	if err != nil {
+		t.Fatalf("UpsertTLSSecret: %v", err)
+	}
+	if len(ssh.Uploads) == 0 {
+		t.Fatal("expected at least 1 upload")
+	}
+	yaml := string(ssh.Uploads[0].Content)
+	if !strings.Contains(yaml, "nvoi/origin-ca-id") {
+		t.Errorf("expected annotation in YAML, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "cert-123") {
+		t.Errorf("expected cert ID value in YAML, got:\n%s", yaml)
+	}
+}
+
+func TestUpsertTLSSecret_NilAnnotations(t *testing.T) {
+	ssh := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "replace", Result: testutil.MockResult{}},
+			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
+		},
+	}
+	err := UpsertTLSSecret(context.Background(), ssh, "ns", "caddy-origin-cert", "cert-pem", "key-pem", nil)
+	if err != nil {
+		t.Fatalf("UpsertTLSSecret: %v", err)
+	}
+	if len(ssh.Uploads) == 0 {
+		t.Fatal("expected at least 1 upload")
+	}
+	yaml := string(ssh.Uploads[0].Content)
+	if strings.Contains(yaml, "nvoi/origin-ca-id") {
+		t.Errorf("nil annotations should not produce annotation block, got:\n%s", yaml)
+	}
+}

@@ -20,8 +20,6 @@ storage:
 services:
   db:
     managed: postgres
-  meilisearch:
-    managed: meilisearch
   web:
     build: web
     port: 80
@@ -32,10 +30,6 @@ services:
       - RAILS_ENV=production
     secrets:
       - RAILS_MASTER_KEY
-      - POSTGRES_HOST=DATABASE_DB_HOST
-      - POSTGRES_USER=DATABASE_DB_USER
-      - POSTGRES_DB=DATABASE_DB_NAME
-      - POSTGRES_PASSWORD=DATABASE_DB_PASSWORD
     storage:
       - assets
     uses: [db]
@@ -47,13 +41,14 @@ services:
       - RAILS_ENV=production
     secrets:
       - RAILS_MASTER_KEY
-      - POSTGRES_HOST=DATABASE_DB_HOST
-      - POSTGRES_USER=DATABASE_DB_USER
-      - POSTGRES_DB=DATABASE_DB_NAME
-      - POSTGRES_PASSWORD=DATABASE_DB_PASSWORD
     uses: [db]
 
+ingress:
+  exposure: edge_proxied
+  tls:
+    mode: edge_origin
+  edge:
+    provider: cloudflare
+
 domains:
-  web:
-    domains: [hz-cloud.nvoi.to]
-    proxy: true
+  web: hz-cloud.nvoi.to

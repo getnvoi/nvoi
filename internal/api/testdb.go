@@ -21,7 +21,6 @@ func TestDB() *gorm.DB {
 		&WorkspaceUser{},
 		&Repo{},
 		&RepoConfig{},
-		&RepoManagedServiceConfig{},
 		&Deployment{},
 		&DeploymentStep{},
 		&DeploymentStepLog{},

@@ -33,7 +33,6 @@ func OpenDB() (*gorm.DB, error) {
 		&WorkspaceUser{},
 		&Repo{},
 		&RepoConfig{},
-		&RepoManagedServiceConfig{},
 		&Deployment{},
 		&DeploymentStep{},
 		&DeploymentStepLog{},

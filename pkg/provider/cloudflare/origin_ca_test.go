@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -95,6 +96,131 @@ func TestCreateCert_APIError(t *testing.T) {
 	_, err := c.CreateCert(context.Background(), []string{"example.com"})
 	if err == nil {
 		t.Fatal("expected error on 403")
+	}
+}
+
+func TestCreateCert_ReturnsID(t *testing.T) {
+	c := testOriginCAClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"result": map[string]any{
+				"id":          "cert-abc-123",
+				"certificate": "-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----",
+			},
+		})
+	}))
+
+	cert, err := c.CreateCert(context.Background(), []string{"example.com"})
+	if err != nil {
+		t.Fatalf("CreateCert: %v", err)
+	}
+	if cert.ID != "cert-abc-123" {
+		t.Errorf("ID = %q, want %q", cert.ID, "cert-abc-123")
+	}
+}
+
+func TestListCerts(t *testing.T) {
+	c := testOriginCAClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if !strings.HasPrefix(r.URL.Path, "/certificates") {
+			t.Errorf("path = %q, want /certificates", r.URL.Path)
+		}
+		zoneID := r.URL.Query().Get("zone_id")
+		if zoneID != "zone-123" {
+			t.Errorf("zone_id = %q, want zone-123", zoneID)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"result": []map[string]any{
+				{"id": "cert-1", "hostnames": []string{"a.com"}, "expires_on": "2030-01-01"},
+				{"id": "cert-2", "hostnames": []string{"b.com", "c.com"}, "expires_on": "2030-01-01"},
+			},
+		})
+	}))
+
+	certs, err := c.ListCerts(context.Background(), "zone-123")
+	if err != nil {
+		t.Fatalf("ListCerts: %v", err)
+	}
+	if len(certs) != 2 {
+		t.Fatalf("got %d certs, want 2", len(certs))
+	}
+	if certs[0].ID != "cert-1" {
+		t.Errorf("cert[0].ID = %q, want cert-1", certs[0].ID)
+	}
+	if len(certs[1].Hostnames) != 2 {
+		t.Errorf("cert[1].Hostnames = %v, want 2 entries", certs[1].Hostnames)
+	}
+}
+
+func TestFindCertByHostnames_Match(t *testing.T) {
+	c := testOriginCAClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"result": []map[string]any{
+				{"id": "cert-1", "hostnames": []string{"other.com"}},
+				{"id": "cert-2", "hostnames": []string{"b.com", "a.com"}},
+			},
+		})
+	}))
+
+	found, err := c.FindCertByHostnames(context.Background(), "zone-123", []string{"a.com", "b.com"})
+	if err != nil {
+		t.Fatalf("FindCertByHostnames: %v", err)
+	}
+	if found == nil {
+		t.Fatal("expected a match")
+	}
+	if found.ID != "cert-2" {
+		t.Errorf("ID = %q, want cert-2", found.ID)
+	}
+}
+
+func TestFindCertByHostnames_NoMatch(t *testing.T) {
+	c := testOriginCAClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"result": []map[string]any{
+				{"id": "cert-1", "hostnames": []string{"other.com"}},
+			},
+		})
+	}))
+
+	found, err := c.FindCertByHostnames(context.Background(), "zone-123", []string{"a.com"})
+	if err != nil {
+		t.Fatalf("FindCertByHostnames: %v", err)
+	}
+	if found != nil {
+		t.Errorf("expected nil match, got %+v", found)
+	}
+}
+
+func TestRevokeCert_Success(t *testing.T) {
+	c := testOriginCAClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/certificates/cert-abc" {
+			t.Errorf("path = %q, want /certificates/cert-abc", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"result": map[string]string{"id": "cert-abc"},
+		})
+	}))
+
+	if err := c.RevokeCert(context.Background(), "cert-abc"); err != nil {
+		t.Fatalf("RevokeCert: %v", err)
+	}
+}
+
+func TestRevokeCert_NotFound(t *testing.T) {
+	c := testOriginCAClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{
+			"errors": []map[string]any{{"message": "not found"}},
+		})
+	}))
+
+	if err := c.RevokeCert(context.Background(), "gone"); err != nil {
+		t.Fatalf("RevokeCert on 404 should succeed (idempotent), got: %v", err)
 	}
 }
 
