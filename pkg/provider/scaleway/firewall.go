@@ -79,7 +79,7 @@ func (c *Client) getFirewallByName(ctx context.Context, name string) (*provider.
 	return nil, nil
 }
 
-func (c *Client) deleteFirewall(ctx context.Context, name string) error {
+func (c *Client) DeleteFirewall(ctx context.Context, name string) error {
 	fw, err := c.getFirewallByName(ctx, name)
 	if err != nil {
 		return err

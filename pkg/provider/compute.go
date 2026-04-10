@@ -27,7 +27,9 @@ type ComputeProvider interface {
 	DeleteServer(ctx context.Context, req DeleteServerRequest) error
 	ListServers(ctx context.Context, labels map[string]string) ([]*Server, error)
 
-	// Resources — unfiltered, everything under the account
+	// Firewall + Network — standalone lifecycle
+	DeleteFirewall(ctx context.Context, name string) error
+	DeleteNetwork(ctx context.Context, name string) error
 	ListAllFirewalls(ctx context.Context) ([]*Firewall, error)
 	ListAllNetworks(ctx context.Context) ([]*Network, error)
 
@@ -98,8 +100,8 @@ type CreateServerRequest struct {
 }
 
 type DeleteServerRequest struct {
-	Name, FirewallName, NetworkName string
-	Labels                          map[string]string
+	Name   string
+	Labels map[string]string
 }
 
 // CreateVolumeRequest — provider resolves server name → ID internally.

@@ -152,14 +152,20 @@ func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
 	serverName := names.Server(req.Name)
 	out.Command("instance", "delete", serverName)
 
+	// Detach any volumes attached to this server before deleting.
+	volumes, _ := prov.ListVolumes(ctx, names.Labels())
+	for _, vol := range volumes {
+		if vol.ServerName == serverName {
+			_ = prov.DetachVolume(ctx, vol.Name)
+		}
+	}
+
 	// Node drain + kubectl delete node is handled by the reconciler (DrainNode)
 	// before this function is called. ComputeDelete only deletes the provider server.
 
 	return prov.DeleteServer(ctx, provider.DeleteServerRequest{
-		Name:         serverName,
-		FirewallName: names.Firewall(),
-		NetworkName:  names.Network(),
-		Labels:       names.Labels(),
+		Name:   serverName,
+		Labels: names.Labels(),
 	})
 }
 

@@ -55,7 +55,7 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().Bool("ci", false, "plain text output")
 
 	root.AddCommand(core.NewDeployCmd(dc))
-	root.AddCommand(core.NewDestroyCmd(dc))
+	root.AddCommand(core.NewTeardownCmd(dc))
 	root.AddCommand(core.NewDescribeCmd(dc))
 	root.AddCommand(core.NewResourcesCmd(dc))
 	root.AddCommand(core.NewLogsCmd(dc))

@@ -154,10 +154,6 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return fmt.Errorf("instance %s did not terminate: %w", instanceID, err)
 	}
 
-	// Cleanup firewall + network
-	_ = c.deleteSecurityGroup(ctx, req.FirewallName)
-	_ = c.deleteVPC(ctx, req.NetworkName)
-
 	return nil
 }
 

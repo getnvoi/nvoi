@@ -55,7 +55,7 @@ func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[str
 	return strconv.FormatInt(createResp.Firewall.ID, 10), nil
 }
 
-func (c *Client) deleteFirewall(ctx context.Context, name string) error {
+func (c *Client) DeleteFirewall(ctx context.Context, name string) error {
 	var resp struct {
 		Firewalls []struct {
 			ID   int64  `json:"id"`

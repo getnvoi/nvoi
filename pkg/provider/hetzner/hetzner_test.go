@@ -406,6 +406,88 @@ func TestEnsureFirewall_CreateNew(t *testing.T) {
 	}
 }
 
+func TestDeleteFirewall_Exists(t *testing.T) {
+	deleted := false
+	n := testNames()
+	fwName := n.Firewall()
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && contains(r.URL.String(), "/firewalls") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"firewalls": []map[string]any{
+					{"id": 55, "name": fwName},
+				},
+			})
+			return
+		}
+		if r.Method == "DELETE" && contains(r.URL.Path, "/firewalls/55") {
+			deleted = true
+			w.WriteHeader(204)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	err := c.DeleteFirewall(context.Background(), fwName)
+	if err != nil {
+		t.Fatalf("DeleteFirewall: %v", err)
+	}
+	if !deleted {
+		t.Error("DELETE was not called")
+	}
+}
+
+func TestDeleteFirewall_NotFound(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"firewalls": []any{}})
+	}))
+
+	err := c.DeleteFirewall(context.Background(), "nonexistent")
+	if err == nil || !errors.Is(err, utils.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestDeleteNetwork_Exists(t *testing.T) {
+	deleted := false
+	n := testNames()
+	netName := n.Network()
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && contains(r.URL.String(), "/networks") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"networks": []map[string]any{
+					{"id": 77, "name": netName},
+				},
+			})
+			return
+		}
+		if r.Method == "DELETE" && contains(r.URL.Path, "/networks/77") {
+			deleted = true
+			w.WriteHeader(204)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	err := c.DeleteNetwork(context.Background(), netName)
+	if err != nil {
+		t.Fatalf("DeleteNetwork: %v", err)
+	}
+	if !deleted {
+		t.Error("DELETE was not called")
+	}
+}
+
+func TestDeleteNetwork_NotFound(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"networks": []any{}})
+	}))
+
+	err := c.DeleteNetwork(context.Background(), "nonexistent")
+	if err == nil || !errors.Is(err, utils.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
 // --- helpers ---
 
 func contains(s, substr string) bool {
@@ -421,23 +503,28 @@ func searchString(s, substr string) bool {
 	return false
 }
 
+func testNames() *utils.Names {
+	n, _ := utils.NewNames("test", "dev")
+	return n
+}
+
 // provider_CreateServerRequest builds a minimal CreateServerRequest for testing EnsureServer.
 func provider_CreateServerRequest(name string) provider.CreateServerRequest {
+	n := testNames()
 	return provider.CreateServerRequest{
 		Name:         name,
 		ServerType:   "cx21",
 		Image:        "ubuntu-22.04",
 		Location:     "fsn1",
-		FirewallName: name + "-fw",
-		NetworkName:  name + "-net",
-		Labels:       map[string]string{"app": "test"},
+		FirewallName: n.Firewall(),
+		NetworkName:  n.Network(),
+		Labels:       n.Labels(),
 	}
 }
 
 func deleteServerRequest(name string) provider.DeleteServerRequest {
 	return provider.DeleteServerRequest{
-		Name:         name,
-		FirewallName: name + "-fw",
-		NetworkName:  name + "-net",
+		Name:   name,
+		Labels: testNames().Labels(),
 	}
 }

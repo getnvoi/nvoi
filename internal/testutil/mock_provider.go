@@ -46,6 +46,9 @@ func (m *MockCompute) ListServers(ctx context.Context, labels map[string]string)
 	return filtered, nil
 }
 
+func (m *MockCompute) DeleteFirewall(ctx context.Context, name string) error { return nil }
+func (m *MockCompute) DeleteNetwork(ctx context.Context, name string) error  { return nil }
+
 func (m *MockCompute) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {
 	return nil, nil
 }

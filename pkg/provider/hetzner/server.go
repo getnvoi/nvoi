@@ -97,23 +97,6 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return utils.ErrNotFound
 	}
 
-	// Detach firewall
-	fwName := req.FirewallName
-	var fwResp struct {
-		Firewalls []struct {
-			ID   int64  `json:"id"`
-			Name string `json:"name"`
-		} `json:"firewalls"`
-	}
-	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/firewalls?name=%s", fwName), nil, &fwResp); err == nil {
-		for _, fw := range fwResp.Firewalls {
-			if fw.Name == fwName {
-				_ = c.detachFirewall(ctx, strconv.FormatInt(fw.ID, 10), srv.ID)
-			}
-		}
-	}
-
-	// Delete server. Firewall and network are shared — not touched here.
 	if err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/servers/%s", srv.ID), nil, nil); err != nil {
 		if !utils.IsNotFound(err) {
 			return fmt.Errorf("delete server: %w", err)

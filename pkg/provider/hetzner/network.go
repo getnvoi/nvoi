@@ -81,7 +81,7 @@ func (c *Client) ListAllNetworks(ctx context.Context) ([]*provider.Network, erro
 	return out, nil
 }
 
-func (c *Client) deleteNetwork(ctx context.Context, name string) error {
+func (c *Client) DeleteNetwork(ctx context.Context, name string) error {
 	var resp struct {
 		Networks []struct {
 			ID   int64  `json:"id"`

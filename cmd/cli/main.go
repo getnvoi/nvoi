@@ -51,7 +51,7 @@ func rootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(cli.NewDeployCmd(&client, &repoPath))
-	root.AddCommand(cli.NewDestroyCmd(&client, &repoPath))
+	root.AddCommand(cli.NewTeardownCmd(&client, &repoPath))
 	root.AddCommand(cli.NewDescribeCmd(&client, &repoPath))
 	root.AddCommand(cli.NewResourcesCmd(&client, &repoPath))
 	root.AddCommand(cli.NewLogsCmd(&client, &repoPath))

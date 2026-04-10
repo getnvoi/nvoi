@@ -46,10 +46,10 @@ func NewDeployCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return cmd
 }
 
-func NewDestroyCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
+func NewTeardownCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "destroy",
-		Short: "Destroy all resources via API",
+		Use:   "teardown",
+		Short: "Tear down all resources via API",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			configPath, _ := cmd.Flags().GetString("config")
 			if configPath == "" {
@@ -59,7 +59,7 @@ func NewDestroyCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read config: %w", err)
 			}
-			return streamRun(*client, (*repoPath)("/destroy"), map[string]any{
+			return streamRun(*client, (*repoPath)("/teardown"), map[string]any{
 				"config": string(data),
 			})
 		},

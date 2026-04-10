@@ -18,6 +18,8 @@ func (stubCompute) DeleteServer(context.Context, DeleteServerRequest) error { re
 func (stubCompute) ListServers(context.Context, map[string]string) ([]*Server, error) {
 	return nil, nil
 }
+func (stubCompute) DeleteFirewall(context.Context, string) error          { return nil }
+func (stubCompute) DeleteNetwork(context.Context, string) error           { return nil }
 func (stubCompute) ListAllFirewalls(context.Context) ([]*Firewall, error) { return nil, nil }
 func (stubCompute) ListAllNetworks(context.Context) ([]*Network, error)   { return nil, nil }
 func (stubCompute) EnsureVolume(context.Context, CreateVolumeRequest) (*Volume, error) {

@@ -62,7 +62,7 @@ func (c *Client) getNetworkByName(ctx context.Context, name string) (*provider.N
 	return nil, nil
 }
 
-func (c *Client) deleteNetwork(ctx context.Context, name string) error {
+func (c *Client) DeleteNetwork(ctx context.Context, name string) error {
 	net, err := c.getNetworkByName(ctx, name)
 	if err != nil {
 		return err

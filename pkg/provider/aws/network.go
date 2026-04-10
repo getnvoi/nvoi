@@ -116,8 +116,8 @@ func (c *Client) ensureVPC(ctx context.Context, name string, labels map[string]s
 	return vpcID, subnetID, nil
 }
 
-// deleteVPC cascades: detach+delete IGW, delete subnet, delete route table, delete VPC.
-func (c *Client) deleteVPC(ctx context.Context, name string) error {
+// DeleteNetwork cascades: detach+delete IGW, delete subnet, delete route table, delete VPC.
+func (c *Client) DeleteNetwork(ctx context.Context, name string) error {
 	vpc, err := c.findVPCByName(ctx, name)
 	if err != nil || vpc == nil {
 		return nil

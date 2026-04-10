@@ -55,7 +55,7 @@ func (c *Client) ensureSecurityGroup(ctx context.Context, name, vpcID string, la
 	return sgID, nil
 }
 
-func (c *Client) deleteSecurityGroup(ctx context.Context, name string) error {
+func (c *Client) DeleteFirewall(ctx context.Context, name string) error {
 	sg, err := c.findSecurityGroupByName(ctx, name, "")
 	if err != nil || sg == nil {
 		return nil
