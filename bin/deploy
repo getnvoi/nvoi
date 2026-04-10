@@ -10,38 +10,6 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   set +a
 fi
 
-require_hex() {
-  local name="$1"
-  local value="${!name:-}"
-  local min_len="${2:-0}"
-  local exact_len="${3:-0}"
-
-  if [[ -z "$value" ]]; then
-    echo "$name is required" >&2
-    exit 1
-  fi
-  if [[ ! "$value" =~ ^[0-9a-fA-F]+$ ]]; then
-    echo "$name must be hex" >&2
-    exit 1
-  fi
-  if (( exact_len > 0 )) && (( ${#value} != exact_len )); then
-    echo "$name must be exactly $exact_len hex chars" >&2
-    exit 1
-  fi
-  if (( min_len > 0 )) && (( ${#value} < min_len )); then
-    echo "$name must be at least $min_len hex chars" >&2
-    exit 1
-  fi
-}
-
-# Runtime secrets must be strong and hex-only.
-require_hex POSTGRES_PASSWORD 64
-require_hex POSTGRES_USER 12 12
-require_hex POSTGRES_DB 12 12
-require_hex JWT_SECRET 64
-require_hex ENCRYPTION_KEY 0 64
-
-# DATABASE_URL assembled from parts.
 export DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
 
 exec go run ./cmd/core deploy --config "$ROOT_DIR/nvoi.yaml"
