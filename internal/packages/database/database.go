@@ -96,20 +96,25 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	out := dc.Cluster.Log()
 	out.Command("database", "reconcile", name)
 
+	engine, err := DetectEngine(db.Image)
+	if err != nil {
+		return nil, err
+	}
+
 	names, err := dc.Cluster.Names()
 	if err != nil {
 		return nil, err
 	}
 
-	// Resolve credentials
-	creds, err := resolveCredentials(ctx, dc, name)
+	creds, err := resolveCredentials(ctx, dc, name, engine)
 	if err != nil {
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 
 	svcName := name + "-db"
 	ns := names.KubeNamespace()
-	dbURL := fmt.Sprintf("postgresql://%s:%s@%s:5432/%s", creds.User, creds.Password, svcName, creds.DBName)
+	port := engine.Port()
+	dbURL := engine.ConnectionURL(svcName, port, creds.User, creds.Password, creds.DBName)
 
 	// Store credentials as k8s secret
 	ssh, _, err := dc.Cluster.SSH(ctx)
@@ -118,7 +123,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	}
 	defer ssh.Close()
 
-	if err := storeCredentials(ctx, ssh, ns, name, creds, dbURL); err != nil {
+	if err := storeCredentials(ctx, ssh, ns, name, engine, creds, dbURL); err != nil {
 		return nil, err
 	}
 	out.Success("credentials stored")
@@ -126,7 +131,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	// Apply StatefulSet + headless Service
 	vol := cfg.Volumes[db.Volume]
 	serverName := vol.Server
-	manifest := generateManifests(name, db.Image, ns, names, serverName)
+	manifest := generateManifests(name, engine, db.Image, ns, names, serverName)
 	if err := applyManifest(ctx, ssh, ns, manifest); err != nil {
 		return nil, err
 	}
@@ -134,7 +139,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 
 	// Wait for postgres ready
 	out.Progress(fmt.Sprintf("waiting for %s ready", svcName))
-	if err := waitReady(ctx, ssh, ns, svcName, creds.User); err != nil {
+	if err := waitReady(ctx, ssh, ns, svcName, engine, creds.User); err != nil {
 		return nil, err
 	}
 	out.Success(fmt.Sprintf("%s ready", svcName))
@@ -159,7 +164,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	if retain == 0 {
 		retain = 7
 	}
-	backupManifest := generateBackupCronJob(name, db.Image, ns, names, svcName, schedule, retain, bucketName)
+	backupManifest := generateBackupCronJob(name, engine, db.Image, ns, names, svcName, schedule, retain, bucketName)
 	if err := applyManifest(ctx, ssh, ns, backupManifest); err != nil {
 		return nil, fmt.Errorf("backup cronjob: %w", err)
 	}
@@ -167,13 +172,14 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 
 	// Build env vars for injection into app services
 	prefix := strings.ToUpper(name)
+	userEnv, passEnv, dbEnv := engine.EnvVarNames()
 	envVars := map[string]string{
-		prefix + "_DATABASE_URL":      dbURL,
-		prefix + "_POSTGRES_HOST":     svcName,
-		prefix + "_POSTGRES_PORT":     "5432",
-		prefix + "_POSTGRES_USER":     creds.User,
-		prefix + "_POSTGRES_PASSWORD": creds.Password,
-		prefix + "_POSTGRES_DB":       creds.DBName,
+		prefix + "_DATABASE_URL": dbURL,
+		prefix + "_" + userEnv:   creds.User,
+		prefix + "_" + passEnv:   creds.Password,
+		prefix + "_" + dbEnv:     creds.DBName,
+		prefix + "_" + strings.ToUpper(engine.Name()) + "_HOST": svcName,
+		prefix + "_" + strings.ToUpper(engine.Name()) + "_PORT": fmt.Sprintf("%d", port),
 	}
 
 	return envVars, nil

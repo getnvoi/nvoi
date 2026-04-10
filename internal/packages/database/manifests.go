@@ -17,11 +17,10 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func generateManifests(name, image, ns string, names *utils.Names, server string) string {
+func generateManifests(name string, engine Engine, image, ns string, names *utils.Names, server string) string {
 	svcName := name + "-db"
 	secretName := name + "-db-credentials"
 	prefix := strings.ToUpper(name)
-	volumePath := names.VolumeMountPath(name + "-db")
 
 	labels := map[string]string{
 		utils.LabelAppName:      svcName,
@@ -30,6 +29,22 @@ func generateManifests(name, image, ns string, names *utils.Names, server string
 
 	one := int32(1)
 	hostPathType := corev1.HostPathDirectoryOrCreate
+	port := engine.Port()
+
+	containerEnv := engine.ContainerEnv(secretName, prefix)
+	if envName, path, needed := engine.DataDir(); needed {
+		containerEnv = append(containerEnv, corev1.EnvVar{Name: envName, Value: path})
+	}
+
+	_, mountPath, _ := engine.DataDir()
+	if mountPath == "" {
+		mountPath = "/var/lib/data"
+	}
+	// Mount parent dir (e.g., /var/lib/postgresql/data not /var/lib/postgresql/data/pgdata)
+	mountDir := mountPath
+	if idx := strings.LastIndex(mountDir, "/"); idx > 0 && strings.Count(mountDir, "/") > 3 {
+		mountDir = mountDir[:idx]
+	}
 
 	ss := appsv1.StatefulSet{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "StatefulSet"},
@@ -45,37 +60,27 @@ func generateManifests(name, image, ns string, names *utils.Names, server string
 					Containers: []corev1.Container{{
 						Name:  svcName,
 						Image: image,
-						Ports: []corev1.ContainerPort{{ContainerPort: 5432}},
-						Env: []corev1.EnvVar{
-							secretEnv("POSTGRES_USER", secretName, prefix+"_POSTGRES_USER"),
-							secretEnv("POSTGRES_PASSWORD", secretName, prefix+"_POSTGRES_PASSWORD"),
-							secretEnv("POSTGRES_DB", secretName, prefix+"_POSTGRES_DB"),
-							{Name: "PGDATA", Value: "/var/lib/postgresql/data/pgdata"},
-						},
+						Ports: []corev1.ContainerPort{{ContainerPort: port}},
+						Env:   containerEnv,
 						VolumeMounts: []corev1.VolumeMount{{
-							Name:      "data",
-							MountPath: "/var/lib/postgresql/data",
+							Name: "data", MountPath: mountDir,
 						}},
 						ReadinessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
-								Exec: &corev1.ExecAction{
-									Command: []string{"pg_isready", "-U", "$(POSTGRES_USER)"},
-								},
+								Exec: &corev1.ExecAction{Command: engine.ReadinessProbe("$(POSTGRES_USER)")},
 							},
 							InitialDelaySeconds: 5,
 							PeriodSeconds:       5,
 						},
 						Resources: corev1.ResourceRequirements{
-							Limits: corev1.ResourceList{
-								corev1.ResourceMemory: resource.MustParse("2Gi"),
-							},
+							Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
 						},
 					}},
 					Volumes: []corev1.Volume{{
 						Name: "data",
 						VolumeSource: corev1.VolumeSource{
 							HostPath: &corev1.HostPathVolumeSource{
-								Path: volumePath,
+								Path: names.VolumeMountPath(name + "-db"),
 								Type: &hostPathType,
 							},
 						},
@@ -91,10 +96,7 @@ func generateManifests(name, image, ns string, names *utils.Names, server string
 		Spec: corev1.ServiceSpec{
 			ClusterIP: "None",
 			Selector:  map[string]string{utils.LabelAppName: svcName},
-			Ports: []corev1.ServicePort{{
-				Port:       5432,
-				TargetPort: intstr.FromInt(5432),
-			}},
+			Ports:     []corev1.ServicePort{{Port: port, TargetPort: intstr.FromInt(int(port))}},
 		},
 	}
 
@@ -103,25 +105,14 @@ func generateManifests(name, image, ns string, names *utils.Names, server string
 	return strings.TrimSpace(string(ssYAML)) + "\n---\n" + strings.TrimSpace(string(svcYAML))
 }
 
-func secretEnv(envName, secretName, key string) corev1.EnvVar {
-	return corev1.EnvVar{
-		Name: envName,
-		ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-				Key:                  key,
-			},
-		},
-	}
-}
-
 func applyManifest(ctx context.Context, ssh utils.SSHClient, ns, manifest string) error {
 	return kube.Apply(ctx, ssh, ns, manifest)
 }
 
-func waitReady(ctx context.Context, ssh utils.SSHClient, ns, svcName, user string) error {
-	pod := svcName + "-0" // StatefulSet pod naming
-	cmd := fmt.Sprintf("exec %s -- pg_isready -U %s", pod, user)
+func waitReady(ctx context.Context, ssh utils.SSHClient, ns, svcName string, engine Engine, user string) error {
+	pod := svcName + "-0"
+	probeCmd := engine.ReadinessProbe(user)
+	cmd := fmt.Sprintf("exec %s -- %s", pod, strings.Join(probeCmd, " "))
 	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
 		_, err := kube.RunKubectl(ctx, ssh, ns, cmd)
 		return err == nil, nil

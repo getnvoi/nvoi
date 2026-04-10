@@ -12,18 +12,22 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func generateBackupCronJob(name, image, ns string, names *utils.Names, dbSvcName, schedule string, retain int, bucketName string) string {
+func generateBackupCronJob(name string, engine Engine, image, ns string, names *utils.Names, dbSvcName, schedule string, retain int, bucketName string) string {
 	cronName := name + "-db-backup"
 	dbSecretName := name + "-db-credentials"
 	bucketSecretName := names.KubeSecrets()
 	prefix := strings.ToUpper(name)
 	storagePrefix := strings.ToUpper(bucketName)
 	storagePrefix = strings.ReplaceAll(storagePrefix, "-", "_")
+	userEnv, passEnv, dbEnv := engine.EnvVarNames()
 
 	labels := map[string]string{
 		utils.LabelAppName:      cronName,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
 	}
+
+	dumpCmd := engine.DumpCommand(dbSvcName, "$DB_USER", "$DB_NAME")
+	pwEnv := engine.PasswordEnvVar()
 
 	script := fmt.Sprintf(`set -e
 export AWS_ACCESS_KEY_ID=$STORAGE_ACCESS_KEY_ID
@@ -37,13 +41,13 @@ else
 fi
 unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install > /dev/null
 TIMESTAMP=$(date +%%Y%%m%%d-%%H%%M%%S)
-PGPASSWORD=$POSTGRES_PASSWORD pg_dump -h %s -U $POSTGRES_USER -d $POSTGRES_DB --no-owner --no-acl | \
+%s=$DB_PASSWORD %s | \
 gzip | \
 aws s3 cp - "s3://$STORAGE_BUCKET/backups/backup-$TIMESTAMP.sql.gz" --endpoint-url "$STORAGE_ENDPOINT"
 aws s3 ls "s3://$STORAGE_BUCKET/backups/" --endpoint-url "$STORAGE_ENDPOINT" | \
 sort -r | tail -n +%d | awk '{print $4}' | \
 xargs -I {} aws s3 rm "s3://$STORAGE_BUCKET/backups/{}" --endpoint-url "$STORAGE_ENDPOINT"
-`, dbSvcName, retain+1)
+`, pwEnv, dumpCmd, retain+1)
 
 	one := int32(1)
 	zero := int32(0)
@@ -70,13 +74,13 @@ xargs -I {} aws s3 rm "s3://$STORAGE_BUCKET/backups/{}" --endpoint-url "$STORAGE
 								Command: []string{"/bin/bash", "-c"},
 								Args:    []string{script},
 								Env: []corev1.EnvVar{
-									secretEnv("POSTGRES_USER", dbSecretName, prefix+"_POSTGRES_USER"),
-									secretEnv("POSTGRES_PASSWORD", dbSecretName, prefix+"_POSTGRES_PASSWORD"),
-									secretEnv("POSTGRES_DB", dbSecretName, prefix+"_POSTGRES_DB"),
-									secretEnv("STORAGE_ENDPOINT", bucketSecretName, "STORAGE_"+storagePrefix+"_ENDPOINT"),
-									secretEnv("STORAGE_BUCKET", bucketSecretName, "STORAGE_"+storagePrefix+"_BUCKET"),
-									secretEnv("STORAGE_ACCESS_KEY_ID", bucketSecretName, "STORAGE_"+storagePrefix+"_ACCESS_KEY_ID"),
-									secretEnv("STORAGE_SECRET_ACCESS_KEY", bucketSecretName, "STORAGE_"+storagePrefix+"_SECRET_ACCESS_KEY"),
+									secretEnvVar("DB_USER", dbSecretName, prefix+"_"+userEnv),
+									secretEnvVar("DB_PASSWORD", dbSecretName, prefix+"_"+passEnv),
+									secretEnvVar("DB_NAME", dbSecretName, prefix+"_"+dbEnv),
+									secretEnvVar("STORAGE_ENDPOINT", bucketSecretName, "STORAGE_"+storagePrefix+"_ENDPOINT"),
+									secretEnvVar("STORAGE_BUCKET", bucketSecretName, "STORAGE_"+storagePrefix+"_BUCKET"),
+									secretEnvVar("STORAGE_ACCESS_KEY_ID", bucketSecretName, "STORAGE_"+storagePrefix+"_ACCESS_KEY_ID"),
+									secretEnvVar("STORAGE_SECRET_ACCESS_KEY", bucketSecretName, "STORAGE_"+storagePrefix+"_SECRET_ACCESS_KEY"),
 								},
 							}},
 						},
