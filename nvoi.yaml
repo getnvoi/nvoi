@@ -17,7 +17,7 @@ firewall: default
 
 volumes:
   pgdata:
-    size: 20
+    size: 25
     server: master
 
 database:
