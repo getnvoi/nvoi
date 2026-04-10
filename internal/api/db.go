@@ -10,9 +10,9 @@ import (
 )
 
 func OpenDB() (*gorm.DB, error) {
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := os.Getenv("MAIN_DATABASE_URL")
 	if dsn == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required")
+		return nil, fmt.Errorf("MAIN_DATABASE_URL is required")
 	}
 
 	logLevel := logger.Warn
