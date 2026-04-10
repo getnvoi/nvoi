@@ -101,3 +101,49 @@ func TestServices_CompleteReplacement(t *testing.T) {
 		t.Error("old-worker not deleted")
 	}
 }
+
+func TestServices_DatabasePackageManagedNotOrphaned(t *testing.T) {
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Database: map[string]config.DatabaseDef{"main": {Image: "postgres:17", Volume: "pgdata"}},
+	}
+	// main-db is in live (created by database package) but not in cfg.Services.
+	// It must NOT be deleted — it's protected.
+	live := &config.LiveState{Services: []string{"web", "main-db"}}
+
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sshCallMatches(ssh, "main-db", "delete") {
+		t.Error("main-db should NOT be deleted — it's managed by the database package")
+	}
+}
+
+func TestServices_CaddyAndDatabaseBothProtected(t *testing.T) {
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Database: map[string]config.DatabaseDef{"main": {Image: "postgres:17", Volume: "pgdata"}},
+	}
+	live := &config.LiveState{Services: []string{"web", "caddy", "main-db", "stale-worker"}}
+
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sshCallMatches(ssh, "caddy", "delete") {
+		t.Error("caddy should not be deleted")
+	}
+	if sshCallMatches(ssh, "main-db", "delete") {
+		t.Error("main-db should not be deleted")
+	}
+	if !sshCallMatches(ssh, "stale-worker", "delete") {
+		t.Error("stale-worker should be deleted")
+	}
+}
