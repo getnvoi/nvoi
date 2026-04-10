@@ -20,17 +20,17 @@ volumes:
     size: 20
     server: master
 
+database:
+  main:
+    image: postgres:17
+    volume: pgdata
+
 secrets:
-  - POSTGRES_PASSWORD
-  - POSTGRES_USER
-  - POSTGRES_DB
   - JWT_SECRET
   - ENCRYPTION_KEY
-  - DATABASE_URL
 
 storage:
   releases: {}
-  backups: {}
 
 build:
   web: ./cmd/web
@@ -38,15 +38,10 @@ build:
   distribution: ./cmd/distribution
 
 services:
-  db:
-    image: postgres:17
-    port: 5432
-    volumes: ["pgdata:/var/lib/postgresql/data"]
-    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB]
   api:
     build: api
     port: 8080
-    secrets: [DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY]
+    secrets: [JWT_SECRET, ENCRYPTION_KEY]
   web:
     build: web
     port: 3000
@@ -54,26 +49,6 @@ services:
     build: distribution
     port: 3001
     storage: [releases]
-
-crons:
-  db-backup:
-    image: postgres:17
-    schedule: "0 */6 * * *"
-    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB]
-    storage: [backups]
-    command: |
-      export AWS_ACCESS_KEY_ID=$STORAGE_BACKUPS_ACCESS_KEY_ID &&
-      export AWS_SECRET_ACCESS_KEY=$STORAGE_BACKUPS_SECRET_ACCESS_KEY &&
-      apt-get update -qq && apt-get install -y -qq curl unzip > /dev/null &&
-      curl -sL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o /tmp/aws.zip &&
-      unzip -q /tmp/aws.zip -d /tmp && /tmp/aws/install > /dev/null &&
-      TIMESTAMP=$(date +%Y%m%d-%H%M%S) &&
-      PGPASSWORD=$POSTGRES_PASSWORD pg_dump -h db -U $POSTGRES_USER -d $POSTGRES_DB --no-owner --no-acl |
-      gzip |
-      aws s3 cp - "s3://$STORAGE_BACKUPS_BUCKET/backups/backup-$TIMESTAMP.sql.gz" --endpoint-url "$STORAGE_BACKUPS_ENDPOINT" &&
-      aws s3 ls "s3://$STORAGE_BACKUPS_BUCKET/backups/" --endpoint-url "$STORAGE_BACKUPS_ENDPOINT" |
-      sort -r | tail -n +8 | awk '{print $4}' |
-      xargs -I {} aws s3 rm "s3://$STORAGE_BACKUPS_BUCKET/backups/{}" --endpoint-url "$STORAGE_BACKUPS_ENDPOINT"
 
 domains:
   web: [nvoi.to, www.nvoi.to]
