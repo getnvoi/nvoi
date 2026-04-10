@@ -1,18 +1,25 @@
 # CLAUDE.md — internal/api
 
-Thin relay between the cloud CLI and `pkg/core/`. Each command hits one API endpoint that calls one `pkg/core/` function. No config YAML, no planner, no deployment lifecycle.
+Thin relay between the cloud CLI and `pkg/core/`. Each command hits one API endpoint that calls one `pkg/core/` function.
 
 ## How it works
 
 ```
-CLI command (e.g. nvoi instance set master ...)
-  → CloudBackend.run("instance.set", "master", {type, region, role})
-    → POST /repos/:rid/run {kind, name, params}
-      → Load repo + InfraProvider credentials
-      → dispatch() → pkg/core.ComputeSet()
-      → Stream JSONL output back
-      → Log CommandLog row
-    → CLI renders JSONL through TUI
+CLI command (e.g. nvoi deploy)
+  → POST /repos/:rid/deploy {config: yamlString}
+    → Load repo + InfraProvider credentials
+    → Reconcile engine runs against the cluster
+    → Stream JSONL output back
+  → CLI renders JSONL through TUI
+```
+
+For granular operations:
+```
+CLI command (e.g. nvoi cron run db-backup)
+  → POST /repos/:rid/run {kind: "cron.run", name: "db-backup"}
+    → dispatch() → pkg/core.CronRun()
+    → Stream JSONL output back
+    → Log CommandLog row
 ```
 
 ## Architecture
@@ -20,7 +27,7 @@ CLI command (e.g. nvoi instance set master ...)
 ```
 internal/api/
   models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo, CommandLog
-  db.go                  PostgreSQL + GORM + AutoMigrate
+  db.go                  PostgreSQL + GORM + AutoMigrate (reads MAIN_DATABASE_URL)
   testdb.go              In-memory SQLite for tests
   encrypt.go             AES-256-GCM for secrets at rest
   jwt.go                 HS256 JWT, 30-day TTL
@@ -41,6 +48,32 @@ internal/api/
     ssh.go               POST /ssh — run command on master, stream output
 ```
 
+## Deployment
+
+The API is deployed via `nvoi.yaml` as a service within the nvoi cluster itself:
+
+```yaml
+database:
+  main:
+    image: postgres:17
+    volume: pgdata
+
+services:
+  api:
+    build: api
+    port: 8080
+    secrets: [JWT_SECRET, ENCRYPTION_KEY]
+
+domains:
+  api: [api.nvoi.to]
+```
+
+The database package auto-injects `MAIN_DATABASE_URL`, `MAIN_POSTGRES_HOST`, etc. into the API service. The API reads `MAIN_DATABASE_URL` from its environment to connect to postgres.
+
+Database credentials are user-owned — set in `.env` and GitHub secrets as `MAIN_POSTGRES_USER`, `MAIN_POSTGRES_PASSWORD`, `MAIN_POSTGRES_DB`. No auto-generation.
+
+Backups are managed by the database package — CronJob runs every 6 hours, uploads to R2 bucket. `nvoi db backup now` triggers immediately.
+
 ## Data model
 
 ```
@@ -60,76 +93,13 @@ User
 
 Single endpoint for all mutation commands. Takes `{kind, name, params}`, dispatches to `pkg/core/`, streams JSONL, logs the result.
 
-Supported kinds: `instance.set`, `instance.delete`, `volume.set`, `volume.delete`, `firewall.set`, `build`, `secret.set`, `secret.delete`, `storage.set`, `storage.delete`, `storage.empty`, `service.set`, `service.delete`, `cron.set`, `cron.delete`, `dns.set`, `dns.delete`, `ingress.set`, `ingress.delete`.
-
-The `runner` struct holds per-request state: `Cluster` + provider refs built from `Repo.InfraProvider` links. Constructed once per request. `dispatch()` is the switch statement mapping kind → `pkg/core/` function.
-
-## Provider credentials
-
-Credentials live on `InfraProvider` records at workspace scope. Repos link to providers via FK columns. No env-based credential resolution on the API side — `InfraProvider.CredentialsMap()` returns schema-mapped credentials directly.
-
-```
-nvoi provider set compute hetzner    → InfraProvider row (encrypted)
-nvoi repos use myapp --compute hetzner → Repo.ComputeProviderID FK
-nvoi instance set master ...         → POST /run → repo.ComputeProvider.CredentialsMap()
-```
-
-## Authentication
-
-1. CLI resolves GitHub token: `gh auth token` → `GITHUB_TOKEN` env → interactive prompt
-2. `POST /login {"github_token": "..."}` → API calls `api.github.com/user` → verifies identity
-3. Find/create User + default Workspace → issue JWT (30-day TTL)
-4. CLI stores JWT in `~/.config/nvoi/auth.json`
-5. All subsequent requests: `Authorization: Bearer <jwt>`
-
-## API routes
-
-```
-POST   /login                                          public — GitHub token → JWT
-GET    /health                                         public — status check
-
-GET    /workspaces                                     list user's workspaces
-POST   /workspaces                                     create workspace
-GET    /workspaces/:id                                 get workspace
-PUT    /workspaces/:id                                 update workspace
-DELETE /workspaces/:id                                 delete workspace
-
-GET    /workspaces/:wid/providers                      list providers
-POST   /workspaces/:wid/providers                      set provider
-DELETE /workspaces/:wid/providers/:kind/:name           delete provider
-
-GET    /workspaces/:wid/repos                          list repos
-POST   /workspaces/:wid/repos                          create repo
-GET    /workspaces/:wid/repos/:rid                     get repo
-PUT    /workspaces/:wid/repos/:rid                     update repo (link providers)
-DELETE /workspaces/:wid/repos/:rid                     delete repo
-
-POST   /workspaces/:wid/repos/:rid/run                 execute command (streams JSONL)
-
-GET    /workspaces/:wid/repos/:rid/describe             live cluster state
-GET    /workspaces/:wid/repos/:rid/resources            provider resources
-POST   /workspaces/:wid/repos/:rid/ssh                  run command on master
-
-GET    /workspaces/:wid/repos/:rid/instances            list servers
-GET    /workspaces/:wid/repos/:rid/volumes              list volumes
-GET    /workspaces/:wid/repos/:rid/dns                  list DNS records
-GET    /workspaces/:wid/repos/:rid/secrets              list secret keys
-GET    /workspaces/:wid/repos/:rid/storage              list storage buckets
-POST   /workspaces/:wid/repos/:rid/storage/:name/empty  empty bucket
-
-GET    /workspaces/:wid/repos/:rid/builds               list registry images
-GET    /workspaces/:wid/repos/:rid/builds/:name/latest   latest image ref
-POST   /workspaces/:wid/repos/:rid/builds/:name/prune    prune old tags
-
-GET    /workspaces/:wid/repos/:rid/services/:svc/logs   stream pod logs
-POST   /workspaces/:wid/repos/:rid/services/:svc/exec    run command in pod
-```
+Supported kinds: `instance.set`, `instance.delete`, `volume.set`, `volume.delete`, `firewall.set`, `build`, `secret.set`, `secret.delete`, `storage.set`, `storage.delete`, `storage.empty`, `service.set`, `service.delete`, `cron.set`, `cron.delete`, `cron.run`, `dns.set`, `dns.delete`, `ingress.set`, `ingress.delete`.
 
 ## Key rules
 
-1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.** Same functions the direct CLI uses.
+1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.**
 2. **Provider credentials come from InfraProvider records.** No env-based resolution. `CredentialsMap()` returns schema-mapped keys.
 3. **Repo SSH keys are auto-generated.** Ed25519 keypair created at repo creation, private key encrypted at rest.
-4. **The API NEVER reads env vars for business logic.** `os.Getenv` is only for server startup config (`DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`).
-5. **CommandLog is the history.** One row per /run call. Kind, name, status, duration. No JSONL replay — the CLI renders in real-time.
+4. **The API NEVER reads env vars for business logic.** `os.Getenv` is only for server startup config (`MAIN_DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`).
+5. **CommandLog is the history.** One row per /run call. Kind, name, status, duration.
 6. **Never fail silently.** Encryption errors, SSH key generation errors, DB errors — always return the error.

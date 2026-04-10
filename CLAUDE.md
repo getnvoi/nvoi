@@ -10,147 +10,107 @@ A CLI that deploys containers to cloud servers from a declarative YAML config. `
 - **No state files.** No manifest, no database, no local cache. Infrastructure is the source of truth.
 - **Everything is idempotent.** `nvoi deploy` reconciles: adds desired resources, removes orphans. Run twice, same result.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
-- **Reconcile vs teardown.** Two operations, overlapping scope, opposite intent. Reconcile converges on a diff: queries live state, adds what's missing, removes what's orphaned — manages everything (provider infra and k8s resources). Teardown is a hard nuke: no diff, no live state query, wipes all external provider resources unconditionally. K8s resources die with the servers. Reconcile is the day-to-day operator. Teardown is the kill switch. Volumes and storage buckets are preserved by default — `--delete-volumes` and `--delete-storage` opt in to destroying them. Servers, firewall, network, and DNS records are always destroyed.
-- **Declarative config, imperative reconciliation.** `nvoi.yaml` declares desired state. The reconciler walks each resource type in order: servers, firewall, volumes, build, secrets, storage, services, crons, DNS, ingress.
-- **`describe` fetches everything live from the cluster.** Nodes, workloads, pods, services, ingress, secrets, storage — all via kubectl over SSH.
-- **Provider interfaces scale.** Hetzner, Cloudflare, AWS, Scaleway. Interface-first. Add a provider = implement the interface.
-- **SSH is the transport.** No agent binary. SSH in, run commands, done.
+- **Reconcile vs teardown.** Reconcile converges on a diff: queries live state, adds what's missing, removes what's orphaned — manages everything (provider infra and k8s resources). Teardown is a hard nuke: no diff, no live state query, wipes all external provider resources. K8s resources die with the servers. Volumes and storage preserved by default — `--delete-volumes` / `--delete-storage` to nuke.
+- **Declarative config, imperative reconciliation.** `nvoi.yaml` declares desired state. The reconciler walks each resource type in order.
+- **Packages.** Higher-level abstractions that bundle infra + secrets + CLI. `database:` is the first package — creates StatefulSet, headless Service, credentials, backup bucket, backup CronJob from one config block. Packages hook into the reconcile loop between secrets and storage.
+- **Provider interfaces scale.** Hetzner, Cloudflare, AWS, Scaleway. Interface-first. Add a provider = implement the interface. Organized by domain: `compute/`, `dns/`, `storage/`, `build/`.
+- **SSH is the transport.** No agent binary. Single SSH connection per deploy (`MasterSSH`), reused across all operations.
 - **Secrets are k8s secrets.** Values live in the cluster only. Resolved from environment variables at deploy time.
-- **Storage credentials are k8s secrets.** `storage` creates the bucket AND stores S3 credentials in the cluster. `storage:` on a service injects them.
 
 ## Build & Test
 
 ```bash
 go test ./...
 go test ./... -v
-go test ./... -run TestWaitRollout
 go test ./... -cover
 go build ./cmd/core
 ```
 
-Tests in three tiers:
-- **Tier 1** — pure functions: naming, YAML generation, Caddyfile, Poll, credential validation, volume parsing, signed URLs, route merging, cloud-init (hostname), APIError, AWS ArchForType, instanceFromEC2, volumeFromEC2, nvoiTags, deref helpers, config validation, config parsing
-- **Tier 2** — mock SSH: kubectl secret ops, Apply, DeleteByName, FirstPod, FindMaster, describe parsers, k3s install, registry, Docker, volume mount/unmount, reconcile orchestration
-- **Tier 3** — httptest: Hetzner API (servers, volumes, firewalls, networks, auth), Cloudflare API (buckets, DNS records, credentials), AWS provider resolution (compute, DNS, missing creds), API handler tests (auth, workspaces, repos, SSH, describe, query)
-
 ## CI
 
-Five GitHub Actions workflows (`.github/workflows/`):
+GitHub Actions workflows (`.github/workflows/`):
 
 - **ci.yml** — fmt + vet + test + build on push and PR
-- **deploy.yml** — production deploy on push to main (builds `cmd/core`, runs `bin/deploy`)
-- **release.yml** — cross-compile on git tags (`v*`), upload to R2 via `cmd/distribution/upload.go`
-- **claude.yml** — Claude Code integration on `@claude` mentions
-- **claude-code-review.yml** — automatic code review on PR opened
+- **deploy.yml** — production deploy on push to main (runs `bin/deploy`)
+- **release.yml** — cross-compile on git tags (`v*`), upload to R2
 
-**PR merges:** Never squash. Use `gh pr merge --merge --delete-branch`. Each commit is a meaningful change — preserve the history.
+**PR merges:** Never squash. Use `gh pr merge --merge --delete-branch`.
 
 ## Local development
 
 ```bash
-bin/core deploy                                  # reconcile from nvoi.yaml
-bin/core teardown                                # nuke all provider resources
-bin/core describe                                # live cluster state
-bin/cloud login                                  # cloud CLI (go run ./cmd/cli)
-go test ./...                                    # run tests
+bin/deploy                     # deploy from nvoi.yaml
+bin/destroy                    # teardown all provider resources
+bin/core describe              # live cluster state
+bin/cloud login                # cloud CLI
+go test ./...                  # run tests
 ```
-
-### First run
-
-```bash
-cp examples/.env.example examples/.env  # fill in credentials
-cd examples && ../bin/core deploy --config hetzner.yaml
-```
-
-### Files
-
-| File | Purpose |
-|------|---------|
-| `.env` | Platform deploy env (not tracked) |
-| `examples/.env` | Example/dev env (not tracked) |
-| `examples/.env.example` | Template for example env |
-| `examples/hetzner.yaml` | Example deploy config — Hetzner compute |
-| `examples/aws.yaml` | Example deploy config — AWS compute |
-| `examples/scaleway.yaml` | Example deploy config — Scaleway compute |
-| `bin/core` | Direct CLI — `go run ./cmd/core` |
-| `bin/cloud` | Cloud CLI — `go run ./cmd/cli` |
-| `bin/dev` | Website development loop |
-| `bin/nvoi` | Cached `cmd/core` binary wrapper |
-| `bin/deploy` | Platform self-deploy (granular commands) |
 
 ## Config format
 
-Everything is one YAML file. Provider credentials come from environment variables.
-
 ```yaml
-app: dummy-rails
+app: myapp
 env: production
 
 providers:
   compute: hetzner          # hetzner | aws | scaleway
   dns: cloudflare           # cloudflare | aws | scaleway
-  storage: cloudflare       # cloudflare | aws
-  build: daytona            # local | daytona | github
+  storage: cloudflare       # cloudflare | aws | scaleway
+  build: local              # local | daytona | github
 
 servers:
   master:
-    type: cx23
-    region: fsn1
-    role: master             # exactly one master required
-  worker:                    # optional workers
-    type: cx33
-    region: fsn1
-    role: worker
+    type: cax11
+    region: nbg1
+    role: master
 
 firewall: default            # string or list of port:cidr rules
 
 volumes:
   pgdata:
-    size: 20                 # GB
-    server: master           # must reference a defined server
+    size: 20
+    server: master
 
-build:
-  web: benbonnet/dummy-rails # name: git source
+database:                    # package — bundles StatefulSet, Service, credentials, backup
+  main:
+    image: postgres:17       # required — also supports mysql, mariadb
+    volume: pgdata           # required — references defined volume
 
-secrets:                     # resolved from env vars at deploy time
-  - RAILS_MASTER_KEY
-  - POSTGRES_PASSWORD
+secrets:                     # user secrets, resolved from env vars
+  - JWT_SECRET
+  - ENCRYPTION_KEY
 
 storage:
-  assets:
-    cors: true               # optional
-    expire_days: 30           # optional
-    bucket: custom-name       # optional override
+  releases: {}
+
+build:
+  web: ./cmd/web
 
 services:
-  db:
-    image: postgres:17       # image or build, mutually exclusive
-    port: 5432
-    volumes: ["pgdata:/var/lib/postgresql/data"]
-    secrets: [POSTGRES_PASSWORD]
+  api:
+    build: api
+    port: 8080
+    secrets: [JWT_SECRET, ENCRYPTION_KEY]
   web:
-    build: web               # references build target
-    port: 80
-    replicas: 2
-    health: /up
-    env: [RAILS_ENV=production, POSTGRES_HOST=db]
-    secrets: [POSTGRES_PASSWORD, RAILS_MASTER_KEY]
-    storage: [assets]
-    server: master            # optional — pin to node
+    build: web
+    port: 3000
+    server: master           # single node — nodeSelector
+    # servers: [worker-1, worker-2]  # multi-node — nodeAffinity + topologySpread
 
 crons:
   cleanup:
-    build: web
+    image: busybox
     schedule: "0 1 * * *"
-    command: bin/cleanup
+    command: echo hi
 
 domains:
   web: [myapp.com, www.myapp.com]
+  api: [api.myapp.com]
 ```
 
 ### Validation
 
-`ValidateConfig()` runs before touching infrastructure. Fail-fast — returns first error:
+`ValidateConfig()` + `packages.ValidateAll()` run before touching infrastructure:
 
 - `app` and `env` required
 - `providers.compute` required
@@ -158,20 +118,27 @@ domains:
 - Volumes: size > 0, server exists
 - Services/crons: image XOR build, referenced build/storage/volumes exist
 - Volume mounts: `name:/path` format, volume must be on same server as workload
-- Domains: service exists and has a port
+- `server` and `servers` mutually exclusive. Multiple servers + volume = error.
+- Web-facing services (with domains): replicas omitted → defaults to 2. Explicit `replicas: 1` → hard error.
+- Database: image and volume required, storage provider required, name collisions checked.
 
 ## Commands
 
 ```bash
-nvoi deploy                  # reconcile: converge live state to match config
-nvoi teardown                # nuke: wipe all external provider resources
-nvoi teardown --delete-volumes --delete-storage  # also nuke volumes and buckets
-nvoi describe                # live cluster state
-nvoi resources               # list all provider resources
-nvoi logs <service>          # stream service logs
-nvoi logs <service> -f       # follow logs
-nvoi exec <service> -- cmd   # run command in service pod
-nvoi ssh -- cmd              # run command on master node
+nvoi deploy                              # reconcile to match config
+nvoi teardown                            # nuke external provider resources
+nvoi teardown --delete-volumes --delete-storage
+nvoi describe                            # live cluster state
+nvoi resources                           # list all provider resources
+nvoi logs <service>                      # stream service logs
+nvoi logs <service> -f                   # follow logs
+nvoi exec <service> -- cmd               # run command in service pod
+nvoi ssh -- cmd                          # run command on master node
+nvoi cron run <name>                     # trigger cron job immediately
+nvoi db backup now                       # trigger database backup
+nvoi db backup list                      # list backups in bucket
+nvoi db backup download <name> [-f file] # download backup
+nvoi db sql "SELECT ..."                 # run SQL on database pod
 ```
 
 Global flags: `--config` (default: `nvoi.yaml`), `--json` (JSONL output), `--ci` (plain text).
@@ -185,220 +152,215 @@ cmd/
   api/main.go              API server entrypoint
   web/main.go              Marketing website (Gin + Goldmark)
   distribution/main.go     Binary distribution server (R2-backed)
-  distribution/upload.go   CI binary upload tool
 
-pkg/                       Public library — the execution engine
-  core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
-    cluster.go             Cluster struct + ProviderRef type
-    output.go              Output interface + JSONL event types (Event, MarshalEvent, ParseEvent, ReplayEvent)
-    compute.go             ComputeSet, ComputeDelete, ComputeList
-    service.go             ServiceSet, ServiceDelete
-    dns.go                 DNSSet, DNSDelete, DNSList
-    ingress.go             IngressSet, IngressDelete
-    storage.go             StorageSet, StorageDelete, StorageEmpty, StorageList
-    secret.go              SecretSet, SecretDelete, SecretList, SecretReveal
-    volume.go              VolumeSet, VolumeDelete, VolumeList
-    build.go               BuildRun, BuildParallel, BuildList, BuildLatest, BuildPrune
-    cron.go                CronSet, CronDelete
-    describe.go            Describe, DescribeJSON — live cluster state
-    resources.go           Resources — all provider resources
-    firewall.go            FirewallSet, FirewallList
-    wait.go                WaitRollout — polls pods with terminal failure detection
-    exec.go                Exec — kubectl exec in pod
-    ssh.go                 SSH — run command on master
-    logs.go                Logs — stream pod logs
-  kube/                    K8s YAML generation + kubectl over SSH + Caddy ingress + rollout
-  infra/                   SSH, server bootstrap, k3s, Docker, volume mounting
-  provider/                ComputeProvider + DNSProvider + BucketProvider + BuildProvider interfaces
-    hetzner/               Hetzner Cloud (compute + volumes)
-    cloudflare/            Cloudflare (DNS + R2 buckets)
-    aws/                   AWS (EC2 + VPC + Route53 + S3)
-    scaleway/              Scaleway (compute + DNS)
-    daytona/               Daytona remote sandbox builds
-    github/                GitHub Actions builds
-    local/                 Local docker buildx builds
-  utils/                   Pure utilities: naming, poll, httpclient, ssh keys, format, maps, params
-    s3/                    S3-compatible operations with AWS Signature V4
-
-internal/                  Private
-  reconcile/               Deploy/destroy orchestrator — YAML to infrastructure
-    schema.go              AppConfig, ProvidersDef, ServerDef, ServiceDef, CronDef, etc.
-    context.go             DeployContext, LiveState
-    reconcile.go           Deploy() — ordered reconciliation: servers → firewall → volumes → build → secrets → storage → services → crons → DNS → ingress
+internal/
+  config/                  Shared types — no logic
+    config.go              AppConfig, DeployContext, LiveState, all definition types
+  reconcile/               Deploy orchestrator — YAML to infrastructure
+    reconcile.go           Deploy() — ordered reconciliation with packages phase
     validate.go            ValidateConfig() — fail-fast pre-flight checks
-    helpers.go             DescribeLive(), SplitServers(), orphan detection
-    servers.go             Server reconciliation (add desired, drain + remove orphans)
+    helpers.go             DescribeLive(), SplitServers(), ResolveServers()
+    servers.go             ServersAdd (create) + ServersRemoveOrphans (drain + delete after services move)
     firewall.go            Firewall reconciliation
     volumes.go             Volume reconciliation
     build.go               Build reconciliation
-    secrets.go             Secret reconciliation (resolved from viper/env)
-    storage.go             Storage reconciliation
-    services.go            Service reconciliation (resolve images, wait rollout)
-    crons.go               Cron reconciliation
+    secrets.go             Secret reconciliation
+    storage.go             Storage reconciliation (excludes package-managed buckets)
+    services.go            Service reconciliation (excludes package-managed services, defaults replicas for domains)
+    crons.go               Cron reconciliation (excludes package-managed crons)
     dns.go                 DNS reconciliation
     ingress.go             Ingress reconciliation
+  packages/                Package interface and registry
+    package.go             Package interface, ValidateAll, ReconcileAll, TeardownAll
+    database/              Database package — postgres + mysql engine support
+      database.go          Reconcile, Validate, Teardown, env var injection
+      engine.go            Engine interface + Postgres/MySQL implementations
+      credentials.go       Read from env vars (no auto-generation)
+      manifests.go         StatefulSet + headless Service YAML generation
+      backup.go            Backup CronJob generation
   core/                    Direct CLI commands + env resolution
-    deploy.go              NewDeployCmd — load YAML, call reconcile.Deploy()
-    teardown.go            NewTeardownCmd — load YAML, nuke external provider resources
+    deploy.go              NewDeployCmd
+    teardown.go            NewTeardownCmd
     describe.go            NewDescribeCmd, NewResourcesCmd
     logs.go                NewLogsCmd
     exec.go                NewExecCmd
     ssh.go                 NewSSHCmd
+    cron.go                NewCronCmd (cron run)
+    database.go            NewDatabaseCmd (db backup now/list/download, db sql)
     resolve.go             BuildContext() — viper + env vars → DeployContext
   cli/                     Cloud CLI — HTTP relay to API
-    backend.go             deploy/teardown (send YAML, stream JSONL), describe, resources, logs, exec, ssh
-    client.go              APIClient (doRaw, doRawWithBody, parseAPIError)
+    backend.go             deploy/teardown/describe/resources/logs/exec/ssh/cron
+    client.go              APIClient
     auth.go                Auth config (~/.config/nvoi/auth.json)
     login.go               GitHub token → JWT flow
     provider.go            nvoi provider set/list/delete
     repos.go               nvoi repos create/list/use/delete
-    workspaces.go          nvoi workspaces create/list/use/delete
+    workspaces.go          nvoi workspaces
     whoami.go              nvoi whoami
   api/                     REST API server (Huma + Gin + GORM)
     models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo, CommandLog
-    db.go                  PostgreSQL + AutoMigrate
-    encrypt.go             AES-256-GCM for secrets at rest
-    jwt.go                 HS256 JWT, 30-day TTL
-    auth.go                AuthRequired middleware
-    github.go              GitHub token verification
-    handlers/router.go     Huma route registration
-    handlers/run.go        POST /run — dispatch to pkg/core/, stream JSONL
-    handlers/query.go      Read-only endpoints (instances, volumes, dns, secrets, storage, builds, logs, exec)
-    handlers/describe.go   Describe + Resources
-    handlers/ssh.go        POST /ssh
-    handlers/auth.go       POST /login
-    handlers/workspaces.go CRUD workspaces
-    handlers/repos.go      CRUD repos
-    handlers/providers.go  Set/list/delete providers
-  render/                  Output renderers — TUI, Plain, JSON, Table, Describe, Resources, Delete
+    db.go                  PostgreSQL + AutoMigrate (reads MAIN_DATABASE_URL)
+    handlers/              Route handlers
+  render/                  Output renderers — TUI, Plain, JSON
   testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
+
+pkg/
+  core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
+    cluster.go             Cluster struct (MasterSSH field), ProviderRef, Connect(), SSH()
+    compute.go             ComputeSet (SSH connect, EnsureSwap, Docker, k3s, label), ComputeDelete, ComputeList
+    service.go             ServiceSet, ServiceDelete
+    dns.go                 DNSSet, DNSDelete, DNSList
+    ingress.go             IngressSet (WaitForCertificate + WaitForHTTPS from server), IngressDelete
+    storage.go             StorageSet, StorageDelete, StorageEmpty, StorageList
+    secret.go              SecretSet, SecretDelete, SecretList, SecretReveal
+    volume.go              VolumeSet, VolumeDelete, VolumeList
+    build.go               BuildRun, BuildParallel, BuildList, BuildLatest, BuildPrune
+    cron.go                CronSet, CronDelete, CronRun
+    database.go            DatabaseBackupList, DatabaseBackupDownload, DatabaseSQL
+    describe.go            Describe, DescribeJSON
+    resources.go           Resources
+    firewall.go            FirewallSet, FirewallList
+    wait.go                WaitRollout
+    exec.go                Exec
+    ssh.go                 SSH
+    logs.go                Logs
+  kube/                    K8s YAML generation + kubectl over SSH + Caddy ingress + rollout
+  infra/                   SSH, server bootstrap, k3s, Docker, swap, volume mounting
+  provider/                Provider interfaces + per-domain implementations
+    compute.go             ComputeProvider interface
+    dns.go                 DNSProvider interface
+    bucket.go              BucketProvider interface
+    builder.go             BuildProvider interface
+    resolve.go             Registration, credential schemas, resolution
+    s3ops/                 Shared S3 operations (CORS, lifecycle, empty)
+    compute/
+      hetzner/             Hetzner Cloud (compute + volumes)
+      aws/                 AWS (EC2 + VPC)
+      scaleway/            Scaleway (compute)
+    dns/
+      cloudflare/          Cloudflare DNS
+      aws/                 AWS Route53
+      scaleway/            Scaleway DNS
+    storage/
+      cloudflare/          Cloudflare R2
+      aws/                 AWS S3
+      scaleway/            Scaleway Object Storage
+    build/
+      local/               Local docker buildx
+      daytona/             Daytona remote sandbox
+      github/              GitHub Actions
+    hetznerbase/           Shared Hetzner HTTP client
+    awsbase/               Shared AWS SDK config
+    cfbase/                Shared Cloudflare HTTP client
+    scwbase/               Shared Scaleway HTTP client
+  utils/                   Pure utilities: naming, poll, httpclient, ssh keys, format, maps, params
+    s3/                    S3-compatible operations with AWS Signature V4
 ```
 
-### Two CLIs, same pkg/core/
+### SSH model
 
-Both CLIs call `pkg/core/` functions — no shared Backend interface. The direct CLI calls them in-process via the reconcile engine. The cloud CLI sends the YAML to the API, which dispatches to `pkg/core/` and streams JSONL back.
+One SSH connection per deploy. `Cluster.MasterSSH` is set once after `ServersAdd()`, shared across all subsequent operations via `borrowedSSH` (no-op Close). API dispatch path connects on-demand (no `MasterSSH`).
 
-- **Direct CLI** (`internal/core/`) — reads `nvoi.yaml` + env vars, builds `DeployContext`, calls `reconcile.Deploy()` or `pkg/core/` directly
-- **Cloud CLI** (`internal/cli/`) — sends YAML to API endpoints, renders streamed JSONL through TUI
+`ComputeSet` connects to individual servers via `Cluster.Connect()` for provisioning (Docker, k3s, swap). Those are separate connections — not the master.
 
-Both produce identical output. Same lipgloss, same events, same look.
+SSH errors: `ErrHostKeyChanged` and `ErrAuthFailed` surface immediately with guidance. Stale known hosts auto-cleared on server creation.
 
 ### Reconcile flow
 
 ```
-nvoi deploy --config nvoi.yaml
-  → loadConfig() → ParseAppConfig(yaml)
-  → BuildContext(cmd) → DeployContext (cluster + provider refs from env)
-  → reconcile.Deploy(ctx, dc, cfg, viper)
-    → ValidateConfig(cfg)
-    → DescribeLive(ctx, dc) → LiveState (current cluster + provider state)
-    → Servers(ctx, dc, live, cfg)   — add desired, drain + remove orphans
-    → Firewall(ctx, dc, live, cfg)
-    → Volumes(ctx, dc, live, cfg)
-    → Build(ctx, dc, cfg)
-    → Secrets(ctx, dc, live, cfg, v) — resolved from env vars
-    → Storage(ctx, dc, live, cfg)
-    → Services(ctx, dc, live, cfg)  — resolve images, wait rollout
-    → Crons(ctx, dc, live, cfg)
-    → DNS(ctx, dc, live, cfg)
-    → Ingress(ctx, dc, live, cfg)
+Deploy(ctx, dc, cfg, viper)
+  → ValidateConfig(cfg)
+  → packages.ValidateAll(cfg)
+  → DescribeLive(ctx, dc) → LiveState
+  → ServersAdd(ctx, dc, cfg)          — create desired, NO orphan removal yet
+  → establish MasterSSH
+  → Firewall(ctx, dc, live, cfg)
+  → Volumes(ctx, dc, live, cfg)
+  → Build(ctx, dc, cfg)
+  → Secrets(ctx, dc, live, cfg, v)
+  → packages.ReconcileAll(ctx, dc, cfg) → packageEnvVars
+  → Storage(ctx, dc, live, cfg)
+  → Services(ctx, dc, live, cfg, packageEnvVars)
+  → Crons(ctx, dc, live, cfg, packageEnvVars)
+  → ServersRemoveOrphans(ctx, dc, live, cfg) — drain + delete AFTER workloads moved
+  → DNS(ctx, dc, live, cfg)
+  → Ingress(ctx, dc, live, cfg)
 ```
 
-### Cloud CLI flow
+### Database package
 
+`database:` in config triggers the database package. Per database:
+1. Detect engine from image (postgres, mysql, mariadb)
+2. Read credentials from environment (required, no auto-generation)
+3. Store as k8s Secret
+4. Apply StatefulSet + headless Service
+5. Wait for readiness probe
+6. Create backup bucket
+7. Apply backup CronJob
+8. Return env vars for injection into all app services
+
+Env vars injected (for database named `main` with postgres):
 ```
-nvoi deploy (cloud CLI)
-  → POST /workspaces/{wid}/repos/{rid}/deploy {config: yamlString}
-    → API dispatches to reconcile engine
-    → streams JSONL output back
-  → CLI renders JSONL through TUI
+MAIN_DATABASE_URL, MAIN_POSTGRES_USER, MAIN_POSTGRES_PASSWORD,
+MAIN_POSTGRES_DB, MAIN_POSTGRES_HOST, MAIN_POSTGRES_PORT
 ```
 
-The API also supports granular operations via `POST /run {kind, name, params}` for individual resource mutations (instance.set, service.delete, etc.).
+Package-managed resources (`main-db`, `main-db-backup`, `main-db-backups`) are protected from orphan detection in Services, Crons, and Storage reconcilers.
+
+### Server provisioning
+
+`ComputeSet` flow per server:
+1. `EnsureServer` at provider (create or return existing)
+2. Resolve private IP
+3. Clear stale known host (recycled IPs)
+4. Wait for SSH (poll `Connect`, hard error on host key changed / auth failed)
+5. `EnsureSwap` — reads actual disk size via `df`, proportional swap (5%, 512MB–2GB)
+6. `EnsureDocker`
+7. Master: `InstallK3sMaster` + `EnsureRegistry`
+8. Worker: `JoinK3sWorker` (reads token from master, installs agent)
+9. `LabelNode`
+
+Zero-downtime server replacement: `ServersAdd` creates new servers first, `Services`/`Crons` move workloads, `ServersRemoveOrphans` drains and deletes old servers after.
 
 ## Providers
 
-Everything pluggable is a provider. Same pattern for all four kinds: interface + credential schema + `init()` register + factory.
+Organized by domain with shared base clients:
 
-| Kind | YAML key | Env var | Interface | Implementations |
-|------|----------|---------|-----------|----------------|
-| Compute | `providers.compute` | `COMPUTE_PROVIDER` | `ComputeProvider` | hetzner, aws, scaleway |
-| DNS | `providers.dns` | `DNS_PROVIDER` | `DNSProvider` | cloudflare, aws, scaleway |
-| Storage | `providers.storage` | `STORAGE_PROVIDER` | `BucketProvider` | cloudflare (R2), aws (S3) |
-| Build | `providers.build` | `BUILD_PROVIDER` | `BuildProvider` | local, daytona, github |
+| Kind | YAML key | Interface | Implementations |
+|------|----------|-----------|----------------|
+| Compute | `providers.compute` | `ComputeProvider` | hetzner, aws, scaleway |
+| DNS | `providers.dns` | `DNSProvider` | cloudflare, aws, scaleway |
+| Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
+| Build | `providers.build` | `BuildProvider` | local, daytona, github |
 
-See [`pkg/provider/CLAUDE.md`](pkg/provider/CLAUDE.md) for registration pattern, credential resolution, and `.env` reference.
-
-## Validation guardrails
-
-`ValidateConfig()` runs hard errors before touching infrastructure:
-
-- **Identity:** `app` and `env` required
-- **Servers:** at least one server, exactly one master, all have type/region/role
-- **Volumes:** size > 0, server reference exists, mount format is `name:/path`
-- **Services/Crons:** image XOR build (mutually exclusive), referenced build/storage/volumes exist
-- **Volume placement:** workload and volume must be on the same server
-- **Domains:** service exists and has a port, at least one domain per entry
-- **Build:** source required for every build target
-
-Runtime guardrails in `pkg/core/`:
-- **Cluster:** master must exist. k3s must be installed.
-- **Node labeling:** ComputeSet labels nodes `nvoi-role={name}`. `server:` on services matches via `nodeSelector`.
-- **Placement:** `server:` pins to node. Volume services auto-pinned to volume's server.
-- **Volumes:** refs checked via provider API. Volume → StatefulSet, replicas=1.
-- **DNS / Ingress:** DNS creates A records. Ingress deploys Caddy with `hostNetwork`, `Recreate` strategy. TLS is ACME only.
-- **Storage:** creates bucket + stores S3 creds as 4 k8s secrets. `storage:` on services expands to secret refs.
-- **Secrets:** referenced secrets must exist in the cluster (hard error if missing).
-- **Rollout:** polls pods with live feedback. Terminal states (`CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`) exit immediately with logs.
-
-## Output contract
-
-**Providers are silent. `pkg/core/` narrates. `internal/render/` renders. No exceptions.**
-
-- `pkg/core/` communicates through the `Output` interface (Command, Progress, Success, Warning, Info, Error, Writer)
-- `pkg/core/` returns errors. Never renders them. Never calls `Output.Error()`.
-- Cobra handles all errors via `root.SetErr()` → `Output.Error()`. Single path.
-- Three renderers: TUI (terminal), JSONL (`--json`), Plain (`--ci` or non-TTY)
-- Both CLIs produce identical output. Direct CLI calls `pkg/core/` → `Output`. Cloud CLI replays JSONL from the API through the same renderers.
-
-See [`internal/render/CLAUDE.md`](internal/render/CLAUDE.md) for renderer details, JSONL format, streaming.
+`ensureFirewall` only ensures the resource exists — never resets rules. Rules managed exclusively by `ReconcileFirewallRules` in the Firewall reconcile step.
 
 ## Key rules
 
 1. `app` + `env` in `nvoi.yaml` are required. They're the namespace for everything.
-2. No state files. Infrastructure is the truth. `describe` fetches live from the cluster.
-3. `deploy` is idempotent. Run twice, same result. Adds desired state, removes orphans.
-4. `teardown` nukes external provider resources. Volumes and storage are preserved by default — data survives teardown unless explicitly opted in with `--delete-volumes` / `--delete-storage`.
-5. Provider interfaces scale. Add a provider = implement the interface. Same registration pattern for all four kinds.
+2. No state files. Infrastructure is the truth.
+3. `deploy` is idempotent. Run twice, same result.
+4. `teardown` nukes external provider resources. Volumes and storage preserved by default.
+5. Provider interfaces scale. Add a provider = implement the interface.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
-7. SSH is the only transport to remote servers. SSH keys are injected strictly via cloud-init UserData — never via provider SSH key APIs. `infra.RenderCloudInit` renders the public key into `ssh_authorized_keys`. This is the only key injection path.
-8. **`os.Getenv` lives exclusively in `internal/core/`.** Environment variables are a CLI concept. `pkg/core/`, `provider/`, `infra/`, `utils/` never read env vars. All external values are resolved in `internal/core/resolve.go` and passed down as typed function arguments. Strictly enforced. No exceptions.
-9. **Providers are silent.** Providers are API clients — they do work and return data. They never print, log, or narrate. Progress output belongs in `pkg/core/` via the `Output` interface.
-10. **`pkg/core/` never writes to stdout.** No `fmt.Printf`, no `os.Stdout`, no `os` import for I/O. All output goes through the `Output` interface. `pkg/core/` is a library — the API handlers call the same functions.
-11. **`pkg/core/` never imports `net/http`.** HTTP calls belong in `infra/` or `provider/`. `pkg/core/` is pure orchestration.
-12. **Errors flow up, render once.** `pkg/core/` returns errors. Cobra renders them through `SetErr` → `Output.Error()`. Never double-print. Never swallow silently.
-13. Every delete is idempotent. Deleting something that doesn't exist succeeds silently. Typed sentinel errors drive the rendering: `utils.ErrNotFound` → "already gone", `core.ErrNoMaster` → "cluster gone".
-14. **No shell injection.** Secret values flow to kubectl via file upload (`ssh.Upload` + `cat`), not inline `fmt.Sprintf`. `shellQuote` for `--from-literal` args. Never interpolate user values into shell strings.
-15. **All providers use `utils.HTTPClient`.** 30s default timeout. Consistent `APIError` types. `IsNotFound()` works uniformly. No raw `http.DefaultClient.Do()`. Exception: AWS provider uses AWS SDK v2 (its own HTTP transport).
-16. **`internal/reconcile/` never reads env vars or imports `os`.** Config comes from `AppConfig` (YAML) + `DeployContext` (resolved in `internal/core/`). Secrets resolved from viper.
-
-## Known limitations
-
-- **No pagination on provider list operations.** Hetzner uses `per_page=50` for servers, volumes, firewalls, networks. No cursor continuation. Fine at current scale. Fix when adding multi-tenant.
-- **No retry / backoff on transient HTTP errors.** Provider API calls fail immediately on 500s or connection drops. User re-runs the command. Idempotent deploy makes this safe.
-- **`s3ops.go` uses a dedicated `s3Client` (not `utils.HTTPClient`).** S3/XML operations need raw HTTP, not JSON. By design.
-- **AWS SDK `LoadDefaultConfig` errors are deferred to `ValidateCredentials`.** Provider factories can't return errors. AWS constructors store the config error and surface it on the first `ValidateCredentials` call.
+7. SSH keys injected via cloud-init only. Single SSH connection per deploy (`MasterSSH`).
+8. **`os.Getenv` lives exclusively in `internal/core/`.** `pkg/core/`, `provider/`, `infra/`, `utils/` never read env vars.
+9. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface.
+10. **`pkg/core/` never writes to stdout.** All output through `Output` interface.
+11. **`pkg/core/` never imports `net/http`.** HTTP calls belong in `infra/` or `provider/`.
+12. **Errors flow up, render once.** `pkg/core/` returns errors. Cobra renders via `Output.Error()`.
+13. **No shell injection.** Secret values via file upload, not inline interpolation.
+14. **Web-facing services require replicas >= 2.** Omitted defaults to 2, explicit 1 is a hard error.
+15. **Package-managed resources are protected from orphan detection.**
+16. **Database credentials are user-owned.** No auto-generation. Missing = hard error.
 
 ## Production hardening notes
 
-Lessons from real deployment failures.
-
-- **`~` doesn't expand in Go.** `resolveSSHKey()` calls `expandHome()` before reading. Any path from env vars or flags that could contain `~` must expand it.
-- **`kubectl apply` does strategic merge, not full replace.** `kube.Apply()` uses `kubectl replace` first, falls back to `kubectl apply --server-side --force-conflicts` for first creation.
-- **Caddy with `hostNetwork` can't rolling-update on single-node.** Caddy Deployment uses `Recreate` strategy.
-- **DNS and ingress are separate concerns.** DNS creates A records only. Ingress owns Caddy entirely — takes all `service:domain` mappings, builds full Caddyfile, deploys once.
-- **Rollout must detect terminal failures.** `CrashLoopBackOff` and `Error` statuses trigger early exit. On bail-out, fetch `--previous` logs.
-- **Build source and Dockerfile are separate.** Source `./cmd/web` means the Dockerfile lives at `./cmd/web/Dockerfile`. Build context is the project root.
-- **GitHub Actions secrets can't start with `GITHUB_`.** Reserved prefix.
-- **Concurrency control on deploy workflows.** Use `concurrency: { group: deploy, cancel-in-progress: false }` to serialize.
-- **ARM servers need ARM runners.** `cax11` (Hetzner ARM) produces `linux/arm64` images. Use `ubuntu-24.04-arm` runner.
+- **`~` doesn't expand in Go.** `resolveSSHKey()` calls `expandHome()`.
+- **`kubectl apply` does strategic merge, not full replace.** `kube.Apply()` uses `kubectl replace` first, falls back to `kubectl apply --server-side --force-conflicts`.
+- **Caddy with `hostNetwork` uses `Recreate` strategy.** ConfigMap mounted as directory (not subPath) for auto-sync.
+- **DNS and ingress are separate concerns.** DNS creates A records. Ingress owns Caddy.
+- **HTTPS verification runs from the server** via SSH curl, not from the deploy client. No DNS propagation dependency. Cert check (`sudo test -f`) + health check (any non-5xx).
+- **SSH host key changed = hard error** with guidance to clear known hosts. Auto-cleared on server creation.
+- **Firewall never reset during server creation.** `ensureFirewall` only ensures existence.
+- **Concurrency control on deploy workflows.** `concurrency: { group: deploy, cancel-in-progress: false }`.
