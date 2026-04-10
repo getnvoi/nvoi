@@ -15,13 +15,14 @@ func Deploy(ctx context.Context, dc *DeployContext, cfg *AppConfig, v *viper.Vip
 
 	live := DescribeLive(ctx, dc)
 
-	if err := Servers(ctx, dc, live, cfg); err != nil {
+	// Create desired servers. Orphans are NOT removed yet — workloads
+	// must move to new nodes first (zero-downtime server replacement).
+	if err := ServersAdd(ctx, dc, cfg); err != nil {
 		return err
 	}
 
 	// Master is now guaranteed to exist. Establish a single SSH connection
-	// for all remaining operations. Every pkg/core/ function that calls
-	// Cluster.SSH() will reuse this connection via borrowedSSH.
+	// for all remaining operations.
 	master, _, _, err := dc.Cluster.Master(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve master after server setup: %w", err)
@@ -54,6 +55,10 @@ func Deploy(ctx context.Context, dc *DeployContext, cfg *AppConfig, v *viper.Vip
 	if err := Crons(ctx, dc, live, cfg); err != nil {
 		return err
 	}
+
+	// Workloads have moved. Now safe to drain + delete orphan servers.
+	ServersRemoveOrphans(ctx, dc, live, cfg)
+
 	if err := DNS(ctx, dc, live, cfg); err != nil {
 		return err
 	}

@@ -7,7 +7,10 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Servers(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) error {
+// ServersAdd creates desired servers. Masters first, then workers.
+// Does NOT remove orphans — that's deferred to ServersRemoveOrphans
+// after workloads have been moved to the new nodes.
+func ServersAdd(ctx context.Context, dc *DeployContext, cfg *AppConfig) error {
 	masters, workers := SplitServers(cfg.Servers)
 	for _, s := range masters {
 		creds := dc.Cluster.Credentials
@@ -35,15 +38,21 @@ func Servers(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppCo
 			return err
 		}
 	}
+	return nil
+}
 
-	if live != nil {
-		desired := toSet(utils.SortedKeys(cfg.Servers))
-		for _, name := range live.Servers {
-			if !desired[name] {
-				drainNode(ctx, dc, name)
-				_ = app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: name})
-			}
+// ServersRemoveOrphans drains and deletes servers that are in live state
+// but not in the desired config. Called AFTER services/crons have been
+// reconciled so workloads have already moved to new nodes.
+func ServersRemoveOrphans(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) {
+	if live == nil {
+		return
+	}
+	desired := toSet(utils.SortedKeys(cfg.Servers))
+	for _, name := range live.Servers {
+		if !desired[name] {
+			drainNode(ctx, dc, name)
+			_ = app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: name})
 		}
 	}
-	return nil
 }
