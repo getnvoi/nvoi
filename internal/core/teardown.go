@@ -12,7 +12,7 @@ import (
 func NewTeardownCmd(dc *reconcile.DeployContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "teardown",
-		Short: "Tear down all resources in config YAML",
+		Short: "Tear down all provider resources in config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd)
 			if err != nil {
@@ -28,28 +28,19 @@ func NewTeardownCmd(dc *reconcile.DeployContext) *cobra.Command {
 	return cmd
 }
 
+// teardown nukes external provider resources. Kubernetes resources (services,
+// crons, ingress, secrets) live on the cluster and die with the servers.
+// K8s resource management is reconcile's job, not teardown's.
 func teardown(ctx context.Context, dc *reconcile.DeployContext, cfg *reconcile.AppConfig, deleteVolumes, deleteStorage bool) error {
-	// Networking
+	// DNS records — external, at the DNS provider
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
-		_ = app.IngressDelete(ctx, app.IngressDeleteRequest{
-			Cluster: dc.Cluster,
-			Route:   app.IngressRouteArg{Service: svcName, Domains: cfg.Domains[svcName]},
-		})
 		_ = app.DNSDelete(ctx, app.DNSDeleteRequest{
 			Cluster: dc.Cluster, DNS: dc.DNS,
 			Service: svcName, Domains: cfg.Domains[svcName],
 		})
 	}
 
-	// Workloads
-	for _, name := range utils.SortedKeys(cfg.Crons) {
-		_ = app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Name: name})
-	}
-	for _, name := range utils.SortedKeys(cfg.Services) {
-		_ = app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Name: name})
-	}
-
-	// Storage — preserved by default
+	// Storage buckets — external, preserved by default
 	if deleteStorage {
 		for _, name := range utils.SortedKeys(cfg.Storage) {
 			_ = app.StorageEmpty(ctx, app.StorageEmptyRequest{
@@ -60,12 +51,7 @@ func teardown(ctx context.Context, dc *reconcile.DeployContext, cfg *reconcile.A
 		}
 	}
 
-	// Secrets
-	for _, key := range cfg.Secrets {
-		_ = app.SecretDelete(ctx, app.SecretDeleteRequest{Cluster: dc.Cluster, Key: key})
-	}
-
-	// Volumes — preserved by default
+	// Volumes — external, preserved by default
 	if deleteVolumes {
 		for _, name := range utils.SortedKeys(cfg.Volumes) {
 			_ = app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name})
@@ -81,8 +67,7 @@ func teardown(ctx context.Context, dc *reconcile.DeployContext, cfg *reconcile.A
 		_ = app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name})
 	}
 
-	// Nuke shared provider resources — firewall and network.
-	// Only destroy does this. Reconcile never touches these.
+	// Firewall + network — shared provider resources, always nuked
 	names, err := dc.Cluster.Names()
 	if err != nil {
 		return nil

@@ -3,11 +3,10 @@ package core
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
-
-	"io"
 
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -15,35 +14,33 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// ── Tracking mock ─────────────────────────────────────────────────────────────
+// ── Tracking infrastructure ───────────────────────────────────────────────────
 
-// tracker records every provider operation in order for assertions.
-type tracker struct {
-	mu  sync.Mutex
-	ops []string
-
-	// Per-call error injection. Key = operation string, value = error to return.
+// opLog records every provider operation in order for assertions.
+type opLog struct {
+	mu     sync.Mutex
+	ops    []string
 	errors map[string]error
 }
 
-func newTracker() *tracker {
-	return &tracker{errors: map[string]error{}}
+func newOpLog() *opLog {
+	return &opLog{errors: map[string]error{}}
 }
 
-func (t *tracker) record(op string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.ops = append(t.ops, op)
-	if err, ok := t.errors[op]; ok {
+func (l *opLog) record(op string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ops = append(l.ops, op)
+	if err, ok := l.errors[op]; ok {
 		return err
 	}
 	return nil
 }
 
-func (t *tracker) has(op string) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for _, o := range t.ops {
+func (l *opLog) has(op string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, o := range l.ops {
 		if o == op {
 			return true
 		}
@@ -51,10 +48,10 @@ func (t *tracker) has(op string) bool {
 	return false
 }
 
-func (t *tracker) indexOf(op string) int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for i, o := range t.ops {
+func (l *opLog) indexOf(op string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i, o := range l.ops {
 		if o == op {
 			return i
 		}
@@ -62,11 +59,11 @@ func (t *tracker) indexOf(op string) int {
 	return -1
 }
 
-func (t *tracker) count(prefix string) int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (l *opLog) count(prefix string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	n := 0
-	for _, o := range t.ops {
+	for _, o := range l.ops {
 		if strings.HasPrefix(o, prefix) {
 			n++
 		}
@@ -74,96 +71,166 @@ func (t *tracker) count(prefix string) int {
 	return n
 }
 
-func (t *tracker) all() []string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	cp := make([]string, len(t.ops))
-	copy(cp, t.ops)
+func (l *opLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cp := make([]string, len(l.ops))
+	copy(cp, l.ops)
 	return cp
 }
 
-// trackingCompute implements provider.ComputeProvider, recording all calls.
+// ── Tracking compute provider ─────────────────────────────────────────────────
+
 type trackingCompute struct {
-	t       *tracker
+	log     *opLog
 	servers []*provider.Server
 	volumes []*provider.Volume
 }
 
-func (c *trackingCompute) ValidateCredentials(ctx context.Context) error { return nil }
-func (c *trackingCompute) ArchForType(string) string                     { return "amd64" }
-
-func (c *trackingCompute) EnsureServer(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error) {
+func (c *trackingCompute) ValidateCredentials(context.Context) error { return nil }
+func (c *trackingCompute) ArchForType(string) string                 { return "amd64" }
+func (c *trackingCompute) EnsureServer(context.Context, provider.CreateServerRequest) (*provider.Server, error) {
 	return nil, nil
 }
-
 func (c *trackingCompute) DeleteServer(ctx context.Context, req provider.DeleteServerRequest) error {
-	return c.t.record("delete-server:" + req.Name)
+	return c.log.record("delete-server:" + req.Name)
 }
-
 func (c *trackingCompute) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {
 	return c.servers, nil
 }
-
 func (c *trackingCompute) DeleteFirewall(ctx context.Context, name string) error {
-	return c.t.record("delete-firewall:" + name)
+	return c.log.record("delete-firewall:" + name)
 }
-
 func (c *trackingCompute) DeleteNetwork(ctx context.Context, name string) error {
-	return c.t.record("delete-network:" + name)
+	return c.log.record("delete-network:" + name)
 }
-
-func (c *trackingCompute) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {
+func (c *trackingCompute) ListAllFirewalls(context.Context) ([]*provider.Firewall, error) {
 	return nil, nil
 }
-func (c *trackingCompute) ListAllNetworks(ctx context.Context) ([]*provider.Network, error) {
+func (c *trackingCompute) ListAllNetworks(context.Context) ([]*provider.Network, error) {
 	return nil, nil
 }
-
-func (c *trackingCompute) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequest) (*provider.Volume, error) {
+func (c *trackingCompute) EnsureVolume(context.Context, provider.CreateVolumeRequest) (*provider.Volume, error) {
 	return nil, nil
 }
-func (c *trackingCompute) ResizeVolume(ctx context.Context, id string, sizeGB int) error { return nil }
+func (c *trackingCompute) ResizeVolume(context.Context, string, int) error { return nil }
 func (c *trackingCompute) DetachVolume(ctx context.Context, name string) error {
-	return c.t.record("detach-volume:" + name)
+	return c.log.record("detach-volume:" + name)
 }
 func (c *trackingCompute) DeleteVolume(ctx context.Context, name string) error {
-	return c.t.record("delete-volume:" + name)
+	return c.log.record("delete-volume:" + name)
 }
 func (c *trackingCompute) ListVolumes(ctx context.Context, labels map[string]string) ([]*provider.Volume, error) {
 	return c.volumes, nil
 }
-func (c *trackingCompute) GetPrivateIP(ctx context.Context, serverID string) (string, error) {
+func (c *trackingCompute) GetPrivateIP(context.Context, string) (string, error) {
 	return "10.0.0.1", nil
 }
 func (c *trackingCompute) ResolveDevicePath(vol *provider.Volume) string { return vol.DevicePath }
-func (c *trackingCompute) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
+func (c *trackingCompute) ListResources(context.Context) ([]provider.ResourceGroup, error) {
 	return nil, nil
 }
-func (c *trackingCompute) ReconcileFirewallRules(ctx context.Context, name string, allowed provider.PortAllowList) error {
+func (c *trackingCompute) ReconcileFirewallRules(context.Context, string, provider.PortAllowList) error {
 	return nil
 }
-func (c *trackingCompute) GetFirewallRules(ctx context.Context, name string) (provider.PortAllowList, error) {
+func (c *trackingCompute) GetFirewallRules(context.Context, string) (provider.PortAllowList, error) {
 	return nil, nil
 }
 
 var _ provider.ComputeProvider = (*trackingCompute)(nil)
 
-// ── Test provider registration ────────────────────────────────────────────────
+// ── Tracking DNS provider ─────────────────────────────────────────────────────
 
-// activeTracker is the per-test mock, returned by the registered factory.
-var activeTracker *trackingCompute
+type trackingDNS struct {
+	log *opLog
+}
+
+func (d *trackingDNS) ValidateCredentials(context.Context) error { return nil }
+func (d *trackingDNS) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
+	return nil
+}
+func (d *trackingDNS) DeleteARecord(ctx context.Context, domain string) error {
+	return d.log.record("delete-dns:" + domain)
+}
+func (d *trackingDNS) ListARecords(context.Context) ([]provider.DNSRecord, error) { return nil, nil }
+func (d *trackingDNS) ListResources(context.Context) ([]provider.ResourceGroup, error) {
+	return nil, nil
+}
+
+var _ provider.DNSProvider = (*trackingDNS)(nil)
+
+// ── Tracking bucket provider ──────────────────────────────────────────────────
+
+type trackingBucket struct {
+	log *opLog
+}
+
+func (b *trackingBucket) ValidateCredentials(context.Context) error                 { return nil }
+func (b *trackingBucket) EnsureBucket(context.Context, string) error                { return nil }
+func (b *trackingBucket) SetCORS(context.Context, string, []string, []string) error { return nil }
+func (b *trackingBucket) ClearCORS(context.Context, string) error                   { return nil }
+func (b *trackingBucket) SetLifecycle(context.Context, string, int) error           { return nil }
+func (b *trackingBucket) Credentials(context.Context) (provider.BucketCredentials, error) {
+	return provider.BucketCredentials{}, nil
+}
+func (b *trackingBucket) ListResources(context.Context) ([]provider.ResourceGroup, error) {
+	return nil, nil
+}
+func (b *trackingBucket) EmptyBucket(ctx context.Context, name string) error {
+	return b.log.record("empty-bucket:" + name)
+}
+func (b *trackingBucket) DeleteBucket(ctx context.Context, name string) error {
+	return b.log.record("delete-bucket:" + name)
+}
+
+var _ provider.BucketProvider = (*trackingBucket)(nil)
+
+// ── Provider registration ─────────────────────────────────────────────────────
+
+var (
+	activeCompute *trackingCompute
+	activeDNS     *trackingDNS
+	activeBucket  *trackingBucket
+)
 
 func init() {
 	provider.RegisterCompute("test-teardown", provider.CredentialSchema{
 		Name: "test-teardown",
 	}, func(creds map[string]string) provider.ComputeProvider {
-		return activeTracker
+		return activeCompute
+	})
+	provider.RegisterDNS("test-teardown-dns", provider.CredentialSchema{
+		Name: "test-teardown-dns",
+	}, func(creds map[string]string) provider.DNSProvider {
+		return activeDNS
+	})
+	provider.RegisterBucket("test-teardown-bucket", provider.CredentialSchema{
+		Name: "test-teardown-bucket",
+	}, func(creds map[string]string) provider.BucketProvider {
+		return activeBucket
 	})
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-func testConfig() *reconcile.AppConfig {
+func setupTeardown(log *opLog) *reconcile.DeployContext {
+	activeCompute = &trackingCompute{log: log}
+	activeDNS = &trackingDNS{log: log}
+	activeBucket = &trackingBucket{log: log}
+
+	return &reconcile.DeployContext{
+		Cluster: app.Cluster{
+			AppName:  "myapp",
+			Env:      "prod",
+			Provider: "test-teardown",
+			Output:   silentOutput{},
+		},
+		DNS:     app.ProviderRef{Name: "test-teardown-dns"},
+		Storage: app.ProviderRef{Name: "test-teardown-bucket"},
+	}
+}
+
+func fullConfig() *reconcile.AppConfig {
 	return &reconcile.AppConfig{
 		App: "myapp",
 		Env: "prod",
@@ -191,279 +258,284 @@ func testConfig() *reconcile.AppConfig {
 	}
 }
 
-func testContext(t *tracker) (*reconcile.DeployContext, *trackingCompute) {
-	mock := &trackingCompute{t: t}
-	activeTracker = mock
-
-	return &reconcile.DeployContext{
-		Cluster: app.Cluster{
-			AppName:  "myapp",
-			Env:      "prod",
-			Provider: "test-teardown",
-			Output:   testNopOutput{},
-		},
-		DNS:     app.ProviderRef{Name: "nonexistent-dns"},
-		Storage: app.ProviderRef{Name: "nonexistent-storage"},
-	}, mock
+func names() *utils.Names {
+	n, _ := utils.NewNames("myapp", "prod")
+	return n
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+type silentOutput struct{}
+
+func (silentOutput) Command(string, string, string, ...any) {}
+func (silentOutput) Progress(string)                        {}
+func (silentOutput) Success(string)                         {}
+func (silentOutput) Warning(string)                         {}
+func (silentOutput) Info(string)                            {}
+func (silentOutput) Error(error)                            {}
+func (silentOutput) Writer() io.Writer                      { return io.Discard }
+
+// ── Tests: return value ───────────────────────────────────────────────────────
 
 func TestTeardown_ReturnsNil(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-
-	err := teardown(context.Background(), dc, cfg, false, false)
+	log := newOpLog()
+	dc := setupTeardown(log)
+	err := teardown(context.Background(), dc, fullConfig(), false, false)
 	if err != nil {
 		t.Fatalf("teardown should return nil, got: %v", err)
 	}
 }
 
-func TestTeardown_DeletesServers(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-	names, _ := utils.NewNames("myapp", "prod")
+func TestTeardown_ReturnsNilWithAllFlags(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	err := teardown(context.Background(), dc, fullConfig(), true, true)
+	if err != nil {
+		t.Fatalf("teardown with all flags should return nil, got: %v", err)
+	}
+}
+
+// ── Tests: DNS ────────────────────────────────────────────────────────────────
+
+func TestTeardown_DeletesDNSRecords(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	if !log.has("delete-dns:myapp.com") {
+		t.Error("DNS record myapp.com not deleted")
+	}
+	if !log.has("delete-dns:www.myapp.com") {
+		t.Error("DNS record www.myapp.com not deleted")
+	}
+	if log.count("delete-dns:") != 2 {
+		t.Errorf("expected exactly 2 DNS deletes, got %d: %v", log.count("delete-dns:"), log.all())
+	}
+}
+
+func TestTeardown_MultipleDomainServices(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	cfg := fullConfig()
+	cfg.Services["api"] = reconcile.ServiceDef{Image: "api:latest", Port: 8080}
+	cfg.Domains["api"] = []string{"api.myapp.com"}
 
 	_ = teardown(context.Background(), dc, cfg, false, false)
 
-	masterName := names.Server("master")
-	workerName := names.Server("worker")
-
-	if !tr.has("delete-server:" + workerName) {
-		t.Errorf("worker server %q not deleted", workerName)
+	if !log.has("delete-dns:myapp.com") {
+		t.Error("myapp.com not deleted")
 	}
-	if !tr.has("delete-server:" + masterName) {
-		t.Errorf("master server %q not deleted", masterName)
+	if !log.has("delete-dns:www.myapp.com") {
+		t.Error("www.myapp.com not deleted")
+	}
+	if !log.has("delete-dns:api.myapp.com") {
+		t.Error("api.myapp.com not deleted")
+	}
+	if log.count("delete-dns:") != 3 {
+		t.Errorf("expected 3 DNS deletes, got %d", log.count("delete-dns:"))
+	}
+}
+
+func TestTeardown_NoDomains(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	cfg := fullConfig()
+	cfg.Domains = nil
+
+	_ = teardown(context.Background(), dc, cfg, false, false)
+
+	if log.count("delete-dns:") != 0 {
+		t.Errorf("no domains configured, but DNS deletes occurred: %v", log.all())
+	}
+}
+
+// ── Tests: servers ────────────────────────────────────────────────────────────
+
+func TestTeardown_DeletesAllServers(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	if !log.has("delete-server:" + n.Server("worker")) {
+		t.Errorf("worker not deleted")
+	}
+	if !log.has("delete-server:" + n.Server("master")) {
+		t.Errorf("master not deleted")
+	}
+	if log.count("delete-server:") != 2 {
+		t.Errorf("expected 2 server deletes, got %d", log.count("delete-server:"))
 	}
 }
 
 func TestTeardown_WorkersBeforeMasters(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-	names, _ := utils.NewNames("myapp", "prod")
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
 
-	_ = teardown(context.Background(), dc, cfg, false, false)
+	workerIdx := log.indexOf("delete-server:" + n.Server("worker"))
+	masterIdx := log.indexOf("delete-server:" + n.Server("master"))
 
-	workerIdx := tr.indexOf("delete-server:" + names.Server("worker"))
-	masterIdx := tr.indexOf("delete-server:" + names.Server("master"))
-
-	if workerIdx < 0 {
-		t.Fatal("worker delete not found")
-	}
-	if masterIdx < 0 {
-		t.Fatal("master delete not found")
+	if workerIdx < 0 || masterIdx < 0 {
+		t.Fatalf("missing server deletes: %v", log.all())
 	}
 	if workerIdx >= masterIdx {
-		t.Errorf("worker deleted at index %d, master at %d — workers must go first", workerIdx, masterIdx)
-	}
-}
-
-func TestTeardown_FirewallAndNetworkAlwaysDeleted(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-	names, _ := utils.NewNames("myapp", "prod")
-
-	_ = teardown(context.Background(), dc, cfg, false, false)
-
-	if !tr.has("delete-firewall:" + names.Firewall()) {
-		t.Errorf("firewall %q not deleted", names.Firewall())
-	}
-	if !tr.has("delete-network:" + names.Network()) {
-		t.Errorf("network %q not deleted", names.Network())
-	}
-}
-
-func TestTeardown_FirewallAndNetworkAfterServers(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-	names, _ := utils.NewNames("myapp", "prod")
-
-	_ = teardown(context.Background(), dc, cfg, false, false)
-
-	masterIdx := tr.indexOf("delete-server:" + names.Server("master"))
-	fwIdx := tr.indexOf("delete-firewall:" + names.Firewall())
-	netIdx := tr.indexOf("delete-network:" + names.Network())
-
-	if fwIdx <= masterIdx {
-		t.Errorf("firewall deleted at %d, master at %d — firewall must come after servers", fwIdx, masterIdx)
-	}
-	if netIdx <= masterIdx {
-		t.Errorf("network deleted at %d, master at %d — network must come after servers", netIdx, masterIdx)
-	}
-}
-
-func TestTeardown_VolumesPreservedByDefault(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-
-	_ = teardown(context.Background(), dc, cfg, false, false)
-
-	if tr.count("delete-volume:") > 0 {
-		t.Errorf("volumes should be preserved by default, but got deletes: %v", tr.all())
-	}
-}
-
-func TestTeardown_VolumesDeletedWithFlag(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-	names, _ := utils.NewNames("myapp", "prod")
-
-	_ = teardown(context.Background(), dc, cfg, true, false)
-
-	volName := names.Volume("pgdata")
-	if !tr.has("delete-volume:" + volName) {
-		t.Errorf("volume %q not deleted with --delete-volumes", volName)
-	}
-}
-
-func TestTeardown_StoragePreservedByDefault(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-
-	_ = teardown(context.Background(), dc, cfg, false, false)
-
-	// StorageEmpty/Delete go through app.StorageEmpty/Delete which need a bucket
-	// provider. With "nonexistent-storage", those calls fail silently.
-	// The key assertion: teardown never even tries when flag is off.
-	// We can't directly track bucket calls here, but we verify no storage ops logged.
-	// This test verifies the code path — storage block is gated by the flag.
-}
-
-func TestTeardown_StorageDeletedWithFlag(t *testing.T) {
-	// Storage uses a bucket provider (not compute), so we can't track it on our
-	// compute mock. But we CAN verify teardown doesn't skip the block — if the
-	// bucket provider existed, it would be called. We verify the code path runs
-	// by confirming teardown still returns nil even with the flag.
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-
-	err := teardown(context.Background(), dc, cfg, false, true)
-	if err != nil {
-		t.Fatalf("teardown with --delete-storage should return nil, got: %v", err)
-	}
-}
-
-func TestTeardown_BothFlagsTogether(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := testConfig()
-	names, _ := utils.NewNames("myapp", "prod")
-
-	_ = teardown(context.Background(), dc, cfg, true, true)
-
-	if !tr.has("delete-volume:" + names.Volume("pgdata")) {
-		t.Error("volume not deleted with both flags")
-	}
-	if !tr.has("delete-firewall:" + names.Firewall()) {
-		t.Error("firewall not deleted with both flags")
-	}
-	if !tr.has("delete-network:" + names.Network()) {
-		t.Error("network not deleted with both flags")
-	}
-}
-
-func TestTeardown_EmptyConfig(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	cfg := &reconcile.AppConfig{
-		App:     "myapp",
-		Env:     "prod",
-		Servers: map[string]reconcile.ServerDef{},
-	}
-
-	err := teardown(context.Background(), dc, cfg, true, true)
-	if err != nil {
-		t.Fatalf("teardown on empty config should return nil, got: %v", err)
-	}
-
-	// Only firewall + network should be deleted (shared infra always nuked).
-	if !tr.has("delete-firewall:" + "nvoi-myapp-prod-fw") {
-		t.Error("firewall not deleted on empty config")
-	}
-	if !tr.has("delete-network:" + "nvoi-myapp-prod-net") {
-		t.Error("network not deleted on empty config")
-	}
-	if tr.count("delete-server:") > 0 {
-		t.Error("no servers to delete, but server deletes occurred")
-	}
-}
-
-func TestTeardown_ErrorsSwallowed(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	names, _ := utils.NewNames("myapp", "prod")
-
-	// Inject error on worker delete — teardown should continue to master and firewall/network.
-	tr.errors["delete-server:"+names.Server("worker")] = fmt.Errorf("provider API down")
-
-	cfg := testConfig()
-	err := teardown(context.Background(), dc, cfg, true, false)
-	if err != nil {
-		t.Fatalf("teardown should swallow errors, got: %v", err)
-	}
-
-	// Despite worker error, master should still be deleted.
-	if !tr.has("delete-server:" + names.Server("master")) {
-		t.Error("master not deleted after worker error")
-	}
-	// Firewall and network should still be deleted.
-	if !tr.has("delete-firewall:" + names.Firewall()) {
-		t.Error("firewall not deleted after worker error")
-	}
-	if !tr.has("delete-network:" + names.Network()) {
-		t.Error("network not deleted after worker error")
+		t.Errorf("worker at %d, master at %d — workers must be deleted first", workerIdx, masterIdx)
 	}
 }
 
 func TestTeardown_MultipleWorkers(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	names, _ := utils.NewNames("myapp", "prod")
-
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
 	cfg := &reconcile.AppConfig{
-		App: "myapp",
-		Env: "prod",
+		App: "myapp", Env: "prod",
 		Servers: map[string]reconcile.ServerDef{
 			"master":   {Type: "cx21", Region: "fsn1", Role: "master"},
 			"worker-a": {Type: "cx21", Region: "fsn1", Role: "worker"},
-			"worker-b": {Type: "cx21", Region: "fsn1", Role: "worker"},
+			"worker-b": {Type: "cx33", Region: "fsn1", Role: "worker"},
 		},
 	}
 
 	_ = teardown(context.Background(), dc, cfg, false, false)
 
-	workerA := tr.indexOf("delete-server:" + names.Server("worker-a"))
-	workerB := tr.indexOf("delete-server:" + names.Server("worker-b"))
-	master := tr.indexOf("delete-server:" + names.Server("master"))
+	wa := log.indexOf("delete-server:" + n.Server("worker-a"))
+	wb := log.indexOf("delete-server:" + n.Server("worker-b"))
+	m := log.indexOf("delete-server:" + n.Server("master"))
 
-	if workerA < 0 || workerB < 0 || master < 0 {
-		t.Fatalf("not all servers deleted: ops=%v", tr.all())
+	if wa < 0 || wb < 0 || m < 0 {
+		t.Fatalf("not all servers deleted: %v", log.all())
 	}
-	if workerA >= master {
-		t.Errorf("worker-a (%d) not before master (%d)", workerA, master)
+	if wa >= m {
+		t.Errorf("worker-a (%d) not before master (%d)", wa, m)
 	}
-	if workerB >= master {
-		t.Errorf("worker-b (%d) not before master (%d)", workerB, master)
+	if wb >= m {
+		t.Errorf("worker-b (%d) not before master (%d)", wb, m)
+	}
+}
+
+func TestTeardown_MasterOnly(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	cfg := &reconcile.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]reconcile.ServerDef{
+			"master": {Type: "cx21", Region: "fsn1", Role: "master"},
+		},
+	}
+
+	_ = teardown(context.Background(), dc, cfg, false, false)
+
+	if !log.has("delete-server:" + n.Server("master")) {
+		t.Error("master not deleted")
+	}
+	if log.count("delete-server:") != 1 {
+		t.Errorf("expected 1 server delete, got %d", log.count("delete-server:"))
+	}
+}
+
+// ── Tests: firewall + network ─────────────────────────────────────────────────
+
+func TestTeardown_FirewallAndNetworkAlwaysDeleted(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	if !log.has("delete-firewall:" + n.Firewall()) {
+		t.Errorf("firewall %q not deleted", n.Firewall())
+	}
+	if !log.has("delete-network:" + n.Network()) {
+		t.Errorf("network %q not deleted", n.Network())
+	}
+}
+
+func TestTeardown_FirewallAndNetworkAfterAllServers(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	masterIdx := log.indexOf("delete-server:" + n.Server("master"))
+	fwIdx := log.indexOf("delete-firewall:" + n.Firewall())
+	netIdx := log.indexOf("delete-network:" + n.Network())
+
+	if fwIdx <= masterIdx {
+		t.Errorf("firewall (%d) before master (%d)", fwIdx, masterIdx)
+	}
+	if netIdx <= masterIdx {
+		t.Errorf("network (%d) before master (%d)", netIdx, masterIdx)
+	}
+}
+
+func TestTeardown_FirewallErrorDoesNotBlockNetwork(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+
+	log.errors["delete-firewall:"+n.Firewall()] = fmt.Errorf("firewall stuck")
+
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	if !log.has("delete-firewall:" + n.Firewall()) {
+		t.Error("firewall delete not attempted")
+	}
+	if !log.has("delete-network:" + n.Network()) {
+		t.Error("network not deleted after firewall error")
+	}
+}
+
+func TestTeardown_EmptyConfig_StillDeletesFirewallAndNetwork(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	cfg := &reconcile.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]reconcile.ServerDef{},
+	}
+
+	_ = teardown(context.Background(), dc, cfg, true, true)
+
+	if !log.has("delete-firewall:" + n.Firewall()) {
+		t.Error("firewall not deleted on empty config")
+	}
+	if !log.has("delete-network:" + n.Network()) {
+		t.Error("network not deleted on empty config")
+	}
+	if log.count("delete-server:") != 0 {
+		t.Error("server deletes on empty config")
+	}
+}
+
+// ── Tests: volumes ────────────────────────────────────────────────────────────
+
+func TestTeardown_VolumesPreservedByDefault(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	if log.count("delete-volume:") != 0 {
+		t.Errorf("volumes preserved by default, but got deletes: %v", log.all())
+	}
+}
+
+func TestTeardown_VolumesDeletedWithFlag(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), true, false)
+
+	if !log.has("delete-volume:" + n.Volume("pgdata")) {
+		t.Errorf("volume %q not deleted with --delete-volumes", n.Volume("pgdata"))
 	}
 }
 
 func TestTeardown_MultipleVolumes(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	names, _ := utils.NewNames("myapp", "prod")
-
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
 	cfg := &reconcile.AppConfig{
-		App: "myapp",
-		Env: "prod",
+		App: "myapp", Env: "prod",
 		Servers: map[string]reconcile.ServerDef{
 			"master": {Type: "cx21", Region: "fsn1", Role: "master"},
 		},
@@ -475,63 +547,268 @@ func TestTeardown_MultipleVolumes(t *testing.T) {
 
 	_ = teardown(context.Background(), dc, cfg, true, false)
 
-	if !tr.has("delete-volume:" + names.Volume("pgdata")) {
-		t.Error("pgdata volume not deleted")
+	if !log.has("delete-volume:" + n.Volume("pgdata")) {
+		t.Error("pgdata not deleted")
 	}
-	if !tr.has("delete-volume:" + names.Volume("redis")) {
-		t.Error("redis volume not deleted")
+	if !log.has("delete-volume:" + n.Volume("redis")) {
+		t.Error("redis not deleted")
+	}
+	if log.count("delete-volume:") != 2 {
+		t.Errorf("expected 2 volume deletes, got %d", log.count("delete-volume:"))
 	}
 }
 
-func TestTeardown_InvalidAppName(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
+func TestTeardown_VolumesBeforeServers(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), true, false)
+
+	volIdx := log.indexOf("delete-volume:" + n.Volume("pgdata"))
+	srvIdx := log.indexOf("delete-server:" + n.Server("worker"))
+
+	if volIdx < 0 || srvIdx < 0 {
+		t.Fatalf("missing ops: %v", log.all())
+	}
+	if volIdx >= srvIdx {
+		t.Errorf("volume (%d) not before servers (%d)", volIdx, srvIdx)
+	}
+}
+
+// ── Tests: storage ────────────────────────────────────────────────────────────
+
+func TestTeardown_StoragePreservedByDefault(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	if log.count("empty-bucket:") != 0 {
+		t.Errorf("storage preserved by default, but got empties: %v", log.all())
+	}
+	if log.count("delete-bucket:") != 0 {
+		t.Errorf("storage preserved by default, but got deletes: %v", log.all())
+	}
+}
+
+func TestTeardown_StorageDeletedWithFlag(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), false, true)
+
+	bucketName := n.Bucket("assets")
+	if !log.has("empty-bucket:" + bucketName) {
+		t.Errorf("bucket %q not emptied", bucketName)
+	}
+	if !log.has("delete-bucket:" + bucketName) {
+		t.Errorf("bucket %q not deleted", bucketName)
+	}
+}
+
+func TestTeardown_StorageEmptiedBeforeDeleted(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), false, true)
+
+	bucketName := n.Bucket("assets")
+	emptyIdx := log.indexOf("empty-bucket:" + bucketName)
+	deleteIdx := log.indexOf("delete-bucket:" + bucketName)
+
+	if emptyIdx < 0 || deleteIdx < 0 {
+		t.Fatalf("missing bucket ops: %v", log.all())
+	}
+	if emptyIdx >= deleteIdx {
+		t.Errorf("empty (%d) not before delete (%d)", emptyIdx, deleteIdx)
+	}
+}
+
+func TestTeardown_MultipleStorageBuckets(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	cfg := fullConfig()
+	cfg.Storage["uploads"] = reconcile.StorageDef{}
+
+	_ = teardown(context.Background(), dc, cfg, false, true)
+
+	if !log.has("delete-bucket:" + n.Bucket("assets")) {
+		t.Error("assets bucket not deleted")
+	}
+	if !log.has("delete-bucket:" + n.Bucket("uploads")) {
+		t.Error("uploads bucket not deleted")
+	}
+}
+
+func TestTeardown_StorageBeforeServers(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), false, true)
+
+	bucketIdx := log.indexOf("delete-bucket:" + n.Bucket("assets"))
+	srvIdx := log.indexOf("delete-server:" + n.Server("worker"))
+
+	if bucketIdx < 0 || srvIdx < 0 {
+		t.Fatalf("missing ops: %v", log.all())
+	}
+	if bucketIdx >= srvIdx {
+		t.Errorf("storage (%d) not before servers (%d)", bucketIdx, srvIdx)
+	}
+}
+
+// ── Tests: error handling ─────────────────────────────────────────────────────
+
+func TestTeardown_ErrorsNeverPropagate(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+
+	// Inject errors everywhere
+	log.errors["delete-dns:myapp.com"] = fmt.Errorf("dns timeout")
+	log.errors["delete-server:"+n.Server("worker")] = fmt.Errorf("api 500")
+	log.errors["delete-firewall:"+n.Firewall()] = fmt.Errorf("firewall locked")
+
+	err := teardown(context.Background(), dc, fullConfig(), true, true)
+	if err != nil {
+		t.Fatalf("teardown must never return an error, got: %v", err)
+	}
+}
+
+func TestTeardown_ServerErrorDoesNotBlockFirewall(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+
+	log.errors["delete-server:"+n.Server("master")] = fmt.Errorf("stuck")
+
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	if !log.has("delete-firewall:" + n.Firewall()) {
+		t.Error("firewall not deleted after server error")
+	}
+	if !log.has("delete-network:" + n.Network()) {
+		t.Error("network not deleted after server error")
+	}
+}
+
+func TestTeardown_DNSErrorDoesNotBlockServers(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+
+	log.errors["delete-dns:myapp.com"] = fmt.Errorf("dns fail")
+	log.errors["delete-dns:www.myapp.com"] = fmt.Errorf("dns fail")
+
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+
+	if !log.has("delete-server:" + n.Server("master")) {
+		t.Error("server not deleted after DNS errors")
+	}
+}
+
+func TestTeardown_VolumeErrorDoesNotBlockServers(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+
+	log.errors["delete-volume:"+n.Volume("pgdata")] = fmt.Errorf("volume busy")
+
+	_ = teardown(context.Background(), dc, fullConfig(), true, false)
+
+	if !log.has("delete-server:" + n.Server("master")) {
+		t.Error("server not deleted after volume error")
+	}
+}
+
+// ── Tests: no k8s resources ───────────────────────────────────────────────────
+
+func TestTeardown_NoK8sResourceOps(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	_ = teardown(context.Background(), dc, fullConfig(), true, true)
+
+	for _, op := range log.all() {
+		if strings.Contains(op, "service") || strings.Contains(op, "cron") ||
+			strings.Contains(op, "ingress") || strings.Contains(op, "secret") {
+			t.Errorf("teardown should not touch k8s resources, but got: %s", op)
+		}
+	}
+}
+
+// ── Tests: edge cases ─────────────────────────────────────────────────────────
+
+func TestTeardown_InvalidClusterNames(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
 	dc.Cluster.AppName = ""
 	dc.Cluster.Env = ""
 
-	cfg := &reconcile.AppConfig{
-		App:     "",
-		Env:     "",
-		Servers: map[string]reconcile.ServerDef{},
-	}
+	cfg := &reconcile.AppConfig{App: "", Env: "", Servers: map[string]reconcile.ServerDef{}}
 
-	// Names() will fail — teardown should still return nil (errors swallowed).
 	err := teardown(context.Background(), dc, cfg, false, false)
 	if err != nil {
-		t.Fatalf("teardown should return nil even with invalid names, got: %v", err)
+		t.Fatalf("should return nil even with invalid names, got: %v", err)
 	}
 }
 
-func TestTeardown_NoDomainsStillDeletesServers(t *testing.T) {
-	tr := newTracker()
-	dc, _ := testContext(tr)
-	names, _ := utils.NewNames("myapp", "prod")
+func TestTeardown_DNSBeforeServers(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), false, false)
 
-	cfg := &reconcile.AppConfig{
-		App: "myapp",
-		Env: "prod",
-		Servers: map[string]reconcile.ServerDef{
-			"master": {Type: "cx21", Region: "fsn1", Role: "master"},
-		},
+	dnsIdx := log.indexOf("delete-dns:myapp.com")
+	srvIdx := log.indexOf("delete-server:" + n.Server("worker"))
+
+	if dnsIdx < 0 || srvIdx < 0 {
+		t.Fatalf("missing ops: %v", log.all())
 	}
-
-	_ = teardown(context.Background(), dc, cfg, false, false)
-
-	if !tr.has("delete-server:" + names.Server("master")) {
-		t.Error("server not deleted when no domains configured")
-	}
-	if !tr.has("delete-firewall:" + names.Firewall()) {
-		t.Error("firewall not deleted when no domains configured")
+	if dnsIdx >= srvIdx {
+		t.Errorf("DNS (%d) not before servers (%d)", dnsIdx, srvIdx)
 	}
 }
 
-// testNopOutput discards all events — used by tests.
-type testNopOutput struct{}
+func TestTeardown_FullOrderDNS_Storage_Volumes_Workers_Masters_Firewall_Network(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+	_ = teardown(context.Background(), dc, fullConfig(), true, true)
 
-func (testNopOutput) Command(string, string, string, ...any) {}
-func (testNopOutput) Progress(string)                        {}
-func (testNopOutput) Success(string)                         {}
-func (testNopOutput) Warning(string)                         {}
-func (testNopOutput) Info(string)                            {}
-func (testNopOutput) Error(error)                            {}
-func (testNopOutput) Writer() io.Writer                      { return io.Discard }
+	dns := log.indexOf("delete-dns:myapp.com")
+	bucket := log.indexOf("delete-bucket:" + n.Bucket("assets"))
+	vol := log.indexOf("delete-volume:" + n.Volume("pgdata"))
+	worker := log.indexOf("delete-server:" + n.Server("worker"))
+	master := log.indexOf("delete-server:" + n.Server("master"))
+	fw := log.indexOf("delete-firewall:" + n.Firewall())
+	net := log.indexOf("delete-network:" + n.Network())
+
+	for label, idx := range map[string]int{
+		"dns": dns, "bucket": bucket, "volume": vol,
+		"worker": worker, "master": master, "firewall": fw, "network": net,
+	} {
+		if idx < 0 {
+			t.Fatalf("%s not found in ops: %v", label, log.all())
+		}
+	}
+
+	// DNS before storage before volumes before workers before master before firewall before network
+	if dns >= bucket {
+		t.Errorf("dns (%d) not before bucket (%d)", dns, bucket)
+	}
+	if bucket >= vol {
+		t.Errorf("bucket (%d) not before volume (%d)", bucket, vol)
+	}
+	if vol >= worker {
+		t.Errorf("volume (%d) not before worker (%d)", vol, worker)
+	}
+	if worker >= master {
+		t.Errorf("worker (%d) not before master (%d)", worker, master)
+	}
+	if master >= fw {
+		t.Errorf("master (%d) not before firewall (%d)", master, fw)
+	}
+	if fw >= net {
+		t.Errorf("firewall (%d) not before network (%d)", fw, net)
+	}
+}
