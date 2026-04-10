@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -90,7 +91,13 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	if err := utils.Poll(sshCtx, 2*time.Second, 5*time.Minute, func() (bool, error) {
 		conn, err := req.Connect(ctx, srv.IPv4+":22")
 		if err != nil {
-			return false, nil
+			if errors.Is(err, infra.ErrHostKeyChanged) {
+				return false, err // hard error — server was recreated
+			}
+			if errors.Is(err, infra.ErrAuthFailed) {
+				return false, err // hard error — wrong SSH key
+			}
+			return false, nil // transient (refused, timeout) — retry
 		}
 		ssh = conn
 		return true, nil
