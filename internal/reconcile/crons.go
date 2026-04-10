@@ -31,8 +31,12 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 	}
 	if live != nil {
 		desired := toSet(utils.SortedKeys(cfg.Crons))
+		protected := map[string]bool{}
+		for dbName := range cfg.Database {
+			protected[dbName+"-db-backup"] = true
+		}
 		for _, name := range live.Crons {
-			if !desired[name] {
+			if !desired[name] && !protected[name] {
 				_ = app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Name: name})
 			}
 		}

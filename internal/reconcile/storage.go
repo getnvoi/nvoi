@@ -20,8 +20,12 @@ func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 	}
 	if live != nil {
 		desired := toSet(utils.SortedKeys(cfg.Storage))
+		protected := map[string]bool{}
+		for dbName := range cfg.Database {
+			protected[dbName+"-db-backups"] = true
+		}
 		for _, name := range live.Storage {
-			if !desired[name] {
+			if !desired[name] && !protected[name] {
 				_ = app.StorageEmpty(ctx, app.StorageEmptyRequest{
 					Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env, Output: dc.Cluster.Output},
 					Storage: dc.Storage, Name: name,

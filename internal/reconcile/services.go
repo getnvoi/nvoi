@@ -50,8 +50,13 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 
 	if live != nil {
 		desired := toSet(svcNames)
+		// Exclude package-managed services from orphan detection
+		protected := map[string]bool{"caddy": true}
+		for dbName := range cfg.Database {
+			protected[dbName+"-db"] = true
+		}
 		for _, name := range live.Services {
-			if !desired[name] && name != "caddy" {
+			if !desired[name] && !protected[name] {
 				_ = app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Name: name})
 			}
 		}
