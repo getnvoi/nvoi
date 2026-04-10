@@ -27,14 +27,10 @@ func testClient(t *testing.T, handler http.Handler) *Client {
 
 // ── Firewall rule reconciliation ────────────────────────────────────────────────
 
-func TestEnsureFirewall_ReconcileExistingRules(t *testing.T) {
-	deletedRules := 0
-	addedRules := 0
+func TestEnsureFirewall_ExistingReturnsID(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-
-		// GET /security_groups?name=... returns existing SG
-		if r.Method == "GET" && strings.Contains(path, "/security_groups") && !strings.Contains(path, "/rules") {
+		if r.Method == "GET" && strings.Contains(path, "/security_groups") {
 			json.NewEncoder(w).Encode(map[string]any{
 				"security_groups": []map[string]any{
 					{"id": "sg-123", "name": "nvoi-test-fw"},
@@ -42,31 +38,7 @@ func TestEnsureFirewall_ReconcileExistingRules(t *testing.T) {
 			})
 			return
 		}
-		// GET /security_groups/sg-123/rules — list existing rules
-		if r.Method == "GET" && strings.Contains(path, "/rules") {
-			json.NewEncoder(w).Encode(map[string]any{
-				"rules": []map[string]any{
-					{"id": "rule-old-1"},
-					{"id": "rule-old-2"},
-				},
-			})
-			return
-		}
-		// DELETE /security_groups/sg-123/rules/rule-old-* — delete old rules
-		if r.Method == "DELETE" && strings.Contains(path, "/rules/") {
-			deletedRules++
-			w.WriteHeader(204)
-			return
-		}
-		// POST /security_groups/sg-123/rules — add new rules
-		if r.Method == "POST" && strings.Contains(path, "/rules") {
-			addedRules++
-			json.NewEncoder(w).Encode(map[string]any{
-				"rule": map[string]any{"id": "rule-new"},
-			})
-			return
-		}
-		t.Errorf("unexpected request: %s %s", r.Method, path)
+		t.Errorf("unexpected request: %s %s — ensureFirewall should only return ID", r.Method, path)
 	}))
 
 	id, err := c.ensureFirewall(context.Background(), "nvoi-test-fw", map[string]string{"app": "test"})
@@ -75,14 +47,6 @@ func TestEnsureFirewall_ReconcileExistingRules(t *testing.T) {
 	}
 	if id != "sg-123" {
 		t.Errorf("id = %q, want %q", id, "sg-123")
-	}
-	if deletedRules != 2 {
-		t.Errorf("deleted %d old rules, want 2", deletedRules)
-	}
-	// baseFirewallRules returns 5 rules (SSH + 4 internal, no HTTP).
-	// Each rule has 1 source IP → 5 addSGRule calls.
-	if addedRules != 5 {
-		t.Errorf("added %d new rules, want 5", addedRules)
 	}
 }
 

@@ -22,9 +22,6 @@ func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[str
 		return "", err
 	}
 	if existing != nil {
-		if err := c.reconcileFirewallRules(ctx, existing.ID); err != nil {
-			return "", fmt.Errorf("reconcile firewall rules: %w", err)
-		}
 		return existing.ID, nil
 	}
 

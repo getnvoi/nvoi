@@ -29,12 +29,7 @@ func (c *Client) ensureFirewall(ctx context.Context, name string, labels map[str
 	}
 	for _, fw := range listResp.Firewalls {
 		if fw.Name == name {
-			id := strconv.FormatInt(fw.ID, 10)
-			// Update rules
-			if err := c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/set_rules", id), map[string]any{"rules": baseFirewallRules()}, nil); err != nil {
-				return "", fmt.Errorf("reconcile firewall rules: %w", err)
-			}
-			return id, nil
+			return strconv.FormatInt(fw.ID, 10), nil
 		}
 	}
 

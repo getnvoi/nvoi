@@ -25,11 +25,7 @@ func (c *Client) ensureSecurityGroup(ctx context.Context, name, vpcID string, la
 		return "", err
 	}
 	if existing != nil {
-		sgID := deref(existing.GroupId)
-		if err := c.reconcileIngressRules(ctx, sgID); err != nil {
-			return "", fmt.Errorf("reconcile firewall rules: %w", err)
-		}
-		return sgID, nil
+		return deref(existing.GroupId), nil
 	}
 
 	resp, err := c.ec2.CreateSecurityGroup(ctx, &ec2.CreateSecurityGroupInput{

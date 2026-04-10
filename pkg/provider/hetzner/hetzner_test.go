@@ -330,10 +330,8 @@ func TestResizeVolume(t *testing.T) {
 
 // ── Firewall rule reconciliation ────────────────────────────────────────────────
 
-func TestEnsureFirewall_ReconcileExistingRules(t *testing.T) {
-	setRulesCalled := false
+func TestEnsureFirewall_ExistingReturnsID(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// GET /firewalls?name=... returns existing firewall
 		if r.Method == "GET" && contains(r.URL.String(), "/firewalls") {
 			json.NewEncoder(w).Encode(map[string]any{
 				"firewalls": []map[string]any{
@@ -342,19 +340,9 @@ func TestEnsureFirewall_ReconcileExistingRules(t *testing.T) {
 			})
 			return
 		}
-		// POST /firewalls/99/actions/set_rules — the reconciliation call
-		if r.Method == "POST" && contains(r.URL.Path, "/firewalls/99/actions/set_rules") {
-			setRulesCalled = true
-			var body map[string]any
-			json.NewDecoder(r.Body).Decode(&body)
-			rules, ok := body["rules"].([]any)
-			if !ok || len(rules) != 5 {
-				t.Errorf("expected 5 base rules in set_rules, got %v", len(rules))
-			}
-			w.WriteHeader(200)
-			return
-		}
-		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		// ensureFirewall should NOT call set_rules on existing firewall.
+		// Rules are managed by ReconcileFirewallRules, not ensureFirewall.
+		t.Errorf("unexpected request: %s %s — ensureFirewall should only return ID for existing firewall", r.Method, r.URL.Path)
 	}))
 
 	id, err := c.ensureFirewall(context.Background(), "nvoi-test-fw", map[string]string{"app": "test"})
@@ -363,9 +351,6 @@ func TestEnsureFirewall_ReconcileExistingRules(t *testing.T) {
 	}
 	if id != "99" {
 		t.Errorf("id = %q, want %q", id, "99")
-	}
-	if !setRulesCalled {
-		t.Error("set_rules was NOT called on existing firewall — rules not reconciled")
 	}
 }
 
