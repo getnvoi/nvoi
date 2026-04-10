@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -30,7 +31,8 @@ func init() {
 	provider.RegisterCompute("test-reconcile", provider.CredentialSchema{Name: "test-reconcile"}, func(creds map[string]string) provider.ComputeProvider {
 		return activeMock
 	})
-	kube.CaddyReloadDelay = 0
+	kube.CaddyConfigTimeout = 10 * time.Millisecond
+	kube.CaddyConfigPollInterval = time.Millisecond
 }
 
 // ── Operation log ─────────────────────────────────────────────────────────────
@@ -149,10 +151,17 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "jsonpath='{.items[0].metadata.name}'", Result: testutil.MockResult{Output: []byte("'caddy-pod'")}},
 			// WaitRollout: get pods ... -o json → returns ready pod list
 			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(readyPodJSON)}},
+			// sha256sum — return a hash that will be checked against expected.
+			// ApplyCaddyConfig polls until hash matches. We return the wildcard
+			// "match everything" approach: the exec command contains the hash check,
+			// and we intercept it to return whatever hash was expected.
+			{Prefix: "sha256sum", Result: testutil.MockResult{Output: []byte("0000000000000000000000000000000000000000000000000000000000000000  /etc/caddy/Caddyfile")}},
 			{Prefix: "caddy reload", Result: testutil.MockResult{}},
 			{Prefix: "test -f", Result: testutil.MockResult{Output: []byte("ready")}},
 			{Prefix: "curl -sk", Result: testutil.MockResult{Output: []byte("'200'")}},
 			{Prefix: "exec", Result: testutil.MockResult{}},
+			// get deployment caddy — fail (not found) so ApplyCaddyConfig takes first-deploy path
+			{Prefix: "get deployment caddy", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
 			{Prefix: "get deploy", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get statefulset", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get configmap", Result: testutil.MockResult{Output: []byte(`{"data":{}}`)}},

@@ -78,9 +78,9 @@ func TestParseIngressArgs_Invalid(t *testing.T) {
 // ── IngressSet — ACME ──────────────────────────────────────────────────────
 
 func TestIngressSet_HardErrorWhenUnreachable(t *testing.T) {
-	origDelay := kube.CaddyReloadDelay
-	kube.CaddyReloadDelay = 0
-	defer func() { kube.CaddyReloadDelay = origDelay }()
+	origDelay := kube.CaddyConfigTimeout
+	kube.CaddyConfigTimeout = 0
+	defer func() { kube.CaddyConfigTimeout = origDelay }()
 
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
@@ -119,9 +119,9 @@ func TestIngressSet_NoCluster(t *testing.T) {
 }
 
 func TestIngressSet_ACMEPath(t *testing.T) {
-	origDelay := kube.CaddyReloadDelay
-	kube.CaddyReloadDelay = 0
-	defer func() { kube.CaddyReloadDelay = origDelay }()
+	origDelay := kube.CaddyConfigTimeout
+	kube.CaddyConfigTimeout = 0
+	defer func() { kube.CaddyConfigTimeout = origDelay }()
 
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
@@ -171,10 +171,6 @@ func TestIngressDelete_LastRoute_WipesEverything(t *testing.T) {
 }
 
 func TestIngressDelete_RemovesRoute_KeepsOthers(t *testing.T) {
-	origDelay := kube.CaddyReloadDelay
-	kube.CaddyReloadDelay = 0
-	defer func() { kube.CaddyReloadDelay = origDelay }()
-
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
@@ -186,11 +182,8 @@ func TestIngressDelete_RemovesRoute_KeepsOthers(t *testing.T) {
 			{Prefix: "get namespace", Result: testutil.MockResult{}},
 			{Prefix: "create namespace", Result: testutil.MockResult{}},
 			{Prefix: "get configmap", Result: testutil.MockResult{Output: []byte("'" + caddyfile + "'")}},
-			// Caddy exists — hot reload path
-			{Prefix: "get deployment caddy", Result: testutil.MockResult{Output: []byte("caddy")}},
-			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte("'caddy-abc123'")}},
-			{Prefix: "exec caddy-abc123 -- sha256sum", Result: testutil.MockResult{Output: []byte("abc  /etc/caddy/Caddyfile")}},
-			{Prefix: "exec caddy-abc123 -- caddy reload", Result: testutil.MockResult{}},
+			// Caddy not deployed — first-deploy path (no hash check)
+			{Prefix: "get deployment caddy", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
 			{Prefix: "replace", Result: testutil.MockResult{}},
 			{Prefix: "apply", Result: testutil.MockResult{}},
 		},

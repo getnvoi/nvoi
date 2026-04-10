@@ -145,9 +145,9 @@ func applyCaddySSH(deploymentExists bool, expectedHash string) *testutil.MockSSH
 }
 
 func TestApplyCaddyConfig_FirstDeploy(t *testing.T) {
-	origDelay := CaddyReloadDelay
-	CaddyReloadDelay = 10 * time.Millisecond
-	defer func() { CaddyReloadDelay = origDelay }()
+	origDelay := CaddyConfigTimeout
+	CaddyConfigTimeout = 10 * time.Millisecond
+	defer func() { CaddyConfigTimeout = origDelay }()
 
 	names, _ := utils.NewNames("myapp", "prod")
 	routes := []IngressRoute{
@@ -167,9 +167,9 @@ func TestApplyCaddyConfig_FirstDeploy(t *testing.T) {
 }
 
 func TestApplyCaddyConfig_HotReload(t *testing.T) {
-	origDelay := CaddyReloadDelay
-	CaddyReloadDelay = 100 * time.Millisecond
-	defer func() { CaddyReloadDelay = origDelay }()
+	origDelay := CaddyConfigTimeout
+	CaddyConfigTimeout = 100 * time.Millisecond
+	defer func() { CaddyConfigTimeout = origDelay }()
 
 	names, _ := utils.NewNames("myapp", "prod")
 	routes := []IngressRoute{
@@ -193,9 +193,9 @@ func TestApplyCaddyConfig_HotReload(t *testing.T) {
 }
 
 func TestApplyCaddyConfig_ReloadError(t *testing.T) {
-	origDelay := CaddyReloadDelay
-	CaddyReloadDelay = 10 * time.Millisecond
-	defer func() { CaddyReloadDelay = origDelay }()
+	origDelay := CaddyConfigTimeout
+	CaddyConfigTimeout = 10 * time.Millisecond
+	defer func() { CaddyConfigTimeout = origDelay }()
 
 	names, _ := utils.NewNames("myapp", "prod")
 	routes := []IngressRoute{

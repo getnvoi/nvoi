@@ -59,33 +59,24 @@ func ApplyCaddyConfig(ctx context.Context, ssh utils.SSHClient, ns string, route
 
 	// Caddy already running — hot reload.
 	// ConfigMap volume sync takes up to kubelet sync period (default 60s).
-	// Poll until the file hash matches, then reload.
+	// Poll until the file hash inside the pod matches what we applied, then reload.
 	podName, err := caddyPodName(ctx, ssh, ns, names.KubeCaddy())
 	if err != nil {
 		return fmt.Errorf("find caddy pod: %w", err)
 	}
 
 	expectedHash := fmt.Sprintf("%x", sha256.Sum256([]byte(caddyfile)))
-	deadline := time.After(CaddyReloadDelay)
-	for {
+	if err := utils.Poll(ctx, CaddyConfigPollInterval, CaddyConfigTimeout, func() (bool, error) {
 		out, hashErr := ssh.Run(ctx, kubectl(ns, fmt.Sprintf(
 			"exec %s -- sha256sum /etc/caddy/Caddyfile", podName)))
-		if hashErr == nil {
-			fields := strings.Fields(strings.TrimSpace(string(out)))
-			if len(fields) > 0 && fields[0] == expectedHash {
-				break
-			}
+		if hashErr != nil {
+			return false, nil
 		}
-		select {
-		case <-deadline:
-			// Timeout — proceed with reload anyway
-			goto reload
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
-		}
+		fields := strings.Fields(strings.TrimSpace(string(out)))
+		return len(fields) > 0 && fields[0] == expectedHash, nil
+	}); err != nil {
+		return fmt.Errorf("configmap not synced to caddy pod after %s: %w", CaddyConfigTimeout, err)
 	}
-reload:
 
 	_, err = ssh.Run(ctx, kubectl(ns, fmt.Sprintf(
 		"exec %s -- caddy reload --config /etc/caddy/Caddyfile --force", podName)))
@@ -96,9 +87,11 @@ reload:
 	return nil
 }
 
-// CaddyReloadDelay is the wait for kubelet to sync ConfigMap to the volume.
-// Variable for testing.
-var CaddyReloadDelay = 5 * time.Second
+// CaddyConfigPollInterval is the interval between config sync checks. Variable for testing.
+var CaddyConfigPollInterval = 2 * time.Second
+
+// CaddyConfigTimeout is the max wait for kubelet to sync the ConfigMap. Variable for testing.
+var CaddyConfigTimeout = 90 * time.Second
 
 // caddyPodName finds the running Caddy pod name.
 func caddyPodName(ctx context.Context, ssh utils.SSHClient, ns, deploymentName string) (string, error) {
