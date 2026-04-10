@@ -66,7 +66,7 @@ func EnsureSwap(ctx context.Context, ssh utils.SSHClient) error {
 		"chmod 600 /swapfile",
 		"mkswap /swapfile",
 		"swapon /swapfile",
-		"grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab",
+		"bash -c \"grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab\"",
 	}
 	for _, cmd := range cmds {
 		if _, err := ssh.Run(ctx, "sudo "+cmd); err != nil {

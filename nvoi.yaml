@@ -12,6 +12,10 @@ servers:
     type: cax11
     region: nbg1
     role: master
+  worker-1:
+    type: cax11
+    region: nbg1
+    role: worker
 
 firewall: default
 
@@ -42,9 +46,11 @@ services:
     build: api
     port: 8080
     secrets: [JWT_SECRET, ENCRYPTION_KEY]
+    server: worker-1
   web:
     build: web
     port: 3000
+    server: worker-1
   distribution:
     build: distribution
     port: 3001
