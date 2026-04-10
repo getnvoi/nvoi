@@ -79,33 +79,7 @@ func WaitSSH(ctx context.Context, addr string, privateKey []byte) error {
 }
 
 // EnsureDocker installs Docker if not present and waits until it's ready.
-func EnsureDocker(ctx context.Context, ip string, privateKey []byte) error {
-	ssh, err := ConnectSSH(ctx, ip+":22", utils.DefaultUser, privateKey)
-	if err != nil {
-		return err
-	}
-	defer ssh.Close()
-
-	if err := ensureDocker(ctx, ssh); err != nil {
-		return err
-	}
-
-	// Verify with a fresh session. Group membership and daemon startup can lag
-	// briefly on first boot, especially on CI-provisioned hosts.
-	ssh.Close()
-	return utils.Poll(ctx, 2*time.Second, 3*time.Minute, func() (bool, error) {
-		fresh, err := ConnectSSH(ctx, ip+":22", utils.DefaultUser, privateKey)
-		if err != nil {
-			return false, nil
-		}
-		defer fresh.Close()
-		_, err = fresh.Run(ctx, "docker info >/dev/null 2>&1 || sudo docker info >/dev/null 2>&1")
-		return err == nil, nil
-	})
-}
-
-// ensureDocker contains the Docker install logic, testable with a mock SSH client.
-func ensureDocker(ctx context.Context, ssh utils.SSHClient) error {
+func EnsureDocker(ctx context.Context, ssh utils.SSHClient) error {
 	// Already installed? Still ensure user is in docker group (some images
 	// ship Docker pre-installed but the deploy user isn't in the group).
 	if _, err := ssh.Run(ctx, "sudo docker info >/dev/null 2>&1"); err == nil {

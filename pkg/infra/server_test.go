@@ -12,7 +12,7 @@ func TestEnsureDocker_AlreadyInstalled(t *testing.T) {
 		"sudo docker info >/dev/null 2>&1": {},
 	})
 
-	err := ensureDocker(context.Background(), mock)
+	err := EnsureDocker(context.Background(), mock)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}

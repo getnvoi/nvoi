@@ -13,17 +13,7 @@ import (
 // MountVolume mounts a volume on the server at mountPath.
 // devicePath is the OS block device — resolved by the provider via ResolveDevicePath.
 // Idempotent: skips if already mounted at mountPath.
-func MountVolume(ctx context.Context, devicePath string, serverIP string, mountPath string, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, serverIP+":22", utils.DefaultUser, privKey)
-	if err != nil {
-		return fmt.Errorf("ssh for volume mount: %w", err)
-	}
-	defer ssh.Close()
-	return mountVolume(ctx, ssh, devicePath, mountPath, w)
-}
-
-// mountVolume contains the mount logic, testable with a mock SSH client.
-func mountVolume(ctx context.Context, ssh utils.SSHClient, devicePath string, mountPath string, w io.Writer) error {
+func MountVolume(ctx context.Context, ssh utils.SSHClient, devicePath string, mountPath string, w io.Writer) error {
 	// Already mounted? Grow filesystem in case of resize, then return.
 	out, err := ssh.Run(ctx, fmt.Sprintf("mountpoint -q %s && echo mounted || echo not", mountPath))
 	if err == nil && strings.TrimSpace(string(out)) == "mounted" {
@@ -83,17 +73,7 @@ func mountVolume(ctx context.Context, ssh utils.SSHClient, devicePath string, mo
 
 // UnmountVolume unmounts a volume and removes the fstab entry.
 // No-op if not mounted. Non-fatal errors are returned (caller decides severity).
-func UnmountVolume(ctx context.Context, serverIP string, mountPath string, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, serverIP+":22", utils.DefaultUser, privKey)
-	if err != nil {
-		return fmt.Errorf("ssh: %w", err)
-	}
-	defer ssh.Close()
-	return unmountVolume(ctx, ssh, mountPath, w)
-}
-
-// unmountVolume contains the unmount logic, testable with a mock SSH client.
-func unmountVolume(ctx context.Context, ssh utils.SSHClient, mountPath string, w io.Writer) error {
+func UnmountVolume(ctx context.Context, ssh utils.SSHClient, mountPath string, w io.Writer) error {
 	// Check if mounted
 	out, err := ssh.Run(ctx, fmt.Sprintf("mountpoint -q %s && echo mounted || echo not", mountPath))
 	if err != nil || strings.TrimSpace(string(out)) != "mounted" {

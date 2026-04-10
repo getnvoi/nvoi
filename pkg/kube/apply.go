@@ -10,7 +10,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -266,14 +265,7 @@ func DrainAndRemoveNode(ctx context.Context, ssh utils.SSHClient, nodeName strin
 }
 
 // LabelNode labels a k8s node with nvoi-role={role}. Idempotent — runs every deploy.
-// Connects to master via SSH since kubectl lives there.
-func LabelNode(ctx context.Context, master infra.Node, sshKey []byte, nodeName, role string) error {
-	ssh, err := infra.ConnectSSH(ctx, master.PublicIP+":22", utils.DefaultUser, sshKey)
-	if err != nil {
-		return fmt.Errorf("ssh master for node label: %w", err)
-	}
-	defer ssh.Close()
-
+func LabelNode(ctx context.Context, ssh utils.SSHClient, nodeName, role string) error {
 	cmd := fmt.Sprintf("KUBECONFIG=%s kubectl label node %s %s=%s --overwrite",
 		kubeconfigPath, nodeName, utils.LabelNvoiRole, role)
 	out, err := ssh.Run(ctx, cmd)

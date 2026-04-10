@@ -72,7 +72,7 @@ func TestInstallK3sMaster_AlreadyInstalled(t *testing.T) {
 
 	var buf bytes.Buffer
 	node := Node{PublicIP: "1.2.3.4", PrivateIP: "10.0.0.1"}
-	err := installK3sMaster(context.Background(), mock, node, &buf)
+	err := InstallK3sMaster(context.Background(), mock, node, &buf)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestInstallK3sMaster_FreshInstall(t *testing.T) {
 
 	var buf bytes.Buffer
 	node := Node{PublicIP: publicIP, PrivateIP: privateIP}
-	err := installK3sMaster(context.Background(), mock, node, &buf)
+	err := InstallK3sMaster(context.Background(), mock, node, &buf)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestEnsureRegistry_AlreadyRunning(t *testing.T) {
 
 	var buf bytes.Buffer
 	node := Node{PublicIP: "1.2.3.4", PrivateIP: privateIP}
-	err := ensureRegistry(context.Background(), mock, node, &buf)
+	err := EnsureRegistry(context.Background(), mock, node, &buf)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestEnsureRegistry_StartNew(t *testing.T) {
 
 	var buf bytes.Buffer
 	node := Node{PublicIP: "1.2.3.4", PrivateIP: privateIP}
-	err := ensureRegistry(context.Background(), mock, node, &buf)
+	err := EnsureRegistry(context.Background(), mock, node, &buf)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}

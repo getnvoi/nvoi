@@ -19,17 +19,7 @@ type Node struct {
 
 // InstallK3sMaster installs k3s server on the master node.
 // Idempotent — skips if already installed and Ready.
-func InstallK3sMaster(ctx context.Context, node Node, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, node.PublicIP+":22", utils.DefaultUser, privKey)
-	if err != nil {
-		return fmt.Errorf("ssh master: %w", err)
-	}
-	defer ssh.Close()
-	return installK3sMaster(ctx, ssh, node, w)
-}
-
-// installK3sMaster contains the k3s install logic, testable with a mock SSH client.
-func installK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.Writer) error {
+func InstallK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.Writer) error {
 	// Already installed?
 	if _, err := ssh.Run(ctx, "command -v kubectl >/dev/null 2>&1 && sudo k3s kubectl get nodes 2>/dev/null | grep -q ' Ready '"); err == nil {
 		fmt.Fprintln(w, "k3s already installed")
@@ -84,17 +74,7 @@ func installK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.
 
 // EnsureRegistry starts the Docker registry container on master.
 // Idempotent — skips if already running.
-func EnsureRegistry(ctx context.Context, node Node, privKey []byte, w io.Writer) error {
-	ssh, err := ConnectSSH(ctx, node.PublicIP+":22", utils.DefaultUser, privKey)
-	if err != nil {
-		return err
-	}
-	defer ssh.Close()
-	return ensureRegistry(ctx, ssh, node, w)
-}
-
-// ensureRegistry contains the registry logic, testable with a mock SSH client.
-func ensureRegistry(ctx context.Context, ssh utils.SSHClient, node Node, w io.Writer) error {
+func EnsureRegistry(ctx context.Context, ssh utils.SSHClient, node Node, w io.Writer) error {
 	registryAddr := utils.RegistryAddr(node.PrivateIP)
 
 	// Already running?
@@ -126,25 +106,14 @@ func ensureRegistry(ctx context.Context, ssh utils.SSHClient, node Node, w io.Wr
 
 // JoinK3sWorker joins a worker to the cluster via the master.
 // Idempotent — skips if k3s-agent is already active.
-func JoinK3sWorker(ctx context.Context, worker, master Node, privKey []byte, w io.Writer) error {
+// masterSSH reads the join token and verifies the node. workerSSH installs the agent.
+func JoinK3sWorker(ctx context.Context, masterSSH, workerSSH utils.SSHClient, worker, master Node, w io.Writer) error {
 	// Read token from master
-	masterSSH, err := ConnectSSH(ctx, master.PublicIP+":22", utils.DefaultUser, privKey)
-	if err != nil {
-		return fmt.Errorf("ssh master for token: %w", err)
-	}
 	tokenBytes, err := masterSSH.Run(ctx, "sudo cat "+utils.K3sTokenPath)
-	masterSSH.Close()
 	if err != nil {
 		return fmt.Errorf("read k3s token: %w", err)
 	}
 	token := strings.TrimSpace(string(tokenBytes))
-
-	// SSH to worker
-	workerSSH, err := ConnectSSH(ctx, worker.PublicIP+":22", utils.DefaultUser, privKey)
-	if err != nil {
-		return fmt.Errorf("ssh worker: %w", err)
-	}
-	defer workerSSH.Close()
 
 	// Already joined?
 	if _, err := workerSSH.Run(ctx, "systemctl is-active --quiet k3s-agent"); err == nil {
@@ -178,16 +147,10 @@ func JoinK3sWorker(ctx context.Context, worker, master Node, privKey []byte, w i
 	}
 
 	// Wait for node Ready on master
-	masterSSH2, err := ConnectSSH(ctx, master.PublicIP+":22", utils.DefaultUser, privKey)
-	if err != nil {
-		return fmt.Errorf("ssh master to verify worker: %w", err)
-	}
-	defer masterSSH2.Close()
-
 	kubeconfig := fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config", utils.DefaultUser)
 	fmt.Fprintln(w, "waiting for worker to be Ready...")
 	if err := utils.Poll(ctx, 3*time.Second, 3*time.Minute, func() (bool, error) {
-		out, err := masterSSH2.Run(ctx, fmt.Sprintf("%s kubectl get nodes -o wide", kubeconfig))
+		out, err := masterSSH.Run(ctx, fmt.Sprintf("%s kubectl get nodes -o wide", kubeconfig))
 		if err != nil {
 			return false, nil
 		}

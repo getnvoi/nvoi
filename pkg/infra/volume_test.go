@@ -22,7 +22,7 @@ func TestMountVolume_AlreadyMounted(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	err := mountVolume(context.Background(), mock, "/dev/sda1", mountPath, &buf)
+	err := MountVolume(context.Background(), mock, "/dev/sda1", mountPath, &buf)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestUnmountVolume_NotMounted(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	err := unmountVolume(context.Background(), mock, mountPath, &buf)
+	err := UnmountVolume(context.Background(), mock, mountPath, &buf)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestUnmountVolume_Mounted(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	err := unmountVolume(context.Background(), mock, mountPath, &buf)
+	err := UnmountVolume(context.Background(), mock, mountPath, &buf)
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}

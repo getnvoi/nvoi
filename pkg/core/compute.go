@@ -82,53 +82,74 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		srv.PrivateIP = ip
 	}
 
+	// Wait for SSH and connect — all infra operations use this connection.
 	out.Progress(fmt.Sprintf("waiting for SSH on %s", srv.IPv4))
+	var ssh utils.SSHClient
 	sshCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	if err := infra.WaitSSH(sshCtx, srv.IPv4+":22", req.SSHKey); err != nil {
+	if err := utils.Poll(sshCtx, 2*time.Second, 5*time.Minute, func() (bool, error) {
+		conn, err := req.connect(ctx, srv.IPv4+":22")
+		if err != nil {
+			return false, nil
+		}
+		ssh = conn
+		return true, nil
+	}); err != nil {
 		return nil, fmt.Errorf("SSH not reachable on %s: %w", srv.IPv4, err)
 	}
+	defer ssh.Close()
 	out.Success("SSH ready")
 
 	out.Progress("ensuring Docker")
-	if err := infra.EnsureDocker(ctx, srv.IPv4, req.SSHKey); err != nil {
+	if err := infra.EnsureDocker(ctx, ssh); err != nil {
 		return nil, fmt.Errorf("docker on %s: %w", srv.IPv4, err)
 	}
 	out.Success("Docker ready")
 
-	var masterIP string
+	srvNode := infra.Node{PublicIP: srv.IPv4, PrivateIP: srv.PrivateIP}
+	var masterSSH utils.SSHClient
+
 	if req.Worker {
 		master, err := FindMaster(ctx, prov, names)
 		if err != nil {
 			return nil, err
 		}
-		masterIP = master.IPv4
 		out.Progress(fmt.Sprintf("joining cluster via master %s", master.IPv4))
-		workerNode := infra.Node{PublicIP: srv.IPv4, PrivateIP: srv.PrivateIP}
+
+		masterSSH, err = req.connect(ctx, master.IPv4+":22")
+		if err != nil {
+			return nil, fmt.Errorf("ssh master for worker join: %w", err)
+		}
+		defer masterSSH.Close()
+
 		masterNode := infra.Node{PublicIP: master.IPv4, PrivateIP: master.PrivateIP}
-		if err := infra.JoinK3sWorker(ctx, workerNode, masterNode, req.SSHKey, out.Writer()); err != nil {
+		if err := infra.JoinK3sWorker(ctx, masterSSH, ssh, srvNode, masterNode, out.Writer()); err != nil {
 			return nil, fmt.Errorf("k3s worker join: %w", err)
 		}
 		out.Success("joined cluster")
+
+		// Label via master SSH
+		if err := kube.LabelNode(ctx, masterSSH, names.Server(req.Name), req.Name); err != nil {
+			return nil, fmt.Errorf("label node: %w", err)
+		}
 	} else {
-		masterIP = srv.IPv4
-		srvNode := infra.Node{PublicIP: srv.IPv4, PrivateIP: srv.PrivateIP}
 		out.Progress("installing k3s master")
-		if err := infra.InstallK3sMaster(ctx, srvNode, req.SSHKey, out.Writer()); err != nil {
+		if err := infra.InstallK3sMaster(ctx, ssh, srvNode, out.Writer()); err != nil {
 			return nil, fmt.Errorf("k3s master: %w", err)
 		}
 		out.Success("k3s master ready")
 
-		if err := infra.EnsureRegistry(ctx, srvNode, req.SSHKey, out.Writer()); err != nil {
+		if err := infra.EnsureRegistry(ctx, ssh, srvNode, out.Writer()); err != nil {
 			return nil, fmt.Errorf("registry: %w", err)
+		}
+
+		// Label via this SSH (it's the master)
+		if err := kube.LabelNode(ctx, ssh, names.Server(req.Name), req.Name); err != nil {
+			return nil, fmt.Errorf("label node: %w", err)
 		}
 	}
 
-	if err := kube.LabelNode(ctx, infra.Node{PublicIP: masterIP}, req.SSHKey, names.Server(req.Name), req.Name); err != nil {
-		return nil, fmt.Errorf("label node: %w", err)
-	}
 	out.Success(fmt.Sprintf("node labeled %s=%s", utils.LabelNvoiRole, req.Name))
-
 	out.Success(fmt.Sprintf("%s %s (private: %s)", names.Server(req.Name), srv.IPv4, srv.PrivateIP))
 	return &ComputeSetResult{Server: srv}, nil
 }
