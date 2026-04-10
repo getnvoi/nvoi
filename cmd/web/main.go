@@ -77,6 +77,18 @@ func main() {
 	contentDir := filepath.Join(root, "cmd/web/content")
 
 	r := gin.Default()
+
+	// 301 www → naked domain (preserve path)
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.Host, "www.") {
+			naked := strings.TrimPrefix(c.Request.Host, "www.")
+			c.Redirect(http.StatusMovedPermanently, "https://"+naked+c.Request.RequestURI)
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
+
 	r.Static("/static", filepath.Join(root, "cmd/web/static"))
 
 	// Homepage
