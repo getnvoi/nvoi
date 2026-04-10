@@ -152,7 +152,7 @@ func TestEnsureRegistry_StartNew(t *testing.T) {
 	curlCmd := fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr)
 
 	dockerRunCmd := fmt.Sprintf(
-		`sudo mkdir -p /var/lib/nvoi/registry && docker rm -f nvoi-registry 2>/dev/null; docker run -d --name nvoi-registry --restart always -p %d:%d -v /var/lib/nvoi/registry:/var/lib/registry -e REGISTRY_STORAGE_DELETE_ENABLED=true %s`,
+		`docker run -d --name nvoi-registry --restart always -p %d:%d -v /var/lib/nvoi/registry:/var/lib/registry -e REGISTRY_STORAGE_DELETE_ENABLED=true %s`,
 		utils.RegistryPort, utils.RegistryPort, utils.RegistryImage,
 	)
 
@@ -160,6 +160,10 @@ func TestEnsureRegistry_StartNew(t *testing.T) {
 		curlCmd:      {},
 		dockerRunCmd: {Output: []byte("container-id\n")},
 	})
+	inner.Prefixes = []testutil.MockPrefix{
+		{Prefix: "sudo mkdir -p", Result: testutil.MockResult{}},
+		{Prefix: "docker rm -f", Result: testutil.MockResult{}},
+	}
 
 	// Fail the first curl call (initial check) so the function takes the "start new"
 	// path. The second curl call (inside Poll) succeeds immediately — no poll wait.
@@ -177,6 +181,41 @@ func TestEnsureRegistry_StartNew(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "starting registry") {
 		t.Errorf("expected output to contain 'starting registry', got: %q", buf.String())
+	}
+}
+
+func TestEnsureRegistry_NoExistingContainer(t *testing.T) {
+	// docker rm -f fails (no container) — should not block docker run.
+	privateIP := "10.0.0.1"
+	registryAddr := utils.RegistryAddr(privateIP)
+	curlCmd := fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr)
+
+	dockerRunCmd := fmt.Sprintf(
+		`docker run -d --name nvoi-registry --restart always -p %d:%d -v /var/lib/nvoi/registry:/var/lib/registry -e REGISTRY_STORAGE_DELETE_ENABLED=true %s`,
+		utils.RegistryPort, utils.RegistryPort, utils.RegistryImage,
+	)
+
+	inner := testutil.NewMockSSH(map[string]testutil.MockResult{
+		curlCmd:      {},
+		dockerRunCmd: {Output: []byte("container-id\n")},
+	})
+	inner.Prefixes = []testutil.MockPrefix{
+		{Prefix: "sudo mkdir -p", Result: testutil.MockResult{}},
+		// docker rm -f fails — no existing container. Must not block run.
+		{Prefix: "docker rm -f", Result: testutil.MockResult{Err: fmt.Errorf("no such container")}},
+	}
+
+	mock := &countingSSH{
+		MockSSH:   inner,
+		failCmd:   curlCmd,
+		failCount: 1,
+	}
+
+	var buf bytes.Buffer
+	node := Node{PublicIP: "1.2.3.4", PrivateIP: privateIP}
+	err := EnsureRegistry(context.Background(), mock, node, &buf)
+	if err != nil {
+		t.Fatalf("registry start should succeed even when rm fails, got: %v", err)
 	}
 }
 

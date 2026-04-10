@@ -84,11 +84,14 @@ func EnsureRegistry(ctx context.Context, ssh utils.SSHClient, node Node, w io.Wr
 	}
 
 	fmt.Fprintln(w, "starting registry...")
-	cmd := fmt.Sprintf(
-		`sudo mkdir -p /var/lib/nvoi/registry && docker rm -f nvoi-registry 2>/dev/null; docker run -d --name nvoi-registry --restart always -p %d:%d -v /var/lib/nvoi/registry:/var/lib/registry -e REGISTRY_STORAGE_DELETE_ENABLED=true %s`,
+	ssh.Run(ctx, "sudo mkdir -p /var/lib/nvoi/registry")
+	ssh.Run(ctx, "docker rm -f nvoi-registry 2>/dev/null || true")
+
+	runCmd := fmt.Sprintf(
+		`docker run -d --name nvoi-registry --restart always -p %d:%d -v /var/lib/nvoi/registry:/var/lib/registry -e REGISTRY_STORAGE_DELETE_ENABLED=true %s`,
 		utils.RegistryPort, utils.RegistryPort, utils.RegistryImage,
 	)
-	if _, err := ssh.Run(ctx, cmd); err != nil {
+	if _, err := ssh.Run(ctx, runCmd); err != nil {
 		return fmt.Errorf("start registry: %w", err)
 	}
 
