@@ -25,10 +25,27 @@ type cloudUser struct {
 	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys,omitempty"`
 }
 
+// SwapSize calculates proportional swap: ~5% of disk, clamped 512MB–2GB.
+func SwapSize(rootVolumeSizeGB int) int {
+	if rootVolumeSizeGB <= 0 {
+		rootVolumeSizeGB = 20
+	}
+	mb := rootVolumeSizeGB * 1024 * 5 / 100 // 5% of disk in MB
+	if mb < 512 {
+		mb = 512
+	}
+	if mb > 2048 {
+		mb = 2048
+	}
+	return mb
+}
+
 // RenderCloudInit produces cloud-init user-data for server provisioning.
 // hostname sets the machine hostname (and therefore the k3s node name).
-func RenderCloudInit(sshPublicKey, hostname string) (string, error) {
+// rootVolumeSizeGB is used to calculate proportional swap (0 = default 20GB).
+func RenderCloudInit(sshPublicKey, hostname string, rootVolumeSizeGB int) (string, error) {
 	user := utils.DefaultUser
+	swapMB := SwapSize(rootVolumeSizeGB)
 	cfg := cloudConfig{
 		Hostname: hostname,
 		Users: []cloudUser{{
@@ -40,6 +57,11 @@ func RenderCloudInit(sshPublicKey, hostname string) (string, error) {
 		}},
 		Packages: []string{"git", "curl", "unzip"},
 		RunCmd: []string{
+			fmt.Sprintf("fallocate -l %dM /swapfile", swapMB),
+			"chmod 600 /swapfile",
+			"mkswap /swapfile",
+			"swapon /swapfile",
+			"echo '/swapfile none swap sw 0 0' >> /etc/fstab",
 			fmt.Sprintf("mkdir -p /home/%s/workspace", user),
 			fmt.Sprintf("chown -R %s:%s /home/%s", user, user, user),
 		},

@@ -25,12 +25,16 @@ type serverJSON struct {
 	PrivateNet []struct {
 		IP string `json:"ip"`
 	} `json:"private_net"`
+	ServerType struct {
+		Disk int `json:"disk"`
+	} `json:"server_type"`
 }
 
 func serverFrom(s serverJSON) *provider.Server {
 	srv := &provider.Server{
 		ID: strconv.FormatInt(s.ID, 10), Name: s.Name, Status: provider.ServerStatus(s.Status),
 		IPv4: s.PublicNet.IPv4.IP, IPv6: s.PublicNet.IPv6.IP,
+		DiskGB: s.ServerType.Disk,
 	}
 	if len(s.PrivateNet) > 0 {
 		srv.PrivateIP = s.PrivateNet[0].IP

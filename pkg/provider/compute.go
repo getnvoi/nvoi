@@ -81,6 +81,7 @@ type Server struct {
 	IPv4      string       `json:"ipv4"`
 	IPv6      string       `json:"ipv6,omitempty"`
 	PrivateIP string       `json:"private_ip"`
+	DiskGB    int          `json:"disk_gb,omitempty"`
 }
 
 type Volume struct {

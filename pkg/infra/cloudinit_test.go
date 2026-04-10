@@ -7,10 +7,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestSwapSize(t *testing.T) {
+	tests := []struct {
+		disk int
+		want int
+	}{
+		{0, 1024},   // default 20GB → 1024MB
+		{5, 512},    // floor
+		{10, 512},   // 512MB
+		{20, 1024},  // 1GB
+		{40, 2048},  // 2GB
+		{100, 2048}, // cap
+	}
+	for _, tt := range tests {
+		got := SwapSize(tt.disk)
+		if got != tt.want {
+			t.Errorf("SwapSize(%d) = %d, want %d", tt.disk, got, tt.want)
+		}
+	}
+}
+
 func TestRenderCloudInit(t *testing.T) {
 	fakeKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@test"
 
-	output, err := RenderCloudInit(fakeKey, "nvoi-test-master")
+	output, err := RenderCloudInit(fakeKey, "nvoi-test-master", 20)
 	if err != nil {
 		t.Fatalf("RenderCloudInit returned error: %v", err)
 	}
@@ -69,6 +89,18 @@ func TestRenderCloudInit(t *testing.T) {
 		}
 		if !found {
 			t.Error("no user named 'deploy' found in cloud-config users")
+		}
+	})
+
+	t.Run("contains swap setup", func(t *testing.T) {
+		if !strings.Contains(output, "swapfile") {
+			t.Error("output should contain swap setup")
+		}
+		if !strings.Contains(output, "mkswap") {
+			t.Error("output should contain mkswap")
+		}
+		if !strings.Contains(output, "swapon") {
+			t.Error("output should contain swapon")
 		}
 	})
 

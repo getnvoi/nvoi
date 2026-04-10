@@ -42,7 +42,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	}
 
 	serverName := names.Server(req.Name)
-	userData, err := infra.RenderCloudInit(strings.TrimSpace(pubKey), serverName)
+	userData, err := infra.RenderCloudInit(strings.TrimSpace(pubKey), serverName, 0)
 	if err != nil {
 		return nil, err
 	}
