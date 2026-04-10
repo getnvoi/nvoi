@@ -93,6 +93,56 @@ func TestCronSet_ResolvesNamedManagedVolumes(t *testing.T) {
 	}
 }
 
+func TestCronRun_Success(t *testing.T) {
+	succeededJob := `{"status":{"succeeded":1,"failed":0}}`
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "create job", Result: testutil.MockResult{}},
+			{Prefix: "get job", Result: testutil.MockResult{Output: []byte(succeededJob)}},
+			{Prefix: "logs", Result: testutil.MockResult{Output: []byte("backup complete\n")}},
+		},
+	}
+
+	c := testCronCluster(mock)
+	c.MasterSSH = mock
+
+	err := CronRun(context.Background(), CronRunRequest{Cluster: c, Name: "db-backup"})
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+	found := false
+	for _, call := range mock.Calls {
+		if strings.Contains(call, "create job") && strings.Contains(call, "--from=cronjob/db-backup") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected create job --from=cronjob/db-backup, calls: %v", mock.Calls)
+	}
+}
+
+func TestCronRun_JobFailed(t *testing.T) {
+	failedJob := `{"status":{"succeeded":0,"failed":1}}`
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "create job", Result: testutil.MockResult{}},
+			{Prefix: "get job", Result: testutil.MockResult{Output: []byte(failedJob)}},
+			{Prefix: "logs", Result: testutil.MockResult{Output: []byte("pg_dump: connection refused\n")}},
+		},
+	}
+
+	c := testCronCluster(mock)
+	c.MasterSSH = mock
+
+	err := CronRun(context.Background(), CronRunRequest{Cluster: c, Name: "db-backup"})
+	if err == nil {
+		t.Fatal("expected error for failed job")
+	}
+	if !strings.Contains(err.Error(), "failed") {
+		t.Errorf("error should mention failure, got: %v", err)
+	}
+}
+
 func TestCronDelete_IdempotentWhenMissing(t *testing.T) {
 	mock := &testutil.MockSSH{
 		Prefixes: []testutil.MockPrefix{
