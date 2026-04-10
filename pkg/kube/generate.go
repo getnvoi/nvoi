@@ -13,6 +13,39 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// applyNodePlacement configures pod scheduling based on server list.
+// Single server → nodeSelector. Multiple servers → nodeAffinity with In
+// operator + topologySpreadConstraints for even distribution.
+// Empty → defaults to master.
+func applyNodePlacement(podSpec *corev1.PodSpec, name string, servers []string) {
+	if len(servers) == 0 {
+		servers = []string{"master"}
+	}
+	if len(servers) == 1 {
+		podSpec.NodeSelector = map[string]string{utils.LabelNvoiRole: servers[0]}
+		return
+	}
+	podSpec.Affinity = &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchExpressions: []corev1.NodeSelectorRequirement{{
+						Key:      utils.LabelNvoiRole,
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   servers,
+					}},
+				}},
+			},
+		},
+	}
+	podSpec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       utils.LabelNvoiRole,
+		WhenUnsatisfiable: corev1.ScheduleAnyway,
+		LabelSelector:     &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: name}},
+	}}
+}
+
 // ParseSecretRef splits a secret reference into env var name and k8s secret key.
 // "RAILS_MASTER_KEY" → ("RAILS_MASTER_KEY", "RAILS_MASTER_KEY")
 // "POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB" → ("POSTGRES_PASSWORD", "POSTGRES_PASSWORD_DB")
@@ -35,8 +68,8 @@ type ServiceSpec struct {
 	SecretName string   // k8s Secret name (from names.KubeSecrets())
 	Volumes    []string // "pgdata:/var/lib/postgresql/data"
 	HealthPath string
-	Server     string // node selector (empty = any)
-	Managed    bool   // true if any volume is provider-managed → StatefulSet
+	Servers    []string // node placement (empty = master only)
+	Managed    bool     // true if any volume is provider-managed → StatefulSet
 }
 
 // GenerateYAML produces k8s YAML for a single service: workload + Service.
@@ -99,12 +132,7 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 		Containers: []corev1.Container{container},
 		Volumes:    volumes,
 	}
-	// No server = pin to master. Explicit server = pin to that node.
-	role := spec.Server
-	if role == "" {
-		role = "master"
-	}
-	podSpec.NodeSelector = map[string]string{utils.LabelNvoiRole: role}
+	applyNodePlacement(&podSpec, spec.Name, spec.Servers)
 
 	// Workload: StatefulSet or Deployment
 	var workloadKind string

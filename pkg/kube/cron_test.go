@@ -56,7 +56,7 @@ func TestGenerateCronYAML_CommandWrappingAndNodeSelector(t *testing.T) {
 		Image:      "busybox:latest",
 		Command:    "echo hi",
 		SecretName: "secrets",
-		Server:     "master",
+		Servers:    []string{"master"},
 	}, names, nil)
 	if err != nil {
 		t.Fatalf("GenerateCronYAML: %v", err)

@@ -24,7 +24,7 @@ type CronSpec struct {
 	Secrets    []string
 	SecretName string
 	Volumes    []string
-	Server     string
+	Servers    []string
 }
 
 func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[string]string) (string, error) {
@@ -71,9 +71,7 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 		Containers:    []corev1.Container{container},
 		Volumes:       volumes,
 	}
-	if spec.Server != "" {
-		podSpec.NodeSelector = map[string]string{utils.LabelNvoiRole: spec.Server}
-	}
+	applyNodePlacement(&podSpec, spec.Name, spec.Servers)
 
 	job := batchv1.CronJob{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "batch/v1", Kind: "CronJob"},

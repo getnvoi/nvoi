@@ -23,7 +23,7 @@ type CronSetRequest struct {
 	Storages []string
 	Volumes  []string
 	Schedule string
-	Server   string
+	Servers  []string
 }
 
 func CronSet(ctx context.Context, req CronSetRequest) error {
@@ -121,7 +121,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 		Secrets:    req.Secrets,
 		SecretName: secretName,
 		Volumes:    req.Volumes,
-		Server:     req.Server,
+		Servers:    req.Servers,
 	}, names, managedVolPaths)
 	if err != nil {
 		return fmt.Errorf("generate manifest: %w", err)

@@ -236,7 +236,7 @@ func (e *runner) dispatch(ctx context.Context, kind, name string, params map[str
 			Storages:   utils.GetStringSlice(params, "storage"),
 			Volumes:    utils.GetStringSlice(params, "volumes"),
 			HealthPath: utils.GetString(params, "health"),
-			Server:     utils.GetString(params, "server"),
+			Servers:    utils.GetStringSlice(params, "servers"),
 		})
 
 	case "service.delete":
@@ -256,7 +256,7 @@ func (e *runner) dispatch(ctx context.Context, kind, name string, params map[str
 			Storages: utils.GetStringSlice(params, "storage"),
 			Volumes:  utils.GetStringSlice(params, "volumes"),
 			Schedule: utils.GetString(params, "schedule"),
-			Server:   utils.GetString(params, "server"),
+			Servers:  utils.GetStringSlice(params, "servers"),
 		})
 
 	case "cron.delete":

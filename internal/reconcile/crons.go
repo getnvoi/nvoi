@@ -14,11 +14,12 @@ func Crons(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConf
 		if err != nil {
 			return err
 		}
+		servers := ResolveServers(cfg, cron.Servers, cron.Server, cron.Volumes)
 		if err := app.CronSet(ctx, app.CronSetRequest{
 			Cluster: dc.Cluster, Name: name, Image: image,
 			Command: cron.Command, EnvVars: cron.Env, Secrets: cron.Secrets,
 			Storages: cron.Storage, Volumes: cron.Volumes,
-			Schedule: cron.Schedule, Server: cron.Server,
+			Schedule: cron.Schedule, Servers: servers,
 		}); err != nil {
 			return err
 		}

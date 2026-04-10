@@ -15,12 +15,12 @@ func Services(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppC
 		if err != nil {
 			return err
 		}
-		server := ResolveServer(cfg, svc.Server, svc.Volumes)
+		servers := ResolveServers(cfg, svc.Servers, svc.Server, svc.Volumes)
 		if err := app.ServiceSet(ctx, app.ServiceSetRequest{
 			Cluster: dc.Cluster, Name: name, Image: image,
 			Port: svc.Port, Command: svc.Command, Replicas: svc.Replicas,
 			EnvVars: svc.Env, Secrets: svc.Secrets, Storages: svc.Storage,
-			Volumes: svc.Volumes, HealthPath: svc.Health, Server: server,
+			Volumes: svc.Volumes, HealthPath: svc.Health, Servers: servers,
 		}); err != nil {
 			return err
 		}

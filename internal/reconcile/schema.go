@@ -53,6 +53,7 @@ type ServiceDef struct {
 	Command  string   `yaml:"command,omitempty"`
 	Health   string   `yaml:"health,omitempty"`
 	Server   string   `yaml:"server,omitempty"`
+	Servers  []string `yaml:"servers,omitempty"`
 	Env      []string `yaml:"env,omitempty"`
 	Secrets  []string `yaml:"secrets,omitempty"`
 	Storage  []string `yaml:"storage,omitempty"`
@@ -65,10 +66,34 @@ type CronDef struct {
 	Schedule string   `yaml:"schedule"`
 	Command  string   `yaml:"command,omitempty"`
 	Server   string   `yaml:"server,omitempty"`
+	Servers  []string `yaml:"servers,omitempty"`
 	Env      []string `yaml:"env,omitempty"`
 	Secrets  []string `yaml:"secrets,omitempty"`
 	Storage  []string `yaml:"storage,omitempty"`
 	Volumes  []string `yaml:"volumes,omitempty"`
+}
+
+// ResolvedServers returns the effective server list. Normalizes
+// server (singular) into a one-element slice.
+func (s ServiceDef) ResolvedServers() []string {
+	if len(s.Servers) > 0 {
+		return s.Servers
+	}
+	if s.Server != "" {
+		return []string{s.Server}
+	}
+	return nil
+}
+
+// ResolvedServers returns the effective server list for a cron.
+func (c CronDef) ResolvedServers() []string {
+	if len(c.Servers) > 0 {
+		return c.Servers
+	}
+	if c.Server != "" {
+		return []string{c.Server}
+	}
+	return nil
 }
 
 func (c *AppConfig) UnmarshalYAML(value *yaml.Node) error {

@@ -83,9 +83,12 @@ func ValidateConfig(cfg *AppConfig) error {
 				return fmt.Errorf("services.%s.build: %q is not a defined build target", name, svc.Build)
 			}
 		}
-		if svc.Server != "" {
-			if _, ok := cfg.Servers[svc.Server]; !ok {
-				return fmt.Errorf("services.%s.server: %q is not a defined server", name, svc.Server)
+		if svc.Server != "" && len(svc.Servers) > 0 {
+			return fmt.Errorf("services.%s: server and servers are mutually exclusive", name)
+		}
+		for _, s := range svc.ResolvedServers() {
+			if _, ok := cfg.Servers[s]; !ok {
+				return fmt.Errorf("services.%s.server: %q is not a defined server", name, s)
 			}
 		}
 		if svc.Replicas < 0 {
@@ -98,6 +101,9 @@ func ValidateConfig(cfg *AppConfig) error {
 		}
 		if err := validateVolumeMounts(cfg, "services."+name, svc.Volumes); err != nil {
 			return err
+		}
+		if len(svc.Servers) > 1 && hasNamedVolume(cfg, svc.Volumes) {
+			return fmt.Errorf("services.%s: multiple servers with a volume mount — volumes are pinned to one server", name)
 		}
 		if err := validateVolumeServer(cfg, name, svc.Server, svc.Volumes); err != nil {
 			return err
@@ -117,9 +123,12 @@ func ValidateConfig(cfg *AppConfig) error {
 				return fmt.Errorf("crons.%s.build: %q is not a defined build target", name, cron.Build)
 			}
 		}
-		if cron.Server != "" {
-			if _, ok := cfg.Servers[cron.Server]; !ok {
-				return fmt.Errorf("crons.%s.server: %q is not a defined server", name, cron.Server)
+		if cron.Server != "" && len(cron.Servers) > 0 {
+			return fmt.Errorf("crons.%s: server and servers are mutually exclusive", name)
+		}
+		for _, s := range cron.ResolvedServers() {
+			if _, ok := cfg.Servers[s]; !ok {
+				return fmt.Errorf("crons.%s.server: %q is not a defined server", name, s)
 			}
 		}
 		for _, ref := range cron.Storage {
@@ -129,6 +138,9 @@ func ValidateConfig(cfg *AppConfig) error {
 		}
 		if err := validateVolumeMounts(cfg, "crons."+name, cron.Volumes); err != nil {
 			return err
+		}
+		if len(cron.Servers) > 1 && hasNamedVolume(cfg, cron.Volumes) {
+			return fmt.Errorf("crons.%s: multiple servers with a volume mount — volumes are pinned to one server", name)
 		}
 		if err := validateVolumeServer(cfg, name, cron.Server, cron.Volumes); err != nil {
 			return err
@@ -150,6 +162,21 @@ func ValidateConfig(cfg *AppConfig) error {
 	}
 
 	return nil
+}
+
+func hasNamedVolume(cfg *AppConfig, mounts []string) bool {
+	for _, mount := range mounts {
+		source, _, ok := strings.Cut(mount, ":")
+		if !ok {
+			continue
+		}
+		if !strings.HasPrefix(source, "/") && !strings.HasPrefix(source, ".") {
+			if _, ok := cfg.Volumes[source]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validateVolumeMounts(cfg *AppConfig, context string, mounts []string) error {

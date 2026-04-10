@@ -117,11 +117,15 @@ func SplitServers(servers map[string]ServerDef) (masters, workers []NamedServer)
 	return
 }
 
-// ResolveServer returns the effective server for a workload.
+// ResolveServers returns the effective server list for a workload.
+// If servers is explicit, returns it. If a single server is set, returns it.
 // If the workload mounts a named volume, it's pinned to that volume's server.
-func ResolveServer(cfg *AppConfig, server string, mounts []string) string {
+func ResolveServers(cfg *AppConfig, servers []string, server string, mounts []string) []string {
+	if len(servers) > 0 {
+		return servers
+	}
 	if server != "" {
-		return server
+		return []string{server}
 	}
 	for _, mount := range mounts {
 		volName, _, ok := strings.Cut(mount, ":")
@@ -129,10 +133,10 @@ func ResolveServer(cfg *AppConfig, server string, mounts []string) string {
 			continue
 		}
 		if vol, exists := cfg.Volumes[volName]; exists {
-			return vol.Server
+			return []string{vol.Server}
 		}
 	}
-	return server
+	return nil
 }
 
 func resolveImageRef(ctx context.Context, dc *DeployContext, image, buildRef string) (string, error) {

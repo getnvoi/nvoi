@@ -116,6 +116,107 @@ func TestValidateConfig_NoServerKeyAllowed(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_ServerAndServersMutuallyExclusive(t *testing.T) {
+	cfg := validCfg()
+	cfg.Servers["worker-1"] = ServerDef{Type: "cx33", Region: "fsn1", Role: "worker"}
+	cfg.Services["web"] = ServiceDef{Image: "nginx", Server: "master", Servers: []string{"master", "worker-1"}}
+	assertValidationError(t, cfg, "server and servers are mutually exclusive")
+}
+
+func TestValidateConfig_ServersReferencesValid(t *testing.T) {
+	cfg := validCfg()
+	cfg.Servers["worker-1"] = ServerDef{Type: "cx33", Region: "fsn1", Role: "worker"}
+	cfg.Services["web"] = ServiceDef{Image: "nginx", Servers: []string{"master", "worker-1"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateConfig_ServersReferencesInvalid(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = ServiceDef{Image: "nginx", Servers: []string{"master", "nonexistent"}}
+	assertValidationError(t, cfg, "not a defined server")
+}
+
+func TestValidateConfig_CronServerAndServersMutuallyExclusive(t *testing.T) {
+	cfg := validCfg()
+	cfg.Servers["worker-1"] = ServerDef{Type: "cx33", Region: "fsn1", Role: "worker"}
+	cfg.Crons = map[string]CronDef{
+		"job": {Image: "busybox", Schedule: "0 * * * *", Server: "master", Servers: []string{"master", "worker-1"}},
+	}
+	assertValidationError(t, cfg, "server and servers are mutually exclusive")
+}
+
+func TestValidateConfig_MultipleServersWithVolume(t *testing.T) {
+	cfg := validCfg()
+	cfg.Servers["worker-1"] = ServerDef{Type: "cx33", Region: "fsn1", Role: "worker"}
+	cfg.Volumes = map[string]VolumeDef{"pgdata": {Size: 20, Server: "master"}}
+	cfg.Services["db"] = ServiceDef{
+		Image:   "postgres:17",
+		Servers: []string{"master", "worker-1"},
+		Volumes: []string{"pgdata:/data"},
+	}
+	assertValidationError(t, cfg, "multiple servers with a volume mount")
+}
+
+func TestValidateConfig_SingleServerWithVolumeOK(t *testing.T) {
+	cfg := validCfg()
+	cfg.Volumes = map[string]VolumeDef{"pgdata": {Size: 20, Server: "master"}}
+	cfg.Services["db"] = ServiceDef{
+		Image:   "postgres:17",
+		Servers: []string{"master"},
+		Volumes: []string{"pgdata:/data"},
+	}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("single server with volume should be ok, got: %v", err)
+	}
+}
+
+func TestResolveServers_ExplicitServers(t *testing.T) {
+	cfg := &AppConfig{}
+	got := ResolveServers(cfg, []string{"worker-1", "worker-2"}, "", nil)
+	if len(got) != 2 || got[0] != "worker-1" || got[1] != "worker-2" {
+		t.Errorf("expected [worker-1, worker-2], got %v", got)
+	}
+}
+
+func TestResolveServers_SingleServer(t *testing.T) {
+	cfg := &AppConfig{}
+	got := ResolveServers(cfg, nil, "master", nil)
+	if len(got) != 1 || got[0] != "master" {
+		t.Errorf("expected [master], got %v", got)
+	}
+}
+
+func TestResolveServers_AutoPinFromVolume(t *testing.T) {
+	cfg := &AppConfig{
+		Volumes: map[string]VolumeDef{"pgdata": {Size: 20, Server: "master"}},
+	}
+	got := ResolveServers(cfg, nil, "", []string{"pgdata:/data"})
+	if len(got) != 1 || got[0] != "master" {
+		t.Errorf("expected [master] from volume pin, got %v", got)
+	}
+}
+
+func TestResolveServers_NoServerNoVolume(t *testing.T) {
+	cfg := &AppConfig{}
+	got := ResolveServers(cfg, nil, "", nil)
+	if got != nil {
+		t.Errorf("expected nil, got %v", got)
+	}
+}
+
+func TestResolveServers_ExplicitOverridesVolume(t *testing.T) {
+	cfg := &AppConfig{
+		Volumes: map[string]VolumeDef{"pgdata": {Size: 20, Server: "master"}},
+	}
+	// Explicit servers takes precedence over volume auto-pin
+	got := ResolveServers(cfg, []string{"worker-1"}, "", []string{"pgdata:/data"})
+	if len(got) != 1 || got[0] != "worker-1" {
+		t.Errorf("expected [worker-1], got %v", got)
+	}
+}
+
 func assertValidationError(t *testing.T, cfg *AppConfig, substr string) {
 	t.Helper()
 	err := ValidateConfig(cfg)

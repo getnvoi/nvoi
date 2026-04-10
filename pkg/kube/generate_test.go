@@ -324,10 +324,10 @@ func TestHealthCheck(t *testing.T) {
 func TestNodeSelector(t *testing.T) {
 	names := mustNames(t)
 	spec := ServiceSpec{
-		Name:   "db",
-		Image:  "postgres:17",
-		Port:   5432,
-		Server: "master",
+		Name:    "db",
+		Image:   "postgres:17",
+		Port:    5432,
+		Servers: []string{"master"},
 	}
 
 	yamlStr, _, err := GenerateYAML(spec, names, nil)
@@ -347,6 +347,94 @@ func TestNodeSelector(t *testing.T) {
 	}
 	if nodeSelector[utils.LabelNvoiRole] != "master" {
 		t.Errorf("expected nodeSelector[%q]=master, got %q", utils.LabelNvoiRole, nodeSelector[utils.LabelNvoiRole])
+	}
+}
+
+func TestMultiServerAffinity(t *testing.T) {
+	names := mustNames(t)
+	spec := ServiceSpec{
+		Name:    "web",
+		Image:   "nginx",
+		Port:    80,
+		Servers: []string{"worker-1", "worker-2"},
+	}
+
+	yamlStr, _, err := GenerateYAML(spec, names, nil)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
+
+	docs := splitDocs(yamlStr)
+	var dep appsv1.Deployment
+	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
+		t.Fatalf("unmarshal Deployment: %v", err)
+	}
+
+	podSpec := dep.Spec.Template.Spec
+
+	// Should NOT have nodeSelector (that's single-server only)
+	if podSpec.NodeSelector != nil {
+		t.Errorf("multi-server should not use nodeSelector, got: %v", podSpec.NodeSelector)
+	}
+
+	// Should have nodeAffinity with In operator
+	if podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil {
+		t.Fatal("expected nodeAffinity for multi-server placement")
+	}
+	terms := podSpec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 {
+		t.Fatalf("expected 1 term, got %d", len(terms))
+	}
+	exprs := terms[0].MatchExpressions
+	if len(exprs) != 1 {
+		t.Fatalf("expected 1 expression, got %d", len(exprs))
+	}
+	if exprs[0].Key != utils.LabelNvoiRole {
+		t.Errorf("expected key %q, got %q", utils.LabelNvoiRole, exprs[0].Key)
+	}
+	if exprs[0].Operator != corev1.NodeSelectorOpIn {
+		t.Errorf("expected operator In, got %v", exprs[0].Operator)
+	}
+	if len(exprs[0].Values) != 2 || exprs[0].Values[0] != "worker-1" || exprs[0].Values[1] != "worker-2" {
+		t.Errorf("expected values [worker-1, worker-2], got %v", exprs[0].Values)
+	}
+
+	// Should have topologySpreadConstraints
+	if len(podSpec.TopologySpreadConstraints) != 1 {
+		t.Fatalf("expected 1 topology spread constraint, got %d", len(podSpec.TopologySpreadConstraints))
+	}
+	tsc := podSpec.TopologySpreadConstraints[0]
+	if tsc.MaxSkew != 1 {
+		t.Errorf("expected maxSkew=1, got %d", tsc.MaxSkew)
+	}
+	if tsc.TopologyKey != utils.LabelNvoiRole {
+		t.Errorf("expected topologyKey %q, got %q", utils.LabelNvoiRole, tsc.TopologyKey)
+	}
+}
+
+func TestDefaultServerIsMaster(t *testing.T) {
+	names := mustNames(t)
+	spec := ServiceSpec{
+		Name:  "web",
+		Image: "nginx",
+		Port:  80,
+		// No Servers set — should default to master
+	}
+
+	yamlStr, _, err := GenerateYAML(spec, names, nil)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
+
+	docs := splitDocs(yamlStr)
+	var dep appsv1.Deployment
+	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
+		t.Fatalf("unmarshal Deployment: %v", err)
+	}
+
+	ns := dep.Spec.Template.Spec.NodeSelector
+	if ns == nil || ns[utils.LabelNvoiRole] != "master" {
+		t.Errorf("empty servers should default to master, got: %v", ns)
 	}
 }
 

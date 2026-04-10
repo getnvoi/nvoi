@@ -25,7 +25,7 @@ type ServiceSetRequest struct {
 	Storages   []string // storage names → expands to STORAGE_{NAME}_* secret refs
 	Volumes    []string // name:/path
 	HealthPath string
-	Server     string
+	Servers    []string
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
@@ -112,7 +112,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		SecretName: names.KubeSecrets(),
 		Volumes:    req.Volumes,
 		HealthPath: req.HealthPath,
-		Server:     req.Server,
+		Servers:    req.Servers,
 		Managed:    managed,
 	}
 
