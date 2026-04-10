@@ -126,7 +126,7 @@ func ListDNSRecords(db *gorm.DB) func(context.Context, *ListDNSInput) (*ListDNSO
 
 		records, err := pkgcore.DNSList(ctx, pkgcore.DNSListRequest{
 			DNS: pkgcore.ProviderRef{
-				Name:  repo.DNSProvider.Name,
+				Name:  repo.DNSProvider.Provider,
 				Creds: repo.DNSProvider.CredentialsMap(),
 			},
 		})
@@ -182,7 +182,7 @@ func EmptyStorage(db *gorm.DB) func(context.Context, *EmptyStorageInput) (*Empty
 		err = pkgcore.StorageEmpty(ctx, pkgcore.StorageEmptyRequest{
 			Cluster: *cluster,
 			Storage: pkgcore.ProviderRef{
-				Name:  repo.StorageProvider.Name,
+				Name:  repo.StorageProvider.Provider,
 				Creds: repo.StorageProvider.CredentialsMap(),
 			},
 			Name: input.Name,

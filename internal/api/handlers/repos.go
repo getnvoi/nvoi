@@ -42,10 +42,10 @@ type UpdateRepoInput struct {
 	RepoScopedInput
 	Body struct {
 		Name            string `json:"name,omitempty" doc:"New repo name"`
-		ComputeProvider string `json:"compute_provider,omitempty" doc:"Compute provider name (looks up by kind=compute + name in workspace)"`
-		DNSProvider     string `json:"dns_provider,omitempty" doc:"DNS provider name"`
-		StorageProvider string `json:"storage_provider,omitempty" doc:"Storage provider name"`
-		BuildProvider   string `json:"build_provider,omitempty" doc:"Build provider name"`
+		ComputeProvider string `json:"compute_provider,omitempty" doc:"Compute provider alias"`
+		DNSProvider     string `json:"dns_provider,omitempty" doc:"DNS provider alias"`
+		StorageProvider string `json:"storage_provider,omitempty" doc:"Storage provider alias"`
+		BuildProvider   string `json:"build_provider,omitempty" doc:"Build provider alias"`
 	}
 }
 
@@ -122,9 +122,9 @@ func UpdateRepo(db *gorm.DB) func(context.Context, *UpdateRepoInput) (*UpdateRep
 			db.Model(repo).Update("name", input.Body.Name)
 		}
 
-		// Link providers by looking up InfraProvider records in the workspace.
+		// Link providers by alias — look up InfraProvider by alias, verify kind matches.
 		providerLinks := []struct {
-			name  string
+			alias string
 			kind  api.ProviderKind
 			field string
 		}{
@@ -134,12 +134,15 @@ func UpdateRepo(db *gorm.DB) func(context.Context, *UpdateRepoInput) (*UpdateRep
 			{input.Body.BuildProvider, api.ProviderKindBuild, "build_provider_id"},
 		}
 		for _, link := range providerLinks {
-			if link.name == "" {
+			if link.alias == "" {
 				continue
 			}
 			var prov api.InfraProvider
-			if err := db.Where("workspace_id = ? AND kind = ? AND name = ?", repo.WorkspaceID, link.kind, link.name).First(&prov).Error; err != nil {
-				return nil, huma.Error404NotFound(fmt.Sprintf("provider %s/%s not found in workspace — run 'nvoi provider set %s %s' first", link.kind, link.name, link.kind, link.name))
+			if err := db.Where("workspace_id = ? AND alias = ?", repo.WorkspaceID, link.alias).First(&prov).Error; err != nil {
+				return nil, huma.Error404NotFound(fmt.Sprintf("provider %q not found in workspace — run 'nvoi provider add' first", link.alias))
+			}
+			if prov.Kind != link.kind {
+				return nil, huma.Error400BadRequest(fmt.Sprintf("provider %q is %s, not %s", link.alias, prov.Kind, link.kind))
 			}
 			db.Model(repo).Update(link.field, prov.ID)
 		}

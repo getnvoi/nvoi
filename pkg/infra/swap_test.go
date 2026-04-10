@@ -34,7 +34,7 @@ func TestEnsureSwap_CreatesSwap(t *testing.T) {
 			{Prefix: "sudo chmod", Result: testutil.MockResult{}},
 			{Prefix: "sudo mkswap", Result: testutil.MockResult{}},
 			{Prefix: "sudo swapon", Result: testutil.MockResult{}},
-			{Prefix: "sudo grep", Result: testutil.MockResult{}},
+			{Prefix: "sudo bash -c", Result: testutil.MockResult{}},
 		},
 	}
 
@@ -64,7 +64,7 @@ func TestEnsureSwap_SmallDisk(t *testing.T) {
 			{Prefix: "sudo chmod", Result: testutil.MockResult{}},
 			{Prefix: "sudo mkswap", Result: testutil.MockResult{}},
 			{Prefix: "sudo swapon", Result: testutil.MockResult{}},
-			{Prefix: "sudo grep", Result: testutil.MockResult{}},
+			{Prefix: "sudo bash -c", Result: testutil.MockResult{}},
 		},
 	}
 

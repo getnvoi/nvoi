@@ -1,12 +1,18 @@
 services:
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     environment:
       - MAIN_DATABASE_URL=postgres://nvoi:nvoi@postgres:5432/nvoi?sslmode=disable
       - JWT_SECRET=dev-jwt-secret-do-not-use-in-production
       - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     ports:
       - "8080:8080"
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,3 +38,5 @@ services:
 
 volumes:
   postgres-data:
+  go-modules:
+  go-build-cache:

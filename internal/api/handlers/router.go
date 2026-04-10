@@ -108,7 +108,7 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 	}, SetProvider(db))
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "delete-provider", Method: http.MethodDelete, Path: prov + "/{kind}/{name}",
+		OperationID: "delete-provider", Method: http.MethodDelete, Path: prov + "/{alias}",
 		Summary: "Delete provider", Tags: []string{"providers"}, Security: security,
 	}, DeleteProvider(db))
 

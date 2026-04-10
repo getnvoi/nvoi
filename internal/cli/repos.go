@@ -132,11 +132,11 @@ func newReposUseCmd() *cobra.Command {
 		Use:   "use <name-or-id>",
 		Short: "Set active repo and optionally link providers",
 		Long: `Sets the active repo. Pass --compute, --dns, --storage, --build to link
-providers from the workspace.
+providers from the workspace by alias.
 
 Examples:
   nvoi repos use myapp
-  nvoi repos use myapp --compute hetzner --dns cloudflare --storage cloudflare --build daytona`,
+  nvoi repos use myapp --compute hetzner-prod --dns cf-dns --storage cf-storage --build daytona-team`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, cfg, err := AuthedClient()
@@ -195,7 +195,7 @@ Examples:
 		},
 	}
 	for _, kind := range providerKinds {
-		cmd.Flags().String(kind, "", "link "+kind+" provider")
+		cmd.Flags().String(kind, "", "link "+kind+" provider by alias")
 	}
 	return cmd
 }

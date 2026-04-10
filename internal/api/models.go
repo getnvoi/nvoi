@@ -122,14 +122,16 @@ const (
 )
 
 // InfraProvider stores a provider with its credentials at workspace scope.
-// A workspace can have multiple providers (e.g. hetzner + aws compute).
+// A workspace can have multiple providers of the same type (e.g. hetzner-prod + hetzner-staging).
+// Each provider has a user-chosen alias used for linking repos.
 // Repos link to specific providers via FK columns.
 type InfraProvider struct {
 	ID          string       `gorm:"primaryKey" json:"id"`
-	WorkspaceID string       `gorm:"not null;uniqueIndex:idx_infra_ws_kind_name" json:"workspace_id"`
-	Kind        ProviderKind `gorm:"not null;uniqueIndex:idx_infra_ws_kind_name" json:"kind"` // compute, dns, storage, build
-	Name        string       `gorm:"not null;uniqueIndex:idx_infra_ws_kind_name" json:"name"` // hetzner, cloudflare, aws, daytona, etc.
-	Credentials string       `gorm:"type:text;not null" json:"-"`                             // encrypted JSON (schema-mapped)
+	WorkspaceID string       `gorm:"not null;uniqueIndex:idx_infra_ws_alias" json:"workspace_id"`
+	Alias       string       `gorm:"not null;uniqueIndex:idx_infra_ws_alias" json:"alias"` // user-chosen name: hetzner-prod, cf-dns, etc.
+	Kind        ProviderKind `gorm:"not null" json:"kind"`                                 // compute, dns, storage, build
+	Provider    string       `gorm:"not null" json:"provider"`                             // hetzner, cloudflare, aws, daytona, etc.
+	Credentials string       `gorm:"type:text;not null" json:"-"`                          // encrypted JSON (schema-mapped)
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`
 
