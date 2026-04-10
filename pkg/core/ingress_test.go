@@ -91,7 +91,8 @@ func TestIngressSet_HardErrorWhenUnreachable(t *testing.T) {
 		Cluster: ingressCluster(out, ingressSetSSH(), mock),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 		Hooks: &IngressHooks{
-			WaitHTTPS: func(ctx context.Context, domain string) error { return fmt.Errorf("timeout") },
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, certPath string) error { return nil },
+			WaitForHTTPS:       func(ctx context.Context, ssh utils.SSHClient, domain string) error { return fmt.Errorf("timeout") },
 		},
 	})
 	if err == nil {
@@ -128,7 +129,10 @@ func TestIngressSet_ACMEPath(t *testing.T) {
 	err := IngressSet(context.Background(), IngressSetRequest{
 		Cluster: ingressCluster(out, ssh, mock),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
-		Hooks:   &IngressHooks{WaitHTTPS: func(ctx context.Context, domain string) error { return nil }},
+		Hooks: &IngressHooks{
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, certPath string) error { return nil },
+			WaitForHTTPS:       func(ctx context.Context, ssh utils.SSHClient, domain string) error { return nil },
+		},
 	})
 	if err != nil {
 		t.Fatalf("expected ACME path to succeed: %v", err)

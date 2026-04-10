@@ -4,58 +4,36 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// WaitHTTPS verifies a domain is reachable over HTTPS.
-// Fails fast on each failure type — no 2-minute blind polling.
-//
-// Connection refused/timeout (3 consecutive): firewall blocking 80/443.
-// TLS handshake failure: cert not provisioned. Polls up to 2 minutes (Let's Encrypt).
-// HTTP 5xx (3 consecutive): Caddy up but backend down. Fail immediately.
-func WaitHTTPS(ctx context.Context, domain string) error {
-	client := &http.Client{Timeout: 5 * time.Second}
-	connFailures := 0
-	serverErrors := 0
-
+// WaitForCertificate polls until the ACME certificate file exists on disk.
+// certPath is the full path to the Caddy cert JSON file (from Names.CaddyCertPath).
+func WaitForCertificate(ctx context.Context, ssh utils.SSHClient, certPath string) error {
+	cmd := fmt.Sprintf("test -f %s && echo ready || echo waiting", certPath)
 	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
-		resp, err := client.Get("https://" + domain)
+		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
-			errMsg := err.Error()
-			serverErrors = 0
-
-			// TCP connection refused/timeout = firewall
-			if strings.Contains(errMsg, "connection refused") ||
-				strings.Contains(errMsg, "i/o timeout") ||
-				strings.Contains(errMsg, "no route to host") {
-				connFailures++
-				if connFailures >= 3 {
-					return false, fmt.Errorf("port not reachable (connection refused/timeout) — firewall is blocking 80/443")
-				}
-				return false, nil
-			}
-
-			// TLS errors = cert not ready, keep polling
-			connFailures = 0
 			return false, nil
 		}
-		resp.Body.Close()
-		connFailures = 0
+		return strings.TrimSpace(string(out)) == "ready", nil
+	})
+}
 
-		if resp.StatusCode >= 500 {
-			serverErrors++
-			if serverErrors >= 3 {
-				return false, fmt.Errorf("backend returning %d — service is down", resp.StatusCode)
-			}
+// WaitForHTTPS verifies a domain responds over HTTPS from the server.
+// Runs curl via SSH — no dependency on client DNS propagation.
+func WaitForHTTPS(ctx context.Context, ssh utils.SSHClient, domain string) error {
+	cmd := fmt.Sprintf("curl -fsk --connect-timeout 5 https://%s -o /dev/null -w '%%{http_code}'", domain)
+	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+		out, err := ssh.Run(ctx, cmd)
+		if err != nil {
 			return false, nil
 		}
-		serverErrors = 0
-
-		return resp.StatusCode >= 200 && resp.StatusCode < 500, nil
+		code := strings.TrimSpace(strings.Trim(string(out), "'"))
+		return code >= "200" && code < "500", nil
 	})
 }
 

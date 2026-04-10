@@ -22,14 +22,22 @@ type IngressRouteArg struct {
 // IngressHooks holds injectable dependencies for testing.
 // Nil fields use production defaults.
 type IngressHooks struct {
-	WaitHTTPS func(ctx context.Context, domain string) error
+	WaitForCertificate func(ctx context.Context, ssh utils.SSHClient, certPath string) error
+	WaitForHTTPS       func(ctx context.Context, ssh utils.SSHClient, domain string) error
 }
 
-func (h *IngressHooks) waitHTTPS() func(context.Context, string) error {
-	if h != nil && h.WaitHTTPS != nil {
-		return h.WaitHTTPS
+func (h *IngressHooks) waitForCertificate() func(context.Context, utils.SSHClient, string) error {
+	if h != nil && h.WaitForCertificate != nil {
+		return h.WaitForCertificate
 	}
-	return infra.WaitHTTPS
+	return infra.WaitForCertificate
+}
+
+func (h *IngressHooks) waitForHTTPS() func(context.Context, utils.SSHClient, string) error {
+	if h != nil && h.WaitForHTTPS != nil {
+		return h.WaitForHTTPS
+	}
+	return infra.WaitForHTTPS
 }
 
 type IngressSetRequest struct {
@@ -87,7 +95,8 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	}
 
 	out.Command("ingress", "set", req.Route.Service, "domains", req.Route.Domains)
-	waitHTTPS := req.Hooks.waitHTTPS()
+	waitForCert := req.Hooks.waitForCertificate()
+	waitForHTTPS := req.Hooks.waitForHTTPS()
 
 	// Resolve the service port from the cluster.
 	port, err := kube.GetServicePort(ctx, ssh, ns, req.Route.Service)
@@ -109,10 +118,17 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	}
 	out.Success("caddy ready")
 
-	// Verify reachability.
+	// Verify cert + HTTPS from the server (no dependency on client DNS).
 	firstDomain := req.Route.Domains[0]
+	certPath := names.CaddyCertPath(firstDomain)
+	out.Progress(fmt.Sprintf("waiting for certificate %s", firstDomain))
+	if err := waitForCert(ctx, ssh, certPath); err != nil {
+		return fmt.Errorf("certificate for %s not provisioned: %w", firstDomain, err)
+	}
+	out.Success(fmt.Sprintf("certificate %s ready", firstDomain))
+
 	out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
-	if err := waitHTTPS(ctx, firstDomain); err != nil {
+	if err := waitForHTTPS(ctx, ssh, firstDomain); err != nil {
 		return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
 	}
 	out.Success(fmt.Sprintf("https://%s live", firstDomain))
