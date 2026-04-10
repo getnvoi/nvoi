@@ -83,6 +83,10 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		srv.PrivateIP = ip
 	}
 
+	// Clear stale known host — the server was just created/ensured,
+	// IP may have been recycled from a previous server.
+	_ = infra.ClearKnownHost(srv.IPv4 + ":22")
+
 	// Wait for SSH and connect — all infra operations use this connection.
 	out.Progress(fmt.Sprintf("waiting for SSH on %s", srv.IPv4))
 	var ssh utils.SSHClient

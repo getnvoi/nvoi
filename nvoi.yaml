@@ -12,7 +12,7 @@ servers:
     type: cax11
     region: nbg1
     role: master
-  worker-2:
+  worker-3:
     type: cax11
     region: nbg1
     role: worker
@@ -51,11 +51,11 @@ services:
     build: api
     port: 8080
     secrets: [DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY]
-    server: worker-2
+    server: worker-3
   web:
     build: web
     port: 3000
-    server: worker-2
+    server: worker-3
   distribution:
     build: distribution
     port: 3001
