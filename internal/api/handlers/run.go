@@ -259,6 +259,12 @@ func (e *runner) dispatch(ctx context.Context, kind, name string, params map[str
 			Servers:  utils.GetStringSlice(params, "servers"),
 		})
 
+	case "cron.run":
+		return pkgcore.CronRun(ctx, pkgcore.CronRunRequest{
+			Cluster: e.cluster,
+			Name:    name,
+		})
+
 	case "cron.delete":
 		return pkgcore.CronDelete(ctx, pkgcore.CronDeleteRequest{
 			Cluster: e.cluster,

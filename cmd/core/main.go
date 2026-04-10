@@ -61,6 +61,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(core.NewLogsCmd(dc))
 	root.AddCommand(core.NewExecCmd(dc))
 	root.AddCommand(core.NewSSHCmd(dc))
+	root.AddCommand(core.NewCronCmd(dc))
 
 	root.SetErr(&outputWriter{root: root})
 	root.SetErrPrefix("")

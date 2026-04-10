@@ -57,6 +57,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(cli.NewLogsCmd(&client, &repoPath))
 	root.AddCommand(cli.NewExecCmd(&client, &repoPath))
 	root.AddCommand(cli.NewSSHCmd(&client, &repoPath))
+	root.AddCommand(cli.NewCronCmd(&client, &repoPath))
 
 	addStandalone(root, cli.NewLoginCmd())
 	addStandalone(root, cli.NewWhoamiCmd())

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -130,6 +131,45 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 		return err
 	}
 	out.Success("applied")
+	return nil
+}
+
+type CronRunRequest struct {
+	Cluster
+	Name string
+}
+
+func CronRun(ctx context.Context, req CronRunRequest) error {
+	out := req.Log()
+
+	ssh, names, err := req.Cluster.SSH(ctx)
+	if err != nil {
+		return err
+	}
+	defer ssh.Close()
+
+	ns := names.KubeNamespace()
+	jobName := fmt.Sprintf("%s-run-%d", req.Name, time.Now().Unix())
+
+	out.Command("cron", "run", req.Name, "job", jobName)
+
+	if err := kube.CreateJobFromCronJob(ctx, ssh, ns, req.Name, jobName); err != nil {
+		return err
+	}
+	out.Progress("waiting for completion")
+
+	if err := kube.WaitForJob(ctx, ssh, ns, jobName, out); err != nil {
+		return err
+	}
+
+	// Stream logs
+	logs := kube.RecentLogs(ctx, ssh, ns, jobName, "", 50)
+	if logs != "" {
+		w := out.Writer()
+		fmt.Fprintln(w, logs)
+	}
+
+	out.Success("completed")
 	return nil
 }
 

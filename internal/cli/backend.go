@@ -201,6 +201,25 @@ func NewExecCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	}
 }
 
+func NewCronCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cron",
+		Short: "Manage cron jobs",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "run <name>",
+		Short: "Trigger a cron job immediately",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return streamRun(*client, (*repoPath)("/run"), map[string]any{
+				"kind": "cron.run",
+				"name": args[0],
+			})
+		},
+	})
+	return cmd
+}
+
 func NewSSHCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "ssh -- <command>",
