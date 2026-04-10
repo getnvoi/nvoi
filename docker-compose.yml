@@ -2,7 +2,7 @@ services:
   api:
     build: .
     environment:
-      - DATABASE_URL=postgres://nvoi:nvoi@postgres:5432/nvoi?sslmode=disable
+      - MAIN_DATABASE_URL=postgres://nvoi:nvoi@postgres:5432/nvoi?sslmode=disable
       - JWT_SECRET=dev-jwt-secret-do-not-use-in-production
       - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     ports:

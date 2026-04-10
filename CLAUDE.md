@@ -38,13 +38,70 @@ GitHub Actions workflows (`.github/workflows/`):
 
 ## Local development
 
+`bin/nvoi` is the universal entrypoint. Sources `.env`, builds the binary if needed, runs any command.
+
 ```bash
-bin/deploy                     # deploy from nvoi.yaml
-bin/destroy                    # teardown all provider resources
-bin/core describe              # live cluster state
-bin/cloud login                # cloud CLI
+# Deploy / teardown
+bin/nvoi deploy                # reconcile from nvoi.yaml
+bin/nvoi teardown              # nuke provider resources
+bin/deploy                     # shorthand for bin/nvoi deploy
+bin/destroy                    # shorthand for bin/nvoi teardown
+
+# Operate
+bin/nvoi describe              # live cluster state
+bin/nvoi logs web              # stream logs
+bin/nvoi logs api -f           # follow logs
+bin/nvoi exec web -- sh        # shell into service pod
+bin/nvoi ssh -- kubectl get pods  # run command on master
+
+# Database
+bin/nvoi db sql "SELECT 1;"   # run SQL
+bin/nvoi db backup now         # trigger backup
+bin/nvoi db backup list        # list backups in R2
+bin/nvoi db backup download <name> -f ./backup.sql.gz
+
+# Cron
+bin/nvoi cron run db-backup    # trigger cron job
+
+# Inspect
+bin/nvoi resources             # list all provider resources
 go test ./...                  # run tests
 ```
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `nvoi.yaml` | Infrastructure config (tracked) |
+| `.env` | Provider credentials + app secrets (not tracked) |
+| `bin/nvoi` | Universal entrypoint — sources .env, builds, runs |
+| `bin/deploy` | Shorthand for `bin/nvoi deploy` |
+| `bin/destroy` | Shorthand for `bin/nvoi teardown` |
+| `bin/core` | Direct `go run ./cmd/core` (no .env) |
+| `bin/cloud` | Cloud CLI — starts compose (API + postgres), runs `cmd/cli` |
+| `bin/dev` | Website development loop |
+
+### Cloud CLI (local development)
+
+`bin/cloud` auto-starts the API + postgres via docker-compose, then runs the cloud CLI:
+
+```bash
+bin/cloud login                # authenticate with GitHub token
+bin/cloud whoami               # show current user + context
+bin/cloud workspaces list      # list workspaces
+bin/cloud repos create myapp   # create repo
+bin/cloud repos use myapp      # set active repo
+bin/cloud provider set compute hetzner  # link provider
+bin/cloud deploy               # deploy via API (sends YAML, streams JSONL)
+bin/cloud describe             # live cluster state via API
+bin/cloud logs web             # stream logs via API
+```
+
+The API runs at `localhost:8080` with a local postgres. `docker-compose.yml` handles the stack:
+- **api** — Go binary, reads `MAIN_DATABASE_URL`, serves Huma REST API
+- **postgres** — postgres:17-alpine, dev credentials (nvoi/nvoi/nvoi)
+
+The cloud CLI stores auth in `~/.config/nvoi/auth.json`.
 
 ## Config format
 
