@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	// Trigger hetzner init() — registers compute provider with schema.
-	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
+	_ "github.com/getnvoi/nvoi/pkg/provider/compute/hetzner"
 )
 
 func TestResolveProviderCredentials_FromEnv(t *testing.T) {
