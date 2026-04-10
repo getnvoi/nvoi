@@ -172,6 +172,40 @@ func TestValidateConfig_SingleServerWithVolumeOK(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_WebFacingExplicit1Replica_Error(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = ServiceDef{Image: "nginx", Port: 80, Replicas: 1}
+	cfg.Domains = map[string][]string{"web": {"example.com"}}
+	assertValidationError(t, cfg, "replicas >= 2")
+}
+
+func TestValidateConfig_WebFacingOmittedReplicas_OK(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = ServiceDef{Image: "nginx", Port: 80} // Replicas: 0 (omitted)
+	cfg.Domains = map[string][]string{"web": {"example.com"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("omitted replicas on web-facing service should be ok (defaults to 2), got: %v", err)
+	}
+}
+
+func TestValidateConfig_WebFacingExplicit2Replicas_OK(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = ServiceDef{Image: "nginx", Port: 80, Replicas: 2}
+	cfg.Domains = map[string][]string{"web": {"example.com"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("explicit 2 replicas should be ok, got: %v", err)
+	}
+}
+
+func TestValidateConfig_NoDomainSingleReplica_OK(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["worker"] = ServiceDef{Image: "busybox", Replicas: 1}
+	// No domain — single replica is fine
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("no domain + 1 replica should be ok, got: %v", err)
+	}
+}
+
 func TestResolveServers_ExplicitServers(t *testing.T) {
 	cfg := &AppConfig{}
 	got := ResolveServers(cfg, []string{"worker-1", "worker-2"}, "", nil)

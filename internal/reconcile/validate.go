@@ -159,6 +159,9 @@ func ValidateConfig(cfg *AppConfig) error {
 		if len(domains) == 0 {
 			return fmt.Errorf("domains.%s: at least one domain is required", svcName)
 		}
+		if svc.Replicas == 1 {
+			return fmt.Errorf("services.%s: web-facing services require replicas >= 2 for zero-downtime rolling updates (omit replicas to default to 2)", svcName)
+		}
 	}
 
 	return nil

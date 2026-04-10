@@ -16,9 +16,13 @@ func Services(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppC
 			return err
 		}
 		servers := ResolveServers(cfg, svc.Servers, svc.Server, svc.Volumes)
+		replicas := svc.Replicas
+		if _, hasDomain := cfg.Domains[name]; hasDomain && replicas == 0 {
+			replicas = 2
+		}
 		if err := app.ServiceSet(ctx, app.ServiceSetRequest{
 			Cluster: dc.Cluster, Name: name, Image: image,
-			Port: svc.Port, Command: svc.Command, Replicas: svc.Replicas,
+			Port: svc.Port, Command: svc.Command, Replicas: replicas,
 			EnvVars: svc.Env, Secrets: svc.Secrets, Storages: svc.Storage,
 			Volumes: svc.Volumes, HealthPath: svc.Health, Servers: servers,
 		}); err != nil {
