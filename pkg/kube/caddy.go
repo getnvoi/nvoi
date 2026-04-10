@@ -189,7 +189,7 @@ func generateDeploymentYAML(names *utils.Names, ns string) (string, error) {
 
 func caddyVolumeMounts() []corev1.VolumeMount {
 	return []corev1.VolumeMount{
-		{Name: "config", MountPath: "/etc/caddy/Caddyfile", SubPath: "Caddyfile", ReadOnly: true},
+		{Name: "config", MountPath: "/etc/caddy", ReadOnly: true},
 		{Name: "data", MountPath: "/data"},
 	}
 }
