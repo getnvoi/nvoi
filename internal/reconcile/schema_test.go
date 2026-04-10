@@ -1,16 +1,20 @@
 package reconcile
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/getnvoi/nvoi/internal/config"
+)
 
 func TestParseAppConfig_InvalidYAML(t *testing.T) {
-	_, err := ParseAppConfig([]byte("not: [valid: yaml"))
+	_, err := config.ParseAppConfig([]byte("not: [valid: yaml"))
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
 	}
 }
 
 func TestParseAppConfig_Valid(t *testing.T) {
-	cfg, err := ParseAppConfig([]byte("app: test\nenv: prod\n"))
+	cfg, err := config.ParseAppConfig([]byte("app: test\nenv: prod\n"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

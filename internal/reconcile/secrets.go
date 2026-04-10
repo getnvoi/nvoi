@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/viper"
 )
 
-func Secrets(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig, v *viper.Viper) error {
+func Secrets(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, v *viper.Viper) error {
 	for _, key := range cfg.Secrets {
 		val := v.GetString(key)
 		if val == "" {

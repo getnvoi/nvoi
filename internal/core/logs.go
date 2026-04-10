@@ -1,12 +1,12 @@
 package core
 
 import (
-	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
 
-func NewLogsCmd(dc *reconcile.DeployContext) *cobra.Command {
+func NewLogsCmd(dc *config.DeployContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <service>",
 		Short: "Stream service logs",

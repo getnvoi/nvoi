@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/internal/packages"
 	"github.com/spf13/viper"
 )
 
 // Deploy reconciles live infrastructure to match the YAML config.
-func Deploy(ctx context.Context, dc *DeployContext, cfg *AppConfig, v *viper.Viper) error {
+func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, v *viper.Viper) error {
 	if err := ValidateConfig(cfg); err != nil {
+		return err
+	}
+	if err := packages.ValidateAll(cfg); err != nil {
 		return err
 	}
 
@@ -46,13 +51,21 @@ func Deploy(ctx context.Context, dc *DeployContext, cfg *AppConfig, v *viper.Vip
 	if err := Secrets(ctx, dc, live, cfg, v); err != nil {
 		return err
 	}
+
+	// Packages (database, etc.) — after volumes/secrets, before services.
+	// Returns env vars to inject into all app services and crons.
+	packageEnvVars, err := packages.ReconcileAll(ctx, dc, cfg)
+	if err != nil {
+		return err
+	}
+
 	if err := Storage(ctx, dc, live, cfg); err != nil {
 		return err
 	}
-	if err := Services(ctx, dc, live, cfg); err != nil {
+	if err := Services(ctx, dc, live, cfg, packageEnvVars); err != nil {
 		return err
 	}
-	if err := Crons(ctx, dc, live, cfg); err != nil {
+	if err := Crons(ctx, dc, live, cfg, packageEnvVars); err != nil {
 		return err
 	}
 

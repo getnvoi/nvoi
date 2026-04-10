@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
@@ -15,7 +15,7 @@ import (
 )
 
 // BuildContext builds a DeployContext from viper config + env vars.
-func BuildContext(cmd *cobra.Command) *reconcile.DeployContext {
+func BuildContext(cmd *cobra.Command) *config.DeployContext {
 	appName := viper.GetString("app")
 	env := viper.GetString("env")
 	out := ResolveOutput(cmd)
@@ -31,7 +31,7 @@ func BuildContext(cmd *cobra.Command) *reconcile.DeployContext {
 	builderCreds, _ := resolveProviderCreds("build", builderName)
 	gitUsername, gitToken := resolveGitAuth()
 
-	return &reconcile.DeployContext{
+	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName:     appName,
 			Env:         env,

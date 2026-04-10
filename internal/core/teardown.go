@@ -3,13 +3,15 @@ package core
 import (
 	"context"
 
+	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/internal/packages"
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
-func NewTeardownCmd(dc *reconcile.DeployContext) *cobra.Command {
+func NewTeardownCmd(dc *config.DeployContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "teardown",
 		Short: "Tear down all provider resources in config YAML",
@@ -31,7 +33,7 @@ func NewTeardownCmd(dc *reconcile.DeployContext) *cobra.Command {
 // teardown nukes external provider resources. Kubernetes resources (services,
 // crons, ingress, secrets) live on the cluster and die with the servers.
 // K8s resource management is reconcile's job, not teardown's.
-func teardown(ctx context.Context, dc *reconcile.DeployContext, cfg *reconcile.AppConfig, deleteVolumes, deleteStorage bool) error {
+func teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
 	// DNS records — external, at the DNS provider
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		_ = app.DNSDelete(ctx, app.DNSDeleteRequest{
@@ -50,6 +52,9 @@ func teardown(ctx context.Context, dc *reconcile.DeployContext, cfg *reconcile.A
 			_ = app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name})
 		}
 	}
+
+	// Package resources (database backup buckets, etc.)
+	packages.TeardownAll(ctx, dc, cfg, deleteStorage)
 
 	// Volumes — external, preserved by default
 	if deleteVolumes {

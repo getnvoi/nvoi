@@ -3,11 +3,12 @@ package reconcile
 import (
 	"context"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func DNS(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) error {
+func DNS(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) error {
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		if err := app.DNSSet(ctx, app.DNSSetRequest{
 			Cluster: dc.Cluster, DNS: dc.DNS,

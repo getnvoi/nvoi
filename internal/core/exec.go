@@ -1,12 +1,12 @@
 package core
 
 import (
-	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
 
-func NewExecCmd(dc *reconcile.DeployContext) *cobra.Command {
+func NewExecCmd(dc *config.DeployContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "exec <service> -- <command>",
 		Short: "Run command in service pod",

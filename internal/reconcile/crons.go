@@ -3,11 +3,12 @@ package reconcile
 import (
 	"context"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Crons(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) error {
+func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, packageEnvVars map[string]string) error {
 	for _, name := range utils.SortedKeys(cfg.Crons) {
 		cron := cfg.Crons[name]
 		image, err := resolveImageRef(ctx, dc, cron.Image, cron.Build)
@@ -15,9 +16,13 @@ func Crons(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConf
 			return err
 		}
 		servers := ResolveServers(cfg, cron.Servers, cron.Server, cron.Volumes)
+		envVars := append([]string{}, cron.Env...)
+		for k, v := range packageEnvVars {
+			envVars = append(envVars, k+"="+v)
+		}
 		if err := app.CronSet(ctx, app.CronSetRequest{
 			Cluster: dc.Cluster, Name: name, Image: image,
-			Command: cron.Command, EnvVars: cron.Env, Secrets: cron.Secrets,
+			Command: cron.Command, EnvVars: envVars, Secrets: cron.Secrets,
 			Storages: cron.Storage, Volumes: cron.Volumes,
 			Schedule: cron.Schedule, Servers: servers,
 		}); err != nil {
@@ -26,8 +31,12 @@ func Crons(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConf
 	}
 	if live != nil {
 		desired := toSet(utils.SortedKeys(cfg.Crons))
+		protected := map[string]bool{}
+		for dbName := range cfg.Database {
+			protected[dbName+"-db-backup"] = true
+		}
 		for _, name := range live.Crons {
-			if !desired[name] {
+			if !desired[name] && !protected[name] {
 				_ = app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Name: name})
 			}
 		}

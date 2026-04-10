@@ -8,10 +8,12 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/core"
-	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	_ "github.com/getnvoi/nvoi/internal/packages/database"
 
 	// Compute
 	_ "github.com/getnvoi/nvoi/pkg/provider/compute/aws"
@@ -41,7 +43,7 @@ func main() {
 }
 
 func rootCmd() *cobra.Command {
-	dc := &reconcile.DeployContext{}
+	dc := &config.DeployContext{}
 
 	root := &cobra.Command{
 		Use:          "nvoi",
@@ -71,6 +73,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(core.NewExecCmd(dc))
 	root.AddCommand(core.NewSSHCmd(dc))
 	root.AddCommand(core.NewCronCmd(dc))
+	root.AddCommand(core.NewDatabaseCmd(dc))
 
 	root.SetErr(&outputWriter{root: root})
 	root.SetErrPrefix("")

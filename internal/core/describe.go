@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
 
-func NewDescribeCmd(dc *reconcile.DeployContext) *cobra.Command {
+func NewDescribeCmd(dc *config.DeployContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe",
 		Short: "Live cluster state",
@@ -36,7 +36,7 @@ func NewDescribeCmd(dc *reconcile.DeployContext) *cobra.Command {
 	}
 }
 
-func NewResourcesCmd(dc *reconcile.DeployContext) *cobra.Command {
+func NewResourcesCmd(dc *config.DeployContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "resources",
 		Short: "List all provider resources",

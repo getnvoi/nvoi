@@ -4,18 +4,20 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/config"
 )
 
 func TestServices_FreshDeploy(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers:  map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Services: map[string]ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sshContains(ssh, "replace", "apply") {
@@ -26,14 +28,14 @@ func TestServices_FreshDeploy(t *testing.T) {
 func TestServices_OrphanRemoved(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers:  map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Services: map[string]ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
-	live := &LiveState{Services: []string{"web", "old-api"}}
+	live := &config.LiveState{Services: []string{"web", "old-api"}}
 
-	if err := Services(context.Background(), dc, live, cfg); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sshCallMatches(ssh, "old-api", "delete") {
@@ -44,14 +46,14 @@ func TestServices_OrphanRemoved(t *testing.T) {
 func TestServices_CaddyNeverOrphaned(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers:  map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Services: map[string]ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
-	live := &LiveState{Services: []string{"web", "caddy"}}
+	live := &config.LiveState{Services: []string{"web", "caddy"}}
 
-	if err := Services(context.Background(), dc, live, cfg); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sshCallMatches(ssh, "caddy", "delete") {
@@ -62,14 +64,14 @@ func TestServices_CaddyNeverOrphaned(t *testing.T) {
 func TestServices_AlreadyConverged(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers:  map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Services: map[string]ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
-	live := &LiveState{Services: []string{"web"}}
+	live := &config.LiveState{Services: []string{"web"}}
 
-	if err := Services(context.Background(), dc, live, cfg); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, call := range ssh.Calls {
@@ -82,14 +84,14 @@ func TestServices_AlreadyConverged(t *testing.T) {
 func TestServices_CompleteReplacement(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers:  map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Services: map[string]ServiceDef{"new-api": {Image: "api:v2", Port: 8080}},
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"new-api": {Image: "api:v2", Port: 8080}},
 	}
-	live := &LiveState{Services: []string{"old-web", "old-worker"}}
+	live := &config.LiveState{Services: []string{"old-web", "old-worker"}}
 
-	if err := Services(context.Background(), dc, live, cfg); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sshCallMatches(ssh, "old-web", "delete") {
@@ -97,5 +99,51 @@ func TestServices_CompleteReplacement(t *testing.T) {
 	}
 	if !sshCallMatches(ssh, "old-worker", "delete") {
 		t.Error("old-worker not deleted")
+	}
+}
+
+func TestServices_DatabasePackageManagedNotOrphaned(t *testing.T) {
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Database: map[string]config.DatabaseDef{"main": {Image: "postgres:17", Volume: "pgdata"}},
+	}
+	// main-db is in live (created by database package) but not in cfg.Services.
+	// It must NOT be deleted — it's protected.
+	live := &config.LiveState{Services: []string{"web", "main-db"}}
+
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sshCallMatches(ssh, "main-db", "delete") {
+		t.Error("main-db should NOT be deleted — it's managed by the database package")
+	}
+}
+
+func TestServices_CaddyAndDatabaseBothProtected(t *testing.T) {
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Database: map[string]config.DatabaseDef{"main": {Image: "postgres:17", Volume: "pgdata"}},
+	}
+	live := &config.LiveState{Services: []string{"web", "caddy", "main-db", "stale-worker"}}
+
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sshCallMatches(ssh, "caddy", "delete") {
+		t.Error("caddy should not be deleted")
+	}
+	if sshCallMatches(ssh, "main-db", "delete") {
+		t.Error("main-db should not be deleted")
+	}
+	if !sshCallMatches(ssh, "stale-worker", "delete") {
+		t.Error("stale-worker should be deleted")
 	}
 }

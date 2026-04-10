@@ -3,6 +3,8 @@ package reconcile
 import (
 	"context"
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/config"
 )
 
 func TestDNS_FreshDeploy(t *testing.T) {
@@ -10,9 +12,9 @@ func TestDNS_FreshDeploy(t *testing.T) {
 	// provider, the call fails. We verify the function is called and the error
 	// doesn't panic — the reconcile caller handles the error.
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains: map[string][]string{"web": {"myapp.com"}},
 	}
 
@@ -26,12 +28,12 @@ func TestDNS_FreshDeploy(t *testing.T) {
 
 func TestDNS_OrphanDetected(t *testing.T) {
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains: map[string][]string{"web": {"myapp.com"}},
 	}
-	live := &LiveState{
+	live := &config.LiveState{
 		Domains: map[string][]string{
 			"web": {"myapp.com"},
 			"api": {"api.myapp.com"},
@@ -46,7 +48,7 @@ func TestDNS_OrphanDetected(t *testing.T) {
 
 func TestDNS_NilLive_NoOrphanDeletion(t *testing.T) {
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		Domains: map[string][]string{"web": {"myapp.com"}},
 	}
 
@@ -57,7 +59,7 @@ func TestDNS_NilLive_NoOrphanDeletion(t *testing.T) {
 
 func TestDNS_NoDomains(t *testing.T) {
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{}
+	cfg := &config.AppConfig{}
 
 	err := DNS(context.Background(), dc, nil, cfg)
 	if err != nil {

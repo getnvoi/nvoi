@@ -3,13 +3,15 @@ package reconcile
 import (
 	"context"
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/config"
 )
 
 func TestFirewall_Applied(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{Firewall: []string{"default"}}
+	cfg := &config.AppConfig{Firewall: []string{"default"}}
 
 	if err := Firewall(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -22,7 +24,7 @@ func TestFirewall_Applied(t *testing.T) {
 func TestFirewall_EmptySkipped(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
-	cfg := &AppConfig{}
+	cfg := &config.AppConfig{}
 
 	if err := Firewall(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -36,7 +38,7 @@ func TestFirewall_Idempotent(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{Firewall: []string{"default"}}
+	cfg := &config.AppConfig{Firewall: []string{"default"}}
 
 	_ = Firewall(context.Background(), dc, nil, cfg)
 	_ = Firewall(context.Background(), dc, nil, cfg)

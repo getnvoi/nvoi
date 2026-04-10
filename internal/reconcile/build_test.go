@@ -3,11 +3,13 @@ package reconcile
 import (
 	"context"
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/config"
 )
 
 func TestBuild_Empty(t *testing.T) {
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{}
+	cfg := &config.AppConfig{}
 
 	err := Build(context.Background(), dc, cfg)
 	if err != nil {
@@ -17,7 +19,7 @@ func TestBuild_Empty(t *testing.T) {
 
 func TestBuild_NoBuildProvider(t *testing.T) {
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		Build: map[string]string{"web": "org/repo"},
 	}
 

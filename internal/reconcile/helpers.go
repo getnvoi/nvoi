@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -13,7 +14,7 @@ import (
 
 // DescribeLive queries the cluster and provider for current state.
 // Returns nil if nothing exists (first deploy).
-func DescribeLive(ctx context.Context, dc *DeployContext) *LiveState {
+func DescribeLive(ctx context.Context, dc *config.DeployContext) *config.LiveState {
 	res, err := app.Describe(ctx, app.DescribeRequest{Cluster: dc.Cluster})
 	if err != nil {
 		return nil
@@ -30,7 +31,7 @@ func DescribeLive(ctx context.Context, dc *DeployContext) *LiveState {
 		return s
 	}
 
-	state := &LiveState{Domains: map[string][]string{}}
+	state := &config.LiveState{Domains: map[string][]string{}}
 	seen := map[string]bool{}
 	for _, s := range servers {
 		name := strip(s.Name)
@@ -69,7 +70,7 @@ func DescribeLive(ctx context.Context, dc *DeployContext) *LiveState {
 	return state
 }
 
-func drainNode(ctx context.Context, dc *DeployContext, name string) {
+func drainNode(ctx context.Context, dc *config.DeployContext, name string) {
 	names, err := dc.Cluster.Names()
 	if err != nil {
 		return
@@ -83,7 +84,7 @@ func drainNode(ctx context.Context, dc *DeployContext, name string) {
 	kube.DrainAndRemoveNode(ctx, ssh, names.Server(name))
 }
 
-func clusterWith(dc *DeployContext, creds map[string]string) app.Cluster {
+func clusterWith(dc *config.DeployContext, creds map[string]string) app.Cluster {
 	c := dc.Cluster
 	c.Credentials = creds
 	return c
@@ -97,16 +98,10 @@ func copyMap(m map[string]string) map[string]string {
 	return cp
 }
 
-// NamedServer pairs a server definition with its map key name.
-type NamedServer struct {
-	Name string
-	ServerDef
-}
-
 // SplitServers separates masters and workers, sorted.
-func SplitServers(servers map[string]ServerDef) (masters, workers []NamedServer) {
+func SplitServers(servers map[string]config.ServerDef) (masters, workers []config.NamedServer) {
 	for _, name := range utils.SortedKeys(servers) {
-		s := NamedServer{Name: name, ServerDef: servers[name]}
+		s := config.NamedServer{Name: name, ServerDef: servers[name]}
 		if s.Role == "worker" {
 			workers = append(workers, s)
 		} else {
@@ -120,7 +115,7 @@ func SplitServers(servers map[string]ServerDef) (masters, workers []NamedServer)
 // ResolveServers returns the effective server list for a workload.
 // If servers is explicit, returns it. If a single server is set, returns it.
 // If the workload mounts a named volume, it's pinned to that volume's server.
-func ResolveServers(cfg *AppConfig, servers []string, server string, mounts []string) []string {
+func ResolveServers(cfg *config.AppConfig, servers []string, server string, mounts []string) []string {
 	if len(servers) > 0 {
 		return servers
 	}
@@ -139,7 +134,7 @@ func ResolveServers(cfg *AppConfig, servers []string, server string, mounts []st
 	return nil
 }
 
-func resolveImageRef(ctx context.Context, dc *DeployContext, image, buildRef string) (string, error) {
+func resolveImageRef(ctx context.Context, dc *config.DeployContext, image, buildRef string) (string, error) {
 	if buildRef != "" {
 		ref, err := app.BuildLatest(ctx, app.BuildLatestRequest{Cluster: dc.Cluster, Name: buildRef})
 		if err != nil {

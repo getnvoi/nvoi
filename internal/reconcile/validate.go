@@ -3,11 +3,13 @@ package reconcile
 import (
 	"fmt"
 	"strings"
+
+	"github.com/getnvoi/nvoi/internal/config"
 )
 
 // ValidateConfig catches all misconfigurations before touching infra.
 // Returns the first error found — fail fast, fix one thing at a time.
-func ValidateConfig(cfg *AppConfig) error {
+func ValidateConfig(cfg *config.AppConfig) error {
 	// ── Identity ──────────────────────────────────────────────────────────
 	if cfg.App == "" {
 		return fmt.Errorf("app is required")
@@ -167,7 +169,7 @@ func ValidateConfig(cfg *AppConfig) error {
 	return nil
 }
 
-func hasNamedVolume(cfg *AppConfig, mounts []string) bool {
+func hasNamedVolume(cfg *config.AppConfig, mounts []string) bool {
 	for _, mount := range mounts {
 		source, _, ok := strings.Cut(mount, ":")
 		if !ok {
@@ -182,7 +184,7 @@ func hasNamedVolume(cfg *AppConfig, mounts []string) bool {
 	return false
 }
 
-func validateVolumeMounts(cfg *AppConfig, context string, mounts []string) error {
+func validateVolumeMounts(cfg *config.AppConfig, context string, mounts []string) error {
 	for _, mount := range mounts {
 		source, _, ok := strings.Cut(mount, ":")
 		if !ok {
@@ -197,7 +199,7 @@ func validateVolumeMounts(cfg *AppConfig, context string, mounts []string) error
 	return nil
 }
 
-func validateVolumeServer(cfg *AppConfig, workload, server string, mounts []string) error {
+func validateVolumeServer(cfg *config.AppConfig, workload, server string, mounts []string) error {
 	for _, mount := range mounts {
 		volName, _, ok := strings.Cut(mount, ":")
 		if !ok || strings.HasPrefix(volName, "/") || strings.HasPrefix(volName, ".") {

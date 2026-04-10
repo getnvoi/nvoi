@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
@@ -207,9 +208,9 @@ func convergeMock() *testutil.MockSSH {
 	}
 }
 
-func testDC(ssh *testutil.MockSSH) *DeployContext {
+func testDC(ssh *testutil.MockSSH) *config.DeployContext {
 	sshKey, _, _ := utils.GenerateEd25519Key()
-	return &DeployContext{
+	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-compute", Credentials: map[string]string{},
@@ -223,7 +224,7 @@ func testDC(ssh *testutil.MockSSH) *DeployContext {
 	}
 }
 
-func convergeDC(log *opLog, ssh *testutil.MockSSH) *DeployContext {
+func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 	mock := &trackingMock{log: log}
 	mock.Servers = []*provider.Server{{
 		ID: "1", Name: "nvoi-myapp-prod-master", Status: "running",
@@ -232,7 +233,7 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *DeployContext {
 	activeMock = mock
 
 	sshKey, _, _ := utils.GenerateEd25519Key()
-	return &DeployContext{
+	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
@@ -259,12 +260,12 @@ func testNames() *utils.Names {
 	return n
 }
 
-func validCfg() *AppConfig {
-	return &AppConfig{
+func validCfg() *config.AppConfig {
+	return &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: ProvidersDef{Compute: "test-compute"},
-		Servers:   map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Services:  map[string]ServiceDef{"web": {Image: "nginx"}},
+		Providers: config.ProvidersDef{Compute: "test-compute"},
+		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services:  map[string]config.ServiceDef{"web": {Image: "nginx"}},
 	}
 }
 

@@ -1,12 +1,12 @@
 package core
 
 import (
-	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
 
-func NewCronCmd(dc *reconcile.DeployContext) *cobra.Command {
+func NewCronCmd(dc *config.DeployContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cron",
 		Short: "Manage cron jobs",
@@ -15,7 +15,7 @@ func NewCronCmd(dc *reconcile.DeployContext) *cobra.Command {
 	return cmd
 }
 
-func newCronRunCmd(dc *reconcile.DeployContext) *cobra.Command {
+func newCronRunCmd(dc *config.DeployContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run <name>",
 		Short: "Trigger a cron job immediately",
