@@ -20,6 +20,7 @@ type MockCompute struct {
 
 func (m *MockCompute) ValidateCredentials(ctx context.Context) error { return nil }
 func (m *MockCompute) ArchForType(instanceType string) string        { return "amd64" }
+func (m *MockCompute) DiskForType(instanceType string) int           { return 20 }
 
 func (m *MockCompute) EnsureServer(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error) {
 	if m.EnsureServerFn != nil {

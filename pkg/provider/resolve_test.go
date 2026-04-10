@@ -11,6 +11,7 @@ type stubCompute struct{}
 
 func (stubCompute) ValidateCredentials(context.Context) error { return nil }
 func (stubCompute) ArchForType(string) string                 { return "amd64" }
+func (stubCompute) DiskForType(string) int                    { return 20 }
 func (stubCompute) EnsureServer(context.Context, CreateServerRequest) (*Server, error) {
 	return nil, nil
 }

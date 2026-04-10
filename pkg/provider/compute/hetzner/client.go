@@ -40,4 +40,22 @@ func (c *Client) ArchForType(t string) string {
 	return "amd64"
 }
 
+func (c *Client) DiskForType(t string) int {
+	var resp struct {
+		ServerTypes []struct {
+			Name string `json:"name"`
+			Disk int    `json:"disk"`
+		} `json:"server_types"`
+	}
+	if err := c.api.Do(context.Background(), "GET", fmt.Sprintf("/server_types?name=%s", t), nil, &resp); err != nil {
+		return 0
+	}
+	for _, st := range resp.ServerTypes {
+		if strings.EqualFold(st.Name, t) {
+			return st.Disk
+		}
+	}
+	return 0
+}
+
 var _ provider.ComputeProvider = (*Client)(nil)

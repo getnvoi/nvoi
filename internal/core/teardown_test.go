@@ -89,6 +89,7 @@ type trackingCompute struct {
 
 func (c *trackingCompute) ValidateCredentials(context.Context) error { return nil }
 func (c *trackingCompute) ArchForType(string) string                 { return "amd64" }
+func (c *trackingCompute) DiskForType(string) int                    { return 20 }
 func (c *trackingCompute) EnsureServer(context.Context, provider.CreateServerRequest) (*provider.Server, error) {
 	return nil, nil
 }
