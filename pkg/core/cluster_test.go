@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -12,7 +11,7 @@ import (
 )
 
 func init() {
-	provider.RegisterCompute("cache-test", provider.CredentialSchema{Name: "cache-test"}, func(creds map[string]string) provider.ComputeProvider {
+	provider.RegisterCompute("cluster-test", provider.CredentialSchema{Name: "cluster-test"}, func(creds map[string]string) provider.ComputeProvider {
 		return &testutil.MockCompute{
 			Servers: []*provider.Server{{
 				ID: "1", Name: "nvoi-myapp-prod-master",
@@ -23,10 +22,10 @@ func init() {
 	})
 }
 
-func cacheCluster(sshFn func(ctx context.Context, addr string) (utils.SSHClient, error)) Cluster {
+func clusterWithSSHFunc(sshFn func(ctx context.Context, addr string) (utils.SSHClient, error)) Cluster {
 	return Cluster{
 		AppName: "myapp", Env: "prod",
-		Provider: "cache-test",
+		Provider: "cluster-test",
 		Output:   &testutil.MockOutput{},
 		SSHFunc:  sshFn,
 	}
@@ -43,118 +42,56 @@ func TestBorrowedSSH_CloseIsNoop(t *testing.T) {
 	}
 }
 
-func TestSSHCache_ReturnsSameConnection(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "true", Result: testutil.MockResult{Output: []byte("")}},
-		},
-	}
-
-	var connectCount int32
-	c := cacheCluster(func(ctx context.Context, addr string) (utils.SSHClient, error) {
-		atomic.AddInt32(&connectCount, 1)
-		return mock, nil
-	})
-	c.EnableSSHCache()
-	defer c.Close()
-
-	ctx := context.Background()
-
-	// First call — should connect
-	ssh1, _, err := c.SSH(ctx)
-	if err != nil {
-		t.Fatalf("SSH() #1: %v", err)
-	}
-
-	// Second call — should reuse cached connection
-	ssh2, _, err := c.SSH(ctx)
-	if err != nil {
-		t.Fatalf("SSH() #2: %v", err)
-	}
-
-	if atomic.LoadInt32(&connectCount) != 1 {
-		t.Errorf("expected 1 connection, got %d", connectCount)
-	}
-
-	// Both should be borrowedSSH wrappers
-	if _, ok := ssh1.(borrowedSSH); !ok {
-		t.Error("ssh1 should be borrowedSSH")
-	}
-	if _, ok := ssh2.(borrowedSSH); !ok {
-		t.Error("ssh2 should be borrowedSSH")
-	}
-}
-
-func TestSSHCache_ReconnectsOnDeadConnection(t *testing.T) {
-	callCount := 0
-	deadMock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "true", Result: testutil.MockResult{Err: fmt.Errorf("broken pipe")}},
-		},
-	}
-	aliveMock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "true", Result: testutil.MockResult{Output: []byte("")}},
-		},
-	}
-
-	c := cacheCluster(func(ctx context.Context, addr string) (utils.SSHClient, error) {
-		callCount++
-		if callCount == 1 {
-			return deadMock, nil
-		}
-		return aliveMock, nil
-	})
-	c.EnableSSHCache()
-	defer c.Close()
-
-	ctx := context.Background()
-
-	// First call — caches the dead connection
-	_, _, err := c.SSH(ctx)
-	if err != nil {
-		t.Fatalf("SSH() #1: %v", err)
-	}
-
-	// Second call — liveness probe fails, reconnects
-	ssh2, _, err := c.SSH(ctx)
-	if err != nil {
-		t.Fatalf("SSH() #2: %v", err)
-	}
-
-	if callCount != 2 {
-		t.Errorf("expected 2 connections (reconnect after dead), got %d", callCount)
-	}
-	// ssh2 should wrap aliveMock
-	_ = ssh2
-}
-
-func TestSSHCache_DoubleCloseIsSafe(t *testing.T) {
+func TestSSH_MasterSSHSet_ReturnsBorrowed(t *testing.T) {
 	mock := &testutil.MockSSH{}
-	c := cacheCluster(func(ctx context.Context, addr string) (utils.SSHClient, error) {
-		return mock, nil
-	})
-	c.EnableSSHCache()
+	c := clusterWithSSHFunc(nil)
+	c.MasterSSH = mock
 
-	// Close without connecting — should be safe
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close() without connection: %v", err)
+	ctx := context.Background()
+	ssh, names, err := c.SSH(ctx)
+	if err != nil {
+		t.Fatalf("SSH(): %v", err)
 	}
-	// Double close
-	if err := c.Close(); err != nil {
-		t.Fatalf("Double Close(): %v", err)
+	if names == nil {
+		t.Fatal("expected names")
+	}
+	if _, ok := ssh.(borrowedSSH); !ok {
+		t.Error("with MasterSSH set, SSH() should return borrowedSSH")
+	}
+	// Close should be a no-op
+	ssh.Close()
+	if mock.Closed {
+		t.Error("borrowedSSH.Close() should not close the shared connection")
 	}
 }
 
-func TestSSH_NoCacheConnectsFresh(t *testing.T) {
+func TestSSH_MasterSSHSet_NeverConnects(t *testing.T) {
+	mock := &testutil.MockSSH{}
+	var connectCount int32
+	c := clusterWithSSHFunc(func(ctx context.Context, addr string) (utils.SSHClient, error) {
+		atomic.AddInt32(&connectCount, 1)
+		return &testutil.MockSSH{}, nil
+	})
+	c.MasterSSH = mock
+
+	ctx := context.Background()
+	_, _, _ = c.SSH(ctx)
+	_, _, _ = c.SSH(ctx)
+	_, _, _ = c.SSH(ctx)
+
+	if atomic.LoadInt32(&connectCount) != 0 {
+		t.Errorf("with MasterSSH set, connect should never be called, got %d", connectCount)
+	}
+}
+
+func TestSSH_NoMasterSSH_ConnectsFresh(t *testing.T) {
 	var connectCount int32
 	mock := &testutil.MockSSH{}
 
-	c := cacheCluster(func(ctx context.Context, addr string) (utils.SSHClient, error) {
+	c := clusterWithSSHFunc(func(ctx context.Context, addr string) (utils.SSHClient, error) {
 		atomic.AddInt32(&connectCount, 1)
 		return mock, nil
 	})
-	// NOT calling EnableSSHCache — each call should connect fresh
 
 	ctx := context.Background()
 	ssh1, _, err := c.SSH(ctx)
@@ -167,21 +104,34 @@ func TestSSH_NoCacheConnectsFresh(t *testing.T) {
 	}
 
 	if atomic.LoadInt32(&connectCount) != 2 {
-		t.Errorf("expected 2 connections without cache, got %d", connectCount)
+		t.Errorf("without MasterSSH, each call should connect fresh, got %d", connectCount)
 	}
 
-	// Without caching, connections should NOT be borrowedSSH
+	// Without MasterSSH, connections should NOT be borrowedSSH
 	if _, ok := ssh1.(borrowedSSH); ok {
-		t.Error("ssh1 should not be borrowedSSH without cache")
+		t.Error("ssh1 should not be borrowedSSH")
 	}
 	if _, ok := ssh2.(borrowedSSH); ok {
-		t.Error("ssh2 should not be borrowedSSH without cache")
+		t.Error("ssh2 should not be borrowedSSH")
 	}
 }
 
-func TestCloseWithoutCache(t *testing.T) {
-	c := Cluster{}
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close() without cache: %v", err)
+func TestConnect_UsesSSHFunc(t *testing.T) {
+	var dialedAddr string
+	mock := &testutil.MockSSH{}
+	c := clusterWithSSHFunc(func(ctx context.Context, addr string) (utils.SSHClient, error) {
+		dialedAddr = addr
+		return mock, nil
+	})
+
+	ctx := context.Background()
+	ssh, err := c.Connect(ctx, "5.6.7.8:22")
+	if err != nil {
+		t.Fatalf("Connect(): %v", err)
+	}
+	defer ssh.Close()
+
+	if dialedAddr != "5.6.7.8:22" {
+		t.Errorf("expected dial to 5.6.7.8:22, got %q", dialedAddr)
 	}
 }

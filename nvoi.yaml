@@ -31,6 +31,11 @@ secrets:
 storage:
   releases: {}
 
+build:
+  web: ./cmd/web
+  api: ./cmd/api
+  distribution: ./cmd/distribution
+
 services:
   db:
     image: postgres:17
@@ -48,11 +53,6 @@ services:
     build: distribution
     port: 3001
     storage: [releases]
-
-build:
-  web: ./cmd/web
-  api: ./cmd/api
-  distribution: ./cmd/distribution
 
 domains:
   web: [nvoi.to, www.nvoi.to]

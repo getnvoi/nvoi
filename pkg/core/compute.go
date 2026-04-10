@@ -88,7 +88,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	sshCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	if err := utils.Poll(sshCtx, 2*time.Second, 5*time.Minute, func() (bool, error) {
-		conn, err := req.connect(ctx, srv.IPv4+":22")
+		conn, err := req.Connect(ctx, srv.IPv4+":22")
 		if err != nil {
 			return false, nil
 		}
@@ -116,7 +116,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		}
 		out.Progress(fmt.Sprintf("joining cluster via master %s", master.IPv4))
 
-		masterSSH, err = req.connect(ctx, master.IPv4+":22")
+		masterSSH, err = req.Connect(ctx, master.IPv4+":22")
 		if err != nil {
 			return nil, fmt.Errorf("ssh master for worker join: %w", err)
 		}

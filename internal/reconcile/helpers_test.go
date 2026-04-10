@@ -204,8 +204,9 @@ func testDC(ssh *testutil.MockSSH) *DeployContext {
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-compute", Credentials: map[string]string{},
-			SSHKey: sshKey,
-			Output: &testutil.MockOutput{},
+			SSHKey:    sshKey,
+			Output:    &testutil.MockOutput{},
+			MasterSSH: ssh,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
@@ -226,8 +227,9 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *DeployContext {
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey: sshKey,
-			Output: &testutil.MockOutput{},
+			SSHKey:    sshKey,
+			Output:    &testutil.MockOutput{},
+			MasterSSH: ssh,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},

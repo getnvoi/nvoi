@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spf13/viper"
 )
@@ -17,6 +18,21 @@ func Deploy(ctx context.Context, dc *DeployContext, cfg *AppConfig, v *viper.Vip
 	if err := Servers(ctx, dc, live, cfg); err != nil {
 		return err
 	}
+
+	// Master is now guaranteed to exist. Establish a single SSH connection
+	// for all remaining operations. Every pkg/core/ function that calls
+	// Cluster.SSH() will reuse this connection via borrowedSSH.
+	master, _, _, err := dc.Cluster.Master(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve master after server setup: %w", err)
+	}
+	ssh, err := dc.Cluster.Connect(ctx, master.IPv4+":22")
+	if err != nil {
+		return fmt.Errorf("establish master SSH: %w", err)
+	}
+	defer ssh.Close()
+	dc.Cluster.MasterSSH = ssh
+
 	if err := Firewall(ctx, dc, live, cfg); err != nil {
 		return err
 	}

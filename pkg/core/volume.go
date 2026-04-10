@@ -61,7 +61,7 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 		return nil, fmt.Errorf("server %s not found", serverName)
 	}
 
-	ssh, err := req.connect(ctx, serverIP+":22")
+	ssh, err := req.Connect(ctx, serverIP+":22")
 	if err != nil {
 		return nil, fmt.Errorf("ssh for volume mount: %w", err)
 	}
@@ -100,7 +100,7 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 	servers, err := prov.ListServers(ctx, names.Labels())
 	if err == nil {
 		for _, s := range servers {
-			ssh, err := req.connect(ctx, s.IPv4+":22")
+			ssh, err := req.Connect(ctx, s.IPv4+":22")
 			if err != nil {
 				out.Warning(fmt.Sprintf("ssh %s for unmount: %s", s.Name, err))
 				continue

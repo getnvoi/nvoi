@@ -27,7 +27,8 @@ func testCluster(ssh *testutil.MockSSH) Cluster {
 	return Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: "test", Credentials: map[string]string{},
-		Output: &testutil.MockOutput{},
+		Output:    &testutil.MockOutput{},
+		MasterSSH: ssh,
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			return ssh, nil
 		},
