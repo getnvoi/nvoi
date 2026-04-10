@@ -13,7 +13,7 @@ import (
 // WaitForCertificate polls until the ACME certificate file exists on disk.
 // certPath is the full path to the Caddy cert JSON file (from Names.CaddyCertPath).
 func WaitForCertificate(ctx context.Context, ssh utils.SSHClient, certPath string) error {
-	cmd := fmt.Sprintf("test -f %s && echo ready || echo waiting", certPath)
+	cmd := fmt.Sprintf("sudo test -f %s && echo ready || echo waiting", certPath)
 	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
