@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newProviderCmd() *cobra.Command {
+func NewProviderCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "provider",
 		Short: "Manage infrastructure providers (workspace-scoped)",
@@ -85,7 +85,7 @@ Examples:
   nvoi provider set compute hetzner HETZNER_TOKEN=xxx  # explicit override`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}
@@ -134,7 +134,7 @@ func newProviderListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List providers in the active workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}
@@ -171,7 +171,7 @@ func newProviderDeleteCmd() *cobra.Command {
 		Short: "Delete a provider from the workspace",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}

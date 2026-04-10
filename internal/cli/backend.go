@@ -19,11 +19,12 @@ var providerKinds = []string{"compute", "dns", "storage", "build"}
 
 func esc(s string) string { return url.PathEscape(s) }
 
-type pathFunc = func(string) string
+// PathFunc builds a repo-scoped API path from a suffix.
+type PathFunc = func(string) string
 
 // ── Deploy / Destroy — send YAML to API, stream JSONL ──────────────────────
 
-func newCloudDeployCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
+func NewDeployCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy from config YAML via API",
@@ -45,7 +46,7 @@ func newCloudDeployCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
 	return cmd
 }
 
-func newCloudDestroyCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
+func NewDestroyCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "destroy",
 		Short: "Destroy all resources via API",
@@ -100,7 +101,7 @@ func streamRun(client *APIClient, path string, body any) error {
 
 // ── Operational commands — direct API calls ─────────────────────────────────
 
-func newCloudDescribeCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
+func NewDescribeCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe",
 		Short: "Live cluster state",
@@ -121,7 +122,7 @@ func newCloudDescribeCmd(client **APIClient, repoPath *pathFunc) *cobra.Command 
 	}
 }
 
-func newCloudResourcesCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
+func NewResourcesCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "resources",
 		Short: "List all provider resources",
@@ -142,7 +143,7 @@ func newCloudResourcesCmd(client **APIClient, repoPath *pathFunc) *cobra.Command
 	}
 }
 
-func newCloudLogsCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
+func NewLogsCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <service>",
 		Short: "Stream service logs",
@@ -181,7 +182,7 @@ func newCloudLogsCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
 	return cmd
 }
 
-func newCloudExecCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
+func NewExecCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "exec <service> -- <command>",
 		Short: "Run command in service pod",
@@ -200,7 +201,7 @@ func newCloudExecCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
 	}
 }
 
-func newCloudSSHCmd(client **APIClient, repoPath *pathFunc) *cobra.Command {
+func NewSSHCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "ssh -- <command>",
 		Short: "Run command on master node",

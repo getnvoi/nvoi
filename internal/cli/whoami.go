@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newWhoamiCmd() *cobra.Command {
+func NewWhoamiCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "whoami",
 		Short: "Show current user and context",

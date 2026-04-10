@@ -23,7 +23,7 @@ type loginResponse struct {
 	IsNew bool `json:"is_new"`
 }
 
-func newLoginCmd() *cobra.Command {
+func NewLoginCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate with nvoi",

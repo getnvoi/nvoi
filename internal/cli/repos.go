@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newReposCmd() *cobra.Command {
+func NewReposCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "repos",
 		Short: "Manage repos",
@@ -27,7 +27,7 @@ func requireWorkspace(cfg *AuthConfig) (string, error) {
 	return cfg.WorkspaceID, nil
 }
 
-func requireRepo(cfg *AuthConfig) (string, string, error) {
+func RequireRepo(cfg *AuthConfig) (string, string, error) {
 	wsID, err := requireWorkspace(cfg)
 	if err != nil {
 		return "", "", err
@@ -43,7 +43,7 @@ func newReposListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List repos in active workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}
@@ -78,7 +78,7 @@ func newReposCreateCmd() *cobra.Command {
 		Short: "Create a repo in active workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}
@@ -139,7 +139,7 @@ Examples:
   nvoi repos use myapp --compute hetzner --dns cloudflare --storage cloudflare --build daytona`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}
@@ -206,7 +206,7 @@ func newReposDeleteCmd() *cobra.Command {
 		Short: "Delete a repo",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}

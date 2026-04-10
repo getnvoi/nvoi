@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newWorkspacesCmd() *cobra.Command {
+func NewWorkspacesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "workspaces",
 		Aliases: []string{"ws"},
@@ -26,7 +26,7 @@ func newWorkspacesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List workspaces",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}
@@ -57,7 +57,7 @@ func newWorkspacesCreateCmd() *cobra.Command {
 		Short: "Create a workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, _, err := authedClient()
+			client, _, err := AuthedClient()
 			if err != nil {
 				return err
 			}
@@ -82,7 +82,7 @@ func newWorkspacesUseCmd() *cobra.Command {
 		Short: "Set active workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, cfg, err := authedClient()
+			client, cfg, err := AuthedClient()
 			if err != nil {
 				return err
 			}
@@ -129,7 +129,7 @@ func newWorkspacesDeleteCmd() *cobra.Command {
 		Short: "Delete a workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, _, err := authedClient()
+			client, _, err := AuthedClient()
 			if err != nil {
 				return err
 			}

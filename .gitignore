@@ -13,4 +13,4 @@ node_modules/
 cmd/web/static/css/output.css
 cmd/web/static/css/output-*.css
 cmd/web/static/manifest.json
-cli
+/cli

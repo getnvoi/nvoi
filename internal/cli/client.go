@@ -64,7 +64,8 @@ func NewUnauthClient() *APIClient {
 }
 
 // authedClient loads auth config and returns an authenticated API client.
-func authedClient() (*APIClient, *AuthConfig, error) {
+// AuthedClient loads auth config and returns an authenticated API client.
+func AuthedClient() (*APIClient, *AuthConfig, error) {
 	cfg, err := LoadAuthConfig()
 	if err != nil {
 		return nil, nil, err
