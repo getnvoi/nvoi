@@ -2,7 +2,7 @@
 
 ## What nvoi is
 
-A CLI that deploys containers to cloud servers from a declarative YAML config. `nvoi deploy` reconciles live infrastructure to match the config. `nvoi destroy` tears it all down. `nvoi describe` fetches everything live from the cluster.
+A CLI that deploys containers to cloud servers from a declarative YAML config. `nvoi deploy` reconciles live infrastructure to match the config. `nvoi teardown` nukes it all. `nvoi describe` fetches everything live from the cluster.
 
 ## Philosophy
 
@@ -10,6 +10,7 @@ A CLI that deploys containers to cloud servers from a declarative YAML config. `
 - **No state files.** No manifest, no database, no local cache. Infrastructure is the source of truth.
 - **Everything is idempotent.** `nvoi deploy` reconciles: adds desired resources, removes orphans. Run twice, same result.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
+- **Reconcile vs teardown.** Two operations, overlapping scope, opposite intent. Reconcile converges on a diff: queries live state, adds what's missing, removes what's orphaned — manages everything (provider infra and k8s resources). Teardown is a hard nuke: no diff, no live state query, wipes all external provider resources unconditionally. K8s resources die with the servers. Reconcile is the day-to-day operator. Teardown is the kill switch. Volumes and storage buckets are preserved by default — `--delete-volumes` and `--delete-storage` opt in to destroying them. Servers, firewall, network, and DNS records are always destroyed.
 - **Declarative config, imperative reconciliation.** `nvoi.yaml` declares desired state. The reconciler walks each resource type in order: servers, firewall, volumes, build, secrets, storage, services, crons, DNS, ingress.
 - **`describe` fetches everything live from the cluster.** Nodes, workloads, pods, services, ingress, secrets, storage — all via kubectl over SSH.
 - **Provider interfaces scale.** Hetzner, Cloudflare, AWS, Scaleway. Interface-first. Add a provider = implement the interface.
@@ -47,8 +48,8 @@ Five GitHub Actions workflows (`.github/workflows/`):
 ## Local development
 
 ```bash
-bin/core deploy                                  # deploy from nvoi.yaml
-bin/core destroy                                 # destroy all resources
+bin/core deploy                                  # reconcile from nvoi.yaml
+bin/core teardown                                # nuke all provider resources
 bin/core describe                                # live cluster state
 bin/cloud login                                  # cloud CLI (go run ./cmd/cli)
 go test ./...                                    # run tests
@@ -76,7 +77,6 @@ cd examples && ../bin/core deploy --config hetzner.yaml
 | `bin/dev` | Website development loop |
 | `bin/nvoi` | Cached `cmd/core` binary wrapper |
 | `bin/deploy` | Platform self-deploy (granular commands) |
-| `bin/destroy` | Platform self-destroy (granular commands) |
 
 ## Config format
 
@@ -163,8 +163,9 @@ domains:
 ## Commands
 
 ```bash
-nvoi deploy                  # reconcile infrastructure to match config
-nvoi destroy                 # tear down all resources in config
+nvoi deploy                  # reconcile: converge live state to match config
+nvoi teardown                # nuke: wipe all external provider resources
+nvoi teardown --delete-volumes --delete-storage  # also nuke volumes and buckets
 nvoi describe                # live cluster state
 nvoi resources               # list all provider resources
 nvoi logs <service>          # stream service logs
@@ -238,15 +239,14 @@ internal/                  Private
     ingress.go             Ingress reconciliation
   core/                    Direct CLI commands + env resolution
     deploy.go              NewDeployCmd — load YAML, call reconcile.Deploy()
-    destroy.go             NewDestroyCmd — load YAML, cascade destroy
+    teardown.go            NewTeardownCmd — load YAML, nuke external provider resources
     describe.go            NewDescribeCmd, NewResourcesCmd
     logs.go                NewLogsCmd
     exec.go                NewExecCmd
     ssh.go                 NewSSHCmd
     resolve.go             BuildContext() — viper + env vars → DeployContext
   cli/                     Cloud CLI — HTTP relay to API
-    backend.go             deploy/destroy (send YAML, stream JSONL), describe, resources, logs, exec, ssh
-    root.go                Root cobra command + standalone commands
+    backend.go             deploy/teardown (send YAML, stream JSONL), describe, resources, logs, exec, ssh
     client.go              APIClient (doRaw, doRawWithBody, parseAPIError)
     auth.go                Auth config (~/.config/nvoi/auth.json)
     login.go               GitHub token → JWT flow
@@ -368,7 +368,7 @@ See [`internal/render/CLAUDE.md`](internal/render/CLAUDE.md) for renderer detail
 1. `app` + `env` in `nvoi.yaml` are required. They're the namespace for everything.
 2. No state files. Infrastructure is the truth. `describe` fetches live from the cluster.
 3. `deploy` is idempotent. Run twice, same result. Adds desired state, removes orphans.
-4. `destroy` is the reverse: tears down everything in the config, reverse order, tolerates missing resources.
+4. `teardown` nukes external provider resources. Volumes and storage are preserved by default — data survives teardown unless explicitly opted in with `--delete-volumes` / `--delete-storage`.
 5. Provider interfaces scale. Add a provider = implement the interface. Same registration pattern for all four kinds.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 7. SSH is the only transport to remote servers. SSH keys are injected strictly via cloud-init UserData — never via provider SSH key APIs. `infra.RenderCloudInit` renders the public key into `ssh_authorized_keys`. This is the only key injection path.
