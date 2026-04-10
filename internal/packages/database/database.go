@@ -106,7 +106,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 		return nil, err
 	}
 
-	creds, err := resolveCredentials(ctx, dc, name, engine)
+	creds, err := resolveCredentials(name, engine)
 	if err != nil {
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
