@@ -54,6 +54,13 @@ services:
     port: 3001
     storage: [releases]
 
+crons:
+  db-backup:
+    image: postgres:17
+    schedule: "0 */6 * * *"
+    command: PGPASSWORD=$POSTGRES_PASSWORD pg_dump -h db -U $POSTGRES_USER -d $POSTGRES_DB --no-owner --no-acl | gzip > /tmp/backup-$(date +%Y%m%d-%H%M%S).sql.gz
+    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB]
+
 domains:
   web: [nvoi.to, www.nvoi.to]
   api: [api.nvoi.to]
