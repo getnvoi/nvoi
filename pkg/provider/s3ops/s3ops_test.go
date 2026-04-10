@@ -1,4 +1,4 @@
-package cloudflare
+package s3ops
 
 import (
 	"context"
@@ -34,8 +34,8 @@ func TestS3EmptyBucket_AlreadyEmpty(t *testing.T) {
 	}))
 	defer close()
 
-	if err := s3EmptyBucket(context.Background(), creds, "my-bucket"); err != nil {
-		t.Fatalf("s3EmptyBucket: %v", err)
+	if err := EmptyBucket(context.Background(), creds, "my-bucket"); err != nil {
+		t.Fatalf("EmptyBucket: %v", err)
 	}
 }
 
@@ -74,8 +74,8 @@ func TestS3EmptyBucket_DeletesObjects(t *testing.T) {
 	}))
 	defer close()
 
-	if err := s3EmptyBucket(context.Background(), creds, "my-bucket"); err != nil {
-		t.Fatalf("s3EmptyBucket: %v", err)
+	if err := EmptyBucket(context.Background(), creds, "my-bucket"); err != nil {
+		t.Fatalf("EmptyBucket: %v", err)
 	}
 }
 
@@ -85,8 +85,8 @@ func TestS3EmptyBucket_404_Succeeds(t *testing.T) {
 	}))
 	defer close()
 
-	if err := s3EmptyBucket(context.Background(), creds, "gone-bucket"); err != nil {
-		t.Fatalf("s3EmptyBucket should succeed on 404 (bucket gone), got: %v", err)
+	if err := EmptyBucket(context.Background(), creds, "gone-bucket"); err != nil {
+		t.Fatalf("EmptyBucket should succeed on 404 (bucket gone), got: %v", err)
 	}
 }
 
@@ -105,9 +105,9 @@ func TestS3SetCORS(t *testing.T) {
 	}))
 	defer close()
 
-	err := s3SetCORS(context.Background(), creds, "my-bucket", []string{"https://example.com"}, []string{"GET", "PUT"})
+	err := SetCORS(context.Background(), creds, "my-bucket", []string{"https://example.com"}, []string{"GET", "PUT"})
 	if err != nil {
-		t.Fatalf("s3SetCORS: %v", err)
+		t.Fatalf("SetCORS: %v", err)
 	}
 	if !strings.Contains(receivedBody, "https://example.com") {
 		t.Errorf("body should contain origin, got: %s", receivedBody)
@@ -127,9 +127,9 @@ func TestS3SetCORS_DefaultMethods(t *testing.T) {
 	defer close()
 
 	// nil methods should default to GET, PUT, POST, DELETE
-	err := s3SetCORS(context.Background(), creds, "my-bucket", []string{"*"}, nil)
+	err := SetCORS(context.Background(), creds, "my-bucket", []string{"*"}, nil)
 	if err != nil {
-		t.Fatalf("s3SetCORS: %v", err)
+		t.Fatalf("SetCORS: %v", err)
 	}
 	for _, m := range []string{"GET", "PUT", "POST", "DELETE"} {
 		if !strings.Contains(receivedBody, "<AllowedMethod>"+m+"</AllowedMethod>") {
@@ -145,7 +145,7 @@ func TestS3SetCORS_Error(t *testing.T) {
 	}))
 	defer close()
 
-	err := s3SetCORS(context.Background(), creds, "my-bucket", []string{"*"}, nil)
+	err := SetCORS(context.Background(), creds, "my-bucket", []string{"*"}, nil)
 	if err == nil {
 		t.Fatal("expected error on 403")
 	}
@@ -166,8 +166,8 @@ func TestS3ClearCORS(t *testing.T) {
 	}))
 	defer close()
 
-	if err := s3ClearCORS(context.Background(), creds, "my-bucket"); err != nil {
-		t.Fatalf("s3ClearCORS: %v", err)
+	if err := ClearCORS(context.Background(), creds, "my-bucket"); err != nil {
+		t.Fatalf("ClearCORS: %v", err)
 	}
 }
 
@@ -177,8 +177,8 @@ func TestS3ClearCORS_404_Succeeds(t *testing.T) {
 	}))
 	defer close()
 
-	if err := s3ClearCORS(context.Background(), creds, "my-bucket"); err != nil {
-		t.Fatalf("s3ClearCORS should succeed on 404 (no cors), got: %v", err)
+	if err := ClearCORS(context.Background(), creds, "my-bucket"); err != nil {
+		t.Fatalf("ClearCORS should succeed on 404 (no cors), got: %v", err)
 	}
 }
 
@@ -197,9 +197,9 @@ func TestS3SetLifecycle(t *testing.T) {
 	}))
 	defer close()
 
-	err := s3SetLifecycle(context.Background(), creds, "my-bucket", 30)
+	err := SetLifecycle(context.Background(), creds, "my-bucket", 30)
 	if err != nil {
-		t.Fatalf("s3SetLifecycle: %v", err)
+		t.Fatalf("SetLifecycle: %v", err)
 	}
 	if !strings.Contains(receivedBody, "<Days>30</Days>") {
 		t.Errorf("body should contain expiry days, got: %s", receivedBody)
@@ -216,7 +216,7 @@ func TestS3SetLifecycle_Error(t *testing.T) {
 	}))
 	defer close()
 
-	err := s3SetLifecycle(context.Background(), creds, "my-bucket", 7)
+	err := SetLifecycle(context.Background(), creds, "my-bucket", 7)
 	if err == nil {
 		t.Fatal("expected error on 500")
 	}

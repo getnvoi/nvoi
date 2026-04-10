@@ -12,6 +12,7 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/provider/cfbase"
+	"github.com/getnvoi/nvoi/pkg/provider/s3ops"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -64,7 +65,7 @@ func (c *Client) EmptyBucket(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	return s3EmptyBucket(ctx, cr, name)
+	return s3ops.EmptyBucket(ctx, cr, name)
 }
 
 func (c *Client) DeleteBucket(ctx context.Context, name string) error {
@@ -83,7 +84,7 @@ func (c *Client) SetCORS(ctx context.Context, name string, origins, methods []st
 	if err != nil {
 		return err
 	}
-	return s3SetCORS(ctx, cr, name, origins, methods)
+	return s3ops.SetCORS(ctx, cr, name, origins, methods)
 }
 
 func (c *Client) ClearCORS(ctx context.Context, name string) error {
@@ -91,7 +92,7 @@ func (c *Client) ClearCORS(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	return s3ClearCORS(ctx, cr, name)
+	return s3ops.ClearCORS(ctx, cr, name)
 }
 
 func (c *Client) SetLifecycle(ctx context.Context, name string, expireDays int) error {
@@ -99,7 +100,7 @@ func (c *Client) SetLifecycle(ctx context.Context, name string, expireDays int) 
 	if err != nil {
 		return err
 	}
-	return s3SetLifecycle(ctx, cr, name, expireDays)
+	return s3ops.SetLifecycle(ctx, cr, name, expireDays)
 }
 
 // Credentials returns S3-compatible access details derived from the CF API token.

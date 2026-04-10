@@ -1,6 +1,6 @@
 // Shared S3 API operations: CORS, Lifecycle, Empty.
 // Delegates signing to core/s3.Sign.
-package cloudflare
+package s3ops
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ var s3Client = &http.Client{Timeout: 30 * time.Second}
 
 // s3EmptyBucket lists and deletes all objects in a bucket via S3 API.
 // Loops until the bucket is empty.
-func s3EmptyBucket(ctx context.Context, creds provider.BucketCredentials, bucket string) error {
+func EmptyBucket(ctx context.Context, creds provider.BucketCredentials, bucket string) error {
 	for {
 		// List objects
 		url := fmt.Sprintf("%s/%s?list-type=2&max-keys=1000", creds.Endpoint, bucket)
@@ -98,7 +98,7 @@ func s3EmptyBucket(ctx context.Context, creds provider.BucketCredentials, bucket
 }
 
 // s3SetCORS sets CORS configuration on a bucket via the S3 PutBucketCors API.
-func s3SetCORS(ctx context.Context, creds provider.BucketCredentials, bucket string, origins, methods []string) error {
+func SetCORS(ctx context.Context, creds provider.BucketCredentials, bucket string, origins, methods []string) error {
 	var sb strings.Builder
 	sb.WriteString("<CORSConfiguration><CORSRule>")
 	for _, o := range origins {
@@ -142,7 +142,7 @@ func s3SetCORS(ctx context.Context, creds provider.BucketCredentials, bucket str
 
 // s3ClearCORS removes CORS configuration from a bucket.
 // Idempotent — succeeds even if no CORS config exists.
-func s3ClearCORS(ctx context.Context, creds provider.BucketCredentials, bucket string) error {
+func ClearCORS(ctx context.Context, creds provider.BucketCredentials, bucket string) error {
 	url := fmt.Sprintf("%s/%s?cors", creds.Endpoint, bucket)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
@@ -169,7 +169,7 @@ func s3ClearCORS(ctx context.Context, creds provider.BucketCredentials, bucket s
 }
 
 // s3SetLifecycle sets an expiration lifecycle rule on a bucket.
-func s3SetLifecycle(ctx context.Context, creds provider.BucketCredentials, bucket string, expireDays int) error {
+func SetLifecycle(ctx context.Context, creds provider.BucketCredentials, bucket string, expireDays int) error {
 	body := []byte(fmt.Sprintf(`<LifecycleConfiguration>
   <Rule>
     <ID>nvoi-expire</ID>

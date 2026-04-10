@@ -24,6 +24,7 @@ import (
 	// Storage
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
+	_ "github.com/getnvoi/nvoi/pkg/provider/storage/scaleway"
 	// Build
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/github"
