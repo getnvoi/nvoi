@@ -56,10 +56,6 @@ func (c *Client) ArchForType(instanceType string) string {
 	return "amd64"
 }
 
-func (c *Client) DiskForType(instanceType string) int {
-	return 0 // AWS disk size depends on EBS config, not instance type
-}
-
 // nameTag builds a tag:Name filter for DescribeX calls.
 func nameTag(name string) []ec2types.Filter {
 	return []ec2types.Filter{

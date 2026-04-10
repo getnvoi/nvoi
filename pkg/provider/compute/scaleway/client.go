@@ -65,10 +65,6 @@ func (c *Client) ArchForType(instanceType string) string {
 	return "amd64"
 }
 
-func (c *Client) DiskForType(instanceType string) int {
-	return 0 // Scaleway disk depends on volume config
-}
-
 // region derives the region from the zone (e.g. "fr-par-1" → "fr-par").
 func (c *Client) region() string {
 	parts := strings.Split(c.zone, "-")

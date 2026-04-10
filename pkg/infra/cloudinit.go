@@ -2,7 +2,9 @@
 package infra
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gopkg.in/yaml.v3"
@@ -26,11 +28,11 @@ type cloudUser struct {
 }
 
 // SwapSize calculates proportional swap: ~5% of disk, clamped 512MB–2GB.
-func SwapSize(rootVolumeSizeGB int) int {
-	if rootVolumeSizeGB <= 0 {
-		rootVolumeSizeGB = 20
+func SwapSize(diskGB int) int {
+	if diskGB <= 0 {
+		diskGB = 20
 	}
-	mb := rootVolumeSizeGB * 1024 * 5 / 100 // 5% of disk in MB
+	mb := diskGB * 1024 * 5 / 100
 	if mb < 512 {
 		mb = 512
 	}
@@ -40,12 +42,44 @@ func SwapSize(rootVolumeSizeGB int) int {
 	return mb
 }
 
+// EnsureSwap sets up swap via SSH. Reads actual disk size from the server.
+// Idempotent — skips if swap is already active.
+func EnsureSwap(ctx context.Context, ssh utils.SSHClient) error {
+	// Already has swap?
+	out, err := ssh.Run(ctx, "swapon --show --noheadings")
+	if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		return nil
+	}
+
+	// Read actual disk size
+	out, err = ssh.Run(ctx, "df --output=size / | tail -1")
+	if err != nil {
+		return nil
+	}
+	var diskKB int
+	fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &diskKB)
+	diskGB := diskKB / 1024 / 1024
+	swapMB := SwapSize(diskGB)
+
+	cmds := []string{
+		fmt.Sprintf("fallocate -l %dM /swapfile", swapMB),
+		"chmod 600 /swapfile",
+		"mkswap /swapfile",
+		"swapon /swapfile",
+		"grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab",
+	}
+	for _, cmd := range cmds {
+		if _, err := ssh.Run(ctx, "sudo "+cmd); err != nil {
+			return fmt.Errorf("swap setup: %s: %w", cmd, err)
+		}
+	}
+	return nil
+}
+
 // RenderCloudInit produces cloud-init user-data for server provisioning.
 // hostname sets the machine hostname (and therefore the k3s node name).
-// rootVolumeSizeGB is used to calculate proportional swap (0 = default 20GB).
-func RenderCloudInit(sshPublicKey, hostname string, rootVolumeSizeGB int) (string, error) {
+func RenderCloudInit(sshPublicKey, hostname string) (string, error) {
 	user := utils.DefaultUser
-	swapMB := SwapSize(rootVolumeSizeGB)
 	cfg := cloudConfig{
 		Hostname: hostname,
 		Users: []cloudUser{{
@@ -57,11 +91,6 @@ func RenderCloudInit(sshPublicKey, hostname string, rootVolumeSizeGB int) (strin
 		}},
 		Packages: []string{"git", "curl", "unzip"},
 		RunCmd: []string{
-			fmt.Sprintf("fallocate -l %dM /swapfile", swapMB),
-			"chmod 600 /swapfile",
-			"mkswap /swapfile",
-			"swapon /swapfile",
-			"echo '/swapfile none swap sw 0 0' >> /etc/fstab",
 			fmt.Sprintf("mkdir -p /home/%s/workspace", user),
 			fmt.Sprintf("chown -R %s:%s /home/%s", user, user, user),
 		},

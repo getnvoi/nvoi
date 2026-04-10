@@ -42,8 +42,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	}
 
 	serverName := names.Server(req.Name)
-	diskGB := prov.DiskForType(req.ServerType)
-	userData, err := infra.RenderCloudInit(strings.TrimSpace(pubKey), serverName, diskGB)
+	userData, err := infra.RenderCloudInit(strings.TrimSpace(pubKey), serverName)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +110,13 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	}
 	defer ssh.Close()
 	out.Success("SSH ready")
+
+	out.Progress("ensuring swap")
+	if err := infra.EnsureSwap(ctx, ssh); err != nil {
+		out.Warning(fmt.Sprintf("swap: %s", err))
+	} else {
+		out.Success("swap ready")
+	}
 
 	out.Progress("ensuring Docker")
 	if err := infra.EnsureDocker(ctx, ssh); err != nil {

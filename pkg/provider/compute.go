@@ -21,7 +21,6 @@ const (
 type ComputeProvider interface {
 	ValidateCredentials(ctx context.Context) error
 	ArchForType(instanceType string) string
-	DiskForType(instanceType string) int // root disk size in GB, 0 if unknown
 
 	// Server — firewall + network resolved internally
 	EnsureServer(ctx context.Context, req CreateServerRequest) (*Server, error)
