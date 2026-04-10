@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -10,7 +11,7 @@ import (
 // ServersAdd creates desired servers. Masters first, then workers.
 // Does NOT remove orphans — that's deferred to ServersRemoveOrphans
 // after workloads have been moved to the new nodes.
-func ServersAdd(ctx context.Context, dc *DeployContext, cfg *AppConfig) error {
+func ServersAdd(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
 	masters, workers := SplitServers(cfg.Servers)
 	for _, s := range masters {
 		creds := dc.Cluster.Credentials
@@ -44,7 +45,7 @@ func ServersAdd(ctx context.Context, dc *DeployContext, cfg *AppConfig) error {
 // ServersRemoveOrphans drains and deletes servers that are in live state
 // but not in the desired config. Called AFTER services/crons have been
 // reconciled so workloads have already moved to new nodes.
-func ServersRemoveOrphans(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) {
+func ServersRemoveOrphans(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) {
 	if live == nil {
 		return
 	}

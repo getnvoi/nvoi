@@ -8,10 +8,12 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/core"
-	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	_ "github.com/getnvoi/nvoi/internal/packages/database"
 
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare"
@@ -32,7 +34,7 @@ func main() {
 }
 
 func rootCmd() *cobra.Command {
-	dc := &reconcile.DeployContext{}
+	dc := &config.DeployContext{}
 
 	root := &cobra.Command{
 		Use:          "nvoi",

@@ -3,10 +3,11 @@ package reconcile
 import (
 	"context"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 )
 
-func Build(ctx context.Context, dc *DeployContext, cfg *AppConfig) error {
+func Build(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
 	if len(cfg.Build) == 0 {
 		return nil
 	}

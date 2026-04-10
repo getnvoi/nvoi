@@ -1,24 +1,61 @@
-package reconcile
+// Package config holds shared types used by reconcile, packages, and the CLI.
+// No logic — just data structures.
+package config
 
 import (
 	"fmt"
 
+	app "github.com/getnvoi/nvoi/pkg/core"
 	"gopkg.in/yaml.v3"
 )
 
+// DeployContext holds everything needed to execute against a cluster.
+type DeployContext struct {
+	Cluster     app.Cluster
+	DNS         app.ProviderRef
+	Storage     app.ProviderRef
+	Builder     string
+	BuildCreds  map[string]string
+	GitUsername string
+	GitToken    string
+}
+
+// LiveState represents what's currently deployed.
+type LiveState struct {
+	Servers  []string
+	Services []string
+	Crons    []string
+	Volumes  []string
+	Storage  []string
+	Secrets  []string
+	Domains  map[string][]string
+}
+
 type AppConfig struct {
-	App       string                `yaml:"app"`
-	Env       string                `yaml:"env"`
-	Providers ProvidersDef          `yaml:"providers"`
-	Servers   map[string]ServerDef  `yaml:"servers"`
-	Firewall  []string              `yaml:"-"`
-	Volumes   map[string]VolumeDef  `yaml:"volumes,omitempty"`
-	Build     map[string]string     `yaml:"build,omitempty"`
-	Secrets   []string              `yaml:"secrets,omitempty"`
-	Storage   map[string]StorageDef `yaml:"storage,omitempty"`
-	Services  map[string]ServiceDef `yaml:"services"`
-	Crons     map[string]CronDef    `yaml:"crons,omitempty"`
-	Domains   map[string][]string   `yaml:"domains,omitempty"`
+	App       string                 `yaml:"app"`
+	Env       string                 `yaml:"env"`
+	Providers ProvidersDef           `yaml:"providers"`
+	Servers   map[string]ServerDef   `yaml:"servers"`
+	Firewall  []string               `yaml:"-"`
+	Volumes   map[string]VolumeDef   `yaml:"volumes,omitempty"`
+	Database  map[string]DatabaseDef `yaml:"database,omitempty"`
+	Build     map[string]string      `yaml:"build,omitempty"`
+	Secrets   []string               `yaml:"secrets,omitempty"`
+	Storage   map[string]StorageDef  `yaml:"storage,omitempty"`
+	Services  map[string]ServiceDef  `yaml:"services"`
+	Crons     map[string]CronDef     `yaml:"crons,omitempty"`
+	Domains   map[string][]string    `yaml:"domains,omitempty"`
+}
+
+type DatabaseDef struct {
+	Image  string    `yaml:"image"`
+	Volume string    `yaml:"volume"`
+	Backup BackupDef `yaml:"backup,omitempty"`
+}
+
+type BackupDef struct {
+	Schedule string `yaml:"schedule,omitempty"` // default: "0 */6 * * *"
+	Retain   int    `yaml:"retain,omitempty"`   // default: 7
 }
 
 type ProvidersDef struct {
@@ -73,8 +110,7 @@ type CronDef struct {
 	Volumes  []string `yaml:"volumes,omitempty"`
 }
 
-// ResolvedServers returns the effective server list. Normalizes
-// server (singular) into a one-element slice.
+// ResolvedServers returns the effective server list for a service.
 func (s ServiceDef) ResolvedServers() []string {
 	if len(s.Servers) > 0 {
 		return s.Servers
@@ -94,6 +130,12 @@ func (c CronDef) ResolvedServers() []string {
 		return []string{c.Server}
 	}
 	return nil
+}
+
+// NamedServer pairs a server definition with its map key name.
+type NamedServer struct {
+	Name string
+	ServerDef
 }
 
 func (c *AppConfig) UnmarshalYAML(value *yaml.Node) error {

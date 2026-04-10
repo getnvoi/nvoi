@@ -3,11 +3,12 @@ package reconcile
 import (
 	"context"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Storage(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) error {
+func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) error {
 	for _, name := range utils.SortedKeys(cfg.Storage) {
 		st := cfg.Storage[name]
 		if err := app.StorageSet(ctx, app.StorageSetRequest{

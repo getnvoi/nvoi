@@ -3,11 +3,12 @@ package reconcile
 import (
 	"context"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
-func Firewall(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) error {
+func Firewall(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) error {
 	if len(cfg.Firewall) == 0 {
 		return nil
 	}

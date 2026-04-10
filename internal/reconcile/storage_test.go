@@ -3,15 +3,17 @@ package reconcile
 import (
 	"context"
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/config"
 )
 
 func TestStorage_FreshDeploy(t *testing.T) {
 	// StorageSet needs a bucket provider. Without one registered, the call fails.
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Storage: map[string]StorageDef{"assets": {CORS: true}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Storage: map[string]config.StorageDef{"assets": {CORS: true}},
 	}
 
 	err := Storage(context.Background(), dc, nil, cfg)
@@ -22,7 +24,7 @@ func TestStorage_FreshDeploy(t *testing.T) {
 
 func TestStorage_NoStorage(t *testing.T) {
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{}
+	cfg := &config.AppConfig{}
 
 	err := Storage(context.Background(), dc, nil, cfg)
 	if err != nil {
@@ -32,12 +34,12 @@ func TestStorage_NoStorage(t *testing.T) {
 
 func TestStorage_OrphanDetected(t *testing.T) {
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Storage: map[string]StorageDef{"assets": {}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Storage: map[string]config.StorageDef{"assets": {}},
 	}
-	live := &LiveState{Storage: []string{"assets", "old-uploads"}}
+	live := &config.LiveState{Storage: []string{"assets", "old-uploads"}}
 
 	// Set fails (no bucket provider). Orphan "old-uploads" detected, delete also fails.
 	// No panic expected.
@@ -46,12 +48,12 @@ func TestStorage_OrphanDetected(t *testing.T) {
 
 func TestStorage_AlreadyConverged(t *testing.T) {
 	dc := testDC(convergeMock())
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Storage: map[string]StorageDef{"assets": {}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Storage: map[string]config.StorageDef{"assets": {}},
 	}
-	live := &LiveState{Storage: []string{"assets"}}
+	live := &config.LiveState{Storage: []string{"assets"}}
 
 	// Set fails (no bucket provider), but no orphans to delete.
 	_ = Storage(context.Background(), dc, live, cfg)

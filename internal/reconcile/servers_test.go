@@ -3,15 +3,17 @@ package reconcile
 import (
 	"context"
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/config"
 )
 
 func TestServersAdd_FreshDeploy(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{
+		Servers: map[string]config.ServerDef{
 			"master": {Type: "cx23", Region: "fsn1", Role: "master"},
 		},
 	}
@@ -28,9 +30,9 @@ func TestServersAdd_AlreadyConverged(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 
 	if err := ServersAdd(context.Background(), dc, cfg); err != nil {
@@ -48,11 +50,11 @@ func TestServersRemoveOrphans(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
-	live := &LiveState{Servers: []string{"master", "old-worker"}}
+	live := &config.LiveState{Servers: []string{"master", "old-worker"}}
 
 	ServersRemoveOrphans(context.Background(), dc, live, cfg)
 
@@ -64,9 +66,9 @@ func TestServersRemoveOrphans(t *testing.T) {
 func TestServersRemoveOrphans_NilLive(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 
 	// nil live = first deploy, no orphans
@@ -81,9 +83,9 @@ func TestServersAdd_ScaleUp(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{
+		Servers: map[string]config.ServerDef{
 			"master":   {Type: "cx23", Region: "fsn1", Role: "master"},
 			"worker-1": {Type: "cx33", Region: "fsn1", Role: "worker"},
 			"worker-2": {Type: "cx33", Region: "fsn1", Role: "worker"},
@@ -105,11 +107,11 @@ func TestServersRemoveOrphans_ScaleDown(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
-	live := &LiveState{Servers: []string{"master", "worker-1", "worker-2"}}
+	live := &config.LiveState{Servers: []string{"master", "worker-1", "worker-2"}}
 
 	ServersRemoveOrphans(context.Background(), dc, live, cfg)
 
@@ -130,14 +132,14 @@ func TestServerReplacement_AddBeforeRemove(t *testing.T) {
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
 
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{
+		Servers: map[string]config.ServerDef{
 			"master":   {Type: "cx23", Region: "fsn1", Role: "master"},
 			"worker-2": {Type: "cx33", Region: "fsn1", Role: "worker"},
 		},
 	}
-	live := &LiveState{Servers: []string{"master", "worker-1"}}
+	live := &config.LiveState{Servers: []string{"master", "worker-1"}}
 
 	// Phase 1: add desired
 	if err := ServersAdd(context.Background(), dc, cfg); err != nil {
@@ -160,7 +162,7 @@ func TestServerReplacement_AddBeforeRemove(t *testing.T) {
 }
 
 func TestSplitServers_WorkersSorted(t *testing.T) {
-	servers := map[string]ServerDef{
+	servers := map[string]config.ServerDef{
 		"worker-z": {Role: "worker", Type: "cx33", Region: "fsn1"},
 		"master":   {Role: "master", Type: "cx23", Region: "fsn1"},
 		"worker-a": {Role: "worker", Type: "cx33", Region: "fsn1"},

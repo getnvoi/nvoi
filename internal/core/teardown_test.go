@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -213,12 +213,12 @@ func init() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-func setupTeardown(log *opLog) *reconcile.DeployContext {
+func setupTeardown(log *opLog) *config.DeployContext {
 	activeCompute = &trackingCompute{log: log}
 	activeDNS = &trackingDNS{log: log}
 	activeBucket = &trackingBucket{log: log}
 
-	return &reconcile.DeployContext{
+	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName:  "myapp",
 			Env:      "prod",
@@ -230,26 +230,26 @@ func setupTeardown(log *opLog) *reconcile.DeployContext {
 	}
 }
 
-func fullConfig() *reconcile.AppConfig {
-	return &reconcile.AppConfig{
+func fullConfig() *config.AppConfig {
+	return &config.AppConfig{
 		App: "myapp",
 		Env: "prod",
-		Servers: map[string]reconcile.ServerDef{
+		Servers: map[string]config.ServerDef{
 			"master": {Type: "cx21", Region: "fsn1", Role: "master"},
 			"worker": {Type: "cx21", Region: "fsn1", Role: "worker"},
 		},
-		Volumes: map[string]reconcile.VolumeDef{
+		Volumes: map[string]config.VolumeDef{
 			"pgdata": {Size: 20, Server: "master"},
 		},
 		Secrets: []string{"DB_PASSWORD", "API_KEY"},
-		Storage: map[string]reconcile.StorageDef{
+		Storage: map[string]config.StorageDef{
 			"assets": {CORS: true},
 		},
-		Services: map[string]reconcile.ServiceDef{
+		Services: map[string]config.ServiceDef{
 			"web": {Image: "nginx", Port: 80},
 			"db":  {Image: "postgres:17", Port: 5432},
 		},
-		Crons: map[string]reconcile.CronDef{
+		Crons: map[string]config.CronDef{
 			"cleanup": {Image: "busybox", Schedule: "0 * * * *", Command: "echo hi"},
 		},
 		Domains: map[string][]string{
@@ -315,7 +315,7 @@ func TestTeardown_MultipleDomainServices(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	cfg := fullConfig()
-	cfg.Services["api"] = reconcile.ServiceDef{Image: "api:latest", Port: 8080}
+	cfg.Services["api"] = config.ServiceDef{Image: "api:latest", Port: 8080}
 	cfg.Domains["api"] = []string{"api.myapp.com"}
 
 	_ = teardown(context.Background(), dc, cfg, false, false)
@@ -387,9 +387,9 @@ func TestTeardown_MultipleWorkers(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	cfg := &reconcile.AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]reconcile.ServerDef{
+		Servers: map[string]config.ServerDef{
 			"master":   {Type: "cx21", Region: "fsn1", Role: "master"},
 			"worker-a": {Type: "cx21", Region: "fsn1", Role: "worker"},
 			"worker-b": {Type: "cx33", Region: "fsn1", Role: "worker"},
@@ -417,9 +417,9 @@ func TestTeardown_MasterOnly(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	cfg := &reconcile.AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]reconcile.ServerDef{
+		Servers: map[string]config.ServerDef{
 			"master": {Type: "cx21", Region: "fsn1", Role: "master"},
 		},
 	}
@@ -489,9 +489,9 @@ func TestTeardown_EmptyConfig_StillDeletesFirewallAndNetwork(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	cfg := &reconcile.AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]reconcile.ServerDef{},
+		Servers: map[string]config.ServerDef{},
 	}
 
 	_ = teardown(context.Background(), dc, cfg, true, true)
@@ -534,12 +534,12 @@ func TestTeardown_MultipleVolumes(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	cfg := &reconcile.AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]reconcile.ServerDef{
+		Servers: map[string]config.ServerDef{
 			"master": {Type: "cx21", Region: "fsn1", Role: "master"},
 		},
-		Volumes: map[string]reconcile.VolumeDef{
+		Volumes: map[string]config.VolumeDef{
 			"pgdata": {Size: 20, Server: "master"},
 			"redis":  {Size: 10, Server: "master"},
 		},
@@ -628,7 +628,7 @@ func TestTeardown_MultipleStorageBuckets(t *testing.T) {
 	dc := setupTeardown(log)
 	n := names()
 	cfg := fullConfig()
-	cfg.Storage["uploads"] = reconcile.StorageDef{}
+	cfg.Storage["uploads"] = config.StorageDef{}
 
 	_ = teardown(context.Background(), dc, cfg, false, true)
 
@@ -744,7 +744,7 @@ func TestTeardown_InvalidClusterNames(t *testing.T) {
 	dc.Cluster.AppName = ""
 	dc.Cluster.Env = ""
 
-	cfg := &reconcile.AppConfig{App: "", Env: "", Servers: map[string]reconcile.ServerDef{}}
+	cfg := &config.AppConfig{App: "", Env: "", Servers: map[string]config.ServerDef{}}
 
 	err := teardown(context.Background(), dc, cfg, false, false)
 	if err != nil {

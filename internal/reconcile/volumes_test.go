@@ -3,16 +3,18 @@ package reconcile
 import (
 	"context"
 	"testing"
+
+	"github.com/getnvoi/nvoi/internal/config"
 )
 
 func TestVolumes_FreshDeploy(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Volumes: map[string]VolumeDef{"pgdata": {Size: 20, Server: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Volumes: map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master"}},
 	}
 
 	if err := Volumes(context.Background(), dc, nil, cfg); err != nil {
@@ -27,12 +29,12 @@ func TestVolumes_OrphanRemoved(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Volumes: map[string]VolumeDef{"pgdata": {Size: 20, Server: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Volumes: map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master"}},
 	}
-	live := &LiveState{Volumes: []string{"pgdata", "old-cache"}}
+	live := &config.LiveState{Volumes: []string{"pgdata", "old-cache"}}
 
 	if err := Volumes(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -46,12 +48,12 @@ func TestVolumes_AlreadyConverged(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Volumes: map[string]VolumeDef{"pgdata": {Size: 20, Server: "master"}},
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Volumes: map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master"}},
 	}
-	live := &LiveState{Volumes: []string{"pgdata"}}
+	live := &config.LiveState{Volumes: []string{"pgdata"}}
 
 	if err := Volumes(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -68,15 +70,15 @@ func TestVolumes_MixedState(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Servers: map[string]ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Volumes: map[string]VolumeDef{
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Volumes: map[string]config.VolumeDef{
 			"pgdata": {Size: 20, Server: "master"},
 			"redis":  {Size: 10, Server: "master"},
 		},
 	}
-	live := &LiveState{Volumes: []string{"pgdata", "old-cache"}}
+	live := &config.LiveState{Volumes: []string{"pgdata", "old-cache"}}
 
 	if err := Volumes(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)

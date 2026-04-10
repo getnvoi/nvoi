@@ -1,12 +1,12 @@
 package core
 
 import (
-	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
 
-func NewSSHCmd(dc *reconcile.DeployContext) *cobra.Command {
+func NewSSHCmd(dc *config.DeployContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "ssh -- <command>",
 		Short: "Run command on master node",
