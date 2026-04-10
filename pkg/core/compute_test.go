@@ -83,9 +83,12 @@ func computeSetCluster(sshErr error) Cluster {
 }
 
 func TestComputeSet_HostKeyChanged_HardError(t *testing.T) {
+	// Real error from infra/ssh.go includes guidance text.
+	realErr := fmt.Errorf("%w for 1.2.3.4:22 — server was likely recreated.\nRun: nvoi known-hosts clear 1.2.3.4:22\nOr remove the entry from ~/.nvoi/known_hosts", infra.ErrHostKeyChanged)
+
 	ctx := context.Background()
 	_, err := ComputeSet(ctx, ComputeSetRequest{
-		Cluster:    computeSetCluster(fmt.Errorf("ssh dial: %w", infra.ErrHostKeyChanged)),
+		Cluster:    computeSetCluster(realErr),
 		Name:       "master",
 		ServerType: "cx21",
 		Region:     "fsn1",
@@ -93,15 +96,24 @@ func TestComputeSet_HostKeyChanged_HardError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for host key changed")
 	}
-	if !strings.Contains(err.Error(), "host key changed") {
-		t.Errorf("error should mention host key changed, got: %v", err)
+	msg := err.Error()
+	if !strings.Contains(msg, "host key changed") {
+		t.Errorf("should mention host key changed, got: %v", msg)
+	}
+	if !strings.Contains(msg, "server was likely recreated") {
+		t.Errorf("should include guidance about recreated server, got: %v", msg)
+	}
+	if !strings.Contains(msg, "known-hosts clear") {
+		t.Errorf("should include clear command guidance, got: %v", msg)
 	}
 }
 
 func TestComputeSet_AuthFailed_HardError(t *testing.T) {
+	realErr := fmt.Errorf("%w for 1.2.3.4:22 — server does not accept this key", infra.ErrAuthFailed)
+
 	ctx := context.Background()
 	_, err := ComputeSet(ctx, ComputeSetRequest{
-		Cluster:    computeSetCluster(fmt.Errorf("ssh dial: %w", infra.ErrAuthFailed)),
+		Cluster:    computeSetCluster(realErr),
 		Name:       "master",
 		ServerType: "cx21",
 		Region:     "fsn1",
@@ -109,7 +121,11 @@ func TestComputeSet_AuthFailed_HardError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for auth failed")
 	}
-	if !strings.Contains(err.Error(), "authentication failed") {
-		t.Errorf("error should mention authentication failed, got: %v", err)
+	msg := err.Error()
+	if !strings.Contains(msg, "authentication failed") {
+		t.Errorf("should mention authentication failed, got: %v", msg)
+	}
+	if !strings.Contains(msg, "does not accept this key") {
+		t.Errorf("should include key rejection guidance, got: %v", msg)
 	}
 }
