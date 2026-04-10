@@ -1,0 +1,60 @@
+app: nvoi
+env: production
+
+providers:
+  compute: hetzner
+  dns: cloudflare
+  storage: cloudflare
+  build: local
+
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+
+firewall: default
+
+volumes:
+  pgdata:
+    size: 20
+    server: master
+
+secrets:
+  - POSTGRES_PASSWORD
+  - POSTGRES_USER
+  - POSTGRES_DB
+  - JWT_SECRET
+  - ENCRYPTION_KEY
+  - DATABASE_URL
+
+storage:
+  releases: {}
+
+services:
+  db:
+    image: postgres:17
+    port: 5432
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB]
+  api:
+    build: api
+    port: 8080
+    secrets: [DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY]
+  web:
+    build: web
+    port: 3000
+  distribution:
+    build: distribution
+    port: 3001
+    storage: [releases]
+
+build:
+  web: ./cmd/web
+  api: ./cmd/api
+  distribution: ./cmd/distribution
+
+domains:
+  web: [nvoi.to, www.nvoi.to]
+  api: [api.nvoi.to]
+  distribution: [get.nvoi.to]

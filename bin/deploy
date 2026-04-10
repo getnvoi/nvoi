@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NVOI="${NVOI_BIN:-$ROOT_DIR/bin/nvoi}"
 
 if [[ -f "$ROOT_DIR/.env" ]]; then
   set -a
@@ -10,12 +9,6 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
   source "$ROOT_DIR/.env"
   set +a
 fi
-
-: "${NVOI_APP_NAME:=nvoi}"
-: "${NVOI_ENV:=production}"
-: "${COMPUTE_PROVIDER:=hetzner}"
-: "${DNS_PROVIDER:=cloudflare}"
-: "${STORAGE_PROVIDER:=cloudflare}"
 
 require_hex() {
   local name="$1"
@@ -42,53 +35,13 @@ require_hex() {
 }
 
 # Runtime secrets must be strong and hex-only.
-require_hex NVOI_POSTGRES_PASSWORD 64
-require_hex NVOI_POSTGRES_USER 12 12
-require_hex NVOI_POSTGRES_DB 12 12
-require_hex NVOI_JWT_SECRET 64
-require_hex NVOI_ENCRYPTION_KEY 0 64
+require_hex POSTGRES_PASSWORD 64
+require_hex POSTGRES_USER 12 12
+require_hex POSTGRES_DB 12 12
+require_hex JWT_SECRET 64
+require_hex ENCRYPTION_KEY 0 64
 
-# Infrastructure
-"$NVOI" instance set master --compute-type cax11 --compute-region nbg1 --role master
-"$NVOI" volume set pgdata --size 20 --server master
-"$NVOI" firewall set default
+# DATABASE_URL assembled from parts.
+export DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
 
-# Secrets
-"$NVOI" secret set POSTGRES_PASSWORD "$NVOI_POSTGRES_PASSWORD"
-"$NVOI" secret set JWT_SECRET "$NVOI_JWT_SECRET"
-"$NVOI" secret set ENCRYPTION_KEY "$NVOI_ENCRYPTION_KEY"
-"$NVOI" secret set DATABASE_URL "postgres://${NVOI_POSTGRES_USER}:${NVOI_POSTGRES_PASSWORD}@db:5432/${NVOI_POSTGRES_DB}"
-
-# Storage
-"$NVOI" storage set releases
-
-# Build images
-"$NVOI" build --build-provider local \
-  --target web:./cmd/web \
-  --target api:./cmd/api \
-  --target distribution:./cmd/distribution
-
-# Services
-"$NVOI" service set db --image postgres:17 --port 5432 \
-  --volume pgdata:/var/lib/postgresql/data \
-  --env POSTGRES_USER="$NVOI_POSTGRES_USER" \
-  --env POSTGRES_DB="$NVOI_POSTGRES_DB" \
-  --secret POSTGRES_PASSWORD \
-  --no-wait
-"$NVOI" service set api --image "$("$NVOI" build latest api)" --port 8080 \
-  --secret DATABASE_URL --secret JWT_SECRET --secret ENCRYPTION_KEY \
-  --no-wait
-"$NVOI" service set web --image "$("$NVOI" build latest web)" --port 3000 \
-  --no-wait
-"$NVOI" service set distribution --image "$("$NVOI" build latest distribution)" --port 3001 \
-  --storage releases
-
-# DNS + Ingress
-"$NVOI" dns set web:nvoi.to,www.nvoi.to
-"$NVOI" dns set api:api.nvoi.to
-"$NVOI" dns set distribution:get.nvoi.to
-
-"$NVOI" ingress set \
-  web:nvoi.to,www.nvoi.to \
-  api:api.nvoi.to \
-  distribution:get.nvoi.to
+exec go run ./cmd/core deploy --config "$ROOT_DIR/nvoi.yaml"
