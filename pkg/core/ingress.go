@@ -23,7 +23,7 @@ type IngressRouteArg struct {
 // Nil fields use production defaults.
 type IngressHooks struct {
 	WaitForCertificate func(ctx context.Context, ssh utils.SSHClient, certPath string) error
-	WaitForHTTPS       func(ctx context.Context, ssh utils.SSHClient, domain string) error
+	WaitForHTTPS       func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error
 }
 
 func (h *IngressHooks) waitForCertificate() func(context.Context, utils.SSHClient, string) error {
@@ -33,7 +33,7 @@ func (h *IngressHooks) waitForCertificate() func(context.Context, utils.SSHClien
 	return infra.WaitForCertificate
 }
 
-func (h *IngressHooks) waitForHTTPS() func(context.Context, utils.SSHClient, string) error {
+func (h *IngressHooks) waitForHTTPS() func(context.Context, utils.SSHClient, string, string) error {
 	if h != nil && h.WaitForHTTPS != nil {
 		return h.WaitForHTTPS
 	}
@@ -42,8 +42,9 @@ func (h *IngressHooks) waitForHTTPS() func(context.Context, utils.SSHClient, str
 
 type IngressSetRequest struct {
 	Cluster
-	Route IngressRouteArg
-	Hooks *IngressHooks // nil = production defaults
+	Route      IngressRouteArg
+	HealthPath string        // if set, verify HTTPS responds on this path after cert
+	Hooks      *IngressHooks // nil = production defaults
 }
 
 type IngressDeleteRequest struct {
@@ -118,7 +119,7 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	}
 	out.Success("caddy ready")
 
-	// Verify cert + HTTPS from the server (no dependency on client DNS).
+	// Verify cert from the server (no dependency on client DNS).
 	firstDomain := req.Route.Domains[0]
 	certPath := names.CaddyCertPath(firstDomain)
 	out.Progress(fmt.Sprintf("waiting for certificate %s", firstDomain))
@@ -127,11 +128,17 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	}
 	out.Success(fmt.Sprintf("certificate %s ready", firstDomain))
 
-	out.Progress(fmt.Sprintf("waiting for https://%s", firstDomain))
-	if err := waitForHTTPS(ctx, ssh, firstDomain); err != nil {
-		return fmt.Errorf("https://%s not reachable: %w", firstDomain, err)
+	// Verify HTTPS — health path or default to /
+	healthPath := req.HealthPath
+	if healthPath == "" {
+		healthPath = "/"
 	}
-	out.Success(fmt.Sprintf("https://%s live", firstDomain))
+	url := fmt.Sprintf("https://%s%s", firstDomain, healthPath)
+	out.Progress(fmt.Sprintf("waiting for %s", url))
+	if err := waitForHTTPS(ctx, ssh, firstDomain, healthPath); err != nil {
+		return fmt.Errorf("%s not reachable: %w", url, err)
+	}
+	out.Success(fmt.Sprintf("%s live", url))
 
 	return nil
 }

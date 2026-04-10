@@ -151,7 +151,7 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(readyPodJSON)}},
 			{Prefix: "caddy reload", Result: testutil.MockResult{}},
 			{Prefix: "test -f", Result: testutil.MockResult{Output: []byte("ready")}},
-			{Prefix: "curl -fsk", Result: testutil.MockResult{Output: []byte("'200'")}},
+			{Prefix: "curl -sk", Result: testutil.MockResult{Output: []byte("'200'")}},
 			{Prefix: "exec", Result: testutil.MockResult{}},
 			{Prefix: "get deploy", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get statefulset", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},

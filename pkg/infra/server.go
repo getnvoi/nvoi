@@ -23,17 +23,20 @@ func WaitForCertificate(ctx context.Context, ssh utils.SSHClient, certPath strin
 	})
 }
 
-// WaitForHTTPS verifies a domain responds over HTTPS from the server.
+// WaitForHTTPS verifies the domain responds over HTTPS from the server.
+// Any non-5xx response = success (TLS works, service is up). Auth (401/403) is fine.
 // Runs curl via SSH — no dependency on client DNS propagation.
-func WaitForHTTPS(ctx context.Context, ssh utils.SSHClient, domain string) error {
-	cmd := fmt.Sprintf("curl -fsk --connect-timeout 5 https://%s -o /dev/null -w '%%{http_code}'", domain)
+func WaitForHTTPS(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+	url := fmt.Sprintf("https://%s%s", domain, healthPath)
+	cmd := fmt.Sprintf("curl -sk --connect-timeout 5 -o /dev/null -w '%%{http_code}' %s", url)
 	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
 			return false, nil
 		}
 		code := strings.TrimSpace(strings.Trim(string(out), "'"))
-		return code >= "200" && code < "500", nil
+		// 5xx = server error, retry. Anything else = TLS works, service responds.
+		return len(code) == 3 && code[0] != '5' && code[0] != '0', nil
 	})
 }
 

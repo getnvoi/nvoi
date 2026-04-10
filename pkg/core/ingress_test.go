@@ -92,7 +92,9 @@ func TestIngressSet_HardErrorWhenUnreachable(t *testing.T) {
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 		Hooks: &IngressHooks{
 			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, certPath string) error { return nil },
-			WaitForHTTPS:       func(ctx context.Context, ssh utils.SSHClient, domain string) error { return fmt.Errorf("timeout") },
+			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+				return fmt.Errorf("timeout")
+			},
 		},
 	})
 	if err == nil {
@@ -131,7 +133,7 @@ func TestIngressSet_ACMEPath(t *testing.T) {
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 		Hooks: &IngressHooks{
 			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, certPath string) error { return nil },
-			WaitForHTTPS:       func(ctx context.Context, ssh utils.SSHClient, domain string) error { return nil },
+			WaitForHTTPS:       func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error { return nil },
 		},
 	})
 	if err != nil {

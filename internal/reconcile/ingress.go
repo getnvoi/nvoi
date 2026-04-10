@@ -9,9 +9,14 @@ import (
 
 func Ingress(ctx context.Context, dc *DeployContext, live *LiveState, cfg *AppConfig) error {
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
+		var healthPath string
+		if svc, ok := cfg.Services[svcName]; ok {
+			healthPath = svc.Health
+		}
 		if err := app.IngressSet(ctx, app.IngressSetRequest{
-			Cluster: dc.Cluster,
-			Route:   app.IngressRouteArg{Service: svcName, Domains: cfg.Domains[svcName]},
+			Cluster:    dc.Cluster,
+			Route:      app.IngressRouteArg{Service: svcName, Domains: cfg.Domains[svcName]},
+			HealthPath: healthPath,
 		}); err != nil {
 			return err
 		}
