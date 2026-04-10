@@ -1,14 +1,2 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-if [[ -f "$ROOT_DIR/.env" ]]; then
-  set -a
-  source "$ROOT_DIR/.env"
-  set +a
-fi
-
-export DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
-
-exec go run ./cmd/core teardown --config "$ROOT_DIR/nvoi.yaml" "$@"
+exec "$(dirname "$0")/nvoi" teardown "$@"

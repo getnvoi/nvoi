@@ -5,6 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$ROOT_DIR/.bin"
 BIN_PATH="$BIN_DIR/nvoi"
 
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  set -a
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
 needs_build=0
 if [[ ! -x "$BIN_PATH" ]]; then
   needs_build=1
