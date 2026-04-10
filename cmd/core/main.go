@@ -15,13 +15,22 @@ import (
 
 	_ "github.com/getnvoi/nvoi/internal/packages/database"
 
-	_ "github.com/getnvoi/nvoi/pkg/provider/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare"
-	_ "github.com/getnvoi/nvoi/pkg/provider/daytona"
-	_ "github.com/getnvoi/nvoi/pkg/provider/github"
-	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
-	_ "github.com/getnvoi/nvoi/pkg/provider/local"
-	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
+	// Compute
+	_ "github.com/getnvoi/nvoi/pkg/provider/compute/aws"
+	_ "github.com/getnvoi/nvoi/pkg/provider/compute/hetzner"
+	_ "github.com/getnvoi/nvoi/pkg/provider/compute/scaleway"
+	// DNS
+	_ "github.com/getnvoi/nvoi/pkg/provider/dns/aws"
+	_ "github.com/getnvoi/nvoi/pkg/provider/dns/cloudflare"
+	_ "github.com/getnvoi/nvoi/pkg/provider/dns/scaleway"
+	// Storage
+	_ "github.com/getnvoi/nvoi/pkg/provider/storage/aws"
+	_ "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
+	_ "github.com/getnvoi/nvoi/pkg/provider/storage/scaleway"
+	// Build
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/github"
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
 )
 
 func main() {
