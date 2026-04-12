@@ -110,8 +110,8 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		return result, ctx.Err()
 	}
 
-	// Ingress (Caddy routes)
-	routes, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
+	// Ingress (k8s Ingress resources)
+	routes, _ := kube.GetIngressRoutes(ctx, ssh, ns)
 	for _, r := range routes {
 		for _, d := range r.Domains {
 			result.Ingress = append(result.Ingress, DescribeIngress{
@@ -165,7 +165,7 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 		{"services", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "services", sel) }},
 		{"cronjobs", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "cronjobs", sel) }},
 		{"secrets", func() ([]byte, error) { return kube.GetNamedJSON(ctx, ssh, ns, "secret", names.KubeSecrets()) }},
-		{"configmaps", func() ([]byte, error) { return kube.GetNamedJSON(ctx, ssh, ns, "configmap", names.KubeCaddyConfig()) }},
+		{"ingresses", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "ingresses", kube.NvoiSelector) }},
 	}
 
 	for _, q := range queries {

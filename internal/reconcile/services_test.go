@@ -43,24 +43,6 @@ func TestServices_OrphanRemoved(t *testing.T) {
 	}
 }
 
-func TestServices_CaddyNeverOrphaned(t *testing.T) {
-	ssh := convergeMock()
-	dc := testDC(ssh)
-	cfg := &config.AppConfig{
-		App: "myapp", Env: "prod",
-		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
-	}
-	live := &config.LiveState{Services: []string{"web", "caddy"}}
-
-	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sshCallMatches(ssh, "caddy", "delete") {
-		t.Error("caddy should never be treated as orphan")
-	}
-}
-
 func TestServices_AlreadyConverged(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
@@ -123,7 +105,7 @@ func TestServices_DatabasePackageManagedNotOrphaned(t *testing.T) {
 	}
 }
 
-func TestServices_CaddyAndDatabaseBothProtected(t *testing.T) {
+func TestServices_DatabaseProtected(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
 	cfg := &config.AppConfig{
@@ -132,13 +114,10 @@ func TestServices_CaddyAndDatabaseBothProtected(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 		Database: map[string]config.DatabaseDef{"main": {Image: "postgres:17", Volume: "pgdata"}},
 	}
-	live := &config.LiveState{Services: []string{"web", "caddy", "main-db", "stale-worker"}}
+	live := &config.LiveState{Services: []string{"web", "main-db", "stale-worker"}}
 
 	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if sshCallMatches(ssh, "caddy", "delete") {
-		t.Error("caddy should not be deleted")
 	}
 	if sshCallMatches(ssh, "main-db", "delete") {
 		t.Error("main-db should not be deleted")

@@ -75,6 +75,10 @@ func (c *SSHClient) Run(_ context.Context, cmd string) ([]byte, error) {
 
 	out, err := sess.CombinedOutput(cmd)
 	if err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			return out, fmt.Errorf("run %q: %s: %w", cmd, detail, err)
+		}
 		return out, fmt.Errorf("run %q: %w", cmd, err)
 	}
 	return out, nil

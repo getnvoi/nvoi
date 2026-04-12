@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 func TestServersAdd_FreshDeploy(t *testing.T) {
@@ -55,6 +56,8 @@ func TestServersRemoveOrphans(t *testing.T) {
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 	live := &config.LiveState{Servers: []string{"master", "old-worker"}}
+	// Orphan server exists at the provider
+	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "2", Name: n.Server("old-worker"), IPv4: "5.6.7.8"})
 
 	ServersRemoveOrphans(context.Background(), dc, live, cfg)
 
@@ -112,6 +115,11 @@ func TestServersRemoveOrphans_ScaleDown(t *testing.T) {
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 	live := &config.LiveState{Servers: []string{"master", "worker-1", "worker-2"}}
+	// Orphan servers exist at the provider
+	activeMock.Servers = append(activeMock.Servers,
+		&provider.Server{ID: "2", Name: n.Server("worker-1"), IPv4: "5.6.7.8"},
+		&provider.Server{ID: "3", Name: n.Server("worker-2"), IPv4: "9.10.11.12"},
+	)
 
 	ServersRemoveOrphans(context.Background(), dc, live, cfg)
 
@@ -154,7 +162,8 @@ func TestServerReplacement_AddBeforeRemove(t *testing.T) {
 
 	// (services would be reconciled here, moving workloads to worker-2)
 
-	// Phase 2: remove orphans
+	// Phase 2: remove orphans — orphan server exists at provider
+	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "4", Name: n.Server("worker-1"), IPv4: "5.6.7.8"})
 	ServersRemoveOrphans(context.Background(), dc, live, cfg)
 	if !log.has("delete-server:" + n.Server("worker-1")) {
 		t.Error("orphan worker-1 not removed")

@@ -32,8 +32,7 @@ func init() {
 	provider.RegisterCompute("test-reconcile", provider.CredentialSchema{Name: "test-reconcile"}, func(creds map[string]string) provider.ComputeProvider {
 		return activeMock
 	})
-	kube.CaddyConfigTimeout = 10 * time.Millisecond
-	kube.CaddyConfigPollInterval = time.Millisecond
+	kube.SetTestTiming(time.Millisecond, time.Millisecond)
 }
 
 // ── Operation log ─────────────────────────────────────────────────────────────
@@ -148,21 +147,15 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "delete service/", Result: testutil.MockResult{}},
 			{Prefix: "delete cronjob", Result: testutil.MockResult{}},
 			{Prefix: "get service", Result: testutil.MockResult{Output: []byte("'80'")}},
-			// FirstPod: get pods ... -o jsonpath → returns pod name
-			{Prefix: "jsonpath='{.items[0].metadata.name}'", Result: testutil.MockResult{Output: []byte("'caddy-pod'")}},
 			// WaitRollout: get pods ... -o json → returns ready pod list
 			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(readyPodJSON)}},
-			// sha256sum — return a hash that will be checked against expected.
-			// ApplyCaddyConfig polls until hash matches. We return the wildcard
-			// "match everything" approach: the exec command contains the hash check,
-			// and we intercept it to return whatever hash was expected.
-			{Prefix: "sha256sum", Result: testutil.MockResult{Output: []byte("0000000000000000000000000000000000000000000000000000000000000000  /etc/caddy/Caddyfile")}},
-			{Prefix: "caddy reload", Result: testutil.MockResult{}},
-			{Prefix: "test -f", Result: testutil.MockResult{Output: []byte("ready")}},
-			{Prefix: "curl -sk", Result: testutil.MockResult{Output: []byte("'200'")}},
-			{Prefix: "exec", Result: testutil.MockResult{}},
-			// get deployment caddy — fail (not found) so ApplyCaddyConfig takes first-deploy path
-			{Prefix: "get deployment caddy", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
+			// Ingress: ACME cert check + HTTPS wait
+			{Prefix: "command -v jq", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},          // no jq, use grep fallback
+			{Prefix: "kubectl -n kube-system exec", Result: testutil.MockResult{Output: []byte("found")}}, // cert exists in acme.json
+			{Prefix: "curl -s", Result: testutil.MockResult{Output: []byte("'200'")}},
+			{Prefix: "delete ingress", Result: testutil.MockResult{}},
+			// EnsureTraefikACME
+			{Prefix: "cat <<", Result: testutil.MockResult{}},
 			{Prefix: "get deploy", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get statefulset", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get configmap", Result: testutil.MockResult{Output: []byte(`{"data":{}}`)}},

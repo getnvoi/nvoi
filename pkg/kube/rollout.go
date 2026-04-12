@@ -23,9 +23,17 @@ type ProgressEmitter interface {
 	Progress(msg string)
 }
 
+// rolloutPollInterval is the interval between readiness polls.
+var rolloutPollInterval = 3 * time.Second
+
 // stabilityDelay is the pause between "all ready" and the verification poll.
-// Exported as a variable so tests can shorten it.
 var stabilityDelay = 4 * time.Second
+
+// SetTestTiming overrides poll interval and stability delay for tests.
+func SetTestTiming(poll, stability time.Duration) {
+	rolloutPollInterval = poll
+	stabilityDelay = stability
+}
 
 func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string, hasHealthCheck bool, emitter ProgressEmitter) error {
 	selector := fmt.Sprintf("%s=%s", utils.LabelAppName, name)
@@ -35,7 +43,7 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 	// that happen after the pod briefly reaches Ready.
 	initialRestarts := map[string]int{}
 
-	err := utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
+	err := utils.Poll(ctx, rolloutPollInterval, 5*time.Minute, func() (bool, error) {
 		cmd := kubectl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {

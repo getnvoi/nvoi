@@ -3,7 +3,6 @@ package hetzner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -141,8 +140,8 @@ func TestDeleteServer_NotFound(t *testing.T) {
 	}))
 
 	err := c.DeleteServer(context.Background(), deleteServerRequest("gone-server"))
-	if !errors.Is(err, utils.ErrNotFound) {
-		t.Fatalf("DeleteServer should return ErrNotFound for non-existent server, got: %v", err)
+	if err != nil {
+		t.Fatalf("DeleteServer should be idempotent (nil for absent server), got: %v", err)
 	}
 }
 
@@ -427,8 +426,8 @@ func TestDeleteFirewall_NotFound(t *testing.T) {
 	}))
 
 	err := c.DeleteFirewall(context.Background(), "nonexistent")
-	if err == nil || !errors.Is(err, utils.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got: %v", err)
+	if err != nil {
+		t.Fatalf("DeleteFirewall should be idempotent (nil for absent), got: %v", err)
 	}
 }
 
@@ -468,8 +467,8 @@ func TestDeleteNetwork_NotFound(t *testing.T) {
 	}))
 
 	err := c.DeleteNetwork(context.Background(), "nonexistent")
-	if err == nil || !errors.Is(err, utils.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got: %v", err)
+	if err != nil {
+		t.Fatalf("DeleteNetwork should be idempotent (nil for absent), got: %v", err)
 	}
 }
 

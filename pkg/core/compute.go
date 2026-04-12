@@ -108,7 +108,6 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	}); err != nil {
 		return nil, fmt.Errorf("SSH not reachable on %s: %w", srv.IPv4, err)
 	}
-	defer ssh.Close()
 	out.Success("SSH ready")
 
 	out.Progress("ensuring swap")
@@ -120,9 +119,18 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 
 	out.Progress("ensuring Docker")
 	if err := infra.EnsureDocker(ctx, ssh); err != nil {
+		ssh.Close()
 		return nil, fmt.Errorf("docker on %s: %w", srv.IPv4, err)
 	}
 	out.Success("Docker ready")
+
+	// Reconnect SSH so the session picks up the docker group membership.
+	ssh.Close()
+	ssh, err = req.Connect(ctx, srv.IPv4+":22")
+	if err != nil {
+		return nil, fmt.Errorf("reconnect SSH after docker setup: %w", err)
+	}
+	defer ssh.Close()
 
 	srvNode := infra.Node{PublicIP: srv.IPv4, PrivateIP: srv.PrivateIP}
 	var masterSSH utils.SSHClient
@@ -191,21 +199,30 @@ func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
 	serverName := names.Server(req.Name)
 	out.Command("instance", "delete", serverName)
 
-	// Detach any volumes attached to this server before deleting.
-	volumes, _ := prov.ListVolumes(ctx, names.Labels())
-	for _, vol := range volumes {
-		if vol.ServerName == serverName {
-			_ = prov.DetachVolume(ctx, vol.Name)
+	// Check existence first for informational message.
+	servers, _ := prov.ListServers(ctx, names.Labels())
+	found := false
+	for _, s := range servers {
+		if s.Name == serverName {
+			found = true
+			break
 		}
 	}
 
-	// Node drain + kubectl delete node is handled by the reconciler (DrainNode)
-	// before this function is called. ComputeDelete only deletes the provider server.
+	if !found {
+		out.Success(serverName + " already deleted")
+		return nil
+	}
 
-	return prov.DeleteServer(ctx, provider.DeleteServerRequest{
+	// DeleteServer handles: detach firewall → detach volumes → delete → wait gone.
+	if err := prov.DeleteServer(ctx, provider.DeleteServerRequest{
 		Name:   serverName,
 		Labels: names.Labels(),
-	})
+	}); err != nil {
+		return err
+	}
+	out.Success(serverName + " deleted")
+	return nil
 }
 
 type ComputeListRequest struct {

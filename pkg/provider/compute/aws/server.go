@@ -127,10 +127,22 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return err
 	}
 	if inst == nil {
-		return utils.ErrNotFound
+		return nil // idempotent — already gone
 	}
 
 	instanceID := deref(inst.InstanceId)
+
+	// Detach volumes before termination — AWS volumes survive instance termination
+	for _, bdm := range inst.BlockDeviceMappings {
+		if bdm.Ebs == nil || bdm.Ebs.VolumeId == nil {
+			continue
+		}
+		volID := deref(bdm.Ebs.VolumeId)
+		c.ec2.DetachVolume(ctx, &ec2.DetachVolumeInput{VolumeId: aws.String(volID)})
+		_ = c.waitForVolumeAvailable(ctx, volID)
+	}
+
+	// Terminate instance
 	_, err = c.ec2.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []string{instanceID},
 	})

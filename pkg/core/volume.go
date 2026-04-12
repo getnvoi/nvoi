@@ -97,6 +97,21 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 
 	out.Command("volume", "delete", volumeName)
 
+	// Check existence
+	volumes, _ := prov.ListVolumes(ctx, names.Labels())
+	found := false
+	for _, v := range volumes {
+		if v.Name == volumeName {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		out.Success(volumeName + " already deleted")
+		return nil
+	}
+
 	servers, err := prov.ListServers(ctx, names.Labels())
 	if err == nil {
 		for _, s := range servers {
@@ -112,7 +127,11 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 		}
 	}
 
-	return prov.DeleteVolume(ctx, volumeName)
+	if err := prov.DeleteVolume(ctx, volumeName); err != nil {
+		return err
+	}
+	out.Success(volumeName + " deleted")
+	return nil
 }
 
 type VolumeListRequest struct {

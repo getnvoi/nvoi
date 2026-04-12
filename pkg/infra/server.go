@@ -10,26 +10,37 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// WaitForCertificate polls until the ACME certificate file exists on disk.
-// certPath is the full path to the Caddy cert JSON file (from Names.CaddyCertPath).
-func WaitForCertificate(ctx context.Context, ssh utils.SSHClient, certPath string) error {
-	cmd := fmt.Sprintf("sudo test -f %s && echo ready || echo waiting", certPath)
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
-		out, err := ssh.Run(ctx, cmd)
-		if err != nil {
-			return false, nil
-		}
-		return strings.TrimSpace(string(out)) == "ready", nil
+// WaitForCertificate polls until Traefik's ACME storage contains the domain cert.
+// Uses jq for structured JSON query, falls back to grep if jq is unavailable.
+func WaitForCertificate(ctx context.Context, ssh utils.SSHClient, domain string) error {
+	jqCmd := fmt.Sprintf(
+		`kubectl -n kube-system exec deploy/traefik -- cat /data/acme.json 2>/dev/null | jq -e '.letsencrypt.Certificates[]? | select(.domain.main == "%s")' >/dev/null 2>&1`,
+		domain)
+	grepCmd := fmt.Sprintf(
+		`kubectl -n kube-system exec deploy/traefik -- cat /data/acme.json 2>/dev/null | grep -q %q`,
+		domain)
+
+	// Detect jq availability once.
+	_, jqErr := ssh.Run(ctx, "command -v jq >/dev/null 2>&1")
+	cmd := grepCmd
+	if jqErr == nil {
+		cmd = jqCmd
+	}
+
+	return utils.Poll(ctx, 3*time.Second, 10*time.Minute, func() (bool, error) {
+		_, err := ssh.Run(ctx, cmd)
+		return err == nil, nil
 	})
 }
 
-// WaitForHTTPS verifies the domain responds over HTTPS from the server.
-// Any non-5xx response = success (TLS works, service is up). Auth (401/403) is fine.
+// WaitForHTTPS verifies the domain responds over HTTPS with a valid certificate.
+// Rejects self-signed certs — confirms Traefik has loaded the ACME cert into its router.
+// Any non-5xx response = success. Auth (401/403) is fine.
 // Runs curl via SSH — no dependency on client DNS propagation.
 func WaitForHTTPS(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
 	url := fmt.Sprintf("https://%s%s", domain, healthPath)
-	cmd := fmt.Sprintf("curl -sk --connect-timeout 5 -o /dev/null -w '%%{http_code}' %s", url)
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+	cmd := fmt.Sprintf("curl -s --connect-timeout 5 -o /dev/null -w '%%{http_code}' %s", url)
+	return utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
 			return false, nil

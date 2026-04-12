@@ -294,6 +294,7 @@ func (e *runner) dispatch(ctx context.Context, kind, name string, params map[str
 				Service: utils.GetString(params, "service"),
 				Domains: utils.GetStringSlice(params, "domains"),
 			},
+			ACME: true,
 		})
 
 	case "ingress.delete":

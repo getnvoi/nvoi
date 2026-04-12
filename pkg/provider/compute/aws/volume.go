@@ -180,7 +180,7 @@ func (c *Client) DeleteVolume(ctx context.Context, name string) error {
 		return err
 	}
 	if vol == nil {
-		return utils.ErrNotFound
+		return nil // idempotent — already gone
 	}
 	if len(vol.Attachments) > 0 {
 		c.ec2.DetachVolume(ctx, &ec2.DetachVolumeInput{VolumeId: vol.VolumeId})

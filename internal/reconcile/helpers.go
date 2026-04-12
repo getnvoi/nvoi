@@ -48,9 +48,7 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext) *config.LiveSta
 		}
 	}
 	for _, w := range res.Workloads {
-		if w.Name != "caddy" {
-			state.Services = append(state.Services, w.Name)
-		}
+		state.Services = append(state.Services, w.Name)
 	}
 	for _, c := range res.Crons {
 		state.Crons = append(state.Crons, c.Name)

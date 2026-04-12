@@ -73,16 +73,8 @@ func teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	}
 
 	// Firewall + network — shared provider resources, always nuked
-	names, err := dc.Cluster.Names()
-	if err != nil {
-		return nil
-	}
-	prov, err := dc.Cluster.Compute()
-	if err != nil {
-		return nil
-	}
-	_ = prov.DeleteFirewall(ctx, names.Firewall())
-	_ = prov.DeleteNetwork(ctx, names.Network())
+	_ = app.FirewallDelete(ctx, app.FirewallDeleteRequest{Cluster: dc.Cluster})
+	_ = app.NetworkDelete(ctx, app.NetworkDeleteRequest{Cluster: dc.Cluster})
 
 	return nil
 }

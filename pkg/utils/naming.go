@@ -51,8 +51,6 @@ func (n *Names) Bucket(name string) string { return fmt.Sprintf("%s-%s", n.Base(
 func (n *Names) KubeNamespace() string          { return n.Base() }
 func (n *Names) KubeWorkload(svc string) string { return svc }
 func (n *Names) KubeService(svc string) string  { return svc }
-func (n *Names) KubeCaddy() string              { return "caddy" }
-func (n *Names) KubeCaddyConfig() string        { return "caddy-config" }
 func (n *Names) KubeSecrets() string            { return "secrets" }
 
 // ── Labels ─────────────────────────────────────────────────────────────────────
@@ -71,15 +69,6 @@ func (n *Names) VolumeMountPath(name string) string {
 	return fmt.Sprintf("/mnt/data/%s-%s", n.Base(), name)
 }
 
-func (n *Names) CaddyDataPath() string {
-	return fmt.Sprintf("/var/lib/nvoi/caddy/%s", n.Stack())
-}
-
-func (n *Names) CaddyCertPath(domain string) string {
-	return fmt.Sprintf("%s/caddy/certificates/acme-v02.api.letsencrypt.org-directory/%s/%s.json",
-		n.CaddyDataPath(), domain, domain)
-}
-
 func (n *Names) NamedVolumeHostPath(volume string) string {
 	return fmt.Sprintf("/var/lib/nvoi/volumes/%s/%s", n.Stack(), volume)
 }
@@ -96,7 +85,6 @@ const (
 // ── Docker ─────────────────────────────────────────────────────────────────────
 
 const (
-	CaddyImage         = "caddy:2-alpine"
 	RegistryImage      = "registry:2"
 	RegistryPort       = 5000
 	DockerDaemonConfig = "/etc/docker/daemon.json"
@@ -108,10 +96,9 @@ func RegistryAddr(ip string) string {
 
 // ── Remote file paths ──────────────────────────────────────────────────────────
 
-func KubeManifestPath() string     { return fmt.Sprintf("/home/%s/nvoi-k8s.yaml", DefaultUser) }
-func EnvFilePath() string          { return fmt.Sprintf("/home/%s/.nvoi.env", DefaultUser) }
-func DeployKeyPath() string        { return fmt.Sprintf("/home/%s/.ssh/nvoi_deploy_key", DefaultUser) }
-func CaddyfileStagingPath() string { return fmt.Sprintf("/home/%s/Caddyfile.k8s", DefaultUser) }
+func KubeManifestPath() string { return fmt.Sprintf("/home/%s/nvoi-k8s.yaml", DefaultUser) }
+func EnvFilePath() string      { return fmt.Sprintf("/home/%s/.nvoi.env", DefaultUser) }
+func DeployKeyPath() string    { return fmt.Sprintf("/home/%s/.ssh/nvoi_deploy_key", DefaultUser) }
 
 // ── K8s label keys ─────────────────────────────────────────────────────────────
 

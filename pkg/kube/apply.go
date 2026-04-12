@@ -1,4 +1,4 @@
-// Package kube handles Kubernetes YAML generation, kubectl operations over SSH, Caddy ingress configuration, and rollout monitoring.
+// Package kube handles Kubernetes YAML generation, kubectl operations over SSH, Ingress resource management, and rollout monitoring.
 package kube
 
 import (

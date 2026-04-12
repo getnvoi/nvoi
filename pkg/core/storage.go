@@ -128,12 +128,14 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 			return err
 		}
 		bucketName := names.Bucket(req.Name)
-		out.Progress(fmt.Sprintf("deleting bucket %s", bucketName))
 		if err := bucket.DeleteBucket(ctx, bucketName); err != nil {
 			if !errors.Is(err, utils.ErrNotFound) {
 				return err
 			}
 			bucketAlreadyGone = true
+			out.Success(fmt.Sprintf("%s already deleted", bucketName))
+		} else {
+			out.Success(fmt.Sprintf("%s deleted", bucketName))
 		}
 	}
 

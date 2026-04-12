@@ -82,9 +82,11 @@ func (l *opLog) all() []string {
 // ── Tracking compute provider ─────────────────────────────────────────────────
 
 type trackingCompute struct {
-	log     *opLog
-	servers []*provider.Server
-	volumes []*provider.Volume
+	log       *opLog
+	servers   []*provider.Server
+	volumes   []*provider.Volume
+	firewalls []*provider.Firewall
+	networks  []*provider.Network
 }
 
 func (c *trackingCompute) ValidateCredentials(context.Context) error { return nil }
@@ -105,10 +107,10 @@ func (c *trackingCompute) DeleteNetwork(ctx context.Context, name string) error 
 	return c.log.record("delete-network:" + name)
 }
 func (c *trackingCompute) ListAllFirewalls(context.Context) ([]*provider.Firewall, error) {
-	return nil, nil
+	return c.firewalls, nil
 }
 func (c *trackingCompute) ListAllNetworks(context.Context) ([]*provider.Network, error) {
-	return nil, nil
+	return c.networks, nil
 }
 func (c *trackingCompute) EnsureVolume(context.Context, provider.CreateVolumeRequest) (*provider.Volume, error) {
 	return nil, nil
@@ -214,7 +216,17 @@ func init() {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func setupTeardown(log *opLog) *config.DeployContext {
-	activeCompute = &trackingCompute{log: log}
+	n := names()
+	activeCompute = &trackingCompute{
+		log: log,
+		servers: []*provider.Server{
+			{ID: "1", Name: n.Server("master"), IPv4: "1.2.3.4"},
+			{ID: "2", Name: n.Server("worker"), IPv4: "5.6.7.8"},
+		},
+		volumes:   []*provider.Volume{{ID: "1", Name: n.Volume("pgdata")}},
+		firewalls: []*provider.Firewall{{ID: "1", Name: n.Firewall()}},
+		networks:  []*provider.Network{{ID: "1", Name: n.Network()}},
+	}
 	activeDNS = &trackingDNS{log: log}
 	activeBucket = &trackingBucket{log: log}
 
@@ -395,6 +407,11 @@ func TestTeardown_MultipleWorkers(t *testing.T) {
 			"worker-b": {Type: "cx33", Region: "fsn1", Role: "worker"},
 		},
 	}
+	activeCompute.servers = []*provider.Server{
+		{ID: "1", Name: n.Server("master")},
+		{ID: "2", Name: n.Server("worker-a")},
+		{ID: "3", Name: n.Server("worker-b")},
+	}
 
 	_ = teardown(context.Background(), dc, cfg, false, false)
 
@@ -543,6 +560,10 @@ func TestTeardown_MultipleVolumes(t *testing.T) {
 			"pgdata": {Size: 20, Server: "master"},
 			"redis":  {Size: 10, Server: "master"},
 		},
+	}
+	activeCompute.volumes = []*provider.Volume{
+		{ID: "1", Name: n.Volume("pgdata")},
+		{ID: "2", Name: n.Volume("redis")},
 	}
 
 	_ = teardown(context.Background(), dc, cfg, true, false)

@@ -41,7 +41,7 @@ func InstallK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.
 	// Install k3s server
 	fmt.Fprintln(w, "installing k3s server...")
 	cmd := fmt.Sprintf(
-		`curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server --disable traefik --disable servicelb --write-kubeconfig-mode 644 --node-ip %s --advertise-address %s --tls-san %s --tls-san %s --cluster-cidr %s --service-cidr %s --flannel-backend vxlan --flannel-iface %s' sh -`,
+		`curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server --write-kubeconfig-mode 644 --node-ip %s --advertise-address %s --tls-san %s --tls-san %s --cluster-cidr %s --service-cidr %s --flannel-backend vxlan --flannel-iface %s' sh -`,
 		node.PrivateIP, node.PrivateIP, node.PrivateIP, node.PublicIP, utils.K3sClusterCIDR, utils.K3sServiceCIDR, privateIface,
 	)
 	if err := ssh.RunStream(ctx, cmd, w, w); err != nil {

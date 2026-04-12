@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 func TestVolumes_FreshDeploy(t *testing.T) {
@@ -35,6 +36,8 @@ func TestVolumes_OrphanRemoved(t *testing.T) {
 		Volumes: map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master"}},
 	}
 	live := &config.LiveState{Volumes: []string{"pgdata", "old-cache"}}
+	// Orphan volume exists at the provider
+	activeMock.Volumes = []*provider.Volume{{ID: "1", Name: n.Volume("old-cache")}}
 
 	if err := Volumes(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -79,6 +82,8 @@ func TestVolumes_MixedState(t *testing.T) {
 		},
 	}
 	live := &config.LiveState{Volumes: []string{"pgdata", "old-cache"}}
+	// Orphan volume exists at the provider
+	activeMock.Volumes = []*provider.Volume{{ID: "1", Name: n.Volume("old-cache")}}
 
 	if err := Volumes(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)

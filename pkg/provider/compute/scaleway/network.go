@@ -68,7 +68,7 @@ func (c *Client) DeleteNetwork(ctx context.Context, name string) error {
 		return err
 	}
 	if net == nil {
-		return utils.ErrNotFound
+		return nil // idempotent — already gone
 	}
 	err = c.api.Do(ctx, "DELETE", c.vpcPath(fmt.Sprintf("/private-networks/%s", net.ID)), nil, nil)
 	if err != nil && !utils.IsNotFound(err) {

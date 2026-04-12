@@ -177,7 +177,17 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return err
 	}
 	if srv == nil {
-		return utils.ErrNotFound
+		return nil // idempotent — already gone
+	}
+
+	// Detach volumes before deletion
+	volumes, err := c.getServerVolumeIDs(ctx, srv.ID)
+	if err == nil {
+		for _, volID := range volumes {
+			if err := c.detachVolumeByID(ctx, volID); err != nil {
+				return fmt.Errorf("detach volume %s: %w", volID, err)
+			}
+		}
 	}
 
 	// Terminate (async)
@@ -198,6 +208,29 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 	}
 
 	return nil
+}
+
+// getServerVolumeIDs returns volume IDs attached to a server.
+func (c *Client) getServerVolumeIDs(ctx context.Context, serverID string) ([]string, error) {
+	var resp struct {
+		Server struct {
+			Volumes map[string]any `json:"volumes"`
+		} `json:"server"`
+	}
+	if err := c.doInstance(ctx, "GET", fmt.Sprintf("/servers/%s", serverID), nil, &resp); err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, volData := range resp.Server.Volumes {
+		volMap, ok := volData.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, ok := volMap["id"].(string); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (c *Client) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {

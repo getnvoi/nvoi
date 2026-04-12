@@ -60,20 +60,15 @@ func (c *Client) DeleteFirewall(ctx context.Context, name string) error {
 	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/firewalls?name=%s", name), nil, &resp); err != nil {
 		return err
 	}
-	found := false
 	for _, fw := range resp.Firewalls {
 		if fw.Name == name {
-			found = true
 			err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/firewalls/%s", strconv.FormatInt(fw.ID, 10)), nil, nil)
 			if err != nil && !utils.IsNotFound(err) {
 				return err
 			}
 		}
 	}
-	if !found {
-		return utils.ErrNotFound
-	}
-	return nil
+	return nil // idempotent — not found is fine
 }
 
 func (c *Client) detachFirewall(ctx context.Context, firewallID, serverID string) error {

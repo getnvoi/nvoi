@@ -82,7 +82,7 @@ func (c *Client) DeleteFirewall(ctx context.Context, name string) error {
 		return err
 	}
 	if fw == nil {
-		return utils.ErrNotFound
+		return nil // idempotent — already gone
 	}
 	err = c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s", fw.ID), nil, nil)
 	if err != nil && !utils.IsNotFound(err) {

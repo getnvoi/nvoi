@@ -51,7 +51,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 	if live != nil {
 		desired := toSet(svcNames)
 		// Exclude package-managed services from orphan detection
-		protected := map[string]bool{"caddy": true}
+		protected := map[string]bool{}
 		for dbName := range cfg.Database {
 			protected[dbName+"-db"] = true
 		}
