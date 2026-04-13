@@ -383,7 +383,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := utils.ResolveDBName(dbName, dbNames(m.cfg))
+				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
 				return app.CronRun(cmd.Context(), app.CronRunRequest{
 					Cluster: m.dc.Cluster, Name: name + "-db-backup",
 				})
@@ -401,7 +401,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Short: "List backups in bucket",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := utils.ResolveDBName(dbName, dbNames(m.cfg))
+				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
 				return core.DatabaseBackupList(cmd, m.dc, name)
 			}
 			return cli.DatabaseBackupList(m.client, m.repoPath, utils.ResolveDBName(dbName, nil))
@@ -414,7 +414,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := utils.ResolveDBName(dbName, dbNames(m.cfg))
+				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
 				outFile, _ := cmd.Flags().GetString("file")
 				return core.DatabaseBackupDownload(cmd, m.dc, name, args[0], outFile)
 			}
@@ -433,7 +433,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := utils.ResolveDBName(dbName, dbNames(m.cfg))
+				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
 				return core.DatabaseSQL(cmd, m.dc, name, args[0])
 			}
 			return cli.DatabaseSQL(m.client, m.repoPath, utils.ResolveDBName(dbName, nil), args[0])
@@ -441,15 +441,4 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 	})
 
 	return cmd
-}
-
-func dbNames(cfg *config.AppConfig) []string {
-	if cfg == nil {
-		return nil
-	}
-	names := make([]string, 0, len(cfg.Database))
-	for n := range cfg.Database {
-		names = append(names, n)
-	}
-	return names
 }

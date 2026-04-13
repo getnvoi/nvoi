@@ -49,6 +49,18 @@ type AppConfig struct {
 	ACMEEmail string                 `yaml:"acme_email,omitempty"`
 }
 
+// DatabaseNames returns the names of all configured databases.
+func (c *AppConfig) DatabaseNames() []string {
+	if c == nil {
+		return nil
+	}
+	names := make([]string, 0, len(c.Database))
+	for n := range c.Database {
+		names = append(names, n)
+	}
+	return names
+}
+
 type DatabaseDef struct {
 	Image  string    `yaml:"image"`
 	Volume string    `yaml:"volume"`

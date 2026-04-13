@@ -39,23 +39,12 @@ func NewDatabaseCmd(dc *config.DeployContext) *cobra.Command {
 	}
 
 	resolve := func() string {
-		return utils.ResolveDBName(dbName, dbNames(cfg))
+		return utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	}
 
 	cmd.AddCommand(newDatabaseBackupCmd(dc, resolve))
 	cmd.AddCommand(newDatabaseSQLCmd(dc, resolve))
 	return cmd
-}
-
-func dbNames(cfg *config.AppConfig) []string {
-	if cfg == nil {
-		return nil
-	}
-	names := make([]string, 0, len(cfg.Database))
-	for n := range cfg.Database {
-		names = append(names, n)
-	}
-	return names
 }
 
 func newDatabaseBackupCmd(dc *config.DeployContext, resolve func() string) *cobra.Command {
