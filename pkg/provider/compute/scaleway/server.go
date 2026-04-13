@@ -177,7 +177,27 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return err
 	}
 	if srv == nil {
-		return utils.ErrNotFound
+		return nil // idempotent — already gone
+	}
+
+	// Release custom security group before deletion.
+	// Scaleway SG delete fails with "group is in use" if any instance references it.
+	// Reassigning to the project default SG frees the custom SG for deletion.
+	// Best-effort: server termination auto-drops the association, but explicit
+	// release prevents races between DeleteServer poll and DeleteFirewall.
+	if err := c.releaseSecurityGroup(ctx, srv.ID); err != nil {
+		// Non-fatal — proceed with deletion. The SG association will auto-drop
+		// when the server is terminated, and DeleteFirewall retries on "in use".
+	}
+
+	// Detach volumes before deletion
+	volumes, err := c.getServerVolumeIDs(ctx, srv.ID)
+	if err == nil {
+		for _, volID := range volumes {
+			if err := c.detachVolumeByID(ctx, volID); err != nil {
+				return fmt.Errorf("detach volume %s: %w", volID, err)
+			}
+		}
 	}
 
 	// Terminate (async)
@@ -189,15 +209,75 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		}
 	}
 
-	// Poll until gone
+	// Poll until gone — only trust s==nil when the API call succeeded.
+	// API errors (rate limit, network) must retry, not short-circuit.
 	if err := utils.Poll(ctx, 3*time.Second, 90*time.Second, func() (bool, error) {
 		s, err := c.getServerByName(ctx, req.Name)
-		return s == nil || err != nil, nil
+		if err != nil {
+			return false, nil // transient API error — retry
+		}
+		return s == nil, nil
 	}); err != nil {
 		return fmt.Errorf("server %s did not terminate: %w", req.Name, err)
 	}
 
 	return nil
+}
+
+// releaseSecurityGroup reassigns a server to the project's default security group,
+// freeing the custom SG for deletion. Scaleway has no explicit "detach SG" API —
+// the only way to release is to reassign to another SG.
+func (c *Client) releaseSecurityGroup(ctx context.Context, serverID string) error {
+	defaultID, err := c.getDefaultSecurityGroupID(ctx)
+	if err != nil {
+		return fmt.Errorf("find default security group: %w", err)
+	}
+	return c.doInstance(ctx, "PATCH", fmt.Sprintf("/servers/%s", serverID), map[string]any{
+		"security_group": map[string]any{"id": defaultID},
+	}, nil)
+}
+
+// getDefaultSecurityGroupID returns the project's default security group ID.
+// Every Scaleway project has exactly one default SG (project_default: true).
+func (c *Client) getDefaultSecurityGroupID(ctx context.Context) (string, error) {
+	var resp struct {
+		SecurityGroups []struct {
+			ID             string `json:"id"`
+			ProjectDefault bool   `json:"project_default"`
+		} `json:"security_groups"`
+	}
+	if err := c.doInstance(ctx, "GET", fmt.Sprintf("/security_groups?project=%s", c.projectID), nil, &resp); err != nil {
+		return "", err
+	}
+	for _, sg := range resp.SecurityGroups {
+		if sg.ProjectDefault {
+			return sg.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no default security group found for project %s", c.projectID)
+}
+
+// getServerVolumeIDs returns volume IDs attached to a server.
+func (c *Client) getServerVolumeIDs(ctx context.Context, serverID string) ([]string, error) {
+	var resp struct {
+		Server struct {
+			Volumes map[string]any `json:"volumes"`
+		} `json:"server"`
+	}
+	if err := c.doInstance(ctx, "GET", fmt.Sprintf("/servers/%s", serverID), nil, &resp); err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, volData := range resp.Server.Volumes {
+		volMap, ok := volData.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, ok := volMap["id"].(string); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (c *Client) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {

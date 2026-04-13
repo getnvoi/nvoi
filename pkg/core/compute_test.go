@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
@@ -127,5 +128,131 @@ func TestComputeSet_AuthFailed_HardError(t *testing.T) {
 	}
 	if !strings.Contains(msg, "does not accept this key") {
 		t.Errorf("should include key rejection guidance, got: %v", msg)
+	}
+}
+
+func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
+	// Track SSH connections to verify reconnect after EnsureDocker.
+	var connections []*testutil.MockSSH
+	var mu sync.Mutex
+
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	provName := "reconnect-test"
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{
+			ID: "1", Name: "nvoi-myapp-prod-master", Status: provider.ServerRunning,
+			IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
+		}},
+	}
+	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
+		return mock
+	})
+
+	cluster := Cluster{
+		AppName: "myapp", Env: "prod",
+		Provider: provName, SSHKey: sshKey,
+		Output: &testutil.MockOutput{},
+		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+			ssh := &testutil.MockSSH{
+				Prefixes: []testutil.MockPrefix{
+					{Prefix: "docker info", Result: testutil.MockResult{}},
+					{Prefix: "sudo", Result: testutil.MockResult{}},
+					{Prefix: "curl", Result: testutil.MockResult{}},
+					{Prefix: "command -v", Result: testutil.MockResult{}},
+					{Prefix: "cloud-init", Result: testutil.MockResult{}},
+					{Prefix: "swapon", Result: testutil.MockResult{Output: []byte("/swapfile")}},
+					{Prefix: "kubectl", Result: testutil.MockResult{}},
+					{Prefix: "k3s", Result: testutil.MockResult{}},
+					{Prefix: "cat", Result: testutil.MockResult{}},
+					{Prefix: "mkdir", Result: testutil.MockResult{}},
+					{Prefix: "install", Result: testutil.MockResult{}},
+					{Prefix: "systemctl", Result: testutil.MockResult{}},
+				},
+			}
+			mu.Lock()
+			connections = append(connections, ssh)
+			mu.Unlock()
+			return ssh, nil
+		},
+	}
+
+	_, _ = ComputeSet(context.Background(), ComputeSetRequest{
+		Cluster:    cluster,
+		Name:       "master",
+		ServerType: "cx21",
+		Region:     "fsn1",
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(connections) < 2 {
+		t.Fatalf("expected at least 2 SSH connections (initial + reconnect after docker), got %d", len(connections))
+	}
+
+	// First connection should be closed (pre-docker session).
+	if !connections[0].Closed {
+		t.Error("first SSH connection should be closed after EnsureDocker")
+	}
+
+	// ClearKnownHost returns "no known host" on first deploy — must NOT
+	// produce a warning. Only real failures (corrupt file, permission denied)
+	// should warn.
+	out := cluster.Output.(*testutil.MockOutput)
+	for _, w := range out.Warnings {
+		if strings.Contains(w, "clear known host") {
+			t.Errorf("'no known host' error should be silenced, got warning: %s", w)
+		}
+	}
+}
+
+func TestMasterSSH_SetAfterComputeSet(t *testing.T) {
+	// Verify that MasterSSH is NOT set by ComputeSet — it's set later by the reconcile loop.
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	provName := "masterssh-test"
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{
+			ID: "1", Name: "nvoi-myapp-prod-master", Status: provider.ServerRunning,
+			IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
+		}},
+	}
+	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
+		return mock
+	})
+
+	cluster := Cluster{
+		AppName: "myapp", Env: "prod",
+		Provider: provName, SSHKey: sshKey,
+		Output: &testutil.MockOutput{},
+		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+			return &testutil.MockSSH{
+				Prefixes: []testutil.MockPrefix{
+					{Prefix: "docker info", Result: testutil.MockResult{}},
+					{Prefix: "sudo", Result: testutil.MockResult{}},
+					{Prefix: "curl", Result: testutil.MockResult{}},
+					{Prefix: "command -v", Result: testutil.MockResult{}},
+					{Prefix: "cloud-init", Result: testutil.MockResult{}},
+					{Prefix: "swapon", Result: testutil.MockResult{Output: []byte("/swapfile")}},
+					{Prefix: "kubectl", Result: testutil.MockResult{}},
+					{Prefix: "k3s", Result: testutil.MockResult{}},
+					{Prefix: "cat", Result: testutil.MockResult{}},
+					{Prefix: "mkdir", Result: testutil.MockResult{}},
+					{Prefix: "install", Result: testutil.MockResult{}},
+					{Prefix: "systemctl", Result: testutil.MockResult{}},
+				},
+			}, nil
+		},
+	}
+
+	_, _ = ComputeSet(context.Background(), ComputeSetRequest{
+		Cluster:    cluster,
+		Name:       "master",
+		ServerType: "cx21",
+		Region:     "fsn1",
+	})
+
+	// MasterSSH must NOT be set by ComputeSet — reconcile.go sets it separately.
+	if cluster.MasterSSH != nil {
+		t.Error("ComputeSet should not set MasterSSH — that's the reconcile loop's job")
 	}
 }

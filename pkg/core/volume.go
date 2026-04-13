@@ -46,7 +46,7 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 		return nil, err
 	}
 
-	servers, err := prov.ListServers(ctx, nil)
+	servers, err := prov.ListServers(ctx, names.Labels())
 	if err != nil {
 		return nil, fmt.Errorf("list servers: %w", err)
 	}
@@ -97,9 +97,24 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 
 	out.Command("volume", "delete", volumeName)
 
-	servers, err := prov.ListServers(ctx, names.Labels())
+	// Check existence
+	volumes, _ := prov.ListVolumes(ctx, names.Labels())
+	found := false
+	for _, v := range volumes {
+		if v.Name == volumeName {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		out.Success(volumeName + " already deleted")
+		return nil
+	}
+
+	appServers, err := prov.ListServers(ctx, names.Labels())
 	if err == nil {
-		for _, s := range servers {
+		for _, s := range appServers {
 			ssh, err := req.Connect(ctx, s.IPv4+":22")
 			if err != nil {
 				out.Warning(fmt.Sprintf("ssh %s for unmount: %s", s.Name, err))
@@ -112,7 +127,11 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 		}
 	}
 
-	return prov.DeleteVolume(ctx, volumeName)
+	if err := prov.DeleteVolume(ctx, volumeName); err != nil {
+		return err
+	}
+	out.Success(volumeName + " deleted")
+	return nil
 }
 
 type VolumeListRequest struct {

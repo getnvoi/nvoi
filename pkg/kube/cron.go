@@ -99,7 +99,7 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 // CreateJobFromCronJob creates a one-off Job from an existing CronJob.
 // Uses kubectl create job --from=cronjob/<name>.
 func CreateJobFromCronJob(ctx context.Context, ssh utils.SSHClient, ns, cronName, jobName string) error {
-	cmd := kubectl(ns, fmt.Sprintf("create job %s --from=cronjob/%s", jobName, cronName))
+	cmd := kctl(ns, fmt.Sprintf("create job %s --from=cronjob/%s", jobName, cronName))
 	if _, err := ssh.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("create job from cronjob/%s: %w", cronName, err)
 	}
@@ -115,7 +115,7 @@ func WaitForJob(ctx context.Context, ssh utils.SSHClient, ns, jobName string, em
 
 	return utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
 		// Check job completion status first.
-		jobOut, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("get job %s -o json", jobName)))
+		jobOut, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get job %s -o json", jobName)))
 		if err != nil {
 			return false, nil
 		}
@@ -136,7 +136,7 @@ func WaitForJob(ctx context.Context, ssh utils.SSHClient, ns, jobName string, em
 		}
 
 		// Poll pods for terminal container states.
-		cmd := kubectl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
+		cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
 			return false, nil
@@ -176,7 +176,7 @@ func WaitForJob(ctx context.Context, ssh utils.SSHClient, ns, jobName string, em
 }
 
 func DeleteCronByName(ctx context.Context, ssh utils.SSHClient, ns, name string) error {
-	if _, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("delete cronjob/%s --ignore-not-found", name))); err != nil {
+	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete cronjob/%s --ignore-not-found", name))); err != nil {
 		return fmt.Errorf("delete cronjob/%s: %w", name, err)
 	}
 	return nil

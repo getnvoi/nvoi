@@ -66,9 +66,11 @@ func (c *countingSSH) Close() error {
 }
 
 func TestInstallK3sMaster_AlreadyInstalled(t *testing.T) {
-	mock := testutil.NewMockSSH(map[string]testutil.MockResult{
-		"command -v kubectl >/dev/null 2>&1 && sudo k3s kubectl get nodes 2>/dev/null | grep -q ' Ready '": {},
-	})
+	mock := testutil.NewMockSSH(map[string]testutil.MockResult{})
+	mock.Prefixes = []testutil.MockPrefix{
+		// Idempotency check: kubectl exists + jsonpath returns True
+		{Prefix: "command -v kubectl", Result: testutil.MockResult{Output: []byte("True")}},
+	}
 
 	var buf bytes.Buffer
 	node := Node{PublicIP: "1.2.3.4", PrivateIP: "10.0.0.1"}
@@ -91,31 +93,27 @@ func TestInstallK3sMaster_FreshInstall(t *testing.T) {
 		utils.DefaultUser, utils.DefaultUser, utils.DefaultUser, utils.DefaultUser,
 	)
 
-	getNodesCmd := fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config kubectl get nodes", utils.DefaultUser)
-
 	mock := testutil.NewMockSSH(map[string]testutil.MockResult{
-		// kubectl check fails — not installed
-		"command -v kubectl >/dev/null 2>&1 && sudo k3s kubectl get nodes 2>/dev/null | grep -q ' Ready '": {
-			Err: fmt.Errorf("not installed"),
-		},
 		// discover private interface
 		fmt.Sprintf("ip -o -4 addr show | awk '/%s/{print $2}' | head -1", privateIP): {
 			Output: []byte("eth1\n"),
 		},
 		// kubeconfig setup
 		kubeconfigCmd: {},
-		// poll kubectl get nodes — returns Ready on first try (avoids 3s poll wait)
-		getNodesCmd: {Output: []byte("master   Ready   control-plane   1m   v1.28.0\n")},
 	})
 
 	mock.Prefixes = []testutil.MockPrefix{
-		// configureK3sRegistry: mkdir + tee heredoc (contains "tee")
+		// Idempotency check: kubectl not installed
+		{Prefix: "command -v kubectl", Result: testutil.MockResult{Err: fmt.Errorf("not installed")}},
+		// configureK3sRegistry: mkdir + tee heredoc
 		{Prefix: "sudo mkdir -p " + utils.K3sConfigDir, Result: testutil.MockResult{}},
 		{Prefix: "tee", Result: testutil.MockResult{}},
-		// k3s restart commands (fire-and-forget in configureK3sRegistry)
-		{Prefix: "sudo systemctl restart k3s", Result: testutil.MockResult{}},
+		// k3s not active on fresh install — skip restart
+		{Prefix: "sudo systemctl is-active", Result: testutil.MockResult{Err: fmt.Errorf("inactive")}},
 		// k3s install via RunStream
 		{Prefix: "curl -sfL https://get.k3s.io", Result: testutil.MockResult{Output: []byte("k3s installed\n")}},
+		// Wait for ready: jsonpath returns True
+		{Prefix: "KUBECONFIG", Result: testutil.MockResult{Output: []byte("True")}},
 	}
 
 	var buf bytes.Buffer
@@ -219,17 +217,73 @@ func TestEnsureRegistry_NoExistingContainer(t *testing.T) {
 	}
 }
 
-func TestConfigureK3sRegistry(t *testing.T) {
+func TestConfigureK3sRegistry_FreshInstall(t *testing.T) {
+	// Neither k3s nor k3s-agent is active — skip restart, no error.
 	mock := testutil.NewMockSSH(map[string]testutil.MockResult{})
 	mock.Prefixes = []testutil.MockPrefix{
-		{Prefix: "tee", Result: testutil.MockResult{}},
 		{Prefix: "sudo mkdir -p", Result: testutil.MockResult{}},
-		{Prefix: "sudo systemctl restart k3s", Result: testutil.MockResult{}},
+		{Prefix: "tee", Result: testutil.MockResult{}},
+		// is-active fails for both — neither service running yet
+		{Prefix: "sudo systemctl is-active", Result: testutil.MockResult{Err: fmt.Errorf("inactive")}},
+	}
+
+	err := configureK3sRegistry(context.Background(), mock, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("expected nil error on fresh install, got: %v", err)
+	}
+}
+
+func TestConfigureK3sRegistry_RestartAndWait(t *testing.T) {
+	// k3s server is active — restart and wait for ready.
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "sudo mkdir -p", Result: testutil.MockResult{}},
+			{Prefix: "tee", Result: testutil.MockResult{}},
+			// k3s is active
+			{Prefix: "sudo systemctl is-active --quiet k3s", Result: testutil.MockResult{}},
+			{Prefix: "sudo systemctl restart k3s", Result: testutil.MockResult{}},
+			// k3s ready check — jsonpath returns True
+			{Prefix: "sudo k3s kubectl get nodes", Result: testutil.MockResult{Output: []byte("True")}},
+			// k3s-agent is not active
+			{Prefix: "sudo systemctl is-active --quiet k3s-agent", Result: testutil.MockResult{Err: fmt.Errorf("inactive")}},
+		},
 	}
 
 	err := configureK3sRegistry(context.Background(), mock, "10.0.0.1")
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
+	}
+
+	// Verify restart was called
+	foundRestart := false
+	for _, call := range mock.Calls {
+		if strings.Contains(call, "systemctl restart k3s") && !strings.Contains(call, "k3s-agent") {
+			foundRestart = true
+		}
+	}
+	if !foundRestart {
+		t.Error("expected k3s restart call")
+	}
+}
+
+func TestConfigureK3sRegistry_RestartFails(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "sudo mkdir -p", Result: testutil.MockResult{}},
+			{Prefix: "tee", Result: testutil.MockResult{}},
+			// k3s is active
+			{Prefix: "sudo systemctl is-active --quiet k3s", Result: testutil.MockResult{}},
+			// restart fails
+			{Prefix: "sudo systemctl restart k3s", Result: testutil.MockResult{Err: fmt.Errorf("restart failed")}},
+		},
+	}
+
+	err := configureK3sRegistry(context.Background(), mock, "10.0.0.1")
+	if err == nil {
+		t.Fatal("expected error when restart fails")
+	}
+	if !strings.Contains(err.Error(), "restart k3s") {
+		t.Errorf("error should mention restart, got: %v", err)
 	}
 }
 

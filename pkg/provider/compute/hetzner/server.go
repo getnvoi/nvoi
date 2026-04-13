@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -98,16 +99,45 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return err
 	}
 	if srv == nil {
-		return utils.ErrNotFound
+		return nil // idempotent — already gone
 	}
 
+	// Fetch firewalls + volumes in one API call
+	firewallIDs, volumeIDs, err := c.getServerAttachments(ctx, srv.ID)
+	if err != nil {
+		return fmt.Errorf("get server attachments: %w", err)
+	}
+
+	// Detach firewalls
+	for _, fwID := range firewallIDs {
+		if err := c.detachFirewall(ctx, fwID, srv.ID); err != nil {
+			return fmt.Errorf("detach firewall %s: %w", fwID, err)
+		}
+	}
+
+	// Detach volumes
+	for _, volID := range volumeIDs {
+		if err := c.detachVolume(ctx, volID); err != nil {
+			return fmt.Errorf("detach volume %s: %w", volID, err)
+		}
+	}
+
+	// Delete server
 	if err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/servers/%s", srv.ID), nil, nil); err != nil {
 		if !utils.IsNotFound(err) {
 			return fmt.Errorf("delete server: %w", err)
 		}
 	}
 
-	return nil
+	// Wait for gone — only trust s==nil when the API call succeeded.
+	// API errors (rate limit, network) must retry, not short-circuit.
+	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+		s, err := c.getServerByName(ctx, req.Name)
+		if err != nil {
+			return false, nil // transient API error — retry
+		}
+		return s == nil, nil
+	})
 }
 
 func (c *Client) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {
@@ -132,6 +162,31 @@ func (c *Client) ListServers(ctx context.Context, labels map[string]string) ([]*
 		servers = append(servers, serverFrom(s))
 	}
 	return servers, nil
+}
+
+// getServerAttachments returns firewall IDs and volume IDs attached to the server
+// in a single API call. Both live on the same GET /servers/{id} response.
+func (c *Client) getServerAttachments(ctx context.Context, serverID string) (firewallIDs, volumeIDs []string, err error) {
+	var resp struct {
+		Server struct {
+			PublicNet struct {
+				Firewalls []struct {
+					ID int64 `json:"id"`
+				} `json:"firewalls"`
+			} `json:"public_net"`
+			Volumes []int64 `json:"volumes"`
+		} `json:"server"`
+	}
+	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/servers/%s", serverID), nil, &resp); err != nil {
+		return nil, nil, err
+	}
+	for _, fw := range resp.Server.PublicNet.Firewalls {
+		firewallIDs = append(firewallIDs, strconv.FormatInt(fw.ID, 10))
+	}
+	for _, v := range resp.Server.Volumes {
+		volumeIDs = append(volumeIDs, strconv.FormatInt(v, 10))
+	}
+	return firewallIDs, volumeIDs, nil
 }
 
 func (c *Client) getServerByName(ctx context.Context, name string) (*provider.Server, error) {

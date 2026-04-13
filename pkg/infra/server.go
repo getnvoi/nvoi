@@ -1,7 +1,9 @@
 package infra
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,26 +12,92 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// WaitForCertificate polls until the ACME certificate file exists on disk.
-// certPath is the full path to the Caddy cert JSON file (from Names.CaddyCertPath).
-func WaitForCertificate(ctx context.Context, ssh utils.SSHClient, certPath string) error {
-	cmd := fmt.Sprintf("sudo test -f %s && echo ready || echo waiting", certPath)
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
-		out, err := ssh.Run(ctx, cmd)
+// WaitForCertificate polls until Traefik's ACME storage contains a valid cert for the domain.
+// Pulls acme.json over SSH and parses it in Go — no jq, no grep, no shell string matching.
+//
+// Pre-checks that the Traefik deployment exists in kube-system before polling.
+// If the deployment name changes across k3s versions, this fails fast with a
+// diagnostic error instead of silently timing out after 10 minutes.
+func WaitForCertificate(ctx context.Context, ssh utils.SSHClient, domain string) error {
+	kubeconfig := fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config", utils.DefaultUser)
+
+	// Verify traefik deployment exists before entering the 10-minute poll loop.
+	checkCmd := fmt.Sprintf("%s kubectl -n kube-system get deploy traefik --no-headers 2>/dev/null", kubeconfig)
+	if out, err := ssh.Run(ctx, checkCmd); err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		listCmd := fmt.Sprintf("%s kubectl -n kube-system get deploy -o name 2>/dev/null", kubeconfig)
+		listOut, _ := ssh.Run(ctx, listCmd)
+		deploys := strings.TrimSpace(string(listOut))
+		if deploys == "" {
+			deploys = "(none)"
+		}
+		return fmt.Errorf("traefik deployment not found in kube-system — cannot read acme.json. deployments found: %s", deploys)
+	}
+
+	execCmd := fmt.Sprintf("%s kubectl -n kube-system exec deploy/traefik -- cat /data/acme.json 2>/dev/null", kubeconfig)
+
+	var lastReason string
+	err := utils.Poll(ctx, 3*time.Second, 10*time.Minute, func() (bool, error) {
+		out, err := ssh.Run(ctx, execCmd)
 		if err != nil {
+			lastReason = "traefik pod not reachable via exec"
 			return false, nil
 		}
-		return strings.TrimSpace(string(out)) == "ready", nil
+		if len(bytes.TrimSpace(out)) == 0 {
+			lastReason = "acme.json is empty — ACME challenge may not have started"
+			return false, nil
+		}
+		if !acmeHasCert(out, domain) {
+			lastReason = fmt.Sprintf("acme.json exists but has no certificate for %s yet", domain)
+			return false, nil
+		}
+		return true, nil
 	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", lastReason, err)
+	}
+	return nil
 }
 
-// WaitForHTTPS verifies the domain responds over HTTPS from the server.
-// Any non-5xx response = success (TLS works, service is up). Auth (401/403) is fine.
+// acmeHasCert checks if Traefik's acme.json contains a certificate for the given domain.
+func acmeHasCert(data []byte, domain string) bool {
+	var store map[string]struct {
+		Certificates []struct {
+			Domain struct {
+				Main string   `json:"main"`
+				SANs []string `json:"sans"`
+			} `json:"domain"`
+			Certificate string `json:"certificate"`
+		} `json:"Certificates"`
+	}
+	if err := json.Unmarshal(data, &store); err != nil {
+		return false
+	}
+	for _, resolver := range store {
+		for _, cert := range resolver.Certificates {
+			if cert.Certificate == "" {
+				continue // no actual cert data
+			}
+			if cert.Domain.Main == domain {
+				return true
+			}
+			for _, san := range cert.Domain.SANs {
+				if san == domain {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// WaitForHTTPS verifies the domain responds over HTTPS with a valid certificate.
+// Rejects self-signed certs — confirms Traefik has loaded the ACME cert into its router.
+// Any non-5xx response = success. Auth (401/403) is fine.
 // Runs curl via SSH — no dependency on client DNS propagation.
 func WaitForHTTPS(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
 	url := fmt.Sprintf("https://%s%s", domain, healthPath)
-	cmd := fmt.Sprintf("curl -sk --connect-timeout 5 -o /dev/null -w '%%{http_code}' %s", url)
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+	cmd := fmt.Sprintf("curl -s --connect-timeout 5 -o /dev/null -w '%%{http_code}' '%s'", url)
+	return utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
 			return false, nil
@@ -68,8 +136,10 @@ func EnsureDocker(ctx context.Context, ssh utils.SSHClient) error {
 		return nil
 	}
 
-	// Wait for cloud-init to finish
-	_, _ = ssh.Run(ctx, "cloud-init status --wait >/dev/null 2>&1 || true")
+	// Wait for cloud-init to finish — networking and package state depend on it.
+	// We only care that it completed, not whether it succeeded.
+	// cloud-init may not exist on some images — that's fine.
+	ssh.Run(ctx, "cloud-init status --wait >/dev/null 2>&1")
 
 	install := func() error {
 		for _, cmd := range []string{

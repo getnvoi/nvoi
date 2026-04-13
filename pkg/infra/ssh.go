@@ -66,18 +66,40 @@ func ConnectSSH(ctx context.Context, addr, user string, privateKey []byte) (*SSH
 }
 
 // Run executes a command and returns its combined output.
-func (c *SSHClient) Run(_ context.Context, cmd string) ([]byte, error) {
+// Respects context cancellation — kills the remote process if ctx is done.
+func (c *SSHClient) Run(ctx context.Context, cmd string) ([]byte, error) {
 	sess, err := c.conn.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("new session: %w", err)
 	}
 	defer sess.Close()
 
-	out, err := sess.CombinedOutput(cmd)
-	if err != nil {
-		return out, fmt.Errorf("run %q: %w", cmd, err)
+	type result struct {
+		out []byte
+		err error
 	}
-	return out, nil
+	done := make(chan result, 1)
+	go func() {
+		out, err := sess.CombinedOutput(cmd)
+		done <- result{out, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = sess.Signal(ssh.SIGKILL)
+		_ = sess.Close()
+		<-done
+		return nil, ctx.Err()
+	case r := <-done:
+		if r.err != nil {
+			detail := strings.TrimSpace(string(r.out))
+			if detail != "" {
+				return r.out, fmt.Errorf("run %q: %s: %w", cmd, detail, r.err)
+			}
+			return r.out, fmt.Errorf("run %q: %w", cmd, r.err)
+		}
+		return r.out, nil
+	}
 }
 
 // RunStream executes a command and streams stdout/stderr to the provided writers.

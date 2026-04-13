@@ -14,6 +14,10 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+func init() {
+	SetTestTiming(time.Millisecond, time.Millisecond)
+}
+
 // testEmitter collects Progress messages for assertions.
 type testEmitter struct {
 	mu       sync.Mutex
@@ -196,9 +200,6 @@ func TestWaitRollout_Unschedulable(t *testing.T) {
 }
 
 func TestWaitRollout_TransientThenReady(t *testing.T) {
-	orig := stabilityDelay
-	stabilityDelay = 10 * time.Millisecond
-	defer func() { stabilityDelay = orig }()
 
 	containerCreatingJSON := `{
 		"items": [

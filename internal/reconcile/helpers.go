@@ -13,13 +13,25 @@ import (
 )
 
 // DescribeLive queries the cluster and provider for current state.
-// Returns nil if nothing exists (first deploy).
-func DescribeLive(ctx context.Context, dc *config.DeployContext) *config.LiveState {
+// Returns (nil, nil) on first deploy (no servers exist).
+// Returns error if servers exist but cluster state can't be read — prevents
+// silent orphan accumulation from flaky SSH.
+func DescribeLive(ctx context.Context, dc *config.DeployContext) (*config.LiveState, error) {
+	// Check if any servers exist at the provider.
+	servers, listErr := app.ComputeList(ctx, app.ComputeListRequest{Cluster: dc.Cluster})
+
 	res, err := app.Describe(ctx, app.DescribeRequest{Cluster: dc.Cluster})
 	if err != nil {
-		return nil
+		if listErr != nil {
+			// Both calls failed — provider may be down or credentials wrong.
+			// Cannot distinguish "first deploy" from "API unreachable."
+			return nil, fmt.Errorf("cannot determine cluster state — provider list failed: %w", listErr)
+		}
+		if len(servers) == 0 {
+			return nil, nil // first deploy — nothing exists
+		}
+		return nil, fmt.Errorf("servers exist but cluster state unreadable — cannot detect orphans: %w", err)
 	}
-	servers, _ := app.ComputeList(ctx, app.ComputeListRequest{Cluster: dc.Cluster})
 	volumes, _ := app.VolumeList(ctx, app.VolumeListRequest{Cluster: dc.Cluster})
 
 	names, _ := dc.Cluster.Names()
@@ -48,9 +60,7 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext) *config.LiveSta
 		}
 	}
 	for _, w := range res.Workloads {
-		if w.Name != "caddy" {
-			state.Services = append(state.Services, w.Name)
-		}
+		state.Services = append(state.Services, w.Name)
 	}
 	for _, c := range res.Crons {
 		state.Crons = append(state.Crons, c.Name)
@@ -67,21 +77,31 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext) *config.LiveSta
 	for _, i := range res.Ingress {
 		state.Domains[i.Service] = append(state.Domains[i.Service], i.Domain)
 	}
-	return state
+
+	// Sort all lists for deterministic output and safe positional comparison.
+	sort.Strings(state.Servers)
+	sort.Strings(state.Services)
+	sort.Strings(state.Crons)
+	sort.Strings(state.Volumes)
+	sort.Strings(state.Storage)
+	sort.Strings(state.Secrets)
+	for _, domains := range state.Domains {
+		sort.Strings(domains)
+	}
+	return state, nil
 }
 
-func drainNode(ctx context.Context, dc *config.DeployContext, name string) {
+func drainNode(ctx context.Context, dc *config.DeployContext, name string) error {
 	names, err := dc.Cluster.Names()
 	if err != nil {
-		return
+		return fmt.Errorf("drain %s: %w", name, err)
 	}
-	ssh, _, err := dc.Cluster.SSH(ctx)
-	if err != nil {
-		return
+	ssh := dc.Cluster.MasterSSH
+	if ssh == nil {
+		return fmt.Errorf("drain %s: no master SSH connection", name)
 	}
-	defer ssh.Close()
 	dc.Cluster.Log().Command("node", "drain", names.Server(name))
-	kube.DrainAndRemoveNode(ctx, ssh, names.Server(name))
+	return kube.DrainAndRemoveNode(ctx, ssh, names.Server(name))
 }
 
 func clusterWith(dc *config.DeployContext, creds map[string]string) app.Cluster {

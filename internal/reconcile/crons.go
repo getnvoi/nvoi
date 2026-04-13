@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -37,7 +38,9 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 		}
 		for _, name := range live.Crons {
 			if !desired[name] && !protected[name] {
-				_ = app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Name: name})
+				if err := app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
+					dc.Cluster.Log().Warning(fmt.Sprintf("orphan cron %s not removed: %s", name, err))
+				}
 			}
 		}
 	}

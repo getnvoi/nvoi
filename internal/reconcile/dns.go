@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -20,10 +21,12 @@ func DNS(ctx context.Context, dc *config.DeployContext, live *config.LiveState, 
 	if live != nil {
 		for svcName, domains := range live.Domains {
 			if _, ok := cfg.Domains[svcName]; !ok {
-				_ = app.DNSDelete(ctx, app.DNSDeleteRequest{
+				if err := app.DNSDelete(ctx, app.DNSDeleteRequest{
 					Cluster: dc.Cluster, DNS: dc.DNS,
 					Service: svcName, Domains: domains,
-				})
+				}); err != nil {
+					dc.Cluster.Log().Warning(fmt.Sprintf("orphan DNS for %s not removed: %s", svcName, err))
+				}
 			}
 		}
 	}

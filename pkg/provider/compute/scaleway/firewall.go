@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -82,13 +83,20 @@ func (c *Client) DeleteFirewall(ctx context.Context, name string) error {
 		return err
 	}
 	if fw == nil {
-		return utils.ErrNotFound
+		return nil // idempotent — already gone
 	}
-	err = c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s", fw.ID), nil, nil)
-	if err != nil && !utils.IsNotFound(err) {
-		return err
-	}
-	return nil
+	// Retry on "in use" — server deletion auto-drops the SG association but
+	// there may be a brief lag after the server disappears from the API.
+	return utils.Poll(ctx, 2*time.Second, 30*time.Second, func() (bool, error) {
+		err := c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s", fw.ID), nil, nil)
+		if err == nil || utils.IsNotFound(err) {
+			return true, nil
+		}
+		if strings.Contains(err.Error(), "in use") {
+			return false, nil // retry — SG still referenced by a terminating server
+		}
+		return false, err
+	})
 }
 
 func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {

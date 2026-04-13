@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -29,8 +29,6 @@ func ingressCluster(out *testutil.MockOutput, ssh utils.SSHClient, mock *testuti
 func ingressSetSSH() *testutil.MockSSH {
 	return &testutil.MockSSH{
 		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get deployment caddy", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
-			{Prefix: "get configmap", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
 			{Prefix: "create namespace", Result: testutil.MockResult{}},
 			{Prefix: "get namespace", Result: testutil.MockResult{}},
 			{Prefix: "get service web", Result: testutil.MockResult{Output: []byte("3000")}},
@@ -75,13 +73,9 @@ func TestParseIngressArgs_Invalid(t *testing.T) {
 	}
 }
 
-// ── IngressSet — ACME ──────────────────────────────────────────────────────
+// ── IngressSet ─────────────────────────────────────────────────────────────
 
-func TestIngressSet_HardErrorWhenUnreachable(t *testing.T) {
-	origDelay := kube.CaddyConfigTimeout
-	kube.CaddyConfigTimeout = 0
-	defer func() { kube.CaddyConfigTimeout = origDelay }()
-
+func TestIngressSet_ACME_HardErrorWhenUnreachable(t *testing.T) {
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
@@ -90,8 +84,9 @@ func TestIngressSet_HardErrorWhenUnreachable(t *testing.T) {
 	err := IngressSet(context.Background(), IngressSetRequest{
 		Cluster: ingressCluster(out, ingressSetSSH(), mock),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		ACME:    true,
 		Hooks: &IngressHooks{
-			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, certPath string) error { return nil },
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error { return nil },
 			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
 				return fmt.Errorf("timeout")
 			},
@@ -102,6 +97,150 @@ func TestIngressSet_HardErrorWhenUnreachable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not reachable") {
 		t.Errorf("error should mention 'not reachable', got: %v", err)
+	}
+}
+
+func TestIngressSet_ACME_Success(t *testing.T) {
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+	}
+	err := IngressSet(context.Background(), IngressSetRequest{
+		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		ACME:    true,
+		Hooks: &IngressHooks{
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error { return nil },
+			WaitForHTTPS:       func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error { return nil },
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success: %v", err)
+	}
+}
+
+func TestIngressSet_ACME_VerifiesAllDomains(t *testing.T) {
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+	}
+	var certChecked, httpsChecked []string
+	err := IngressSet(context.Background(), IngressSetRequest{
+		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:    true,
+		Hooks: &IngressHooks{
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
+				certChecked = append(certChecked, domain)
+				return nil
+			},
+			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+				httpsChecked = append(httpsChecked, domain)
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success: %v", err)
+	}
+	if len(certChecked) != 2 {
+		t.Errorf("expected cert check for 2 domains, got %d: %v", len(certChecked), certChecked)
+	}
+	if len(httpsChecked) != 2 {
+		t.Errorf("expected HTTPS check for 2 domains, got %d: %v", len(httpsChecked), httpsChecked)
+	}
+}
+
+func TestIngressSet_ACME_SecondDomainCertFails(t *testing.T) {
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+	}
+	err := IngressSet(context.Background(), IngressSetRequest{
+		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:    true,
+		Hooks: &IngressHooks{
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
+				if domain == "www.example.com" {
+					return fmt.Errorf("cert timeout")
+				}
+				return nil
+			},
+			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+				return nil
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when second domain cert fails")
+	}
+	if !strings.Contains(err.Error(), "www.example.com") {
+		t.Errorf("error should mention the failing domain, got: %v", err)
+	}
+}
+
+func TestIngressSet_NoACME_SkipsHTTPSWait(t *testing.T) {
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+	}
+	err := IngressSet(context.Background(), IngressSetRequest{
+		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		ACME:    false, // tunnel mode — no HTTPS wait
+		Hooks: &IngressHooks{
+			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+				t.Fatal("WaitForHTTPS should not be called when ACME is false")
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success: %v", err)
+	}
+}
+
+func TestIngressSet_ACME_TimeoutWarnsInsteadOfFailing(t *testing.T) {
+	// Shrink the deadline so the test doesn't wait 10 minutes.
+	orig := acmeVerifyTimeout
+	acmeVerifyTimeout = 50 * time.Millisecond
+	defer func() { acmeVerifyTimeout = orig }()
+
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+	}
+	err := IngressSet(context.Background(), IngressSetRequest{
+		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:    true,
+		Hooks: &IngressHooks{
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
+				// Block until context expires.
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+				return nil
+			},
+		},
+	})
+	// Must NOT return an error — timeout is a warning, not a failure.
+	if err != nil {
+		t.Fatalf("timeout should warn, not fail. got: %v", err)
+	}
+	if len(out.Warnings) == 0 {
+		t.Fatal("expected a warning about ACME verification timeout")
+	}
+	found := false
+	for _, w := range out.Warnings {
+		if strings.Contains(w, "timed out") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warning should mention 'timed out', got: %v", out.Warnings)
 	}
 }
 
@@ -118,32 +257,9 @@ func TestIngressSet_NoCluster(t *testing.T) {
 	}
 }
 
-func TestIngressSet_ACMEPath(t *testing.T) {
-	origDelay := kube.CaddyConfigTimeout
-	kube.CaddyConfigTimeout = 0
-	defer func() { kube.CaddyConfigTimeout = origDelay }()
-
-	out := &testutil.MockOutput{}
-	mock := &testutil.MockCompute{
-		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
-	}
-	ssh := ingressSetSSH()
-	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
-		Hooks: &IngressHooks{
-			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, certPath string) error { return nil },
-			WaitForHTTPS:       func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error { return nil },
-		},
-	})
-	if err != nil {
-		t.Fatalf("expected ACME path to succeed: %v", err)
-	}
-}
-
 // ── IngressDelete ───────────────────────────────────────────────────────────
 
-func TestIngressDelete_LastRoute_WipesEverything(t *testing.T) {
+func TestIngressDelete_Success(t *testing.T) {
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
@@ -152,12 +268,7 @@ func TestIngressDelete_LastRoute_WipesEverything(t *testing.T) {
 		Prefixes: []testutil.MockPrefix{
 			{Prefix: "get namespace", Result: testutil.MockResult{}},
 			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			// ConfigMap with one route — this is the last route
-			{Prefix: "get configmap", Result: testutil.MockResult{Output: []byte("'example.com {\n\treverse_proxy web.ns.svc.cluster.local:3000\n}'")}},
-			{Prefix: "delete deployment/", Result: testutil.MockResult{}},
-			{Prefix: "delete statefulset/", Result: testutil.MockResult{}},
-			{Prefix: "delete service/", Result: testutil.MockResult{}},
-			{Prefix: "delete configmap", Result: testutil.MockResult{}},
+			{Prefix: "delete ingress", Result: testutil.MockResult{}},
 		},
 	}
 
@@ -167,44 +278,6 @@ func TestIngressDelete_LastRoute_WipesEverything(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
-	}
-}
-
-func TestIngressDelete_RemovesRoute_KeepsOthers(t *testing.T) {
-	out := &testutil.MockOutput{}
-	mock := &testutil.MockCompute{
-		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
-	}
-	// Two routes: web and api. Deleting web, api remains.
-	caddyfile := "api.example.com {\n\treverse_proxy api.ns.svc.cluster.local:8080\n}\n\nexample.com {\n\treverse_proxy web.ns.svc.cluster.local:3000\n}"
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get namespace", Result: testutil.MockResult{}},
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "get configmap", Result: testutil.MockResult{Output: []byte("'" + caddyfile + "'")}},
-			// Caddy not deployed — first-deploy path (no hash check)
-			{Prefix: "get deployment caddy", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
-			{Prefix: "replace", Result: testutil.MockResult{}},
-			{Prefix: "apply", Result: testutil.MockResult{}},
-		},
-	}
-
-	err := IngressDelete(context.Background(), IngressDeleteRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
-	})
-	if err != nil {
-		t.Fatalf("expected success: %v", err)
-	}
-	// Verify Caddy was redeployed (not wiped)
-	foundCaddyUpdate := false
-	for _, msg := range out.Successes {
-		if strings.Contains(msg, "caddy updated") {
-			foundCaddyUpdate = true
-		}
-	}
-	if !foundCaddyUpdate {
-		t.Fatalf("expected caddy updated, got successes: %v", out.Successes)
 	}
 }
 

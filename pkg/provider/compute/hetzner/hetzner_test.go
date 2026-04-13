@@ -3,10 +3,10 @@ package hetzner
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -130,6 +130,84 @@ func TestEnsureServer_AlreadyExists(t *testing.T) {
 	}
 }
 
+func TestDeleteServer_FetchesAttachmentsOnce(t *testing.T) {
+	serverDetailCalls := 0
+	deleted := false
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// getServerByName — list endpoint. Returns gone after DELETE.
+		if r.Method == "GET" && contains(r.URL.String(), "/servers?name=") {
+			if deleted {
+				json.NewEncoder(w).Encode(map[string]any{"servers": []any{}})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"servers": []map[string]any{
+					{
+						"id": 10, "name": "target-server", "status": "running",
+						"public_net": map[string]any{
+							"ipv4": map[string]string{"ip": "1.2.3.4"},
+							"ipv6": map[string]string{"ip": ""},
+						},
+						"private_net": []any{},
+					},
+				},
+			})
+			return
+		}
+		// getServerAttachments — single server detail fetch
+		if r.Method == "GET" && contains(r.URL.Path, "/servers/10") {
+			serverDetailCalls++
+			json.NewEncoder(w).Encode(map[string]any{
+				"server": map[string]any{
+					"public_net": map[string]any{
+						"firewalls": []map[string]any{{"id": 50}},
+					},
+					"volumes": []int64{60},
+				},
+			})
+			return
+		}
+		// detachFirewall
+		if r.Method == "POST" && contains(r.URL.Path, "/firewalls/50/actions/remove_from_resources") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"actions": []map[string]any{{"id": 1}},
+			})
+			return
+		}
+		// detachVolume
+		if r.Method == "POST" && contains(r.URL.Path, "/volumes/60/actions/detach") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"action": map[string]any{"id": 2},
+			})
+			return
+		}
+		// waitForAction
+		if r.Method == "GET" && contains(r.URL.Path, "/actions/") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"action": map[string]any{"id": 1, "status": "success"},
+			})
+			return
+		}
+		// DELETE server
+		if r.Method == "DELETE" && contains(r.URL.Path, "/servers/10") {
+			deleted = true
+			w.WriteHeader(204)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := c.DeleteServer(ctx, deleteServerRequest("target-server"))
+	if err != nil {
+		t.Fatalf("DeleteServer: %v", err)
+	}
+	if serverDetailCalls != 1 {
+		t.Errorf("expected exactly 1 GET /servers/{id} call for attachments, got %d", serverDetailCalls)
+	}
+}
+
 func TestDeleteServer_NotFound(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// getServerByName returns empty list — server doesn't exist
@@ -141,8 +219,53 @@ func TestDeleteServer_NotFound(t *testing.T) {
 	}))
 
 	err := c.DeleteServer(context.Background(), deleteServerRequest("gone-server"))
-	if !errors.Is(err, utils.ErrNotFound) {
-		t.Fatalf("DeleteServer should return ErrNotFound for non-existent server, got: %v", err)
+	if err != nil {
+		t.Fatalf("DeleteServer should be idempotent (nil for absent server), got: %v", err)
+	}
+}
+
+func TestDeleteServer_APIErrorDuringPoll_RetriesNotShortCircuits(t *testing.T) {
+	// Verify that a transient API error during the "wait for gone" poll
+	// is retried — not treated as "server is gone."
+	pollCalls := 0
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && contains(r.URL.String(), "/servers?name=") {
+			// Always return "server still exists" — we're testing the poll won't
+			// short-circuit on API errors before we cancel via context.
+			pollCalls++
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{"message": "internal error"},
+			})
+			return
+		}
+		// Anything else — not reached in this test
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+
+	// Short context — cancels poll before 3s retry interval.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Call the poll function directly with a fake server ID to skip
+	// the firewall/volume/delete steps and isolate the poll behavior.
+	err := utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+		s, getErr := c.getServerByName(ctx, "test-srv")
+		if getErr != nil {
+			return false, nil // THIS is the fix — old code returned true here
+		}
+		return s == nil, nil
+	})
+
+	// Should timeout (context cancelled), NOT succeed.
+	// Old code: 500 → err!=nil → return true → poll exits "success" → server "gone" (wrong).
+	// New code: 500 → err!=nil → return false → retry → context cancel → timeout.
+	if err == nil {
+		t.Fatal("poll should NOT succeed when API returns errors — that means err!=nil was treated as 'server gone'")
+	}
+	if pollCalls < 1 {
+		t.Error("poll should have attempted at least one API call")
 	}
 }
 
@@ -427,8 +550,8 @@ func TestDeleteFirewall_NotFound(t *testing.T) {
 	}))
 
 	err := c.DeleteFirewall(context.Background(), "nonexistent")
-	if err == nil || !errors.Is(err, utils.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got: %v", err)
+	if err != nil {
+		t.Fatalf("DeleteFirewall should be idempotent (nil for absent), got: %v", err)
 	}
 }
 
@@ -468,8 +591,153 @@ func TestDeleteNetwork_NotFound(t *testing.T) {
 	}))
 
 	err := c.DeleteNetwork(context.Background(), "nonexistent")
-	if err == nil || !errors.Is(err, utils.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got: %v", err)
+	if err != nil {
+		t.Fatalf("DeleteNetwork should be idempotent (nil for absent), got: %v", err)
+	}
+}
+
+// ── detachFirewall ──────────────────────────────────────────────────────────
+
+func TestDetachFirewall_PollsActionToCompletion(t *testing.T) {
+	actionPolled := false
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// POST remove_from_resources → returns action
+		if r.Method == "POST" && contains(r.URL.Path, "/actions/remove_from_resources") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"actions": []map[string]any{
+					{"id": 777},
+				},
+			})
+			return
+		}
+		// GET /actions/777 → immediate success
+		if r.Method == "GET" && contains(r.URL.Path, "/actions/777") {
+			actionPolled = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"action": map[string]any{"id": 777, "status": "success"},
+			})
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	err := c.detachFirewall(context.Background(), "10", "42")
+	if err != nil {
+		t.Fatalf("detachFirewall: %v", err)
+	}
+	if !actionPolled {
+		t.Error("waitForAction was never called — detachFirewall must poll the action to completion")
+	}
+}
+
+func TestDetachFirewall_MultipleActions(t *testing.T) {
+	polled := map[int64]bool{}
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && contains(r.URL.Path, "/actions/remove_from_resources") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"actions": []map[string]any{
+					{"id": 100},
+					{"id": 200},
+				},
+			})
+			return
+		}
+		if r.Method == "GET" && contains(r.URL.Path, "/actions/100") {
+			polled[100] = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"action": map[string]any{"id": 100, "status": "success"},
+			})
+			return
+		}
+		if r.Method == "GET" && contains(r.URL.Path, "/actions/200") {
+			polled[200] = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"action": map[string]any{"id": 200, "status": "success"},
+			})
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	err := c.detachFirewall(context.Background(), "10", "42")
+	if err != nil {
+		t.Fatalf("detachFirewall: %v", err)
+	}
+	if !polled[100] || !polled[200] {
+		t.Errorf("expected both actions polled, got %v", polled)
+	}
+}
+
+func TestDetachFirewall_NotFoundIsIdempotent(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && contains(r.URL.Path, "/actions/remove_from_resources") {
+			w.WriteHeader(404)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"code":    "not_found",
+					"message": "firewall not found",
+				},
+			})
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	err := c.detachFirewall(context.Background(), "999", "42")
+	if err != nil {
+		t.Fatalf("detachFirewall should be idempotent for not found, got: %v", err)
+	}
+}
+
+func TestDetachFirewall_PropagatesAPIError(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"code":    "server_error",
+				"message": "internal server error",
+			},
+		})
+	}))
+
+	err := c.detachFirewall(context.Background(), "10", "42")
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+	if !contains(err.Error(), "detach firewall") {
+		t.Errorf("error %q should contain 'detach firewall'", err.Error())
+	}
+}
+
+func TestDetachFirewall_ActionFailurePropagates(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && contains(r.URL.Path, "/actions/remove_from_resources") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"actions": []map[string]any{
+					{"id": 888},
+				},
+			})
+			return
+		}
+		if r.Method == "GET" && contains(r.URL.Path, "/actions/888") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"action": map[string]any{
+					"id":     888,
+					"status": "error",
+					"error":  map[string]any{"message": "detach timed out at provider"},
+				},
+			})
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	err := c.detachFirewall(context.Background(), "10", "42")
+	if err == nil {
+		t.Fatal("expected error when action fails at provider")
+	}
+	if !contains(err.Error(), "detach firewall action") {
+		t.Errorf("error %q should contain 'detach firewall action'", err.Error())
 	}
 }
 

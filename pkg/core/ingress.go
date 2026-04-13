@@ -5,11 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// acmeVerifyTimeout bounds the total time spent verifying certs + HTTPS
+// across all domains for a single service. If it expires, the deploy
+// continues with a warning — certs finish issuing in the background.
+var acmeVerifyTimeout = 10 * time.Minute
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -20,9 +26,8 @@ type IngressRouteArg struct {
 }
 
 // IngressHooks holds injectable dependencies for testing.
-// Nil fields use production defaults.
 type IngressHooks struct {
-	WaitForCertificate func(ctx context.Context, ssh utils.SSHClient, certPath string) error
+	WaitForCertificate func(ctx context.Context, ssh utils.SSHClient, domain string) error
 	WaitForHTTPS       func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error
 }
 
@@ -44,12 +49,13 @@ type IngressSetRequest struct {
 	Cluster
 	Route      IngressRouteArg
 	HealthPath string        // if set, verify HTTPS responds on this path after cert
+	ACME       bool          // true = Traefik ACME (Let's Encrypt), false = HTTP only (tunnel)
 	Hooks      *IngressHooks // nil = production defaults
 }
 
 type IngressDeleteRequest struct {
 	Cluster
-	Route IngressRouteArg // route to remove
+	Route IngressRouteArg
 }
 
 // ── ParseIngressArgs ────────────────────────────────────────────────────────
@@ -79,8 +85,8 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 
 // ── IngressSet ──────────────────────────────────────────────────────────────
 
-// IngressSet adds or updates a single ingress route. Reads the current Caddyfile,
-// merges the new route, and redeploys Caddy with ACME TLS.
+// IngressSet creates or updates a k8s Ingress resource for a service.
+// One Ingress per service — no shared state, no read-modify-write.
 func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	out := req.Log()
 
@@ -96,8 +102,6 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	}
 
 	out.Command("ingress", "set", req.Route.Service, "domains", req.Route.Domains)
-	waitForCert := req.Hooks.waitForCertificate()
-	waitForHTTPS := req.Hooks.waitForHTTPS()
 
 	// Resolve the service port from the cluster.
 	port, err := kube.GetServicePort(ctx, ssh, ns, req.Route.Service)
@@ -105,50 +109,62 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 		return fmt.Errorf("service %q has no port — ingress requires a service with --port: %w", req.Route.Service, err)
 	}
 
-	// Read current routes and merge.
-	currentRoutes, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
-	merged := mergeRoute(currentRoutes, kube.IngressRoute{
+	out.Progress("applying ingress")
+	if err := kube.ApplyIngress(ctx, ssh, ns, kube.IngressRoute{
 		Service: req.Route.Service,
 		Port:    port,
 		Domains: req.Route.Domains,
-	})
+	}, req.ACME); err != nil {
+		return fmt.Errorf("ingress: %w", err)
+	}
+	out.Success("ingress ready")
 
-	out.Progress("applying caddy config")
-	if err := kube.ApplyCaddyConfig(ctx, ssh, ns, merged, names); err != nil {
-		return fmt.Errorf("caddy: %w", err)
-	}
-	out.Success("caddy ready")
+	if req.ACME {
+		waitForCert := req.Hooks.waitForCertificate()
+		waitForHTTPS := req.Hooks.waitForHTTPS()
+		healthPath := req.HealthPath
+		if healthPath == "" {
+			healthPath = "/"
+		}
 
-	// Verify cert from the server (no dependency on client DNS).
-	firstDomain := req.Route.Domains[0]
-	certPath := names.CaddyCertPath(firstDomain)
-	out.Progress(fmt.Sprintf("waiting for certificate %s", firstDomain))
-	if err := waitForCert(ctx, ssh, certPath); err != nil {
-		return fmt.Errorf("certificate for %s not provisioned: %w", firstDomain, err)
-	}
-	out.Success(fmt.Sprintf("certificate %s ready", firstDomain))
+		// Single deadline across all domains. If it expires, warn and
+		// continue — certs finish issuing in the background, next deploy
+		// will confirm them.
+		acmeCtx, cancel := context.WithTimeout(ctx, acmeVerifyTimeout)
+		defer cancel()
 
-	// Verify HTTPS — health path or default to /
-	healthPath := req.HealthPath
-	if healthPath == "" {
-		healthPath = "/"
+		for _, domain := range req.Route.Domains {
+			// Step 1: cert issued by ACME
+			out.Progress(fmt.Sprintf("waiting for certificate %s", domain))
+			if err := waitForCert(acmeCtx, ssh, domain); err != nil {
+				if acmeCtx.Err() != nil {
+					out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
+					return nil
+				}
+				return fmt.Errorf("certificate for %s not provisioned: %w", domain, err)
+			}
+			out.Success(fmt.Sprintf("certificate %s ready", domain))
+
+			// Step 2: service reachable over HTTPS
+			url := fmt.Sprintf("https://%s%s", domain, healthPath)
+			out.Progress(fmt.Sprintf("waiting for %s", url))
+			if err := waitForHTTPS(acmeCtx, ssh, domain, healthPath); err != nil {
+				if acmeCtx.Err() != nil {
+					out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
+					return nil
+				}
+				return fmt.Errorf("%s not reachable: %w", url, err)
+			}
+			out.Success(fmt.Sprintf("%s live", url))
+		}
 	}
-	url := fmt.Sprintf("https://%s%s", firstDomain, healthPath)
-	out.Progress(fmt.Sprintf("waiting for %s", url))
-	if err := waitForHTTPS(ctx, ssh, firstDomain, healthPath); err != nil {
-		return fmt.Errorf("%s not reachable: %w", url, err)
-	}
-	out.Success(fmt.Sprintf("%s live", url))
 
 	return nil
 }
 
 // ── IngressDelete ───────────────────────────────────────────────────────────
 
-// IngressDelete removes a single ingress route.
-//
-// When routes remain after removal: remove the route from Caddyfile, redeploy Caddy.
-// When no routes remain (last route deleted): wipe deployment, configmap.
+// IngressDelete removes the Ingress resource for a service.
 func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 	out := req.Log()
 	out.Command("ingress", "delete", req.Route.Service, "domains", req.Route.Domains)
@@ -164,69 +180,10 @@ func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 	defer ssh.Close()
 
 	ns := names.KubeNamespace()
-	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
-		return err
-	}
-
-	// Read current routes, remove the target service.
-	currentRoutes, _ := kube.GetIngressRoutes(ctx, ssh, ns, names.KubeCaddyConfig())
-	remaining := removeRoute(currentRoutes, req.Route.Service)
-
-	if len(remaining) > 0 {
-		// Routes remain — just remove the route, redeploy.
-		out.Progress(fmt.Sprintf("removing route, %d remaining", len(remaining)))
-		if err := kube.ApplyCaddyConfig(ctx, ssh, ns, remaining, names); err != nil {
-			return fmt.Errorf("caddy: %w", err)
-		}
-		out.Success(fmt.Sprintf("caddy updated (%d route(s) remaining)", len(remaining)))
-		return nil
-	}
-
-	out.Progress("removing caddy ingress")
-	if err := deleteAllIngress(ctx, ssh, ns, names); err != nil {
+	out.Progress("removing ingress")
+	if err := kube.DeleteIngress(ctx, ssh, ns, req.Route.Service); err != nil {
 		return err
 	}
 	out.Success("ingress removed")
-	return nil
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-// mergeRoute replaces or appends a route in the current set, matched by service name.
-func mergeRoute(current []kube.IngressRoute, route kube.IngressRoute) []kube.IngressRoute {
-	merged := make([]kube.IngressRoute, 0, len(current)+1)
-	replaced := false
-	for _, r := range current {
-		if r.Service == route.Service {
-			merged = append(merged, route)
-			replaced = true
-		} else {
-			merged = append(merged, r)
-		}
-	}
-	if !replaced {
-		merged = append(merged, route)
-	}
-	return merged
-}
-
-// removeRoute removes the route for the given service name.
-func removeRoute(current []kube.IngressRoute, service string) []kube.IngressRoute {
-	var remaining []kube.IngressRoute
-	for _, r := range current {
-		if r.Service != service {
-			remaining = append(remaining, r)
-		}
-	}
-	return remaining
-}
-
-func deleteAllIngress(ctx context.Context, ssh utils.SSHClient, ns string, names *utils.Names) error {
-	if err := kube.DeleteByName(ctx, ssh, ns, names.KubeCaddy()); err != nil {
-		return err
-	}
-	if _, err := kube.RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete configmap %s --ignore-not-found", names.KubeCaddyConfig())); err != nil {
-		return err
-	}
 	return nil
 }

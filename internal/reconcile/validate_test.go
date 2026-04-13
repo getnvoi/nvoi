@@ -253,6 +253,82 @@ func TestResolveServers_ExplicitOverridesVolume(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_InvalidAppName(t *testing.T) {
+	cfg := validCfg()
+	cfg.App = "My App!"
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_InvalidEnvName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Env = "PRODUCTION"
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_InvalidServerName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Servers = map[string]config.ServerDef{
+		"MY_SERVER": {Type: "cx23", Region: "fsn1", Role: "master"},
+	}
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_InvalidServiceName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services = map[string]config.ServiceDef{
+		"my_service": {Image: "nginx", Port: 80},
+	}
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_InvalidCronName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Crons = map[string]config.CronDef{
+		"My Cron": {Image: "busybox", Schedule: "0 * * * *", Command: "echo"},
+	}
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_InvalidVolumeName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Volumes = map[string]config.VolumeDef{
+		"pg.data": {Size: 20, Server: "master"},
+	}
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_InvalidSecretName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Secrets = []string{"DATABASE/URL"}
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_InvalidSecretNameLowercase(t *testing.T) {
+	cfg := validCfg()
+	cfg.Secrets = []string{"jwt_secret"}
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_ValidSecretNames(t *testing.T) {
+	cfg := validCfg()
+	cfg.Secrets = []string{"JWT_SECRET", "ENCRYPTION_KEY", "DB_PASSWORD"}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("valid secret names should pass: %v", err)
+	}
+}
+
+func TestValidateConfig_ValidHyphenatedNames(t *testing.T) {
+	cfg := validCfg()
+	cfg.App = "my-app"
+	cfg.Env = "staging-eu"
+	cfg.Services = map[string]config.ServiceDef{
+		"web-frontend": {Image: "nginx", Port: 80},
+	}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("hyphenated names should be valid: %v", err)
+	}
+}
+
 func assertValidationError(t *testing.T, cfg *config.AppConfig, substr string) {
 	t.Helper()
 	err := ValidateConfig(cfg)

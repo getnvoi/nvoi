@@ -2,9 +2,11 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // ── DNS ───────────────────────────────────────────────────────────────────────
@@ -16,7 +18,7 @@ type DNSSetRequest struct {
 	Domains []string
 }
 
-// DNSSet creates/updates DNS A records. DNS only — no Caddy.
+// DNSSet creates/updates DNS A records. DNS only — ingress is separate.
 func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	out := req.Log()
 
@@ -62,10 +64,14 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	}
 
 	for _, domain := range req.Domains {
-		out.Progress(fmt.Sprintf("deleting %s", domain))
 		if err := dns.DeleteARecord(ctx, domain); err != nil {
+			if errors.Is(err, utils.ErrNotFound) {
+				out.Success(fmt.Sprintf("%s already deleted", domain))
+				continue
+			}
 			return fmt.Errorf("dns delete %s: %w", domain, err)
 		}
+		out.Success(fmt.Sprintf("%s deleted", domain))
 	}
 
 	return nil

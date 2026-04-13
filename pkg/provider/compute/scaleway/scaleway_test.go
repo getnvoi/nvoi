@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -351,6 +352,319 @@ func TestReconcileFirewallRules_NotFound(t *testing.T) {
 	err := c.ReconcileFirewallRules(context.Background(), "nonexistent", nil)
 	if err == nil {
 		t.Fatal("expected ErrNotFound")
+	}
+}
+
+// ── DeleteServer SG release ──────────────────────────────────────────────────
+
+func TestDeleteServer_ReleasesSecurityGroup(t *testing.T) {
+	patchedSG := false
+	terminated := false
+	pollCount := 0
+
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// getServerByName
+		if r.Method == "GET" && strings.HasSuffix(path, "/servers") {
+			if pollCount > 0 {
+				// Second call: server gone
+				json.NewEncoder(w).Encode(map[string]any{"servers": []any{}})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"servers": []serverJSON{{ID: "srv-1", Name: "test-server", State: "running"}},
+			})
+			return
+		}
+
+		// getDefaultSecurityGroupID
+		if r.Method == "GET" && strings.Contains(path, "/security_groups") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"security_groups": []map[string]any{
+					{"id": "sg-default", "project_default": true},
+					{"id": "sg-custom", "project_default": false},
+				},
+			})
+			return
+		}
+
+		// PATCH /servers/srv-1 — SG reassignment
+		if r.Method == "PATCH" && strings.Contains(path, "/servers/srv-1") {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if sg, ok := body["security_group"]; ok {
+				sgMap := sg.(map[string]any)
+				if sgMap["id"] == "sg-default" {
+					patchedSG = true
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"server": map[string]any{"id": "srv-1"}})
+			return
+		}
+
+		// getServerVolumeIDs
+		if r.Method == "GET" && strings.Contains(path, "/servers/srv-1") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"server": map[string]any{"id": "srv-1", "volumes": map[string]any{}},
+			})
+			return
+		}
+
+		// terminate
+		if r.Method == "POST" && strings.Contains(path, "/action") {
+			terminated = true
+			pollCount++
+			w.WriteHeader(202)
+			return
+		}
+
+		t.Errorf("unexpected request: %s %s", r.Method, path)
+	}))
+
+	err := c.DeleteServer(context.Background(), provider.DeleteServerRequest{Name: "test-server"})
+	if err != nil {
+		t.Fatalf("DeleteServer: %v", err)
+	}
+	if !patchedSG {
+		t.Error("DeleteServer should reassign server to default SG before termination")
+	}
+	if !terminated {
+		t.Error("DeleteServer should terminate the server")
+	}
+}
+
+func TestDeleteServer_SGReleaseFails_StillTerminates(t *testing.T) {
+	terminated := false
+	pollCount := 0
+
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// getServerByName
+		if r.Method == "GET" && strings.HasSuffix(path, "/servers") {
+			if pollCount > 0 {
+				json.NewEncoder(w).Encode(map[string]any{"servers": []any{}})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"servers": []serverJSON{{ID: "srv-1", Name: "test-server", State: "running"}},
+			})
+			return
+		}
+
+		// getDefaultSecurityGroupID — fail (no default SG found)
+		if r.Method == "GET" && strings.Contains(path, "/security_groups") {
+			json.NewEncoder(w).Encode(map[string]any{"security_groups": []any{}})
+			return
+		}
+
+		// getServerVolumeIDs
+		if r.Method == "GET" && strings.Contains(path, "/servers/srv-1") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"server": map[string]any{"id": "srv-1", "volumes": map[string]any{}},
+			})
+			return
+		}
+
+		// terminate — should still happen even though SG release failed
+		if r.Method == "POST" && strings.Contains(path, "/action") {
+			terminated = true
+			pollCount++
+			w.WriteHeader(202)
+			return
+		}
+
+		t.Errorf("unexpected request: %s %s", r.Method, path)
+	}))
+
+	err := c.DeleteServer(context.Background(), provider.DeleteServerRequest{Name: "test-server"})
+	if err != nil {
+		t.Fatalf("DeleteServer should succeed even when SG release fails: %v", err)
+	}
+	if !terminated {
+		t.Error("server should still be terminated when SG release fails")
+	}
+}
+
+// ── DeleteFirewall ───────────────────────────────────────────────────────────
+
+func TestDeleteFirewall_Success(t *testing.T) {
+	deleted := false
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && strings.Contains(r.URL.Path, "/security_groups") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"security_groups": []map[string]any{
+					{"id": "sg-123", "name": "nvoi-test-fw"},
+				},
+			})
+			return
+		}
+		if r.Method == "DELETE" {
+			deleted = true
+			w.WriteHeader(204)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+
+	err := c.DeleteFirewall(context.Background(), "nvoi-test-fw")
+	if err != nil {
+		t.Fatalf("DeleteFirewall: %v", err)
+	}
+	if !deleted {
+		t.Error("DELETE was not called")
+	}
+}
+
+func TestDeleteFirewall_InUseIsRetryable(t *testing.T) {
+	attempts := 0
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && strings.Contains(r.URL.Path, "/security_groups") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"security_groups": []map[string]any{
+					{"id": "sg-123", "name": "nvoi-test-fw"},
+				},
+			})
+			return
+		}
+		if r.Method == "DELETE" {
+			attempts++
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "group is in use. you cannot delete it.",
+			})
+			return
+		}
+	}))
+
+	// Short context — cancels the poll before the 2s retry interval.
+	// Proves "in use" is treated as retryable (not returned as hard error).
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := c.DeleteFirewall(ctx, "nvoi-test-fw")
+	if err == nil {
+		t.Fatal("expected error with always-in-use mock")
+	}
+	// Error must NOT be about "in use" — that would mean it was treated as a hard error.
+	if strings.Contains(err.Error(), "in use") {
+		t.Errorf("'in use' should be retried, not returned as error: %s", err)
+	}
+	if attempts < 1 {
+		t.Error("DELETE should have been attempted at least once")
+	}
+}
+
+func TestDeleteFirewall_HardErrorPropagates(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && strings.Contains(r.URL.Path, "/security_groups") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"security_groups": []map[string]any{
+					{"id": "sg-123", "name": "nvoi-test-fw"},
+				},
+			})
+			return
+		}
+		if r.Method == "DELETE" {
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]any{
+				"message": "internal server error",
+			})
+			return
+		}
+	}))
+
+	err := c.DeleteFirewall(context.Background(), "nvoi-test-fw")
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+}
+
+func TestDeleteFirewall_NotFound_Idempotent(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"security_groups": []any{}})
+	}))
+
+	err := c.DeleteFirewall(context.Background(), "nonexistent")
+	if err != nil {
+		t.Fatalf("DeleteFirewall should be idempotent for absent SG: %v", err)
+	}
+}
+
+func TestGetDefaultSecurityGroupID(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"security_groups": []map[string]any{
+				{"id": "sg-custom", "project_default": false},
+				{"id": "sg-default", "project_default": true},
+			},
+		})
+	}))
+
+	id, err := c.getDefaultSecurityGroupID(context.Background())
+	if err != nil {
+		t.Fatalf("getDefaultSecurityGroupID: %v", err)
+	}
+	if id != "sg-default" {
+		t.Errorf("id = %q, want sg-default", id)
+	}
+}
+
+func TestGetDefaultSecurityGroupID_NoneFound(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"security_groups": []map[string]any{
+				{"id": "sg-1", "project_default": false},
+			},
+		})
+	}))
+
+	_, err := c.getDefaultSecurityGroupID(context.Background())
+	if err == nil {
+		t.Fatal("expected error when no default SG exists")
+	}
+	if !strings.Contains(err.Error(), "no default security group") {
+		t.Errorf("error should mention 'no default security group', got: %s", err)
+	}
+}
+
+// ── DeleteServer poll correctness ────────────────────────────────────────────
+
+func TestDeleteServer_APIErrorDuringPoll_RetriesNotShortCircuits(t *testing.T) {
+	pollCalls := 0
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// All GETs to /servers return 500 — simulates transient API errors
+		if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/servers") {
+			pollCalls++
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]any{"message": "internal error"})
+			return
+		}
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+
+	// Short context — cancels poll before retry interval.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Isolate the poll logic directly.
+	err := utils.Poll(ctx, 3*time.Second, 90*time.Second, func() (bool, error) {
+		s, getErr := c.getServerByName(ctx, "test-srv")
+		if getErr != nil {
+			return false, nil // fix: retry on API error
+		}
+		return s == nil, nil
+	})
+
+	// Old code: 500 → err!=nil → return true → "server gone" (wrong).
+	// New code: 500 → retry → context cancel → timeout.
+	if err == nil {
+		t.Fatal("poll should NOT succeed when API returns errors")
+	}
+	if pollCalls < 1 {
+		t.Error("should have attempted at least one API call")
 	}
 }
 

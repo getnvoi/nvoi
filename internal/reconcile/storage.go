@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -26,11 +27,15 @@ func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 		}
 		for _, name := range live.Storage {
 			if !desired[name] && !protected[name] {
-				_ = app.StorageEmpty(ctx, app.StorageEmptyRequest{
+				if err := app.StorageEmpty(ctx, app.StorageEmptyRequest{
 					Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env, Output: dc.Cluster.Output},
 					Storage: dc.Storage, Name: name,
-				})
-				_ = app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name})
+				}); err != nil {
+					dc.Cluster.Log().Warning(fmt.Sprintf("orphan storage %s not emptied: %s", name, err))
+				}
+				if err := app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name}); err != nil {
+					dc.Cluster.Log().Warning(fmt.Sprintf("orphan storage %s not removed: %s", name, err))
+				}
 			}
 		}
 	}

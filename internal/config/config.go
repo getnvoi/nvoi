@@ -45,6 +45,7 @@ type AppConfig struct {
 	Services  map[string]ServiceDef  `yaml:"services"`
 	Crons     map[string]CronDef     `yaml:"crons,omitempty"`
 	Domains   map[string][]string    `yaml:"domains,omitempty"`
+	ACMEEmail string                 `yaml:"acme_email,omitempty"`
 }
 
 type DatabaseDef struct {

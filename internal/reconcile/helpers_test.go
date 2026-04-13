@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/config"
@@ -32,8 +33,8 @@ func init() {
 	provider.RegisterCompute("test-reconcile", provider.CredentialSchema{Name: "test-reconcile"}, func(creds map[string]string) provider.ComputeProvider {
 		return activeMock
 	})
-	kube.CaddyConfigTimeout = 10 * time.Millisecond
-	kube.CaddyConfigPollInterval = time.Millisecond
+	kube.SetTestTiming(time.Millisecond, time.Millisecond)
+	dnsGracePeriod = time.Millisecond
 }
 
 // ── Operation log ─────────────────────────────────────────────────────────────
@@ -84,7 +85,8 @@ func (l *opLog) all() []string {
 
 type trackingMock struct {
 	testutil.MockCompute
-	log *opLog
+	log     *opLog
+	ListErr error // if set, ListServers returns this error
 }
 
 func (m *trackingMock) EnsureServer(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error) {
@@ -101,6 +103,9 @@ func (m *trackingMock) DeleteServer(ctx context.Context, req provider.DeleteServ
 }
 
 func (m *trackingMock) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {
+	if m.ListErr != nil {
+		return nil, m.ListErr
+	}
 	return m.Servers, nil
 }
 
@@ -129,6 +134,111 @@ func (m *trackingMock) GetPrivateIP(ctx context.Context, serverID string) (strin
 	return "10.0.1.1", nil
 }
 
+// ── DescribeLive tests ───────────────────────────────────────────────────────
+
+func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
+	// If ComputeList fails (provider API down, bad credentials), DescribeLive
+	// must NOT return (nil, nil) — that means "first deploy" and would cause
+	// duplicate server creation. It must return an error.
+	log := &opLog{}
+	mock := &trackingMock{log: log, ListErr: fmt.Errorf("API unreachable")}
+	activeMock = mock
+
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Provider: "test-reconcile", Credentials: map[string]string{},
+			SSHKey: sshKey,
+			Output: &testutil.MockOutput{},
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return nil, fmt.Errorf("no SSH")
+			},
+		},
+	}
+
+	live, err := DescribeLive(context.Background(), dc)
+	if err == nil {
+		t.Fatal("expected error when ComputeList fails, got nil — would be misinterpreted as first deploy")
+	}
+	if live != nil {
+		t.Error("live state should be nil on error")
+	}
+}
+
+func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
+	// When ComputeList succeeds with zero servers and Describe fails (no master),
+	// that's a genuine first deploy — (nil, nil) is correct.
+	log := &opLog{}
+	mock := &trackingMock{log: log}
+	mock.Servers = nil // no servers at provider
+	activeMock = mock
+
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Provider: "test-reconcile", Credentials: map[string]string{},
+			SSHKey: sshKey,
+			Output: &testutil.MockOutput{},
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return nil, fmt.Errorf("no master")
+			},
+		},
+	}
+
+	live, err := DescribeLive(context.Background(), dc)
+	if err != nil {
+		t.Fatalf("first deploy should return nil error, got: %v", err)
+	}
+	if live != nil {
+		t.Error("first deploy should return nil live state")
+	}
+}
+
+func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
+	log := &opLog{}
+	mock := &trackingMock{log: log}
+	// Provider returns servers in reverse alphabetical order.
+	mock.Servers = []*provider.Server{
+		{ID: "3", Name: "nvoi-myapp-prod-worker-2", Status: "running", IPv4: "1.2.3.6", PrivateIP: "10.0.1.3"},
+		{ID: "1", Name: "nvoi-myapp-prod-master", Status: "running", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"},
+		{ID: "2", Name: "nvoi-myapp-prod-worker-1", Status: "running", IPv4: "1.2.3.5", PrivateIP: "10.0.1.2"},
+	}
+	activeMock = mock
+
+	ssh := convergeMock()
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Provider: "test-reconcile", Credentials: map[string]string{},
+			SSHKey:    sshKey,
+			Output:    &testutil.MockOutput{},
+			MasterSSH: ssh,
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return ssh, nil
+			},
+		},
+	}
+
+	live, err := DescribeLive(context.Background(), dc)
+	if err != nil {
+		t.Fatalf("DescribeLive: %v", err)
+	}
+	if live == nil {
+		t.Fatal("expected non-nil live state")
+	}
+
+	// Servers must be sorted regardless of provider return order.
+	for i := 1; i < len(live.Servers); i++ {
+		if live.Servers[i] < live.Servers[i-1] {
+			t.Errorf("servers not sorted: %v", live.Servers)
+			break
+		}
+	}
+}
+
 // ── Shared test setup ─────────────────────────────────────────────────────────
 
 // readyPodJSON is a kubectl get pods -o json response with one ready pod.
@@ -148,21 +258,14 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "delete service/", Result: testutil.MockResult{}},
 			{Prefix: "delete cronjob", Result: testutil.MockResult{}},
 			{Prefix: "get service", Result: testutil.MockResult{Output: []byte("'80'")}},
-			// FirstPod: get pods ... -o jsonpath → returns pod name
-			{Prefix: "jsonpath='{.items[0].metadata.name}'", Result: testutil.MockResult{Output: []byte("'caddy-pod'")}},
 			// WaitRollout: get pods ... -o json → returns ready pod list
 			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(readyPodJSON)}},
-			// sha256sum — return a hash that will be checked against expected.
-			// ApplyCaddyConfig polls until hash matches. We return the wildcard
-			// "match everything" approach: the exec command contains the hash check,
-			// and we intercept it to return whatever hash was expected.
-			{Prefix: "sha256sum", Result: testutil.MockResult{Output: []byte("0000000000000000000000000000000000000000000000000000000000000000  /etc/caddy/Caddyfile")}},
-			{Prefix: "caddy reload", Result: testutil.MockResult{}},
-			{Prefix: "test -f", Result: testutil.MockResult{Output: []byte("ready")}},
-			{Prefix: "curl -sk", Result: testutil.MockResult{Output: []byte("'200'")}},
-			{Prefix: "exec", Result: testutil.MockResult{}},
-			// get deployment caddy — fail (not found) so ApplyCaddyConfig takes first-deploy path
-			{Prefix: "get deployment caddy", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
+			// Ingress: ACME cert check (acme.json parsed in Go) + HTTPS wait
+			{Prefix: "kubectl -n kube-system exec", Result: testutil.MockResult{Output: []byte(`{"letsencrypt":{"Certificates":[{"domain":{"main":"myapp.com"},"certificate":"base64data"}]}}`)}},
+			{Prefix: "curl -s", Result: testutil.MockResult{Output: []byte("'200'")}},
+			{Prefix: "delete ingress", Result: testutil.MockResult{}},
+			// EnsureTraefikACME — waitForTraefikReady polls deploy/traefik
+			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
 			{Prefix: "get deploy", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get statefulset", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get configmap", Result: testutil.MockResult{Output: []byte(`{"data":{}}`)}},
@@ -180,10 +283,13 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "sudo docker info", Result: testutil.MockResult{}},
 			{Prefix: "sudo usermod", Result: testutil.MockResult{}},
 			// k3s master install (ComputeSet)
-			{Prefix: "command -v kubectl", Result: testutil.MockResult{}},
+			{Prefix: "command -v kubectl", Result: testutil.MockResult{Output: []byte("True")}},
 			{Prefix: "curl -fs http://", Result: testutil.MockResult{}},
 			{Prefix: "docker run -d --name nvoi-registry", Result: testutil.MockResult{}},
 			{Prefix: "docker rm -f", Result: testutil.MockResult{}},
+			// k3s jsonpath ready checks — KUBECONFIG must be before jsonpath (worker join needs IP)
+			{Prefix: "KUBECONFIG", Result: testutil.MockResult{Output: []byte("True,10.0.1.1")}},
+			{Prefix: "sudo k3s kubectl get nodes", Result: testutil.MockResult{Output: []byte("True")}},
 			// k3s worker join (ComputeSet worker path)
 			{Prefix: "sudo cat /var/lib/rancher/k3s/server/node-token", Result: testutil.MockResult{Output: []byte("test-token")}},
 			{Prefix: "systemctl is-active", Result: testutil.MockResult{Err: fmt.Errorf("inactive")}},

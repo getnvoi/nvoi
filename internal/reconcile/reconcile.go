@@ -18,7 +18,10 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	live := DescribeLive(ctx, dc)
+	live, err := DescribeLive(ctx, dc)
+	if err != nil {
+		return err
+	}
 
 	// Create desired servers. Orphans are NOT removed yet — workloads
 	// must move to new nodes first (zero-downtime server replacement).
@@ -70,10 +73,18 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	}
 
 	// Workloads have moved. Now safe to drain + delete orphan servers.
-	ServersRemoveOrphans(ctx, dc, live, cfg)
+	if err := ServersRemoveOrphans(ctx, dc, live, cfg); err != nil {
+		return err
+	}
 
 	if err := DNS(ctx, dc, live, cfg); err != nil {
 		return err
 	}
+
+	// Verify DNS propagation before ACME — warn if domains don't resolve yet.
+	if len(cfg.Domains) > 0 {
+		verifyDNSPropagation(ctx, dc, cfg)
+	}
+
 	return Ingress(ctx, dc, live, cfg)
 }

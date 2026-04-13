@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -60,20 +62,15 @@ func (c *Client) DeleteFirewall(ctx context.Context, name string) error {
 	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/firewalls?name=%s", name), nil, &resp); err != nil {
 		return err
 	}
-	found := false
 	for _, fw := range resp.Firewalls {
 		if fw.Name == name {
-			found = true
 			err := c.api.Do(ctx, "DELETE", fmt.Sprintf("/firewalls/%s", strconv.FormatInt(fw.ID, 10)), nil, nil)
 			if err != nil && !utils.IsNotFound(err) {
 				return err
 			}
 		}
 	}
-	if !found {
-		return utils.ErrNotFound
-	}
-	return nil
+	return nil // idempotent — not found is fine
 }
 
 func (c *Client) detachFirewall(ctx context.Context, firewallID, serverID string) error {
@@ -83,7 +80,30 @@ func (c *Client) detachFirewall(ctx context.Context, firewallID, serverID string
 			{"type": "server", "server": map[string]any{"id": intID}},
 		},
 	}
-	return c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/remove_from_resources", firewallID), body, nil)
+	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+		var resp struct {
+			Actions []struct {
+				ID int64 `json:"id"`
+			} `json:"actions"`
+		}
+		if err := c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/remove_from_resources", firewallID), body, &resp); err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				return true, nil
+			}
+			if isLocked(err) {
+				return false, nil // retry
+			}
+			return false, fmt.Errorf("detach firewall: %w", err)
+		}
+		for _, a := range resp.Actions {
+			if a.ID != 0 {
+				if err := c.waitForAction(ctx, a.ID); err != nil {
+					return false, fmt.Errorf("detach firewall action: %w", err)
+				}
+			}
+		}
+		return true, nil
+	})
 }
 
 func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {

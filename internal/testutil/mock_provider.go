@@ -11,6 +11,7 @@ import (
 type MockCompute struct {
 	Servers                  []*provider.Server
 	Volumes                  []*provider.Volume
+	ListServersCalls         []map[string]string // labels passed to each ListServers call
 	EnsureServerFn           func(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error)
 	DeleteServerFn           func(ctx context.Context, req provider.DeleteServerRequest) error
 	EnsureVolumeFn           func(ctx context.Context, req provider.CreateVolumeRequest) (*provider.Volume, error)
@@ -36,14 +37,8 @@ func (m *MockCompute) DeleteServer(ctx context.Context, req provider.DeleteServe
 }
 
 func (m *MockCompute) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {
-	if labels == nil {
-		return m.Servers, nil
-	}
-	var filtered []*provider.Server
-	for _, s := range m.Servers {
-		filtered = append(filtered, s)
-	}
-	return filtered, nil
+	m.ListServersCalls = append(m.ListServersCalls, labels)
+	return m.Servers, nil
 }
 
 func (m *MockCompute) DeleteFirewall(ctx context.Context, name string) error { return nil }

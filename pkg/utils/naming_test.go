@@ -107,8 +107,6 @@ func TestNamesKube(t *testing.T) {
 		want string
 	}{
 		{"KubeNamespace", n.KubeNamespace(), "nvoi-dummy-rails-production"},
-		{"KubeCaddy", n.KubeCaddy(), "caddy"},
-		{"KubeCaddyConfig", n.KubeCaddyConfig(), "caddy-config"},
 		{"KubeSecrets", n.KubeSecrets(), "secrets"},
 	}
 	for _, tt := range tests {
@@ -162,7 +160,6 @@ func TestNamesPaths(t *testing.T) {
 		want string
 	}{
 		{"VolumeMountPath", n.VolumeMountPath("pgdata"), "/mnt/data/nvoi-dummy-rails-production-pgdata"},
-		{"CaddyDataPath", n.CaddyDataPath(), "/var/lib/nvoi/caddy/nvoi-dummy-rails-production"},
 		{"NamedVolumeHostPath", n.NamedVolumeHostPath("pgdata"), "/var/lib/nvoi/volumes/nvoi-dummy-rails-production/pgdata"},
 	}
 	for _, tt := range tests {

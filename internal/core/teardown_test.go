@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -82,9 +83,11 @@ func (l *opLog) all() []string {
 // ── Tracking compute provider ─────────────────────────────────────────────────
 
 type trackingCompute struct {
-	log     *opLog
-	servers []*provider.Server
-	volumes []*provider.Volume
+	log       *opLog
+	servers   []*provider.Server
+	volumes   []*provider.Volume
+	firewalls []*provider.Firewall
+	networks  []*provider.Network
 }
 
 func (c *trackingCompute) ValidateCredentials(context.Context) error { return nil }
@@ -105,10 +108,10 @@ func (c *trackingCompute) DeleteNetwork(ctx context.Context, name string) error 
 	return c.log.record("delete-network:" + name)
 }
 func (c *trackingCompute) ListAllFirewalls(context.Context) ([]*provider.Firewall, error) {
-	return nil, nil
+	return c.firewalls, nil
 }
 func (c *trackingCompute) ListAllNetworks(context.Context) ([]*provider.Network, error) {
-	return nil, nil
+	return c.networks, nil
 }
 func (c *trackingCompute) EnsureVolume(context.Context, provider.CreateVolumeRequest) (*provider.Volume, error) {
 	return nil, nil
@@ -214,9 +217,21 @@ func init() {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func setupTeardown(log *opLog) *config.DeployContext {
-	activeCompute = &trackingCompute{log: log}
+	n := names()
+	activeCompute = &trackingCompute{
+		log: log,
+		servers: []*provider.Server{
+			{ID: "1", Name: n.Server("master"), IPv4: "1.2.3.4"},
+			{ID: "2", Name: n.Server("worker"), IPv4: "5.6.7.8"},
+		},
+		volumes:   []*provider.Volume{{ID: "1", Name: n.Volume("pgdata")}},
+		firewalls: []*provider.Firewall{{ID: "1", Name: n.Firewall()}},
+		networks:  []*provider.Network{{ID: "1", Name: n.Network()}},
+	}
 	activeDNS = &trackingDNS{log: log}
 	activeBucket = &trackingBucket{log: log}
+
+	sshKey, _, _ := utils.GenerateEd25519Key()
 
 	return &config.DeployContext{
 		Cluster: app.Cluster{
@@ -224,6 +239,10 @@ func setupTeardown(log *opLog) *config.DeployContext {
 			Env:      "prod",
 			Provider: "test-teardown",
 			Output:   silentOutput{},
+			SSHKey:   sshKey,
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return &testutil.MockSSH{}, nil
+			},
 		},
 		DNS:     app.ProviderRef{Name: "test-teardown-dns"},
 		Storage: app.ProviderRef{Name: "test-teardown-bucket"},
@@ -395,6 +414,11 @@ func TestTeardown_MultipleWorkers(t *testing.T) {
 			"worker-b": {Type: "cx33", Region: "fsn1", Role: "worker"},
 		},
 	}
+	activeCompute.servers = []*provider.Server{
+		{ID: "1", Name: n.Server("master")},
+		{ID: "2", Name: n.Server("worker-a")},
+		{ID: "3", Name: n.Server("worker-b")},
+	}
 
 	_ = teardown(context.Background(), dc, cfg, false, false)
 
@@ -544,6 +568,10 @@ func TestTeardown_MultipleVolumes(t *testing.T) {
 			"redis":  {Size: 10, Server: "master"},
 		},
 	}
+	activeCompute.volumes = []*provider.Volume{
+		{ID: "1", Name: n.Volume("pgdata")},
+		{ID: "2", Name: n.Volume("redis")},
+	}
 
 	_ = teardown(context.Background(), dc, cfg, true, false)
 
@@ -670,8 +698,15 @@ func TestTeardown_ErrorsNeverPropagate(t *testing.T) {
 	log.errors["delete-firewall:"+n.Firewall()] = fmt.Errorf("firewall locked")
 
 	err := teardown(context.Background(), dc, fullConfig(), true, true)
-	if err != nil {
-		t.Fatalf("teardown must never return an error, got: %v", err)
+	if err == nil {
+		t.Fatal("teardown should report errors, not swallow them")
+	}
+	// Best-effort: all operations still attempted despite errors.
+	if !log.has("delete-firewall:" + n.Firewall()) {
+		t.Error("firewall should still be attempted after DNS error")
+	}
+	if !log.has("delete-network:" + n.Network()) {
+		t.Error("network should still be attempted after server error")
 	}
 }
 
@@ -747,8 +782,8 @@ func TestTeardown_InvalidClusterNames(t *testing.T) {
 	cfg := &config.AppConfig{App: "", Env: "", Servers: map[string]config.ServerDef{}}
 
 	err := teardown(context.Background(), dc, cfg, false, false)
-	if err != nil {
-		t.Fatalf("should return nil even with invalid names, got: %v", err)
+	if err == nil {
+		t.Fatal("should return error with invalid names")
 	}
 }
 

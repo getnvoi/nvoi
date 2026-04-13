@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/packages"
@@ -33,23 +35,31 @@ func NewTeardownCmd(dc *config.DeployContext) *cobra.Command {
 // teardown nukes external provider resources. Kubernetes resources (services,
 // crons, ingress, secrets) live on the cluster and die with the servers.
 // K8s resource management is reconcile's job, not teardown's.
+// Best-effort: continues through all resources, collects and returns all errors.
 func teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
+	var errs []string
+	collect := func(err error) {
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+
 	// DNS records — external, at the DNS provider
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
-		_ = app.DNSDelete(ctx, app.DNSDeleteRequest{
+		collect(app.DNSDelete(ctx, app.DNSDeleteRequest{
 			Cluster: dc.Cluster, DNS: dc.DNS,
 			Service: svcName, Domains: cfg.Domains[svcName],
-		})
+		}))
 	}
 
 	// Storage buckets — external, preserved by default
 	if deleteStorage {
 		for _, name := range utils.SortedKeys(cfg.Storage) {
-			_ = app.StorageEmpty(ctx, app.StorageEmptyRequest{
+			collect(app.StorageEmpty(ctx, app.StorageEmptyRequest{
 				Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env, Output: dc.Cluster.Output},
 				Storage: dc.Storage, Name: name,
-			})
-			_ = app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name})
+			}))
+			collect(app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name}))
 		}
 	}
 
@@ -59,30 +69,25 @@ func teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	// Volumes — external, preserved by default
 	if deleteVolumes {
 		for _, name := range utils.SortedKeys(cfg.Volumes) {
-			_ = app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name})
+			collect(app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name}))
 		}
 	}
 
 	// Servers — workers first, then master
 	masters, workers := reconcile.SplitServers(cfg.Servers)
 	for _, s := range workers {
-		_ = app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name})
+		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
 	}
 	for _, s := range masters {
-		_ = app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name})
+		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
 	}
 
 	// Firewall + network — shared provider resources, always nuked
-	names, err := dc.Cluster.Names()
-	if err != nil {
-		return nil
-	}
-	prov, err := dc.Cluster.Compute()
-	if err != nil {
-		return nil
-	}
-	_ = prov.DeleteFirewall(ctx, names.Firewall())
-	_ = prov.DeleteNetwork(ctx, names.Network())
+	collect(app.FirewallDelete(ctx, app.FirewallDeleteRequest{Cluster: dc.Cluster}))
+	collect(app.NetworkDelete(ctx, app.NetworkDeleteRequest{Cluster: dc.Cluster}))
 
+	if len(errs) > 0 {
+		return fmt.Errorf("teardown completed with %d error(s):\n  %s", len(errs), strings.Join(errs, "\n  "))
+	}
 	return nil
 }

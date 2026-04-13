@@ -20,11 +20,13 @@ A CLI that deploys containers to cloud servers from a declarative YAML config. `
 ## Build & Test
 
 ```bash
-go test ./...
-go test ./... -v
-go test ./... -cover
+bin/test                   # enforced 5s timeout — MUST pass, no exceptions
+bin/test -v                # verbose
+go test ./... -cover       # coverage
 go build ./cmd/core
 ```
+
+**Test suite MUST complete in under 2 seconds per package.** `bin/test` enforces this with `go test -timeout 2s`. Any test that exceeds this is broken — fix it by injecting mocks for I/O waits (SSH polls, HTTP retries, stability delays). Never sleep in tests. Override production timeouts with `kube.SetTestTiming(time.Millisecond, time.Millisecond)` in test `init()`. This is non-negotiable.
 
 ## CI
 
@@ -290,7 +292,7 @@ pkg/
     builder.go             BuildProvider interface
     resolve.go             Registration, credential schemas, resolution
     s3ops/                 Shared S3 operations (CORS, lifecycle, empty)
-    compute/
+    compute/               See pkg/provider/compute/CLAUDE.md for DeleteServer contract
       hetzner/             Hetzner Cloud (compute + volumes)
       aws/                 AWS (EC2 + VPC)
       scaleway/            Scaleway (compute)
@@ -392,6 +394,10 @@ Organized by domain with shared base clients:
 
 `ensureFirewall` only ensures the resource exists — never resets rules. Rules managed exclusively by `ReconcileFirewallRules` in the Firewall reconcile step.
 
+## Working tree
+
+The working tree frequently has uncommitted changes — that's normal. The on-disk file is always the intended version. When reviewing, never flag a mismatch between a prior commit and the working tree as a bug. The working tree is the source of truth. Commits happen when the user asks.
+
 ## Key rules
 
 1. `app` + `env` in `nvoi.yaml` are required. They're the namespace for everything.
@@ -404,20 +410,26 @@ Organized by domain with shared base clients:
 8. **`os.Getenv` lives exclusively in `internal/core/`.** `pkg/core/`, `provider/`, `infra/`, `utils/` never read env vars.
 9. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface.
 10. **`pkg/core/` never writes to stdout.** All output through `Output` interface.
+17. **Every provider operation goes through `pkg/core/`.** No caller should invoke a provider method directly. `pkg/core/` wraps every operation with output, error handling, and naming resolution. Teardown, reconcile, CLI commands — all go through `pkg/core/` functions. Direct provider calls bypass output and error reporting.
 11. **`pkg/core/` never imports `net/http`.** HTTP calls belong in `infra/` or `provider/`.
 12. **Errors flow up, render once.** `pkg/core/` returns errors. Cobra renders via `Output.Error()`.
 13. **No shell injection.** Secret values via file upload, not inline interpolation.
 14. **Web-facing services require replicas >= 2.** Omitted defaults to 2, explicit 1 is a hard error.
 15. **Package-managed resources are protected from orphan detection.**
 16. **Database credentials are user-owned.** No auto-generation. Missing = hard error.
+18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) and API input (`validateDispatchInput`) are the only places that validate user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
+
+19. **One kubectl primitive: `kctl(ns, cmd)`.** Every kubectl-over-SSH call in `pkg/kube/` goes through this single unexported helper. `ns=""` for cluster-scoped, `ns="foo"` for namespaced. YAML applied via SFTP upload + `kctl`, never heredocs. No code outside `pkg/kube/` constructs kubectl strings. Exception: `pkg/infra/k3s.go` bootstrap uses `sudo k3s kubectl` before deploy-user kubeconfig exists.
+20. **Async provider actions polled to completion.** Every action that returns an ID must be polled via `waitForAction` before proceeding. Fire-and-forget = production race condition.
+21. **`DeleteServer` detaches firewall before termination.** Every provider. Hetzner: `detachFirewall` + poll. AWS: move to VPC default SG. Scaleway: reassign to project default SG. `DeleteFirewall` retries "still in use."
 
 ## Production hardening notes
 
 - **`~` doesn't expand in Go.** `resolveSSHKey()` calls `expandHome()`.
 - **`kubectl apply` does strategic merge, not full replace.** `kube.Apply()` uses `kubectl replace` first, falls back to `kubectl apply --server-side --force-conflicts`.
-- **Caddy with `hostNetwork` uses `Recreate` strategy.** ConfigMap mounted as directory (not subPath) for auto-sync.
-- **DNS and ingress are separate concerns.** DNS creates A records. Ingress owns Caddy.
-- **HTTPS verification runs from the server** via SSH curl, not from the deploy client. No DNS propagation dependency. Cert check (`sudo test -f`) + health check (any non-5xx).
+- **Ingress uses k3s built-in Traefik.** Standard k8s Ingress resources, one per service. No custom ingress controller deployment.
+- **DNS and ingress are separate concerns.** DNS creates A records. Ingress creates k8s Ingress resources.
+- **HTTPS verification is two-step.** Step 1: check ACME cert exists in Traefik's acme.json. Step 2: curl from server verifies service responds (any non-5xx). Both run via SSH — no DNS propagation dependency.
 - **SSH host key changed = hard error** with guidance to clear known hosts. Auto-cleared on server creation.
 - **Firewall never reset during server creation.** `ensureFirewall` only ensures existence.
 - **Concurrency control on deploy workflows.** `concurrency: { group: deploy, cancel-in-progress: false }`.
