@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func NewDatabaseCmd(dc *config.DeployContext) *cobra.Command {
+func NewDatabaseCmd(dc *config.DeployContext, cfg **config.AppConfig) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "database",
 		Aliases: []string{"db"},
@@ -19,27 +19,10 @@ func NewDatabaseCmd(dc *config.DeployContext) *cobra.Command {
 	}
 
 	var dbName string
-	var cfg *config.AppConfig
-	cmd.PersistentFlags().StringVar(&dbName, "name", "", "database name (defaults to first)")
+	cmd.PersistentFlags().StringVar(&dbName, "name", "", "database name (required when multiple databases configured)")
 
-	// Parse config once for all database subcommands.
-	// Chain with parent's PersistentPreRunE (which populates dc via BuildContext).
-	cmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		if parent := cmd.Root().PersistentPreRunE; parent != nil {
-			if err := parent(cmd, args); err != nil {
-				return err
-			}
-		}
-		c, err := LoadConfig(cmd)
-		if err != nil {
-			return err
-		}
-		cfg = c
-		return nil
-	}
-
-	resolve := func() string {
-		return utils.ResolveDBName(dbName, cfg.DatabaseNames())
+	resolve := func() (string, error) {
+		return utils.ResolveDBName(dbName, (*cfg).DatabaseNames())
 	}
 
 	cmd.AddCommand(newDatabaseBackupCmd(dc, resolve))
@@ -47,7 +30,7 @@ func NewDatabaseCmd(dc *config.DeployContext) *cobra.Command {
 	return cmd
 }
 
-func newDatabaseBackupCmd(dc *config.DeployContext, resolve func() string) *cobra.Command {
+func newDatabaseBackupCmd(dc *config.DeployContext, resolve func() (string, error)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Manage database backups",
@@ -56,9 +39,13 @@ func newDatabaseBackupCmd(dc *config.DeployContext, resolve func() string) *cobr
 		Use:   "now",
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := resolve()
+			if err != nil {
+				return err
+			}
 			return app.CronRun(cmd.Context(), app.CronRunRequest{
 				Cluster: dc.Cluster,
-				Name:    resolve() + "-db-backup",
+				Name:    name + "-db-backup",
 			})
 		},
 	})
@@ -66,7 +53,11 @@ func newDatabaseBackupCmd(dc *config.DeployContext, resolve func() string) *cobr
 		Use:   "list",
 		Short: "List backups in bucket",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return DatabaseBackupList(cmd, dc, resolve())
+			name, err := resolve()
+			if err != nil {
+				return err
+			}
+			return DatabaseBackupList(cmd, dc, name)
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
@@ -74,21 +65,29 @@ func newDatabaseBackupCmd(dc *config.DeployContext, resolve func() string) *cobr
 		Short: "Download a backup file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := resolve()
+			if err != nil {
+				return err
+			}
 			outFile, _ := cmd.Flags().GetString("file")
-			return DatabaseBackupDownload(cmd, dc, resolve(), args[0], outFile)
+			return DatabaseBackupDownload(cmd, dc, name, args[0], outFile)
 		},
 	})
 	cmd.Commands()[2].Flags().StringP("file", "f", "", "output file (default: stdout)")
 	return cmd
 }
 
-func newDatabaseSQLCmd(dc *config.DeployContext, resolve func() string) *cobra.Command {
+func newDatabaseSQLCmd(dc *config.DeployContext, resolve func() (string, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   "sql <query>",
 		Short: "Run SQL against the database",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return DatabaseSQL(cmd, dc, resolve(), args[0])
+			name, err := resolve()
+			if err != nil {
+				return err
+			}
+			return DatabaseSQL(cmd, dc, name, args[0])
 		},
 	}
 }
@@ -148,6 +147,9 @@ func DatabaseBackupDownload(cmd *cobra.Command, dc *config.DeployContext, name, 
 	return nil
 }
 
+// DatabaseSQL prints raw query output directly — not through Output.
+// psql/mysql table formatting breaks if wrapped in TUI chrome or JSONL events.
+// This means --json has no effect on db sql output. Intentional.
 func DatabaseSQL(cmd *cobra.Command, dc *config.DeployContext, name, query string) error {
 	output, err := app.DatabaseSQL(cmd.Context(), app.DatabaseSQLRequest{
 		Cluster: dc.Cluster,

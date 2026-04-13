@@ -201,7 +201,10 @@ func DatabaseBackupDownload(client *APIClient, repoPath func(string) string, out
 }
 
 // DatabaseSQL runs a SQL query via the API.
-func DatabaseSQL(client *APIClient, repoPath func(string) string, out app.Output, dbName, query string) error {
+// Unlike DatabaseBackupList/DatabaseBackupDownload, this prints raw query
+// output directly — not through Output. psql/mysql table formatting breaks
+// if wrapped in TUI chrome or JSONL events. --json has no effect. Intentional.
+func DatabaseSQL(client *APIClient, repoPath func(string) string, dbName, query string) error {
 	var result struct {
 		Output string `json:"output"`
 	}

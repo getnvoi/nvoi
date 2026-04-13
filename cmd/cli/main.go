@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -112,7 +113,7 @@ func (w *outputWriter) Write(p []byte) (n int, err error) {
 	if msg != "" && msg != "\n" {
 		msg = strings.TrimSpace(msg)
 		msg = strings.TrimPrefix(msg, "Error: ")
-		core.ResolveOutput(w.root).Error(fmt.Errorf("%s", msg))
+		core.ResolveOutput(w.root).Error(errors.New(msg))
 	}
 	return len(p), nil
 }
@@ -390,7 +391,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 	}
 
 	var dbName string
-	cmd.PersistentFlags().StringVar(&dbName, "name", "", "database name (defaults to first)")
+	cmd.PersistentFlags().StringVar(&dbName, "name", "", "database name (required when multiple databases configured)")
 
 	backupCmd := &cobra.Command{Use: "backup", Short: "Manage database backups"}
 
@@ -399,12 +400,18 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
+				name, err := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
+				if err != nil {
+					return err
+				}
 				return app.CronRun(cmd.Context(), app.CronRunRequest{
 					Cluster: m.dc.Cluster, Name: name + "-db-backup",
 				})
 			}
-			name := utils.ResolveDBName(dbName, nil)
+			name := dbName
+			if name == "" {
+				name = "main"
+			}
 			return cli.StreamRun(m.client, m.repoPath("/run"), map[string]any{
 				"kind": "cron.run",
 				"name": name + "-db-backup",
@@ -417,10 +424,13 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Short: "List backups in bucket",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
+				name, err := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
+				if err != nil {
+					return err
+				}
 				return core.DatabaseBackupList(cmd, m.dc, name)
 			}
-			return cli.DatabaseBackupList(m.client, m.repoPath, core.ResolveOutput(cmd), utils.ResolveDBName(dbName, nil))
+			return cli.DatabaseBackupList(m.client, m.repoPath, core.ResolveOutput(cmd), dbName)
 		},
 	})
 
@@ -430,12 +440,15 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
+				name, err := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
+				if err != nil {
+					return err
+				}
 				outFile, _ := cmd.Flags().GetString("file")
 				return core.DatabaseBackupDownload(cmd, m.dc, name, args[0], outFile)
 			}
 			outFile, _ := cmd.Flags().GetString("file")
-			return cli.DatabaseBackupDownload(m.client, m.repoPath, core.ResolveOutput(cmd), utils.ResolveDBName(dbName, nil), args[0], outFile)
+			return cli.DatabaseBackupDownload(m.client, m.repoPath, core.ResolveOutput(cmd), dbName, args[0], outFile)
 		},
 	}
 	dlCmd.Flags().StringP("file", "f", "", "output file (default: stdout)")
@@ -449,10 +462,13 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
+				name, err := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
+				if err != nil {
+					return err
+				}
 				return core.DatabaseSQL(cmd, m.dc, name, args[0])
 			}
-			return cli.DatabaseSQL(m.client, m.repoPath, core.ResolveOutput(cmd), utils.ResolveDBName(dbName, nil), args[0])
+			return cli.DatabaseSQL(m.client, m.repoPath, dbName, args[0])
 		},
 	})
 

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"os/signal"
 	"strings"
@@ -44,19 +44,20 @@ func main() {
 
 func rootCmd() *cobra.Command {
 	dc := &config.DeployContext{}
+	var cfg *config.AppConfig
 
 	root := &cobra.Command{
 		Use:          "nvoi",
 		Short:        "Deploy containers to cloud servers",
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			configPath, _ := cmd.Root().Flags().GetString("config")
-			viper.SetConfigFile(configPath)
-			viper.AutomaticEnv()
-			if err := viper.ReadInConfig(); err != nil {
-				return fmt.Errorf("read config: %w", err)
+			c, err := core.LoadConfig(cmd)
+			if err != nil {
+				return err
 			}
-			*dc = *core.BuildContext(cmd)
+			cfg = c
+			viper.AutomaticEnv()
+			*dc = *core.BuildContextFromConfig(cmd, cfg)
 			return nil
 		},
 	}
@@ -65,15 +66,15 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().Bool("json", false, "output JSONL")
 	root.PersistentFlags().Bool("ci", false, "plain text output")
 
-	root.AddCommand(core.NewDeployCmd(dc))
-	root.AddCommand(core.NewTeardownCmd(dc))
+	root.AddCommand(core.NewDeployCmd(dc, &cfg))
+	root.AddCommand(core.NewTeardownCmd(dc, &cfg))
 	root.AddCommand(core.NewDescribeCmd(dc))
 	root.AddCommand(core.NewResourcesCmd(dc))
 	root.AddCommand(core.NewLogsCmd(dc))
 	root.AddCommand(core.NewExecCmd(dc))
 	root.AddCommand(core.NewSSHCmd(dc))
 	root.AddCommand(core.NewCronCmd(dc))
-	root.AddCommand(core.NewDatabaseCmd(dc))
+	root.AddCommand(core.NewDatabaseCmd(dc, &cfg))
 
 	root.SetErr(&outputWriter{root: root})
 	root.SetErrPrefix("")
@@ -88,7 +89,7 @@ func (w *outputWriter) Write(p []byte) (n int, err error) {
 	if msg != "" && msg != "\n" {
 		msg = strings.TrimSpace(msg)
 		msg = strings.TrimPrefix(msg, "Error: ")
-		core.ResolveOutput(w.root).Error(fmt.Errorf("%s", msg))
+		core.ResolveOutput(w.root).Error(errors.New(msg))
 	}
 	return len(p), nil
 }

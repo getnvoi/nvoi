@@ -10,16 +10,12 @@ import (
 	"github.com/spf13/viper"
 )
 
-func NewDeployCmd(dc *config.DeployContext) *cobra.Command {
+func NewDeployCmd(dc *config.DeployContext, cfg **config.AppConfig) *cobra.Command {
 	return &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy from config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := LoadConfig(cmd)
-			if err != nil {
-				return err
-			}
-			return reconcile.Deploy(cmd.Context(), dc, cfg, viper.GetViper())
+			return reconcile.Deploy(cmd.Context(), dc, *cfg, viper.GetViper())
 		},
 	}
 }

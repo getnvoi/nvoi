@@ -13,18 +13,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func NewTeardownCmd(dc *config.DeployContext) *cobra.Command {
+func NewTeardownCmd(dc *config.DeployContext, cfg **config.AppConfig) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "teardown",
 		Short: "Tear down all provider resources in config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := LoadConfig(cmd)
-			if err != nil {
-				return err
-			}
 			deleteVolumes, _ := cmd.Flags().GetBool("delete-volumes")
 			deleteStorage, _ := cmd.Flags().GetBool("delete-storage")
-			return Teardown(cmd.Context(), dc, cfg, deleteVolumes, deleteStorage)
+			return Teardown(cmd.Context(), dc, *cfg, deleteVolumes, deleteStorage)
 		},
 	}
 	cmd.Flags().Bool("delete-volumes", false, "also delete persistent volumes (preserved by default)")

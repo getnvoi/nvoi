@@ -429,7 +429,7 @@ func TestCloudDispatch_DatabaseBackupList(t *testing.T) {
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"db", "backup", "list"})
 	cmd.Execute()
-	want := "/workspaces/ws-1/repos/repo-1/database/backups?name=main"
+	want := "/workspaces/ws-1/repos/repo-1/database/backups?name="
 	if gotPath != want {
 		t.Fatalf("path = %q, want %q", gotPath, want)
 	}

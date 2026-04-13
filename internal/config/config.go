@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"sort"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"gopkg.in/yaml.v3"
@@ -58,6 +59,7 @@ func (c *AppConfig) DatabaseNames() []string {
 	for n := range c.Database {
 		names = append(names, n)
 	}
+	sort.Strings(names)
 	return names
 }
 

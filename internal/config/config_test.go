@@ -1,7 +1,6 @@
 package config
 
 import (
-	"sort"
 	"testing"
 )
 
@@ -13,7 +12,6 @@ func TestDatabaseNames(t *testing.T) {
 		},
 	}
 	names := cfg.DatabaseNames()
-	sort.Strings(names)
 	if len(names) != 2 {
 		t.Fatalf("len = %d, want 2", len(names))
 	}

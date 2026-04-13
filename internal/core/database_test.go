@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -19,9 +18,11 @@ import (
 // ── Config parsed once via PersistentPreRunE ─────────────────────────────────
 
 func TestNewDatabaseCmd_ResolvesDBNameFromConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := dir + "/nvoi.yaml"
-	os.WriteFile(cfgPath, []byte("app: myapp\nenv: prod\nproviders:\n  compute: hetzner\nservers:\n  master:\n    type: cx21\n    region: fsn1\n    role: master\ndatabase:\n  analytics:\n    image: postgres:17\n    volume: pgdata\n"), 0o644)
+	cfgData := []byte("app: myapp\nenv: prod\nproviders:\n  compute: hetzner\nservers:\n  master:\n    type: cx21\n    region: fsn1\n    role: master\ndatabase:\n  analytics:\n    image: postgres:17\n    volume: pgdata\n")
+	cfg, err := config.ParseAppConfig(cfgData)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ns := "nvoi-myapp-prod"
 	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
@@ -34,15 +35,13 @@ func TestNewDatabaseCmd_ResolvesDBNameFromConfig(t *testing.T) {
 	}
 
 	dc := newDBTestContext(ssh)
-	dbCmd := NewDatabaseCmd(dc)
+	dbCmd := NewDatabaseCmd(dc, &cfg)
 
 	root := &cobra.Command{Use: "nvoi", SilenceUsage: true}
-	root.PersistentFlags().String("config", cfgPath, "")
-	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error { return nil }
 	root.AddCommand(dbCmd)
 
-	root.SetArgs([]string{"db", "sql", "SELECT 1", "--config", cfgPath})
-	err := root.Execute()
+	root.SetArgs([]string{"db", "sql", "SELECT 1"})
+	err = root.Execute()
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -54,9 +53,11 @@ func TestNewDatabaseCmd_ResolvesDBNameFromConfig(t *testing.T) {
 }
 
 func TestNewDatabaseCmd_FlagOverridesConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := dir + "/nvoi.yaml"
-	os.WriteFile(cfgPath, []byte("app: myapp\nenv: prod\nproviders:\n  compute: hetzner\nservers:\n  master:\n    type: cx21\n    region: fsn1\n    role: master\ndatabase:\n  analytics:\n    image: postgres:17\n    volume: pgdata\n"), 0o644)
+	cfgData := []byte("app: myapp\nenv: prod\nproviders:\n  compute: hetzner\nservers:\n  master:\n    type: cx21\n    region: fsn1\n    role: master\ndatabase:\n  analytics:\n    image: postgres:17\n    volume: pgdata\n")
+	cfg, err := config.ParseAppConfig(cfgData)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ns := "nvoi-myapp-prod"
 	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
@@ -68,15 +69,13 @@ func TestNewDatabaseCmd_FlagOverridesConfig(t *testing.T) {
 	}
 
 	dc := newDBTestContext(ssh)
-	dbCmd := NewDatabaseCmd(dc)
+	dbCmd := NewDatabaseCmd(dc, &cfg)
 
 	root := &cobra.Command{Use: "nvoi", SilenceUsage: true}
-	root.PersistentFlags().String("config", cfgPath, "")
-	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error { return nil }
 	root.AddCommand(dbCmd)
 
-	root.SetArgs([]string{"db", "sql", "SELECT 1", "--config", cfgPath, "--name", "custom"})
-	err := root.Execute()
+	root.SetArgs([]string{"db", "sql", "SELECT 1", "--name", "custom"})
+	err = root.Execute()
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -107,9 +106,7 @@ func newDBTestContext(ssh *testutil.MockSSH) *config.DeployContext {
 }
 
 func newCmd() *cobra.Command {
-	cmd := &cobra.Command{}
-	cmd.Flags().String("config", "/nonexistent", "")
-	return cmd
+	return &cobra.Command{}
 }
 
 // ── DatabaseSQL ─────────────────────────────────────────────────────────────
