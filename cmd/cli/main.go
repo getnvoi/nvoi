@@ -1,12 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,7 +14,6 @@ import (
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -144,8 +140,6 @@ func addCloudOnly(root *cobra.Command, cmd *cobra.Command) {
 	root.AddCommand(cmd)
 }
 
-func esc(s string) string { return url.PathEscape(s) }
-
 func readConfigFile(cmd *cobra.Command) ([]byte, error) {
 	configPath, _ := cmd.Flags().GetString("config")
 	if configPath == "" {
@@ -240,17 +234,7 @@ func newDescribeCmd(m *mode) *cobra.Command {
 				render.RenderDescribe(res)
 				return nil
 			}
-			var res app.DescribeResult
-			if err := m.client.Do("GET", m.repoPath("/describe"), nil, &res); err != nil {
-				return err
-			}
-			if j {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(res)
-			}
-			render.RenderDescribe(&res)
-			return nil
+			return cli.Describe(m.client, m.repoPath, j)
 		},
 	}
 }
@@ -278,17 +262,7 @@ func newResourcesCmd(m *mode) *cobra.Command {
 				render.RenderResources(groups)
 				return nil
 			}
-			var groups []provider.ResourceGroup
-			if err := m.client.Do("GET", m.repoPath("/resources"), nil, &groups); err != nil {
-				return err
-			}
-			if j {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(groups)
-			}
-			render.RenderResources(groups)
-			return nil
+			return cli.Resources(m.client, m.repoPath, j)
 		},
 	}
 }
@@ -311,23 +285,10 @@ func newLogsCmd(m *mode) *cobra.Command {
 					Previous: previous, Timestamps: timestamps,
 				})
 			}
-			path := fmt.Sprintf("/services/%s/logs?tail=%d&since=%s", args[0], tail, since)
-			if follow {
-				path += "&follow=true"
-			}
-			if previous {
-				path += "&previous=true"
-			}
-			if timestamps {
-				path += "&timestamps=true"
-			}
-			resp, err := m.client.DoRaw("GET", m.repoPath(path))
-			if err != nil {
-				return err
-			}
-			defer resp.Body.Close()
-			_, err = io.Copy(os.Stdout, resp.Body)
-			return err
+			return cli.Logs(m.client, m.repoPath, cli.LogsOpts{
+				Service: args[0], Follow: follow, Tail: tail,
+				Since: since, Previous: previous, Timestamps: timestamps,
+			})
 		},
 	}
 	cmd.Flags().BoolP("follow", "f", false, "follow log output")
@@ -349,15 +310,7 @@ func newExecCmd(m *mode) *cobra.Command {
 					Cluster: m.dc.Cluster, Service: args[0], Command: args[1:],
 				})
 			}
-			resp, err := m.client.DoRawWithBody("POST", m.repoPath("/services/"+esc(args[0])+"/exec"), map[string]any{
-				"command": args[1:],
-			})
-			if err != nil {
-				return err
-			}
-			defer resp.Body.Close()
-			_, err = io.Copy(os.Stdout, resp.Body)
-			return err
+			return cli.Exec(m.client, m.repoPath, args[0], args[1:])
 		},
 	}
 }
@@ -371,18 +324,7 @@ func newSSHCmd(m *mode) *cobra.Command {
 			if m.local {
 				return app.SSH(cmd.Context(), app.SSHRequest{Cluster: m.dc.Cluster, Command: args})
 			}
-			resp, err := m.client.DoRawWithBody("POST", m.repoPath("/ssh"), map[string]any{
-				"command": args,
-			})
-			if err != nil {
-				return err
-			}
-			defer resp.Body.Close()
-			scanner := bufio.NewScanner(resp.Body)
-			for scanner.Scan() {
-				fmt.Println(scanner.Text())
-			}
-			return scanner.Err()
+			return cli.SSH(m.client, m.repoPath, args)
 		},
 	}
 }
@@ -449,23 +391,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 				name := core.ResolveDBName(cmd, &dbName)
 				return core.DatabaseBackupList(cmd, m.dc, name)
 			}
-			name := cloudDBName(&dbName)
-			var entries []struct {
-				Key          string `json:"key"`
-				Size         int64  `json:"size"`
-				LastModified string `json:"last_modified"`
-			}
-			if err := m.client.Do("GET", m.repoPath(fmt.Sprintf("/database/backups?name=%s", esc(name))), nil, &entries); err != nil {
-				return err
-			}
-			if len(entries) == 0 {
-				fmt.Println("no backups found")
-				return nil
-			}
-			for _, e := range entries {
-				fmt.Printf("%s  %s  %d bytes\n", e.LastModified, e.Key, e.Size)
-			}
-			return nil
+			return cli.DatabaseBackupList(m.client, m.repoPath, cloudDBName(&dbName))
 		},
 	})
 
@@ -479,30 +405,8 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 				outFile, _ := cmd.Flags().GetString("file")
 				return core.DatabaseBackupDownload(cmd, m.dc, name, args[0], outFile)
 			}
-			name := cloudDBName(&dbName)
 			outFile, _ := cmd.Flags().GetString("file")
-			resp, err := m.client.DoRaw("GET", m.repoPath(fmt.Sprintf("/database/backups/%s?name=%s", esc(args[0]), esc(name))))
-			if err != nil {
-				return err
-			}
-			defer resp.Body.Close()
-			var w io.Writer = os.Stdout
-			if outFile != "" {
-				f, err := os.Create(outFile)
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				w = f
-			}
-			n, err := io.Copy(w, resp.Body)
-			if err != nil {
-				return err
-			}
-			if outFile != "" {
-				fmt.Printf("downloaded %s (%d bytes)\n", outFile, n)
-			}
-			return nil
+			return cli.DatabaseBackupDownload(m.client, m.repoPath, cloudDBName(&dbName), args[0], outFile)
 		},
 	}
 	dlCmd.Flags().StringP("file", "f", "", "output file (default: stdout)")
@@ -519,18 +423,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 				name := core.ResolveDBName(cmd, &dbName)
 				return core.DatabaseSQL(cmd, m.dc, name, args[0])
 			}
-			name := cloudDBName(&dbName)
-			var result struct {
-				Output string `json:"output"`
-			}
-			if err := m.client.Do("POST", m.repoPath("/database/sql"), map[string]any{
-				"name":  name,
-				"query": args[0],
-			}, &result); err != nil {
-				return err
-			}
-			fmt.Print(result.Output)
-			return nil
+			return cli.DatabaseSQL(m.client, m.repoPath, cloudDBName(&dbName), args[0])
 		},
 	})
 

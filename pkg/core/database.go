@@ -61,13 +61,15 @@ type DatabaseBackupDownloadRequest struct {
 }
 
 func DatabaseBackupDownload(ctx context.Context, req DatabaseBackupDownloadRequest) (io.ReadCloser, int64, error) {
+	// SSH is only needed to read backup credentials from k8s secrets.
+	// Close it before returning — the S3 stream is a direct HTTP connection,
+	// not tunneled through SSH.
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer ssh.Close()
-
 	endpoint, bucket, accessKey, secretKey, err := backupCreds(ctx, ssh, names, req.DBName)
+	ssh.Close()
 	if err != nil {
 		return nil, 0, err
 	}
