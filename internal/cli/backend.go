@@ -59,12 +59,21 @@ func NewTeardownCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read config: %w", err)
 			}
-			return StreamRun(*client, (*repoPath)("/teardown"), map[string]any{
-				"config": string(data),
-			})
+			deleteVolumes, _ := cmd.Flags().GetBool("delete-volumes")
+			deleteStorage, _ := cmd.Flags().GetBool("delete-storage")
+			body := map[string]any{"config": string(data)}
+			if deleteVolumes {
+				body["delete_volumes"] = true
+			}
+			if deleteStorage {
+				body["delete_storage"] = true
+			}
+			return StreamRun(*client, (*repoPath)("/teardown"), body)
 		},
 	}
 	cmd.Flags().String("config", "nvoi.yaml", "path to config YAML")
+	cmd.Flags().Bool("delete-volumes", false, "also delete persistent volumes (preserved by default)")
+	cmd.Flags().Bool("delete-storage", false, "also delete storage buckets (preserved by default)")
 	return cmd
 }
 

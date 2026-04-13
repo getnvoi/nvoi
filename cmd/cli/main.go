@@ -201,9 +201,14 @@ func newTeardownCmd(m *mode) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return cli.StreamRun(m.client, m.repoPath("/teardown"), map[string]any{
-				"config": string(data),
-			})
+			body := map[string]any{"config": string(data)}
+			if deleteVolumes {
+				body["delete_volumes"] = true
+			}
+			if deleteStorage {
+				body["delete_storage"] = true
+			}
+			return cli.StreamRun(m.client, m.repoPath("/teardown"), body)
 		},
 	}
 	cmd.Flags().Bool("delete-volumes", false, "also delete persistent volumes (preserved by default)")

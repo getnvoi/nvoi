@@ -368,6 +368,58 @@ func TestCloudDispatch_DatabaseBackupList(t *testing.T) {
 	}
 }
 
+// ── Teardown flags forwarded to API ──────────────────────────────────────────
+
+func TestCloudDispatch_TeardownForwardsDeleteFlags(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	dir := writeAuth(t, ts.URL)
+	cfgPath := filepath.Join(dir, "nvoi.yaml")
+	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
+
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"teardown", "--config", cfgPath, "--delete-volumes", "--delete-storage"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["delete_volumes"] != true {
+		t.Fatalf("delete_volumes = %v, want true", gotBody["delete_volumes"])
+	}
+	if gotBody["delete_storage"] != true {
+		t.Fatalf("delete_storage = %v, want true", gotBody["delete_storage"])
+	}
+}
+
+func TestCloudDispatch_TeardownOmitsFlagsWhenFalse(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	dir := writeAuth(t, ts.URL)
+	cfgPath := filepath.Join(dir, "nvoi.yaml")
+	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
+
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"teardown", "--config", cfgPath})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := gotBody["delete_volumes"]; ok {
+		t.Fatal("delete_volumes should not be present when flag is false")
+	}
+	if _, ok := gotBody["delete_storage"]; ok {
+		t.Fatal("delete_storage should not be present when flag is false")
+	}
+}
+
 // ── StreamRun ───────────────────────────────────────────────────────────────
 
 func TestStreamRun_ProcessesJSONL(t *testing.T) {
