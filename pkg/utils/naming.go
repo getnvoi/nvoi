@@ -126,6 +126,19 @@ func StorageEnvPrefix(bucketName string) string {
 	return "STORAGE_" + strings.ReplaceAll(upper, "-", "_")
 }
 
+// ── Name resolution ──────────────────────────────────────────────────────────
+
+// ResolveDBName returns the database name from flag, first available name, or "main".
+func ResolveDBName(flag string, available []string) string {
+	if flag != "" {
+		return flag
+	}
+	if len(available) > 0 {
+		return available[0]
+	}
+	return "main"
+}
+
 // ── Network CIDRs ──────────────────────────────────────────────────────────────
 
 const (

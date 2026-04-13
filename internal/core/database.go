@@ -7,6 +7,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -25,6 +26,23 @@ func NewDatabaseCmd(dc *config.DeployContext) *cobra.Command {
 	return cmd
 }
 
+// resolveDB loads config to find available database names, then resolves.
+func resolveDB(cmd *cobra.Command, flag *string) string {
+	cfg, _ := LoadConfig(cmd)
+	return utils.ResolveDBName(*flag, dbNames(cfg))
+}
+
+func dbNames(cfg *config.AppConfig) []string {
+	if cfg == nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.Database))
+	for n := range cfg.Database {
+		names = append(names, n)
+	}
+	return names
+}
+
 func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup",
@@ -34,7 +52,7 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Use:   "now",
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := ResolveDBName(cmd, dbName)
+			name := resolveDB(cmd, dbName)
 			cronName := name + "-db-backup"
 			return app.CronRun(cmd.Context(), app.CronRunRequest{
 				Cluster: dc.Cluster,
@@ -46,7 +64,7 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Use:   "list",
 		Short: "List backups in bucket",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := ResolveDBName(cmd, dbName)
+			name := resolveDB(cmd, dbName)
 			return DatabaseBackupList(cmd, dc, name)
 		},
 	})
@@ -55,7 +73,7 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Short: "Download a backup file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := ResolveDBName(cmd, dbName)
+			name := resolveDB(cmd, dbName)
 			outFile, _ := cmd.Flags().GetString("file")
 			return DatabaseBackupDownload(cmd, dc, name, args[0], outFile)
 		},
@@ -70,24 +88,10 @@ func newDatabaseSQLCmd(dc *config.DeployContext, dbName *string) *cobra.Command 
 		Short: "Run SQL against the database",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := ResolveDBName(cmd, dbName)
+			name := resolveDB(cmd, dbName)
 			return DatabaseSQL(cmd, dc, name, args[0])
 		},
 	}
-}
-
-func ResolveDBName(cmd *cobra.Command, dbName *string) string {
-	if *dbName != "" {
-		return *dbName
-	}
-	cfg, err := LoadConfig(cmd)
-	if err != nil || len(cfg.Database) == 0 {
-		return "main"
-	}
-	for name := range cfg.Database {
-		return name
-	}
-	return "main"
 }
 
 func DatabaseBackupList(cmd *cobra.Command, dc *config.DeployContext, name string) error {

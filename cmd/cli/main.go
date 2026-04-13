@@ -14,6 +14,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
@@ -50,6 +51,7 @@ func main() {
 type mode struct {
 	local    bool
 	dc       *config.DeployContext // local mode
+	cfg      *config.AppConfig     // local mode — parsed once, reused by all commands
 	client   *cli.APIClient        // cloud mode
 	repoPath func(string) string   // cloud mode
 }
@@ -99,14 +101,14 @@ func rootCmd() *cobra.Command {
 }
 
 func initLocal(cmd *cobra.Command, m *mode) error {
-	configPath, _ := cmd.Flags().GetString("config")
-	viper.SetConfigFile(configPath)
-	viper.AutomaticEnv()
-	if err := viper.ReadInConfig(); err != nil {
-		return fmt.Errorf("read config: %w", err)
+	cfg, err := core.LoadConfig(cmd)
+	if err != nil {
+		return err
 	}
+	viper.AutomaticEnv() // env var resolution for secrets in reconcile.Deploy
 	m.local = true
-	m.dc = core.BuildContext(cmd)
+	m.cfg = cfg
+	m.dc = core.BuildContextFromConfig(cmd, cfg)
 	return nil
 }
 
@@ -179,11 +181,7 @@ func newDeployCmd(m *mode) *cobra.Command {
 		Short: "Deploy from config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				cfg, err := core.LoadConfig(cmd)
-				if err != nil {
-					return err
-				}
-				return reconcile.Deploy(cmd.Context(), m.dc, cfg, viper.GetViper())
+				return reconcile.Deploy(cmd.Context(), m.dc, m.cfg, viper.GetViper())
 			}
 			data, err := readConfigFile(cmd)
 			if err != nil {
@@ -204,11 +202,7 @@ func newTeardownCmd(m *mode) *cobra.Command {
 			deleteVolumes, _ := cmd.Flags().GetBool("delete-volumes")
 			deleteStorage, _ := cmd.Flags().GetBool("delete-storage")
 			if m.local {
-				cfg, err := core.LoadConfig(cmd)
-				if err != nil {
-					return err
-				}
-				return core.Teardown(cmd.Context(), m.dc, cfg, deleteVolumes, deleteStorage)
+				return core.Teardown(cmd.Context(), m.dc, m.cfg, deleteVolumes, deleteStorage)
 			}
 			data, err := readConfigFile(cmd)
 			if err != nil {
@@ -389,12 +383,12 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := core.ResolveDBName(cmd, &dbName)
+				name := utils.ResolveDBName(dbName, dbNames(m.cfg))
 				return app.CronRun(cmd.Context(), app.CronRunRequest{
 					Cluster: m.dc.Cluster, Name: name + "-db-backup",
 				})
 			}
-			name := cloudDBName(&dbName)
+			name := utils.ResolveDBName(dbName, nil)
 			return cli.StreamRun(m.client, m.repoPath("/run"), map[string]any{
 				"kind": "cron.run",
 				"name": name + "-db-backup",
@@ -407,10 +401,10 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Short: "List backups in bucket",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := core.ResolveDBName(cmd, &dbName)
+				name := utils.ResolveDBName(dbName, dbNames(m.cfg))
 				return core.DatabaseBackupList(cmd, m.dc, name)
 			}
-			return cli.DatabaseBackupList(m.client, m.repoPath, cloudDBName(&dbName))
+			return cli.DatabaseBackupList(m.client, m.repoPath, utils.ResolveDBName(dbName, nil))
 		},
 	})
 
@@ -420,12 +414,12 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := core.ResolveDBName(cmd, &dbName)
+				name := utils.ResolveDBName(dbName, dbNames(m.cfg))
 				outFile, _ := cmd.Flags().GetString("file")
 				return core.DatabaseBackupDownload(cmd, m.dc, name, args[0], outFile)
 			}
 			outFile, _ := cmd.Flags().GetString("file")
-			return cli.DatabaseBackupDownload(m.client, m.repoPath, cloudDBName(&dbName), args[0], outFile)
+			return cli.DatabaseBackupDownload(m.client, m.repoPath, utils.ResolveDBName(dbName, nil), args[0], outFile)
 		},
 	}
 	dlCmd.Flags().StringP("file", "f", "", "output file (default: stdout)")
@@ -439,19 +433,23 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				name := core.ResolveDBName(cmd, &dbName)
+				name := utils.ResolveDBName(dbName, dbNames(m.cfg))
 				return core.DatabaseSQL(cmd, m.dc, name, args[0])
 			}
-			return cli.DatabaseSQL(m.client, m.repoPath, cloudDBName(&dbName), args[0])
+			return cli.DatabaseSQL(m.client, m.repoPath, utils.ResolveDBName(dbName, nil), args[0])
 		},
 	})
 
 	return cmd
 }
 
-func cloudDBName(dbName *string) string {
-	if *dbName != "" {
-		return *dbName
+func dbNames(cfg *config.AppConfig) []string {
+	if cfg == nil {
+		return nil
 	}
-	return "main"
+	names := make([]string, 0, len(cfg.Database))
+	for n := range cfg.Database {
+		names = append(names, n)
+	}
+	return names
 }

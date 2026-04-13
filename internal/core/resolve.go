@@ -15,6 +15,7 @@ import (
 )
 
 // BuildContext builds a DeployContext from viper config + env vars.
+// Used by cmd/core where viper owns the config lifecycle.
 func BuildContext(cmd *cobra.Command) *config.DeployContext {
 	appName := viper.GetString("app")
 	env := viper.GetString("env")
@@ -43,6 +44,37 @@ func BuildContext(cmd *cobra.Command) *config.DeployContext {
 		DNS:         app.ProviderRef{Name: dnsProvider, Creds: dnsCreds},
 		Storage:     app.ProviderRef{Name: storageProvider, Creds: storageCreds},
 		Builder:     builderName,
+		BuildCreds:  builderCreds,
+		GitUsername: gitUsername,
+		GitToken:    gitToken,
+	}
+}
+
+// BuildContextFromConfig builds a DeployContext from a parsed AppConfig.
+// Reads provider credentials from env vars, not viper. Used by cmd/cli
+// --local mode to avoid a redundant viper config read.
+func BuildContextFromConfig(cmd *cobra.Command, cfg *config.AppConfig) *config.DeployContext {
+	out := ResolveOutput(cmd)
+
+	computeCreds, _ := resolveProviderCreds("compute", cfg.Providers.Compute)
+	sshKey, _ := resolveSSHKey()
+	dnsCreds, _ := resolveProviderCreds("dns", cfg.Providers.DNS)
+	storageCreds, _ := resolveProviderCreds("storage", cfg.Providers.Storage)
+	builderCreds, _ := resolveProviderCreds("build", cfg.Providers.Build)
+	gitUsername, gitToken := resolveGitAuth()
+
+	return &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName:     cfg.App,
+			Env:         cfg.Env,
+			Provider:    cfg.Providers.Compute,
+			Credentials: computeCreds,
+			SSHKey:      sshKey,
+			Output:      out,
+		},
+		DNS:         app.ProviderRef{Name: cfg.Providers.DNS, Creds: dnsCreds},
+		Storage:     app.ProviderRef{Name: cfg.Providers.Storage, Creds: storageCreds},
+		Builder:     cfg.Providers.Build,
 		BuildCreds:  builderCreds,
 		GitUsername: gitUsername,
 		GitToken:    gitToken,

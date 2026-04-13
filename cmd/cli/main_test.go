@@ -28,8 +28,8 @@ func TestLocalFlagWithoutConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "read config") {
-		t.Fatalf("error = %q, want config read error", err.Error())
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Fatalf("error = %q, want file-not-found error", err.Error())
 	}
 }
 
@@ -564,60 +564,5 @@ func TestLoadConfig_DefaultPath(t *testing.T) {
 	// Default "nvoi.yaml" doesn't exist in test dir — error expected.
 	if err == nil {
 		t.Fatal("expected error")
-	}
-}
-
-// ── ResolveDBName ───────────────────────────────────────────────────────────
-
-func TestResolveDBName_FromFlag(t *testing.T) {
-	cmd := &cobra.Command{}
-	cmd.Flags().String("config", "/nonexistent", "")
-
-	name := "custom"
-	got := core.ResolveDBName(cmd, &name)
-	if got != "custom" {
-		t.Fatalf("got %q, want custom", got)
-	}
-}
-
-func TestResolveDBName_FromConfig(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "nvoi.yaml")
-	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\ndatabase:\n  analytics:\n    image: postgres:17\n    volume: pgdata\n"), 0o644)
-
-	cmd := &cobra.Command{}
-	cmd.Flags().String("config", cfgPath, "")
-
-	empty := ""
-	got := core.ResolveDBName(cmd, &empty)
-	if got != "analytics" {
-		t.Fatalf("got %q, want analytics (first db in config)", got)
-	}
-}
-
-func TestResolveDBName_FallbackToMain(t *testing.T) {
-	cmd := &cobra.Command{}
-	cmd.Flags().String("config", "/nonexistent", "")
-
-	empty := ""
-	got := core.ResolveDBName(cmd, &empty)
-	if got != "main" {
-		t.Fatalf("got %q, want main (default fallback)", got)
-	}
-}
-
-// ── cloudDBName ─────────────────────────────────────────────────────────────
-
-func TestCloudDBName_Custom(t *testing.T) {
-	name := "analytics"
-	if got := cloudDBName(&name); got != "analytics" {
-		t.Fatalf("got %q, want analytics", got)
-	}
-}
-
-func TestCloudDBName_Default(t *testing.T) {
-	empty := ""
-	if got := cloudDBName(&empty); got != "main" {
-		t.Fatalf("got %q, want main", got)
 	}
 }

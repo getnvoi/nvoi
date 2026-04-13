@@ -267,6 +267,28 @@ func TestStorageEnvPrefix(t *testing.T) {
 	}
 }
 
+func TestResolveDBName(t *testing.T) {
+	tests := []struct {
+		name      string
+		flag      string
+		available []string
+		want      string
+	}{
+		{"flag set", "custom", []string{"analytics", "logs"}, "custom"},
+		{"flag empty, picks first available", "", []string{"analytics", "logs"}, "analytics"},
+		{"flag empty, no available", "", nil, "main"},
+		{"flag empty, empty slice", "", []string{}, "main"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveDBName(tt.flag, tt.available)
+			if got != tt.want {
+				t.Errorf("ResolveDBName(%q, %v) = %q, want %q", tt.flag, tt.available, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRegistryAddr(t *testing.T) {
 	tests := []struct {
 		name string
