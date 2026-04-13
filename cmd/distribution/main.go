@@ -28,6 +28,11 @@ import (
 var installScript []byte
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "pull" {
+		pull(os.Args[2:])
+		return
+	}
+
 	cfg := loadConfig()
 
 	mux := http.NewServeMux()

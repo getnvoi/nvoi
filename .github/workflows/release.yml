@@ -82,8 +82,15 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-      - name: Upload to R2
+      - name: Write SSH key
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Pull release into R2
         env:
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: go run ./cmd/distribution/upload.go "${{ github.ref_name }}" dist/
+          SSH_KEY_PATH: ~/.ssh/id_ed25519
+          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: go run ./cmd/core exec distribution -- ./nvoi-dist pull "${{ github.ref_name }}"
