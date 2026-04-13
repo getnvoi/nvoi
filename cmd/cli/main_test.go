@@ -93,6 +93,53 @@ func TestCloudOnlyCommandsWithLocal(t *testing.T) {
 	}
 }
 
+// ── Cloud-only auth enforcement ──────────────────────────────────────────────
+
+func TestCloudOnlyCommandsRequireAuth(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no auth.json
+
+	// These commands should fail at PersistentPreRunE with an auth error,
+	// NOT reach their RunE and fail with a different error.
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"whoami", []string{"whoami"}},
+		{"workspaces", []string{"workspaces", "list"}},
+		{"repos", []string{"repos", "list"}},
+		{"provider", []string{"provider", "list"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := rootCmd()
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "nvoi login") {
+				t.Fatalf("error = %q, want auth error mentioning 'nvoi login'", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoginDoesNotRequireAuth(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no auth.json
+
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"login"})
+	err := cmd.Execute()
+	// login will fail (no GitHub token), but NOT with "nvoi login" auth error.
+	// It should get past PersistentPreRunE and into its own RunE.
+	if err == nil {
+		t.Fatal("expected error (no GitHub token)")
+	}
+	if strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("login should not require auth, got: %q", err.Error())
+	}
+}
+
 // ── Dispatch: local mode ────────────────────────────────────────────────────
 
 func TestLocalDispatch_Deploy(t *testing.T) {

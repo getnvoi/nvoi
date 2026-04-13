@@ -88,7 +88,8 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(newDatabaseCmd(&m))
 
 	// Cloud-only commands — hard error with --local.
-	addCloudOnly(root, cli.NewLoginCmd())
+	// login skips auth (it creates it). Everything else enforces it.
+	addUnauthCloudOnly(root, cli.NewLoginCmd())
 	addCloudOnly(root, cli.NewWhoamiCmd())
 	addCloudOnly(root, cli.NewWorkspacesCmd())
 	addCloudOnly(root, cli.NewReposCmd())
@@ -129,11 +130,25 @@ func initCloud(cmd *cobra.Command, m *mode) error {
 	return nil
 }
 
-// addCloudOnly registers a command that is not available in local mode.
-// Cloud-only commands manage their own auth (call AuthedClient() in RunE) —
-// this override only gates --local. Root's PersistentPreRunE (initCloud)
-// is NOT called for these commands.
+// addCloudOnly registers a cloud-only command that requires auth.
+// Gates --local and verifies the user is authenticated before RunE fires.
 func addCloudOnly(root *cobra.Command, cmd *cobra.Command) {
+	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
+		local, _ := c.Flags().GetBool("local")
+		if local {
+			return fmt.Errorf("%s is not available in local mode", cmd.Name())
+		}
+		if _, err := cli.LoadAuthConfig(); err != nil {
+			return err
+		}
+		return nil
+	}
+	root.AddCommand(cmd)
+}
+
+// addUnauthCloudOnly registers a cloud-only command that does NOT require auth.
+// Only used for login — it creates auth, so it can't require it.
+func addUnauthCloudOnly(root *cobra.Command, cmd *cobra.Command) {
 	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
 		local, _ := c.Flags().GetBool("local")
 		if local {
