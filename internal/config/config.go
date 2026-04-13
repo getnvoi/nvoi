@@ -4,20 +4,29 @@ package config
 
 import (
 	"fmt"
+	"sort"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"gopkg.in/yaml.v3"
 )
 
+// DatabaseCredentials holds resolved database credentials for a single database.
+type DatabaseCredentials struct {
+	User     string
+	Password string
+	DBName   string
+}
+
 // DeployContext holds everything needed to execute against a cluster.
 type DeployContext struct {
-	Cluster     app.Cluster
-	DNS         app.ProviderRef
-	Storage     app.ProviderRef
-	Builder     string
-	BuildCreds  map[string]string
-	GitUsername string
-	GitToken    string
+	Cluster       app.Cluster
+	DNS           app.ProviderRef
+	Storage       app.ProviderRef
+	Builder       string
+	BuildCreds    map[string]string
+	GitUsername   string
+	GitToken      string
+	DatabaseCreds map[string]*DatabaseCredentials
 }
 
 // LiveState represents what's currently deployed.
@@ -49,7 +58,21 @@ type AppConfig struct {
 	ACMEEmail string                 `yaml:"acme_email,omitempty"`
 }
 
+// DatabaseNames returns the names of all configured databases.
+func (c *AppConfig) DatabaseNames() []string {
+	if c == nil {
+		return nil
+	}
+	names := make([]string, 0, len(c.Database))
+	for n := range c.Database {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 type DatabaseDef struct {
+	Kind   string    `yaml:"kind"`
 	Image  string    `yaml:"image"`
 	Volume string    `yaml:"volume"`
 	Backup BackupDef `yaml:"backup,omitempty"`

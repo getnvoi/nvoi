@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"io"
+	"log"
 	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -93,7 +94,7 @@ func ListInstances(db *gorm.DB) func(context.Context, *ListInstancesInput) (*Lis
 		}
 		servers, err := pkgcore.ComputeList(ctx, pkgcore.ComputeListRequest{Cluster: *cluster})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &ListInstancesOutput{Body: servers}, nil
 	}
@@ -107,7 +108,7 @@ func ListVolumes(db *gorm.DB) func(context.Context, *ListVolumesInput) (*ListVol
 		}
 		volumes, err := pkgcore.VolumeList(ctx, pkgcore.VolumeListRequest{Cluster: *cluster})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &ListVolumesOutput{Body: volumes}, nil
 	}
@@ -132,7 +133,7 @@ func ListDNSRecords(db *gorm.DB) func(context.Context, *ListDNSInput) (*ListDNSO
 			},
 		})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 
 		return &ListDNSOutput{Body: records}, nil
@@ -147,7 +148,7 @@ func ListSecrets(db *gorm.DB) func(context.Context, *ListSecretsInput) (*ListSec
 		}
 		keys, err := pkgcore.SecretList(ctx, pkgcore.SecretListRequest{Cluster: *cluster})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &ListSecretsOutput{Body: keys}, nil
 	}
@@ -161,7 +162,7 @@ func ListStorageBuckets(db *gorm.DB) func(context.Context, *ListStorageInput) (*
 		}
 		items, err := pkgcore.StorageList(ctx, pkgcore.StorageListRequest{Cluster: *cluster})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &ListStorageOutput{Body: items}, nil
 	}
@@ -189,7 +190,7 @@ func EmptyStorage(db *gorm.DB) func(context.Context, *EmptyStorageInput) (*Empty
 			Name: input.Name,
 		})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 
 		return &EmptyStorageOutput{Body: struct {
@@ -206,7 +207,7 @@ func ListBuilds(db *gorm.DB) func(context.Context, *ListBuildsInput) (*ListBuild
 		}
 		images, err := pkgcore.BuildList(ctx, pkgcore.BuildListRequest{Cluster: *cluster})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &ListBuildsOutput{Body: images}, nil
 	}
@@ -223,7 +224,7 @@ func BuildLatestImage(db *gorm.DB) func(context.Context, *BuildLatestInput) (*Bu
 			Name:    input.Name,
 		})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &BuildLatestOutput{Body: struct {
 			Image string `json:"image"`
@@ -243,7 +244,7 @@ func PruneBuild(db *gorm.DB) func(context.Context, *BuildPruneInput) (*BuildPrun
 			Keep:    input.Body.Keep,
 		})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &BuildPruneOutput{Body: struct {
 			Status string `json:"status"`
@@ -255,21 +256,22 @@ func PruneBuild(db *gorm.DB) func(context.Context, *BuildPruneInput) (*BuildPrun
 
 type DatabaseBackupListInput struct {
 	RepoScopedInput
-	Name string `query:"name" default:"main" doc:"Database name"`
+	Name string `query:"name" required:"true" doc:"Database name"`
 }
 type DatabaseBackupListOutput struct{ Body []pkgcore.BackupEntry }
 
 type DatabaseBackupDownloadInput struct {
 	RepoScopedInput
-	Name string `query:"name" default:"main" doc:"Database name"`
+	Name string `query:"name" required:"true" doc:"Database name"`
 	Key  string `path:"key" doc:"Backup key"`
 }
 
 type DatabaseSQLInput struct {
 	RepoScopedInput
 	Body struct {
-		Name  string `json:"name,omitempty" doc:"Database name (defaults to main)"`
-		Query string `json:"query" required:"true" doc:"SQL query"`
+		Name   string `json:"name" required:"true" doc:"Database name"`
+		Engine string `json:"engine" required:"true" doc:"Database engine (postgres or mysql)"`
+		Query  string `json:"query" required:"true" doc:"SQL query"`
 	}
 }
 type DatabaseSQLOutput struct {
@@ -289,7 +291,7 @@ func DatabaseBackupList(db *gorm.DB) func(context.Context, *DatabaseBackupListIn
 			DBName:  input.Name,
 		})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &DatabaseBackupListOutput{Body: entries}, nil
 	}
@@ -307,7 +309,7 @@ func DatabaseBackupDownload(db *gorm.DB) func(context.Context, *DatabaseBackupDo
 			Key:     input.Key,
 		})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &huma.StreamResponse{
 			Body: func(ctx huma.Context) {
@@ -316,7 +318,9 @@ func DatabaseBackupDownload(db *gorm.DB) func(context.Context, *DatabaseBackupDo
 					ctx.SetHeader("Content-Length", strconv.FormatInt(contentLength, 10))
 				}
 				defer body.Close()
-				io.Copy(ctx.BodyWriter(), body)
+				if _, err := io.Copy(ctx.BodyWriter(), body); err != nil {
+					log.Printf("backup download stream error: %v", err)
+				}
 			},
 		}, nil
 	}
@@ -328,17 +332,14 @@ func DatabaseSQL(db *gorm.DB) func(context.Context, *DatabaseSQLInput) (*Databas
 		if err != nil {
 			return nil, err
 		}
-		name := input.Body.Name
-		if name == "" {
-			name = "main"
-		}
 		out, err := pkgcore.DatabaseSQL(ctx, pkgcore.DatabaseSQLRequest{
 			Cluster: *cluster,
-			DBName:  name,
+			DBName:  input.Body.Name,
+			Engine:  input.Body.Engine,
 			Query:   input.Body.Query,
 		})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &DatabaseSQLOutput{Body: struct {
 			Output string `json:"output"`

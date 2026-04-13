@@ -297,7 +297,7 @@ func (silentOutput) Writer() io.Writer                      { return io.Discard 
 func TestTeardown_ReturnsNil(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
-	err := teardown(context.Background(), dc, fullConfig(), false, false)
+	err := Teardown(context.Background(), dc, fullConfig(), false, false)
 	if err != nil {
 		t.Fatalf("teardown should return nil, got: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestTeardown_ReturnsNil(t *testing.T) {
 func TestTeardown_ReturnsNilWithAllFlags(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
-	err := teardown(context.Background(), dc, fullConfig(), true, true)
+	err := Teardown(context.Background(), dc, fullConfig(), true, true)
 	if err != nil {
 		t.Fatalf("teardown with all flags should return nil, got: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestTeardown_ReturnsNilWithAllFlags(t *testing.T) {
 func TestTeardown_DeletesDNSRecords(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	if !log.has("delete-dns:myapp.com") {
 		t.Error("DNS record myapp.com not deleted")
@@ -337,7 +337,7 @@ func TestTeardown_MultipleDomainServices(t *testing.T) {
 	cfg.Services["api"] = config.ServiceDef{Image: "api:latest", Port: 8080}
 	cfg.Domains["api"] = []string{"api.myapp.com"}
 
-	_ = teardown(context.Background(), dc, cfg, false, false)
+	_ = Teardown(context.Background(), dc, cfg, false, false)
 
 	if !log.has("delete-dns:myapp.com") {
 		t.Error("myapp.com not deleted")
@@ -359,7 +359,7 @@ func TestTeardown_NoDomains(t *testing.T) {
 	cfg := fullConfig()
 	cfg.Domains = nil
 
-	_ = teardown(context.Background(), dc, cfg, false, false)
+	_ = Teardown(context.Background(), dc, cfg, false, false)
 
 	if log.count("delete-dns:") != 0 {
 		t.Errorf("no domains configured, but DNS deletes occurred: %v", log.all())
@@ -372,7 +372,7 @@ func TestTeardown_DeletesAllServers(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	if !log.has("delete-server:" + n.Server("worker")) {
 		t.Errorf("worker not deleted")
@@ -389,7 +389,7 @@ func TestTeardown_WorkersBeforeMasters(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	workerIdx := log.indexOf("delete-server:" + n.Server("worker"))
 	masterIdx := log.indexOf("delete-server:" + n.Server("master"))
@@ -420,7 +420,7 @@ func TestTeardown_MultipleWorkers(t *testing.T) {
 		{ID: "3", Name: n.Server("worker-b")},
 	}
 
-	_ = teardown(context.Background(), dc, cfg, false, false)
+	_ = Teardown(context.Background(), dc, cfg, false, false)
 
 	wa := log.indexOf("delete-server:" + n.Server("worker-a"))
 	wb := log.indexOf("delete-server:" + n.Server("worker-b"))
@@ -448,7 +448,7 @@ func TestTeardown_MasterOnly(t *testing.T) {
 		},
 	}
 
-	_ = teardown(context.Background(), dc, cfg, false, false)
+	_ = Teardown(context.Background(), dc, cfg, false, false)
 
 	if !log.has("delete-server:" + n.Server("master")) {
 		t.Error("master not deleted")
@@ -464,7 +464,7 @@ func TestTeardown_FirewallAndNetworkAlwaysDeleted(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	if !log.has("delete-firewall:" + n.Firewall()) {
 		t.Errorf("firewall %q not deleted", n.Firewall())
@@ -478,7 +478,7 @@ func TestTeardown_FirewallAndNetworkAfterAllServers(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	masterIdx := log.indexOf("delete-server:" + n.Server("master"))
 	fwIdx := log.indexOf("delete-firewall:" + n.Firewall())
@@ -499,7 +499,7 @@ func TestTeardown_FirewallErrorDoesNotBlockNetwork(t *testing.T) {
 
 	log.errors["delete-firewall:"+n.Firewall()] = fmt.Errorf("firewall stuck")
 
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	if !log.has("delete-firewall:" + n.Firewall()) {
 		t.Error("firewall delete not attempted")
@@ -518,7 +518,7 @@ func TestTeardown_EmptyConfig_StillDeletesFirewallAndNetwork(t *testing.T) {
 		Servers: map[string]config.ServerDef{},
 	}
 
-	_ = teardown(context.Background(), dc, cfg, true, true)
+	_ = Teardown(context.Background(), dc, cfg, true, true)
 
 	if !log.has("delete-firewall:" + n.Firewall()) {
 		t.Error("firewall not deleted on empty config")
@@ -536,7 +536,7 @@ func TestTeardown_EmptyConfig_StillDeletesFirewallAndNetwork(t *testing.T) {
 func TestTeardown_VolumesPreservedByDefault(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	if log.count("delete-volume:") != 0 {
 		t.Errorf("volumes preserved by default, but got deletes: %v", log.all())
@@ -547,7 +547,7 @@ func TestTeardown_VolumesDeletedWithFlag(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), true, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), true, false)
 
 	if !log.has("delete-volume:" + n.Volume("pgdata")) {
 		t.Errorf("volume %q not deleted with --delete-volumes", n.Volume("pgdata"))
@@ -573,7 +573,7 @@ func TestTeardown_MultipleVolumes(t *testing.T) {
 		{ID: "2", Name: n.Volume("redis")},
 	}
 
-	_ = teardown(context.Background(), dc, cfg, true, false)
+	_ = Teardown(context.Background(), dc, cfg, true, false)
 
 	if !log.has("delete-volume:" + n.Volume("pgdata")) {
 		t.Error("pgdata not deleted")
@@ -590,7 +590,7 @@ func TestTeardown_VolumesBeforeServers(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), true, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), true, false)
 
 	volIdx := log.indexOf("delete-volume:" + n.Volume("pgdata"))
 	srvIdx := log.indexOf("delete-server:" + n.Server("worker"))
@@ -608,7 +608,7 @@ func TestTeardown_VolumesBeforeServers(t *testing.T) {
 func TestTeardown_StoragePreservedByDefault(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	if log.count("empty-bucket:") != 0 {
 		t.Errorf("storage preserved by default, but got empties: %v", log.all())
@@ -622,7 +622,7 @@ func TestTeardown_StorageDeletedWithFlag(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), false, true)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, true)
 
 	bucketName := n.Bucket("assets")
 	if !log.has("empty-bucket:" + bucketName) {
@@ -637,7 +637,7 @@ func TestTeardown_StorageEmptiedBeforeDeleted(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), false, true)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, true)
 
 	bucketName := n.Bucket("assets")
 	emptyIdx := log.indexOf("empty-bucket:" + bucketName)
@@ -658,7 +658,7 @@ func TestTeardown_MultipleStorageBuckets(t *testing.T) {
 	cfg := fullConfig()
 	cfg.Storage["uploads"] = config.StorageDef{}
 
-	_ = teardown(context.Background(), dc, cfg, false, true)
+	_ = Teardown(context.Background(), dc, cfg, false, true)
 
 	if !log.has("delete-bucket:" + n.Bucket("assets")) {
 		t.Error("assets bucket not deleted")
@@ -672,7 +672,7 @@ func TestTeardown_StorageBeforeServers(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), false, true)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, true)
 
 	bucketIdx := log.indexOf("delete-bucket:" + n.Bucket("assets"))
 	srvIdx := log.indexOf("delete-server:" + n.Server("worker"))
@@ -697,7 +697,7 @@ func TestTeardown_ErrorsNeverPropagate(t *testing.T) {
 	log.errors["delete-server:"+n.Server("worker")] = fmt.Errorf("api 500")
 	log.errors["delete-firewall:"+n.Firewall()] = fmt.Errorf("firewall locked")
 
-	err := teardown(context.Background(), dc, fullConfig(), true, true)
+	err := Teardown(context.Background(), dc, fullConfig(), true, true)
 	if err == nil {
 		t.Fatal("teardown should report errors, not swallow them")
 	}
@@ -717,7 +717,7 @@ func TestTeardown_ServerErrorDoesNotBlockFirewall(t *testing.T) {
 
 	log.errors["delete-server:"+n.Server("master")] = fmt.Errorf("stuck")
 
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	if !log.has("delete-firewall:" + n.Firewall()) {
 		t.Error("firewall not deleted after server error")
@@ -735,7 +735,7 @@ func TestTeardown_DNSErrorDoesNotBlockServers(t *testing.T) {
 	log.errors["delete-dns:myapp.com"] = fmt.Errorf("dns fail")
 	log.errors["delete-dns:www.myapp.com"] = fmt.Errorf("dns fail")
 
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	if !log.has("delete-server:" + n.Server("master")) {
 		t.Error("server not deleted after DNS errors")
@@ -749,7 +749,7 @@ func TestTeardown_VolumeErrorDoesNotBlockServers(t *testing.T) {
 
 	log.errors["delete-volume:"+n.Volume("pgdata")] = fmt.Errorf("volume busy")
 
-	_ = teardown(context.Background(), dc, fullConfig(), true, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), true, false)
 
 	if !log.has("delete-server:" + n.Server("master")) {
 		t.Error("server not deleted after volume error")
@@ -761,7 +761,7 @@ func TestTeardown_VolumeErrorDoesNotBlockServers(t *testing.T) {
 func TestTeardown_NoK8sResourceOps(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
-	_ = teardown(context.Background(), dc, fullConfig(), true, true)
+	_ = Teardown(context.Background(), dc, fullConfig(), true, true)
 
 	for _, op := range log.all() {
 		if strings.Contains(op, "service") || strings.Contains(op, "cron") ||
@@ -781,7 +781,7 @@ func TestTeardown_InvalidClusterNames(t *testing.T) {
 
 	cfg := &config.AppConfig{App: "", Env: "", Servers: map[string]config.ServerDef{}}
 
-	err := teardown(context.Background(), dc, cfg, false, false)
+	err := Teardown(context.Background(), dc, cfg, false, false)
 	if err == nil {
 		t.Fatal("should return error with invalid names")
 	}
@@ -791,7 +791,7 @@ func TestTeardown_DNSBeforeServers(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), false, false)
+	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	dnsIdx := log.indexOf("delete-dns:myapp.com")
 	srvIdx := log.indexOf("delete-server:" + n.Server("worker"))
@@ -808,7 +808,7 @@ func TestTeardown_FullOrderDNS_Storage_Volumes_Workers_Masters_Firewall_Network(
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
-	_ = teardown(context.Background(), dc, fullConfig(), true, true)
+	_ = Teardown(context.Background(), dc, fullConfig(), true, true)
 
 	dns := log.indexOf("delete-dns:myapp.com")
 	bucket := log.indexOf("delete-bucket:" + n.Bucket("assets"))

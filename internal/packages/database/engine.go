@@ -2,7 +2,6 @@ package database
 
 import (
 	"fmt"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -41,16 +40,17 @@ type Engine interface {
 	EnvVarNames() (user, password, database string)
 }
 
-// DetectEngine returns the engine based on the container image name.
-func DetectEngine(image string) (Engine, error) {
-	lower := strings.ToLower(image)
-	if strings.Contains(lower, "postgres") || strings.Contains(lower, "pgvector") {
-		return &Postgres{}, nil
+// EngineFor returns the engine for a given kind. Kind is validated at config
+// time — this panics on unknown kinds to catch wiring bugs, not user input.
+func EngineFor(kind string) Engine {
+	switch kind {
+	case "postgres":
+		return &Postgres{}
+	case "mysql":
+		return &MySQL{}
+	default:
+		panic(fmt.Sprintf("unknown database kind %q — should have been caught by validation", kind))
 	}
-	if strings.Contains(lower, "mysql") || strings.Contains(lower, "mariadb") {
-		return &MySQL{}, nil
-	}
-	return nil, fmt.Errorf("unsupported database image %q — must contain postgres, mysql, or mariadb", image)
 }
 
 // ── Postgres ──────────────────────────────────────────────────────────────────

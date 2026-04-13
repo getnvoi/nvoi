@@ -58,7 +58,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 	for _, mount := range req.Volumes {
 		source, _, named, ok := utils.ParseVolumeMount(mount)
 		if !ok {
-			return fmt.Errorf("invalid volume mount %q", mount)
+			return ErrInputf("invalid volume mount %q", mount)
 		}
 		if named {
 			volName := names.Volume(source)
@@ -71,7 +71,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 				}
 			}
 			if !found {
-				return fmt.Errorf("volume %q not found", source)
+				return ErrNotFound("volume", source)
 			}
 		}
 	}
@@ -80,7 +80,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 	for _, e := range req.EnvVars {
 		k, v, ok := strings.Cut(e, "=")
 		if !ok {
-			return fmt.Errorf("invalid env var %q — expected KEY=VALUE", e)
+			return ErrInputf("invalid env var %q — expected KEY=VALUE", e)
 		}
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}
@@ -107,7 +107,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 				}
 			}
 			if !found {
-				return fmt.Errorf("secret %q not found — run 'nvoi secret set %s <value>' first", secretKey, secretKey)
+				return ErrNotFound("secret", secretKey)
 			}
 		}
 	}

@@ -9,6 +9,7 @@ package utils
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -124,6 +125,28 @@ const (
 func StorageEnvPrefix(bucketName string) string {
 	upper := strings.ToUpper(bucketName)
 	return "STORAGE_" + strings.ReplaceAll(upper, "-", "_")
+}
+
+// ── Name resolution ──────────────────────────────────────────────────────────
+
+// ResolveDBName returns the database name to operate on.
+// Flag overrides everything. With exactly one available, it's unambiguous.
+// Multiple available without a flag is an error — the user must specify --name.
+func ResolveDBName(flag string, available []string) (string, error) {
+	if flag != "" {
+		return flag, nil
+	}
+	switch len(available) {
+	case 0:
+		return "", fmt.Errorf("no databases configured")
+	case 1:
+		return available[0], nil
+	default:
+		sorted := make([]string, len(available))
+		copy(sorted, available)
+		sort.Strings(sorted)
+		return "", fmt.Errorf("multiple databases configured (%s), specify --name", strings.Join(sorted, ", "))
+	}
 }
 
 // ── Network CIDRs ──────────────────────────────────────────────────────────────

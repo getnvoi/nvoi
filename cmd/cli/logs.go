@@ -1,12 +1,8 @@
-package core
+package main
 
-import (
-	"github.com/getnvoi/nvoi/internal/config"
-	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
-func NewLogsCmd(dc *config.DeployContext) *cobra.Command {
+func newLogsCmd(m *mode) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs <service>",
 		Short: "Stream service logs",
@@ -17,10 +13,9 @@ func NewLogsCmd(dc *config.DeployContext) *cobra.Command {
 			since, _ := cmd.Flags().GetString("since")
 			previous, _ := cmd.Flags().GetBool("previous")
 			timestamps, _ := cmd.Flags().GetBool("timestamps")
-			return app.Logs(cmd.Context(), app.LogsRequest{
-				Cluster: dc.Cluster, Service: args[0],
-				Follow: follow, Tail: tail, Since: since,
-				Previous: previous, Timestamps: timestamps,
+			return m.backend.Logs(cmd.Context(), LogsOpts{
+				Service: args[0], Follow: follow, Tail: tail,
+				Since: since, Previous: previous, Timestamps: timestamps,
 			})
 		},
 	}

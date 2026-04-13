@@ -61,13 +61,15 @@ type DatabaseBackupDownloadRequest struct {
 }
 
 func DatabaseBackupDownload(ctx context.Context, req DatabaseBackupDownloadRequest) (io.ReadCloser, int64, error) {
+	// SSH is only needed to read backup credentials from k8s secrets.
+	// Close it before returning — the S3 stream is a direct HTTP connection,
+	// not tunneled through SSH.
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer ssh.Close()
-
 	endpoint, bucket, accessKey, secretKey, err := backupCreds(ctx, ssh, names, req.DBName)
+	ssh.Close()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -89,6 +91,7 @@ func DatabaseBackupDownload(ctx context.Context, req DatabaseBackupDownloadReque
 type DatabaseSQLRequest struct {
 	Cluster
 	DBName string
+	Engine string // "postgres" or "mysql" — from config kind
 	Query  string
 }
 
@@ -104,26 +107,29 @@ func DatabaseSQL(ctx context.Context, req DatabaseSQLRequest) (string, error) {
 	secretName := req.DBName + "-db-credentials"
 	prefix := utils.ToUpperSnake(req.DBName)
 
-	user, _ := kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_POSTGRES_USER")
-	dbname, _ := kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_POSTGRES_DB")
-
-	if user == "" {
+	var user, dbname, sqlCmd string
+	switch req.Engine {
+	case "postgres":
+		user, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_POSTGRES_USER")
+		dbname, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_POSTGRES_DB")
+		if user == "" {
+			return "", ErrNotReady(fmt.Sprintf("postgres credentials not found for %q — has the database been deployed?", req.DBName))
+		}
+		sqlCmd = fmt.Sprintf("exec %s -- psql -U %s -d %s -c %q", pod, user, dbname, req.Query)
+	case "mysql":
 		user, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_MYSQL_USER")
 		dbname, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_MYSQL_DATABASE")
+		if user == "" {
+			return "", ErrNotReady(fmt.Sprintf("mysql credentials not found for %q — has the database been deployed?", req.DBName))
+		}
+		sqlCmd = fmt.Sprintf("exec %s -- mysql -u %s %s -e %q", pod, user, dbname, req.Query)
+	default:
+		return "", ErrInputf("unsupported database engine %q for %q", req.Engine, req.DBName)
 	}
 
-	if user == "" {
-		return "", fmt.Errorf("database credentials not found for %q", req.DBName)
-	}
-
-	sqlCmd := fmt.Sprintf("exec %s -- psql -U %s -d %s -c %q", pod, user, dbname, req.Query)
 	out, err := kube.RunKubectl(ctx, ssh, ns, sqlCmd)
 	if err != nil {
-		sqlCmd = fmt.Sprintf("exec %s -- mysql -u %s %s -e %q", pod, user, dbname, req.Query)
-		out, err = kube.RunKubectl(ctx, ssh, ns, sqlCmd)
-		if err != nil {
-			return "", fmt.Errorf("sql: %w", err)
-		}
+		return "", fmt.Errorf("sql: %w", err)
 	}
 	return string(out), nil
 }
@@ -146,7 +152,7 @@ func backupCreds(ctx context.Context, ssh utils.SSHClient, names *utils.Names, d
 	secretKey, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, storageKey("SECRET_ACCESS_KEY"))
 
 	if endpoint == "" || bucket == "" {
-		return "", "", "", "", fmt.Errorf("backup bucket credentials not found — has the database been deployed?")
+		return "", "", "", "", ErrNotReady("backup bucket credentials not found — has the database been deployed?")
 	}
 	return endpoint, bucket, accessKey, secretKey, nil
 }

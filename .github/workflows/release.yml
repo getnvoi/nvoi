@@ -45,7 +45,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build CLIs
+      - name: Build CLI
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -53,7 +53,6 @@ jobs:
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
           go build -ldflags="-s -w" -o "dist/nvoi-${GOOS}-${GOARCH}${ext}" ./cmd/cli
-          go build -ldflags="-s -w" -o "dist/nvoi-local-${GOOS}-${GOARCH}${ext}" ./cmd/core
 
       - uses: actions/upload-artifact@v4
         with:
@@ -92,4 +91,4 @@ jobs:
         env:
           SSH_KEY_PATH: ~/.ssh/id_ed25519
           HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
-        run: go run ./cmd/core exec distribution -- ./nvoi-dist pull "${{ github.ref_name }}"
+        run: go run ./cmd/cli --local exec distribution -- ./nvoi-dist pull "${{ github.ref_name }}"

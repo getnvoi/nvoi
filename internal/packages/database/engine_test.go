@@ -4,35 +4,27 @@ import (
 	"testing"
 )
 
-func TestDetectEngine_Postgres(t *testing.T) {
-	for _, img := range []string{"postgres:17", "postgres:16-alpine", "pgvector/pgvector:pg17"} {
-		e, err := DetectEngine(img)
-		if err != nil {
-			t.Fatalf("DetectEngine(%q): %v", img, err)
-		}
-		if e.Name() != "postgres" {
-			t.Errorf("DetectEngine(%q) = %q, want postgres", img, e.Name())
-		}
+func TestEngineFor_Postgres(t *testing.T) {
+	e := EngineFor("postgres")
+	if e.Name() != "postgres" {
+		t.Errorf("got %q, want postgres", e.Name())
 	}
 }
 
-func TestDetectEngine_MySQL(t *testing.T) {
-	for _, img := range []string{"mysql:8", "mysql:5.7", "mariadb:10"} {
-		e, err := DetectEngine(img)
-		if err != nil {
-			t.Fatalf("DetectEngine(%q): %v", img, err)
-		}
-		if e.Name() != "mysql" {
-			t.Errorf("DetectEngine(%q) = %q, want mysql", img, e.Name())
-		}
+func TestEngineFor_MySQL(t *testing.T) {
+	e := EngineFor("mysql")
+	if e.Name() != "mysql" {
+		t.Errorf("got %q, want mysql", e.Name())
 	}
 }
 
-func TestDetectEngine_Unknown(t *testing.T) {
-	_, err := DetectEngine("redis:7")
-	if err == nil {
-		t.Fatal("expected error for unsupported image")
-	}
+func TestEngineFor_UnknownPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for unknown kind")
+		}
+	}()
+	EngineFor("redis")
 }
 
 func TestPostgres_ConnectionURL(t *testing.T) {
