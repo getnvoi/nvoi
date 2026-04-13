@@ -57,19 +57,19 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 		req := pkgcore.ResourcesRequest{}
 		if repo.ComputeProvider != nil {
 			req.Compute = pkgcore.ProviderRef{
-				Name:  repo.ComputeProvider.Name,
+				Name:  repo.ComputeProvider.Provider,
 				Creds: repo.ComputeProvider.CredentialsMap(),
 			}
 		}
 		if repo.DNSProvider != nil {
 			req.DNS = pkgcore.ProviderRef{
-				Name:  repo.DNSProvider.Name,
+				Name:  repo.DNSProvider.Provider,
 				Creds: repo.DNSProvider.CredentialsMap(),
 			}
 		}
 		if repo.StorageProvider != nil {
 			req.Storage = pkgcore.ProviderRef{
-				Name:  repo.StorageProvider.Name,
+				Name:  repo.StorageProvider.Provider,
 				Creds: repo.StorageProvider.CredentialsMap(),
 			}
 		}
@@ -89,7 +89,7 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 func clusterFromRepo(repo *api.Repo) *pkgcore.Cluster {
 	computeName, computeCreds := "", map[string]string(nil)
 	if repo.ComputeProvider != nil {
-		computeName = repo.ComputeProvider.Name
+		computeName = repo.ComputeProvider.Provider
 		computeCreds = repo.ComputeProvider.CredentialsMap()
 	}
 	return &pkgcore.Cluster{

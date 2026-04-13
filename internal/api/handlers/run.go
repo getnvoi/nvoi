@@ -93,25 +93,25 @@ type runner struct {
 func newRunner(repo *api.Repo, user *api.User) (*runner, error) {
 	computeName, computeCreds := "", map[string]string(nil)
 	if repo.ComputeProvider != nil {
-		computeName = repo.ComputeProvider.Name
+		computeName = repo.ComputeProvider.Provider
 		computeCreds = repo.ComputeProvider.CredentialsMap()
 	}
 
 	dnsName, dnsCreds := "", map[string]string(nil)
 	if repo.DNSProvider != nil {
-		dnsName = repo.DNSProvider.Name
+		dnsName = repo.DNSProvider.Provider
 		dnsCreds = repo.DNSProvider.CredentialsMap()
 	}
 
 	storageName, storageCreds := "", map[string]string(nil)
 	if repo.StorageProvider != nil {
-		storageName = repo.StorageProvider.Name
+		storageName = repo.StorageProvider.Provider
 		storageCreds = repo.StorageProvider.CredentialsMap()
 	}
 
 	buildName, buildCreds := "", map[string]string(nil)
 	if repo.BuildProvider != nil {
-		buildName = repo.BuildProvider.Name
+		buildName = repo.BuildProvider.Provider
 		buildCreds = repo.BuildProvider.CredentialsMap()
 	}
 

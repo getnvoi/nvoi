@@ -9,4 +9,6 @@ if ! docker compose -f "$ROOT_DIR/docker-compose.yml" ps --status running 2>/dev
   docker compose -f "$ROOT_DIR/docker-compose.yml" up -d --wait
 fi
 
+export NVOI_API_BASE="http://localhost:8080"
+
 exec go run ./cmd/cli "$@"
