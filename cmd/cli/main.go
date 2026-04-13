@@ -129,6 +129,10 @@ func initCloud(cmd *cobra.Command, m *mode) error {
 	return nil
 }
 
+// addCloudOnly registers a command that is not available in local mode.
+// Cloud-only commands manage their own auth (call AuthedClient() in RunE) —
+// this override only gates --local. Root's PersistentPreRunE (initCloud)
+// is NOT called for these commands.
 func addCloudOnly(root *cobra.Command, cmd *cobra.Command) {
 	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
 		local, _ := c.Flags().GetBool("local")
