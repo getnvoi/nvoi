@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -14,6 +15,76 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
+
+// ── Config parsed once via PersistentPreRunE ─────────────────────────────────
+
+func TestNewDatabaseCmd_ResolvesDBNameFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := dir + "/nvoi.yaml"
+	os.WriteFile(cfgPath, []byte("app: myapp\nenv: prod\nproviders:\n  compute: hetzner\nservers:\n  master:\n    type: cx21\n    region: fsn1\n    role: master\ndatabase:\n  analytics:\n    image: postgres:17\n    volume: pgdata\n"), 0o644)
+
+	ns := "nvoi-myapp-prod"
+	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
+	ssh.Prefixes = []testutil.MockPrefix{
+		// Respond to secret lookups for "analytics" db (analytics-db-credentials)
+		{
+			Prefix: kctlPrefix(ns) + "get secret analytics-db-credentials",
+			Result: testutil.MockResult{Err: fmt.Errorf("not found")},
+		},
+	}
+
+	dc := newDBTestContext(ssh)
+	dbCmd := NewDatabaseCmd(dc)
+
+	root := &cobra.Command{Use: "nvoi", SilenceUsage: true}
+	root.PersistentFlags().String("config", cfgPath, "")
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error { return nil }
+	root.AddCommand(dbCmd)
+
+	root.SetArgs([]string{"db", "sql", "SELECT 1", "--config", cfgPath})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Resolved to "analytics" (from config) → tried analytics-db-credentials.
+	// If it fell back to "main", it would try main-db-credentials instead.
+	if !strings.Contains(err.Error(), `"analytics"`) {
+		t.Fatalf("expected resolve to 'analytics' from config, got: %v", err)
+	}
+}
+
+func TestNewDatabaseCmd_FlagOverridesConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := dir + "/nvoi.yaml"
+	os.WriteFile(cfgPath, []byte("app: myapp\nenv: prod\nproviders:\n  compute: hetzner\nservers:\n  master:\n    type: cx21\n    region: fsn1\n    role: master\ndatabase:\n  analytics:\n    image: postgres:17\n    volume: pgdata\n"), 0o644)
+
+	ns := "nvoi-myapp-prod"
+	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
+	ssh.Prefixes = []testutil.MockPrefix{
+		{
+			Prefix: kctlPrefix(ns) + "get secret custom-db-credentials",
+			Result: testutil.MockResult{Err: fmt.Errorf("not found")},
+		},
+	}
+
+	dc := newDBTestContext(ssh)
+	dbCmd := NewDatabaseCmd(dc)
+
+	root := &cobra.Command{Use: "nvoi", SilenceUsage: true}
+	root.PersistentFlags().String("config", cfgPath, "")
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error { return nil }
+	root.AddCommand(dbCmd)
+
+	root.SetArgs([]string{"db", "sql", "SELECT 1", "--config", cfgPath, "--name", "custom"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// --name=custom overrides config's "analytics" → tried custom-db-credentials.
+	if !strings.Contains(err.Error(), `"custom"`) {
+		t.Fatalf("--name flag didn't override config, got: %v", err)
+	}
+}
 
 // b64 encodes a string to base64, matching kubectl's secret output format.
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
