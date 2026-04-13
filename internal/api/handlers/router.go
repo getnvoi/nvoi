@@ -142,12 +142,25 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 		Summary: "Delete repo", Tags: []string{"repos"}, Security: security,
 	}, DeleteRepo(db))
 
-	// ── Run ──────────────────────────────────────────────────────────────────
+	// ── Config ──────────────────────────────────────────────────────────────
+	cfgPath := rpID + "/config"
 
 	huma.Register(humaAPI, huma.Operation{
-		OperationID: "run-command", Method: http.MethodPost, Path: rpID + "/run",
-		Summary: "Run a command against the cluster", Tags: []string{"run"}, Security: security,
-	}, Run(db))
+		OperationID: "config-show", Method: http.MethodGet, Path: cfgPath,
+		Summary: "Show stored config", Tags: []string{"config"}, Security: security,
+	}, ConfigShow(db))
+
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "config-save", Method: http.MethodPut, Path: cfgPath,
+		Summary: "Save config", Tags: []string{"config"}, Security: security,
+	}, ConfigSave(db))
+
+	// ── Cron ────────────────────────────────────────────────────────────────
+
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "cron-run", Method: http.MethodPost, Path: rpID + "/cron/{name}/run",
+		Summary: "Trigger a cron job immediately", Tags: []string{"cron"}, Security: security,
+	}, CronRun(db))
 
 	// ── Cluster ──────────────────────────────────────────────────────────────
 

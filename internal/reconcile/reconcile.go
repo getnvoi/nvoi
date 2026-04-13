@@ -14,9 +14,6 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err := ValidateConfig(cfg); err != nil {
 		return err
 	}
-	if err := packages.ValidateAll(cfg); err != nil {
-		return err
-	}
 
 	live, err := DescribeLive(ctx, dc)
 	if err != nil {

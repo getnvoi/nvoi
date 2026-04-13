@@ -71,10 +71,7 @@ func (b *cloudBackend) SSH(ctx context.Context, command []string) error {
 }
 
 func (b *cloudBackend) CronRun(ctx context.Context, name string) error {
-	return cloud.StreamRun(b.client, b.repoPath("/run"), map[string]any{
-		"kind": "cron.run",
-		"name": name,
-	})
+	return cloud.StreamRun(b.client, b.repoPath("/cron/"+name+"/run"), nil)
 }
 
 // ── Database ────────────────────────────────────────────────────────────────
