@@ -310,6 +310,27 @@ func TestCloudDispatch_Logs(t *testing.T) {
 	}
 }
 
+func TestCloudDispatch_LogsURLEncoding(t *testing.T) {
+	var gotRawQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRawQuery = r.URL.RawQuery
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	writeAuth(t, ts.URL)
+
+	cmd := rootCmd()
+	cmd.SetArgs([]string{"logs", "web", "--since", "5m&foo=bar"})
+	cmd.Execute()
+	if strings.Contains(gotRawQuery, "foo=bar") {
+		t.Fatalf("since param not escaped — raw query %q contains injected param", gotRawQuery)
+	}
+	if !strings.Contains(gotRawQuery, "since=5m%26foo%3Dbar") {
+		t.Fatalf("raw query = %q, want since=5m%%26foo%%3Dbar (encoded)", gotRawQuery)
+	}
+}
+
 func TestCloudDispatch_Exec(t *testing.T) {
 	var gotPath, gotMethod string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

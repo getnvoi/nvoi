@@ -100,7 +100,7 @@ type LogsOpts struct {
 
 // Logs streams service logs from the API.
 func Logs(client *APIClient, repoPath func(string) string, opts LogsOpts) error {
-	path := fmt.Sprintf("/services/%s/logs?tail=%d&since=%s", esc(opts.Service), opts.Tail, esc(opts.Since))
+	path := fmt.Sprintf("/services/%s/logs?tail=%d&since=%s", esc(opts.Service), opts.Tail, url.QueryEscape(opts.Since))
 	if opts.Follow {
 		path += "&follow=true"
 	}
