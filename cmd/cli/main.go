@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/getnvoi/nvoi/internal/cli"
@@ -98,7 +99,22 @@ func rootCmd() *cobra.Command {
 	addCloudOnly(root, cli.NewReposCmd())
 	addCloudOnly(root, cli.NewProviderCmd())
 
+	root.SetErr(&outputWriter{root: root})
+	root.SetErrPrefix("")
+
 	return root
+}
+
+type outputWriter struct{ root *cobra.Command }
+
+func (w *outputWriter) Write(p []byte) (n int, err error) {
+	msg := string(p)
+	if msg != "" && msg != "\n" {
+		msg = strings.TrimSpace(msg)
+		msg = strings.TrimPrefix(msg, "Error: ")
+		core.ResolveOutput(w.root).Error(fmt.Errorf("%s", msg))
+	}
+	return len(p), nil
 }
 
 func initLocal(cmd *cobra.Command, m *mode) error {
