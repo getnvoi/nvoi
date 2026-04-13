@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"io"
 	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -247,6 +248,101 @@ func PruneBuild(db *gorm.DB) func(context.Context, *BuildPruneInput) (*BuildPrun
 		return &BuildPruneOutput{Body: struct {
 			Status string `json:"status"`
 		}{Status: "pruned"}}, nil
+	}
+}
+
+// ── Database ────────────────────────────────────────────────────────────────
+
+type DatabaseBackupListInput struct {
+	RepoScopedInput
+	Name string `query:"name" default:"main" doc:"Database name"`
+}
+type DatabaseBackupListOutput struct{ Body []pkgcore.BackupEntry }
+
+type DatabaseBackupDownloadInput struct {
+	RepoScopedInput
+	Name string `query:"name" default:"main" doc:"Database name"`
+	Key  string `path:"key" doc:"Backup key"`
+}
+
+type DatabaseSQLInput struct {
+	RepoScopedInput
+	Body struct {
+		Name  string `json:"name,omitempty" doc:"Database name (defaults to main)"`
+		Query string `json:"query" required:"true" doc:"SQL query"`
+	}
+}
+type DatabaseSQLOutput struct {
+	Body struct {
+		Output string `json:"output"`
+	}
+}
+
+func DatabaseBackupList(db *gorm.DB) func(context.Context, *DatabaseBackupListInput) (*DatabaseBackupListOutput, error) {
+	return func(ctx context.Context, input *DatabaseBackupListInput) (*DatabaseBackupListOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := pkgcore.DatabaseBackupList(ctx, pkgcore.DatabaseBackupListRequest{
+			Cluster: *cluster,
+			DBName:  input.Name,
+		})
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		return &DatabaseBackupListOutput{Body: entries}, nil
+	}
+}
+
+func DatabaseBackupDownload(db *gorm.DB) func(context.Context, *DatabaseBackupDownloadInput) (*huma.StreamResponse, error) {
+	return func(ctx context.Context, input *DatabaseBackupDownloadInput) (*huma.StreamResponse, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
+		if err != nil {
+			return nil, err
+		}
+		body, contentLength, err := pkgcore.DatabaseBackupDownload(ctx, pkgcore.DatabaseBackupDownloadRequest{
+			Cluster: *cluster,
+			DBName:  input.Name,
+			Key:     input.Key,
+		})
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				ctx.SetHeader("Content-Type", "application/octet-stream")
+				if contentLength > 0 {
+					ctx.SetHeader("Content-Length", strconv.FormatInt(contentLength, 10))
+				}
+				defer body.Close()
+				io.Copy(ctx.BodyWriter(), body)
+			},
+		}, nil
+	}
+}
+
+func DatabaseSQL(db *gorm.DB) func(context.Context, *DatabaseSQLInput) (*DatabaseSQLOutput, error) {
+	return func(ctx context.Context, input *DatabaseSQLInput) (*DatabaseSQLOutput, error) {
+		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
+		if err != nil {
+			return nil, err
+		}
+		name := input.Body.Name
+		if name == "" {
+			name = "main"
+		}
+		out, err := pkgcore.DatabaseSQL(ctx, pkgcore.DatabaseSQLRequest{
+			Cluster: *cluster,
+			DBName:  name,
+			Query:   input.Body.Query,
+		})
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		return &DatabaseSQLOutput{Body: struct {
+			Output string `json:"output"`
+		}{Output: out}}, nil
 	}
 }
 

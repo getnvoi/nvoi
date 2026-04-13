@@ -45,16 +45,15 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build CLI
+      - name: Build CLIs
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          out="nvoi-${GOOS}-${GOARCH}${ext}"
-          go build -ldflags="-s -w" -o "dist/${out}" ./cmd/core
-          echo "artifact=${out}" >> "$GITHUB_ENV"
+          go build -ldflags="-s -w" -o "dist/nvoi-${GOOS}-${GOARCH}${ext}" ./cmd/cli
+          go build -ldflags="-s -w" -o "dist/nvoi-local-${GOOS}-${GOARCH}${ext}" ./cmd/core
 
       - uses: actions/upload-artifact@v4
         with:

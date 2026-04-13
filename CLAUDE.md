@@ -419,6 +419,17 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 15. **Package-managed resources are protected from orphan detection.**
 16. **Database credentials are user-owned.** No auto-generation. Missing = hard error.
 18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) and API input (`validateDispatchInput`) are the only places that validate user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
+22. **`cmd/core` and `cmd/cli` command parity.** Every operational command in `cmd/core` must have its `cmd/cli` equivalent (relayed through the API). Shared commands: deploy, teardown, describe, resources, logs, exec, ssh, cron, database. CLI-exclusive commands (cloud workspace management, no direct-mode equivalent): login, whoami, workspaces, repos, provider. Adding a command to one CLI without the other is a bug.
+
+## CLI mode detection
+
+Two CLIs today (`cmd/core` direct, `cmd/cli` cloud). Goal: single binary with a toggle.
+
+- `~/.config/nvoi/auth.json` exists → **cloud mode** (relay through API). Default.
+- `--local` flag → **direct mode** (call `pkg/core/` with local provider creds). Explicit override.
+- No auth, no `--local` → warn user to authenticate.
+- `nvoi.yaml` present but no auth → advertise cloud mode ("run `nvoi login` for API mode").
+- Auth exists, no `--local`, but `nvoi.yaml` present → warn user they're in cloud mode and `nvoi.yaml` won't be used by the CLI (the API has its own config).
 
 19. **One kubectl primitive: `kctl(ns, cmd)`.** Every kubectl-over-SSH call in `pkg/kube/` goes through this single unexported helper. `ns=""` for cluster-scoped, `ns="foo"` for namespaced. YAML applied via SFTP upload + `kctl`, never heredocs. No code outside `pkg/kube/` constructs kubectl strings. Exception: `pkg/infra/k3s.go` bootstrap uses `sudo k3s kubectl` before deploy-user kubeconfig exists.
 20. **Async provider actions polled to completion.** Every action that returns an ID must be polled via `waitForAction` before proceeding. Fire-and-forget = production race condition.

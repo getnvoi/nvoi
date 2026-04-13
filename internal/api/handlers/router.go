@@ -216,6 +216,24 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 		Summary: "Prune build images", Tags: []string{"builds"}, Security: security,
 	}, PruneBuild(db))
 
+	// ── Database ─────────────────────────────────────────────────────────────
+	dbPath := rpID + "/database"
+
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "database-backup-list", Method: http.MethodGet, Path: dbPath + "/backups",
+		Summary: "List database backups", Tags: []string{"database"}, Security: security,
+	}, DatabaseBackupList(db))
+
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "database-backup-download", Method: http.MethodGet, Path: dbPath + "/backups/{key}",
+		Summary: "Download a database backup", Tags: []string{"database"}, Security: security,
+	}, DatabaseBackupDownload(db))
+
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "database-sql", Method: http.MethodPost, Path: dbPath + "/sql",
+		Summary: "Run SQL query", Tags: []string{"database"}, Security: security,
+	}, DatabaseSQL(db))
+
 	// ── Services ─────────────────────────────────────────────────────────────
 	svc := rpID + "/services/{service}"
 

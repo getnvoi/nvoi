@@ -220,6 +220,115 @@ func NewCronCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return cmd
 }
 
+func NewDatabaseCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "database",
+		Aliases: []string{"db"},
+		Short:   "Database operations",
+	}
+
+	var dbName string
+	cmd.PersistentFlags().StringVar(&dbName, "name", "main", "database name")
+
+	// db backup
+	backupCmd := &cobra.Command{Use: "backup", Short: "Manage database backups"}
+
+	backupCmd.AddCommand(&cobra.Command{
+		Use:   "now",
+		Short: "Trigger a backup immediately",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cronName := dbName + "-db-backup"
+			return streamRun(*client, (*repoPath)("/run"), map[string]any{
+				"kind": "cron.run",
+				"name": cronName,
+			})
+		},
+	})
+
+	backupCmd.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List backups in bucket",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var entries []struct {
+				Key          string `json:"key"`
+				Size         int64  `json:"size"`
+				LastModified string `json:"last_modified"`
+			}
+			path := (*repoPath)(fmt.Sprintf("/database/backups?name=%s", esc(dbName)))
+			if err := (*client).Do("GET", path, nil, &entries); err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				fmt.Println("no backups found")
+				return nil
+			}
+			for _, e := range entries {
+				fmt.Printf("%s  %s  %d bytes\n", e.LastModified, e.Key, e.Size)
+			}
+			return nil
+		},
+	})
+
+	dlCmd := &cobra.Command{
+		Use:   "download <backup-name>",
+		Short: "Download a backup file",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			outFile, _ := cmd.Flags().GetString("file")
+			path := (*repoPath)(fmt.Sprintf("/database/backups/%s?name=%s", esc(args[0]), esc(dbName)))
+			resp, err := (*client).doRaw("GET", path)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+
+			var w io.Writer = os.Stdout
+			if outFile != "" {
+				f, err := os.Create(outFile)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				w = f
+			}
+			n, err := io.Copy(w, resp.Body)
+			if err != nil {
+				return err
+			}
+			if outFile != "" {
+				fmt.Printf("downloaded %s (%d bytes)\n", outFile, n)
+			}
+			return nil
+		},
+	}
+	dlCmd.Flags().StringP("file", "f", "", "output file (default: stdout)")
+	backupCmd.AddCommand(dlCmd)
+
+	cmd.AddCommand(backupCmd)
+
+	// db sql
+	cmd.AddCommand(&cobra.Command{
+		Use:   "sql <query>",
+		Short: "Run SQL against the database",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var result struct {
+				Output string `json:"output"`
+			}
+			if err := (*client).Do("POST", (*repoPath)("/database/sql"), map[string]any{
+				"name":  dbName,
+				"query": args[0],
+			}, &result); err != nil {
+				return err
+			}
+			fmt.Print(result.Output)
+			return nil
+		},
+	})
+
+	return cmd
+}
+
 func NewSSHCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return &cobra.Command{
 		Use:   "ssh -- <command>",
