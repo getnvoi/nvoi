@@ -30,6 +30,7 @@ func TestLocalFlagWithoutConfig(t *testing.T) {
 }
 
 func TestCloudModeWithoutAuth(t *testing.T) {
+	cli.ResetAuthCache()
 	t.Setenv("HOME", t.TempDir())
 
 	cmd := rootCmd()
@@ -44,6 +45,7 @@ func TestCloudModeWithoutAuth(t *testing.T) {
 }
 
 func TestCloudModeWithoutAuthWithConfig(t *testing.T) {
+	cli.ResetAuthCache()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
@@ -92,6 +94,7 @@ func TestCloudOnlyCommandsWithLocal(t *testing.T) {
 // ── Cloud-only auth enforcement ──────────────────────────────────────────────
 
 func TestCloudOnlyCommandsRequireAuth(t *testing.T) {
+	cli.ResetAuthCache()
 	t.Setenv("HOME", t.TempDir()) // no auth.json
 
 	// These commands should fail at PersistentPreRunE with an auth error,
@@ -121,6 +124,7 @@ func TestCloudOnlyCommandsRequireAuth(t *testing.T) {
 }
 
 func TestLoginDoesNotRequireAuth(t *testing.T) {
+	cli.ResetAuthCache()
 	t.Setenv("HOME", t.TempDir()) // no auth.json
 
 	cmd := rootCmd()
@@ -180,6 +184,9 @@ func TestLocalDispatch_Teardown(t *testing.T) {
 
 func writeAuth(t *testing.T, apiBase string) string {
 	t.Helper()
+	cli.ResetAuthCache()
+	t.Cleanup(cli.ResetAuthCache)
+
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 

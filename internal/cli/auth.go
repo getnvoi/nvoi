@@ -23,7 +23,19 @@ func authConfigPath() string {
 	return filepath.Join(home, authConfigDir, authConfigFile)
 }
 
+// cachedAuth holds the result of the first successful LoadAuthConfig call.
+// Avoids re-reading ~/.config/nvoi/auth.json on every command — the gate
+// check in addCloudOnly loads it once, AuthedClient() in RunE reuses it.
+var cachedAuth *AuthConfig
+
+// ResetAuthCache clears the cached auth config. Used by tests that
+// write different auth files between test cases.
+func ResetAuthCache() { cachedAuth = nil }
+
 func LoadAuthConfig() (*AuthConfig, error) {
+	if cachedAuth != nil {
+		return cachedAuth, nil
+	}
 	data, err := os.ReadFile(authConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("not logged in — run 'nvoi login'")
@@ -35,10 +47,12 @@ func LoadAuthConfig() (*AuthConfig, error) {
 	if cfg.Token == "" {
 		return nil, fmt.Errorf("not logged in — run 'nvoi login'")
 	}
+	cachedAuth = &cfg
 	return &cfg, nil
 }
 
 func SaveAuthConfig(cfg *AuthConfig) error {
+	cachedAuth = nil // invalidate cache — next LoadAuthConfig re-reads from disk
 	path := authConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err

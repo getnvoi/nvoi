@@ -63,7 +63,6 @@ func NewUnauthClient() *APIClient {
 	}
 }
 
-// authedClient loads auth config and returns an authenticated API client.
 // AuthedClient loads auth config and returns an authenticated API client.
 func AuthedClient() (*APIClient, *AuthConfig, error) {
 	cfg, err := LoadAuthConfig()
