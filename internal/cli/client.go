@@ -111,9 +111,9 @@ func (c *APIClient) Do(method, path string, body, out any) error {
 	return nil
 }
 
-// doRaw returns the raw HTTP response — caller must close the body.
+// DoRaw returns the raw HTTP response — caller must close the body.
 // Used for streaming endpoints (JSONL logs).
-func (c *APIClient) doRaw(method, path string) (*http.Response, error) {
+func (c *APIClient) DoRaw(method, path string) (*http.Response, error) {
 	req, err := http.NewRequest(method, c.base+path, nil)
 	if err != nil {
 		return nil, err
@@ -136,9 +136,9 @@ func (c *APIClient) doRaw(method, path string) (*http.Response, error) {
 	return resp, nil
 }
 
-// doRawWithBody sends a request with a JSON body and returns the raw response.
+// DoRawWithBody sends a request with a JSON body and returns the raw response.
 // Caller must close the body. Used for streaming POST endpoints (/run, SSH).
-func (c *APIClient) doRawWithBody(method, path string, body any) (*http.Response, error) {
+func (c *APIClient) DoRawWithBody(method, path string, body any) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)

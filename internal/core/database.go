@@ -37,7 +37,7 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Use:   "now",
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := resolveDBName(cmd, dbName)
+			name := ResolveDBName(cmd, dbName)
 			cronName := name + "-db-backup"
 			return app.CronRun(cmd.Context(), app.CronRunRequest{
 				Cluster: dc.Cluster,
@@ -49,8 +49,8 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Use:   "list",
 		Short: "List backups in bucket",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := resolveDBName(cmd, dbName)
-			return databaseBackupList(cmd, dc, name)
+			name := ResolveDBName(cmd, dbName)
+			return DatabaseBackupList(cmd, dc, name)
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
@@ -58,9 +58,9 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Short: "Download a backup file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := resolveDBName(cmd, dbName)
+			name := ResolveDBName(cmd, dbName)
 			outFile, _ := cmd.Flags().GetString("file")
-			return databaseBackupDownload(cmd, dc, name, args[0], outFile)
+			return DatabaseBackupDownload(cmd, dc, name, args[0], outFile)
 		},
 	})
 	cmd.Commands()[2].Flags().StringP("file", "f", "", "output file (default: stdout)")
@@ -73,17 +73,17 @@ func newDatabaseSQLCmd(dc *config.DeployContext, dbName *string) *cobra.Command 
 		Short: "Run SQL against the database",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := resolveDBName(cmd, dbName)
-			return databaseSQL(cmd, dc, name, args[0])
+			name := ResolveDBName(cmd, dbName)
+			return DatabaseSQL(cmd, dc, name, args[0])
 		},
 	}
 }
 
-func resolveDBName(cmd *cobra.Command, dbName *string) string {
+func ResolveDBName(cmd *cobra.Command, dbName *string) string {
 	if *dbName != "" {
 		return *dbName
 	}
-	cfg, err := loadConfig(cmd)
+	cfg, err := LoadConfig(cmd)
 	if err != nil || len(cfg.Database) == 0 {
 		return "main"
 	}
@@ -93,7 +93,7 @@ func resolveDBName(cmd *cobra.Command, dbName *string) string {
 	return "main"
 }
 
-func databaseBackupList(cmd *cobra.Command, dc *config.DeployContext, name string) error {
+func DatabaseBackupList(cmd *cobra.Command, dc *config.DeployContext, name string) error {
 	ssh, names, err := dc.Cluster.SSH(cmd.Context())
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func databaseBackupList(cmd *cobra.Command, dc *config.DeployContext, name strin
 	return nil
 }
 
-func databaseBackupDownload(cmd *cobra.Command, dc *config.DeployContext, name, backupKey, outFile string) error {
+func DatabaseBackupDownload(cmd *cobra.Command, dc *config.DeployContext, name, backupKey, outFile string) error {
 	ssh, names, err := dc.Cluster.SSH(cmd.Context())
 	if err != nil {
 		return err
@@ -184,7 +184,7 @@ func databaseBackupDownload(cmd *cobra.Command, dc *config.DeployContext, name, 
 	return nil
 }
 
-func databaseSQL(cmd *cobra.Command, dc *config.DeployContext, name, query string) error {
+func DatabaseSQL(cmd *cobra.Command, dc *config.DeployContext, name, query string) error {
 	ssh, names, err := dc.Cluster.SSH(cmd.Context())
 	if err != nil {
 		return err

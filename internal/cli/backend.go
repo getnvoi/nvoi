@@ -37,7 +37,7 @@ func NewDeployCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read config: %w", err)
 			}
-			return streamRun(*client, (*repoPath)("/deploy"), map[string]any{
+			return StreamRun(*client, (*repoPath)("/deploy"), map[string]any{
 				"config": string(data),
 			})
 		},
@@ -59,7 +59,7 @@ func NewTeardownCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("read config: %w", err)
 			}
-			return streamRun(*client, (*repoPath)("/teardown"), map[string]any{
+			return StreamRun(*client, (*repoPath)("/teardown"), map[string]any{
 				"config": string(data),
 			})
 		},
@@ -68,9 +68,9 @@ func NewTeardownCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 	return cmd
 }
 
-// streamRun POSTs a body and streams JSONL response through the TUI.
-func streamRun(client *APIClient, path string, body any) error {
-	resp, err := client.doRawWithBody("POST", path, body)
+// StreamRun POSTs a body and streams JSONL response through the TUI.
+func StreamRun(client *APIClient, path string, body any) error {
+	resp, err := client.DoRawWithBody("POST", path, body)
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func NewLogsCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 			if timestamps {
 				path += "&timestamps=true"
 			}
-			resp, err := (*client).doRaw("GET", (*repoPath)(path))
+			resp, err := (*client).DoRaw("GET", (*repoPath)(path))
 			if err != nil {
 				return err
 			}
@@ -188,7 +188,7 @@ func NewExecCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 		Short: "Run command in service pod",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := (*client).doRawWithBody("POST", (*repoPath)("/services/"+esc(args[0])+"/exec"), map[string]any{
+			resp, err := (*client).DoRawWithBody("POST", (*repoPath)("/services/"+esc(args[0])+"/exec"), map[string]any{
 				"command": args[1:],
 			})
 			if err != nil {
@@ -211,7 +211,7 @@ func NewCronCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 		Short: "Trigger a cron job immediately",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return streamRun(*client, (*repoPath)("/run"), map[string]any{
+			return StreamRun(*client, (*repoPath)("/run"), map[string]any{
 				"kind": "cron.run",
 				"name": args[0],
 			})
@@ -238,7 +238,7 @@ func NewDatabaseCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cronName := dbName + "-db-backup"
-			return streamRun(*client, (*repoPath)("/run"), map[string]any{
+			return StreamRun(*client, (*repoPath)("/run"), map[string]any{
 				"kind": "cron.run",
 				"name": cronName,
 			})
@@ -276,7 +276,7 @@ func NewDatabaseCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			outFile, _ := cmd.Flags().GetString("file")
 			path := (*repoPath)(fmt.Sprintf("/database/backups/%s?name=%s", esc(args[0]), esc(dbName)))
-			resp, err := (*client).doRaw("GET", path)
+			resp, err := (*client).DoRaw("GET", path)
 			if err != nil {
 				return err
 			}
@@ -335,7 +335,7 @@ func NewSSHCmd(client **APIClient, repoPath *PathFunc) *cobra.Command {
 		Short: "Run command on master node",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := (*client).doRawWithBody("POST", (*repoPath)("/ssh"), map[string]any{
+			resp, err := (*client).DoRawWithBody("POST", (*repoPath)("/ssh"), map[string]any{
 				"command": args,
 			})
 			if err != nil {

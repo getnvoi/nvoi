@@ -92,7 +92,7 @@ func TestDoRaw_APIError(t *testing.T) {
 	defer ts.Close()
 
 	c := &APIClient{base: ts.URL, http: ts.Client(), stream: ts.Client()}
-	_, err := c.doRaw("GET", "/test")
+	_, err := c.DoRaw("GET", "/test")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -117,7 +117,7 @@ func TestDoRawWithBody_APIError(t *testing.T) {
 	defer ts.Close()
 
 	c := &APIClient{base: ts.URL, http: ts.Client(), stream: ts.Client()}
-	_, err := c.doRawWithBody("POST", "/test", map[string]string{"key": "val"})
+	_, err := c.DoRawWithBody("POST", "/test", map[string]string{"key": "val"})
 	if err == nil {
 		t.Fatal("expected error")
 	}

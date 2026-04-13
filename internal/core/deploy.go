@@ -15,7 +15,7 @@ func NewDeployCmd(dc *config.DeployContext) *cobra.Command {
 		Use:   "deploy",
 		Short: "Deploy from config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(cmd)
+			cfg, err := LoadConfig(cmd)
 			if err != nil {
 				return err
 			}
@@ -24,7 +24,7 @@ func NewDeployCmd(dc *config.DeployContext) *cobra.Command {
 	}
 }
 
-func loadConfig(cmd *cobra.Command) (*config.AppConfig, error) {
+func LoadConfig(cmd *cobra.Command) (*config.AppConfig, error) {
 	path, _ := cmd.Flags().GetString("config")
 	if path == "" {
 		path = "nvoi.yaml"
