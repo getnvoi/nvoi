@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/getnvoi/nvoi/internal/render"
-	pkgcore "github.com/getnvoi/nvoi/pkg/core"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -39,14 +39,14 @@ func StreamRun(client *APIClient, path string, body any) error {
 		if line == "" {
 			continue
 		}
-		ev, err := pkgcore.ParseEvent(line)
+		ev, err := app.ParseEvent(line)
 		if err != nil {
 			continue
 		}
-		if ev.Type == pkgcore.EventError {
+		if ev.Type == app.EventError {
 			lastErr = fmt.Errorf("%s", ev.Message)
 		}
-		pkgcore.ReplayEvent(ev, out)
+		app.ReplayEvent(ev, out)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -58,7 +58,7 @@ func StreamRun(client *APIClient, path string, body any) error {
 
 // Describe fetches live cluster state from the API and renders it.
 func Describe(client *APIClient, repoPath func(string) string, jsonOutput bool) error {
-	var res pkgcore.DescribeResult
+	var res app.DescribeResult
 	if err := client.Do("GET", repoPath("/describe"), nil, &res); err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func SSH(client *APIClient, repoPath func(string) string, command []string) erro
 // ── Database ────────────────────────────────────────────────────────────────
 
 // DatabaseBackupList lists backups via the API.
-func DatabaseBackupList(client *APIClient, repoPath func(string) string, dbName string) error {
+func DatabaseBackupList(client *APIClient, repoPath func(string) string, out app.Output, dbName string) error {
 	var entries []struct {
 		Key          string `json:"key"`
 		Size         int64  `json:"size"`
@@ -160,23 +160,26 @@ func DatabaseBackupList(client *APIClient, repoPath func(string) string, dbName 
 	if err := client.Do("GET", repoPath(fmt.Sprintf("/database/backups?name=%s", url.QueryEscape(dbName))), nil, &entries); err != nil {
 		return err
 	}
+	out.Command("database", "backup list", dbName)
 	if len(entries) == 0 {
-		fmt.Println("no backups found")
+		out.Info("no backups found")
 		return nil
 	}
 	for _, e := range entries {
-		fmt.Printf("%s  %s  %d bytes\n", e.LastModified, e.Key, e.Size)
+		out.Info(fmt.Sprintf("%s  %s  %d bytes", e.LastModified, e.Key, e.Size))
 	}
 	return nil
 }
 
 // DatabaseBackupDownload downloads a backup via the API.
-func DatabaseBackupDownload(client *APIClient, repoPath func(string) string, dbName, backupKey, outFile string) error {
+func DatabaseBackupDownload(client *APIClient, repoPath func(string) string, out app.Output, dbName, backupKey, outFile string) error {
 	resp, err := client.DoRaw("GET", repoPath(fmt.Sprintf("/database/backups/%s?name=%s", esc(backupKey), url.QueryEscape(dbName))))
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	out.Command("database", "backup download", backupKey)
 
 	var w io.Writer = os.Stdout
 	if outFile != "" {
@@ -192,13 +195,13 @@ func DatabaseBackupDownload(client *APIClient, repoPath func(string) string, dbN
 		return err
 	}
 	if outFile != "" {
-		fmt.Printf("downloaded %s (%d bytes)\n", outFile, n)
+		out.Success(fmt.Sprintf("downloaded %s (%d bytes)", outFile, n))
 	}
 	return nil
 }
 
 // DatabaseSQL runs a SQL query via the API.
-func DatabaseSQL(client *APIClient, repoPath func(string) string, dbName, query string) error {
+func DatabaseSQL(client *APIClient, repoPath func(string) string, out app.Output, dbName, query string) error {
 	var result struct {
 		Output string `json:"output"`
 	}

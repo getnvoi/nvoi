@@ -420,7 +420,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
 				return core.DatabaseBackupList(cmd, m.dc, name)
 			}
-			return cli.DatabaseBackupList(m.client, m.repoPath, utils.ResolveDBName(dbName, nil))
+			return cli.DatabaseBackupList(m.client, m.repoPath, core.ResolveOutput(cmd), utils.ResolveDBName(dbName, nil))
 		},
 	})
 
@@ -435,7 +435,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 				return core.DatabaseBackupDownload(cmd, m.dc, name, args[0], outFile)
 			}
 			outFile, _ := cmd.Flags().GetString("file")
-			return cli.DatabaseBackupDownload(m.client, m.repoPath, utils.ResolveDBName(dbName, nil), args[0], outFile)
+			return cli.DatabaseBackupDownload(m.client, m.repoPath, core.ResolveOutput(cmd), utils.ResolveDBName(dbName, nil), args[0], outFile)
 		},
 	}
 	dlCmd.Flags().StringP("file", "f", "", "output file (default: stdout)")
@@ -452,7 +452,7 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 				name := utils.ResolveDBName(dbName, m.cfg.DatabaseNames())
 				return core.DatabaseSQL(cmd, m.dc, name, args[0])
 			}
-			return cli.DatabaseSQL(m.client, m.repoPath, utils.ResolveDBName(dbName, nil), args[0])
+			return cli.DatabaseSQL(m.client, m.repoPath, core.ResolveOutput(cmd), utils.ResolveDBName(dbName, nil), args[0])
 		},
 	})
 
