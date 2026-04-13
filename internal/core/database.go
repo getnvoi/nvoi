@@ -19,17 +19,32 @@ func NewDatabaseCmd(dc *config.DeployContext) *cobra.Command {
 	}
 
 	var dbName string
+	var cfg *config.AppConfig
 	cmd.PersistentFlags().StringVar(&dbName, "name", "", "database name (defaults to first)")
 
-	cmd.AddCommand(newDatabaseBackupCmd(dc, &dbName))
-	cmd.AddCommand(newDatabaseSQLCmd(dc, &dbName))
-	return cmd
-}
+	// Parse config once for all database subcommands.
+	// Chain with parent's PersistentPreRunE (which populates dc via BuildContext).
+	cmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if parent := cmd.Root().PersistentPreRunE; parent != nil {
+			if err := parent(cmd, args); err != nil {
+				return err
+			}
+		}
+		c, err := LoadConfig(cmd)
+		if err != nil {
+			return err
+		}
+		cfg = c
+		return nil
+	}
 
-// resolveDB loads config to find available database names, then resolves.
-func resolveDB(cmd *cobra.Command, flag *string) string {
-	cfg, _ := LoadConfig(cmd)
-	return utils.ResolveDBName(*flag, dbNames(cfg))
+	resolve := func() string {
+		return utils.ResolveDBName(dbName, dbNames(cfg))
+	}
+
+	cmd.AddCommand(newDatabaseBackupCmd(dc, resolve))
+	cmd.AddCommand(newDatabaseSQLCmd(dc, resolve))
+	return cmd
 }
 
 func dbNames(cfg *config.AppConfig) []string {
@@ -43,7 +58,7 @@ func dbNames(cfg *config.AppConfig) []string {
 	return names
 }
 
-func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Command {
+func newDatabaseBackupCmd(dc *config.DeployContext, resolve func() string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup",
 		Short: "Manage database backups",
@@ -52,11 +67,9 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Use:   "now",
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := resolveDB(cmd, dbName)
-			cronName := name + "-db-backup"
 			return app.CronRun(cmd.Context(), app.CronRunRequest{
 				Cluster: dc.Cluster,
-				Name:    cronName,
+				Name:    resolve() + "-db-backup",
 			})
 		},
 	})
@@ -64,8 +77,7 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Use:   "list",
 		Short: "List backups in bucket",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := resolveDB(cmd, dbName)
-			return DatabaseBackupList(cmd, dc, name)
+			return DatabaseBackupList(cmd, dc, resolve())
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
@@ -73,23 +85,21 @@ func newDatabaseBackupCmd(dc *config.DeployContext, dbName *string) *cobra.Comma
 		Short: "Download a backup file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := resolveDB(cmd, dbName)
 			outFile, _ := cmd.Flags().GetString("file")
-			return DatabaseBackupDownload(cmd, dc, name, args[0], outFile)
+			return DatabaseBackupDownload(cmd, dc, resolve(), args[0], outFile)
 		},
 	})
 	cmd.Commands()[2].Flags().StringP("file", "f", "", "output file (default: stdout)")
 	return cmd
 }
 
-func newDatabaseSQLCmd(dc *config.DeployContext, dbName *string) *cobra.Command {
+func newDatabaseSQLCmd(dc *config.DeployContext, resolve func() string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "sql <query>",
 		Short: "Run SQL against the database",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := resolveDB(cmd, dbName)
-			return DatabaseSQL(cmd, dc, name, args[0])
+			return DatabaseSQL(cmd, dc, resolve(), args[0])
 		},
 	}
 }
