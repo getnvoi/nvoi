@@ -262,7 +262,7 @@ internal/
     db.go                  PostgreSQL + AutoMigrate (reads MAIN_DATABASE_URL)
     handlers/              Route handlers
   render/                  Output renderers — TUI, Plain, JSON
-  testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
+  testutil/                MockSSH (utils.SSHClient), MockCompute, MockDNS, MockBucket, MockOutput
 
 pkg/
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
@@ -319,7 +319,14 @@ pkg/
 
 ### SSH model
 
-One SSH connection per deploy. `Cluster.MasterSSH` is set once after `ServersAdd()`, shared across all subsequent operations via `borrowedSSH` (no-op Close). API dispatch path connects on-demand (no `MasterSSH`).
+**Interface → implementation → mock:**
+- `utils.SSHClient` (`pkg/utils/ssh.go`) — the interface. Every SSH consumer takes this.
+- `infra.SSHClient` (`pkg/infra/ssh.go`) — the real implementation. Wraps `golang.org/x/crypto/ssh` with SFTP upload, TCP dial, persistent connection.
+- `testutil.MockSSH` (`internal/testutil/mock_ssh.go`) — test mock. Canned responses by exact command or prefix match. Records all calls for assertions.
+
+**Connection lifecycle:** One SSH connection per deploy. `Cluster.MasterSSH` (`utils.SSHClient`) is set once after `ServersAdd()`, shared across all subsequent operations via `borrowedSSH` (no-op Close). API dispatch path connects on-demand (no `MasterSSH`).
+
+**Testing:** Set `Cluster.MasterSSH = &testutil.MockSSH{...}` to inject canned SSH responses. `MockSSH` matches commands by exact string first, then by prefix. Use `ssh.Calls` to assert which commands ran, `ssh.Uploads` to assert file uploads. See `internal/core/teardown_test.go` and `internal/core/database_test.go` for patterns.
 
 `ComputeSet` connects to individual servers via `Cluster.Connect()` for provisioning (Docker, k3s, swap). Those are separate connections — not the master.
 
