@@ -194,6 +194,16 @@ func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
 	if !connections[0].Closed {
 		t.Error("first SSH connection should be closed after EnsureDocker")
 	}
+
+	// ClearKnownHost returns "no known host" on first deploy — must NOT
+	// produce a warning. Only real failures (corrupt file, permission denied)
+	// should warn.
+	out := cluster.Output.(*testutil.MockOutput)
+	for _, w := range out.Warnings {
+		if strings.Contains(w, "clear known host") {
+			t.Errorf("'no known host' error should be silenced, got warning: %s", w)
+		}
+	}
 }
 
 func TestMasterSSH_SetAfterComputeSet(t *testing.T) {

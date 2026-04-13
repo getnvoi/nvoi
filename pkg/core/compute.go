@@ -85,7 +85,13 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 
 	// Clear stale known host — the server was just created/ensured,
 	// IP may have been recycled from a previous server.
-	_ = infra.ClearKnownHost(srv.IPv4 + ":22")
+	// "not found" is expected on first deploy. Write failures are real —
+	// a stale entry causes ErrHostKeyChanged with misleading guidance.
+	if err := infra.ClearKnownHost(srv.IPv4 + ":22"); err != nil {
+		if !strings.Contains(err.Error(), "no known host") {
+			out.Warning(fmt.Sprintf("clear known host %s: %s", srv.IPv4, err))
+		}
+	}
 
 	// Wait for SSH and connect — all infra operations use this connection.
 	out.Progress(fmt.Sprintf("waiting for SSH on %s", srv.IPv4))

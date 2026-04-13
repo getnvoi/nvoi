@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // ValidateConfig catches all misconfigurations before touching infra.
@@ -14,8 +15,14 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	if cfg.App == "" {
 		return fmt.Errorf("app is required")
 	}
+	if err := utils.ValidateName("app", cfg.App); err != nil {
+		return err
+	}
 	if cfg.Env == "" {
 		return fmt.Errorf("env is required")
+	}
+	if err := utils.ValidateName("env", cfg.Env); err != nil {
+		return err
 	}
 
 	// ── Providers ─────────────────────────────────────────────────────────
@@ -29,6 +36,9 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	}
 	masterCount := 0
 	for name, srv := range cfg.Servers {
+		if err := utils.ValidateName("servers."+name, name); err != nil {
+			return err
+		}
 		if srv.Type == "" {
 			return fmt.Errorf("servers.%s.type is required", name)
 		}
@@ -54,6 +64,9 @@ func ValidateConfig(cfg *config.AppConfig) error {
 
 	// ── Volumes ───────────────────────────────────────────────────────────
 	for name, vol := range cfg.Volumes {
+		if err := utils.ValidateName("volumes."+name, name); err != nil {
+			return err
+		}
 		if vol.Size <= 0 {
 			return fmt.Errorf("volumes.%s.size must be > 0", name)
 		}
@@ -65,8 +78,18 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		}
 	}
 
+	// ── Storage ──────────────────────────────────────────────────────────
+	for name := range cfg.Storage {
+		if err := utils.ValidateName("storage."+name, name); err != nil {
+			return err
+		}
+	}
+
 	// ── Build ─────────────────────────────────────────────────────────────
 	for name, source := range cfg.Build {
+		if err := utils.ValidateName("build."+name, name); err != nil {
+			return err
+		}
 		if source == "" {
 			return fmt.Errorf("build.%s: source is required", name)
 		}
@@ -74,6 +97,9 @@ func ValidateConfig(cfg *config.AppConfig) error {
 
 	// ── Services ──────────────────────────────────────────────────────────
 	for name, svc := range cfg.Services {
+		if err := utils.ValidateName("services."+name, name); err != nil {
+			return err
+		}
 		if svc.Image == "" && svc.Build == "" {
 			return fmt.Errorf("services.%s: image or build is required", name)
 		}
@@ -114,6 +140,9 @@ func ValidateConfig(cfg *config.AppConfig) error {
 
 	// ── Crons ─────────────────────────────────────────────────────────────
 	for name, cron := range cfg.Crons {
+		if err := utils.ValidateName("crons."+name, name); err != nil {
+			return err
+		}
 		if cron.Image == "" && cron.Build == "" {
 			return fmt.Errorf("crons.%s: image or build is required", name)
 		}
@@ -161,8 +190,20 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if len(domains) == 0 {
 			return fmt.Errorf("domains.%s: at least one domain is required", svcName)
 		}
+		for _, d := range domains {
+			if err := utils.ValidateDomain("domains."+svcName, d); err != nil {
+				return err
+			}
+		}
 		if svc.Replicas == 1 {
 			return fmt.Errorf("services.%s: web-facing services require replicas >= 2 for zero-downtime rolling updates (omit replicas to default to 2)", svcName)
+		}
+	}
+
+	// ── Secrets ───────────────────────────────────────────────────────────
+	for _, name := range cfg.Secrets {
+		if err := utils.ValidateEnvVarName("secrets."+name, name); err != nil {
+			return err
 		}
 	}
 

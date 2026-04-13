@@ -1,12 +1,15 @@
 package kube
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	sigsyaml "sigs.k8s.io/yaml"
+
+	"github.com/getnvoi/nvoi/internal/testutil"
 )
 
 func TestGenerateIngressYAML_SingleDomain_ACME(t *testing.T) {
@@ -223,12 +226,278 @@ func TestGetIngressRoutes_ParsesJSON(t *testing.T) {
 	}
 }
 
+// ingressRule builds a single IngressRule pointing to service:port.
+func ingressRule(host, service string, port int) networkingv1.IngressRule {
+	return networkingv1.IngressRule{
+		Host: host,
+		IngressRuleValue: networkingv1.IngressRuleValue{
+			HTTP: &networkingv1.HTTPIngressRuleValue{
+				Paths: []networkingv1.HTTPIngressPath{{
+					Backend: networkingv1.IngressBackend{
+						Service: &networkingv1.IngressServiceBackend{
+							Name: service,
+							Port: networkingv1.ServiceBackendPort{Number: int32(port)},
+						},
+					},
+				}},
+			},
+		},
+	}
+}
+
+// ingressListSSH returns a MockSSH that responds to "get ingress" with the serialized list.
+func ingressListSSH(items ...networkingv1.Ingress) *testutil.MockSSH {
+	list := networkingv1.IngressList{Items: items}
+	data, _ := json.Marshal(list)
+	return &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "get ingress", Result: testutil.MockResult{Output: data}},
+		},
+	}
+}
+
+func findRoute(routes []IngressRoute, service string) *IngressRoute {
+	for _, r := range routes {
+		if r.Service == service {
+			return &r
+		}
+	}
+	return nil
+}
+
+func TestGetIngressRoutes_TwoServices(t *testing.T) {
+	ssh := ingressListSSH(
+		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{ingressRule("example.com", "web", 3000)},
+		}},
+		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{ingressRule("api.example.com", "api", 8080)},
+		}},
+	)
+
+	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 routes, got %d", len(routes))
+	}
+
+	web := findRoute(routes, "web")
+	api := findRoute(routes, "api")
+	if web == nil {
+		t.Fatal("missing route for web")
+	}
+	if api == nil {
+		t.Fatal("missing route for api")
+	}
+	if web.Port != 3000 {
+		t.Errorf("web port = %d, want 3000", web.Port)
+	}
+	if api.Port != 8080 {
+		t.Errorf("api port = %d, want 8080", api.Port)
+	}
+	if len(web.Domains) != 1 || web.Domains[0] != "example.com" {
+		t.Errorf("web domains = %v, want [example.com]", web.Domains)
+	}
+	if len(api.Domains) != 1 || api.Domains[0] != "api.example.com" {
+		t.Errorf("api domains = %v, want [api.example.com]", api.Domains)
+	}
+}
+
+func TestGetIngressRoutes_SameServiceTwoIngresses_DomainsMerge(t *testing.T) {
+	// Two separate Ingress resources both pointing to "web" — domains should merge.
+	ssh := ingressListSSH(
+		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{ingressRule("example.com", "web", 3000)},
+		}},
+		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{ingressRule("www.example.com", "web", 3000)},
+		}},
+	)
+
+	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route (merged), got %d", len(routes))
+	}
+	if routes[0].Service != "web" {
+		t.Errorf("service = %q, want web", routes[0].Service)
+	}
+	if len(routes[0].Domains) != 2 {
+		t.Fatalf("expected 2 domains merged, got %d: %v", len(routes[0].Domains), routes[0].Domains)
+	}
+}
+
+func TestGetIngressRoutes_MultiRulesPerIngress(t *testing.T) {
+	// One Ingress with multiple rules — same service, multiple domains.
+	ssh := ingressListSSH(
+		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{
+				ingressRule("example.com", "web", 3000),
+				ingressRule("www.example.com", "web", 3000),
+				ingressRule("api.example.com", "api", 8080),
+			},
+		}},
+	)
+
+	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 routes, got %d", len(routes))
+	}
+
+	web := findRoute(routes, "web")
+	api := findRoute(routes, "api")
+	if web == nil || api == nil {
+		t.Fatalf("missing routes: web=%v api=%v", web, api)
+	}
+	if len(web.Domains) != 2 {
+		t.Errorf("web should have 2 domains, got %d: %v", len(web.Domains), web.Domains)
+	}
+	if len(api.Domains) != 1 {
+		t.Errorf("api should have 1 domain, got %d: %v", len(api.Domains), api.Domains)
+	}
+}
+
+func TestGetIngressRoutes_EmptyList(t *testing.T) {
+	ssh := ingressListSSH() // no items
+
+	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 0 {
+		t.Errorf("expected 0 routes, got %d", len(routes))
+	}
+}
+
+func TestGetIngressRoutes_SkipsRulesWithoutHTTP(t *testing.T) {
+	// Rule with no HTTP block — should be skipped without error.
+	ssh := ingressListSSH(
+		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{
+				{Host: "tcp.example.com"}, // no HTTP
+				ingressRule("example.com", "web", 3000),
+			},
+		}},
+	)
+
+	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(routes))
+	}
+	if len(routes[0].Domains) != 1 || routes[0].Domains[0] != "example.com" {
+		t.Errorf("domains = %v, want [example.com]", routes[0].Domains)
+	}
+}
+
 func TestKubeIngressName(t *testing.T) {
 	if got := KubeIngressName("web"); got != "ingress-web" {
 		t.Errorf("got %q, want ingress-web", got)
 	}
 	if got := KubeIngressName("api"); got != "ingress-api" {
 		t.Errorf("got %q, want ingress-api", got)
+	}
+}
+
+func TestEnsureTraefikACME_UsesUploadNotHeredoc(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
+			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
+		},
+	}
+
+	err := EnsureTraefikACME(context.Background(), mock, "admin@example.com", true)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// Must use SFTP upload — not heredoc
+	if len(mock.Uploads) != 1 {
+		t.Fatalf("expected 1 upload (SFTP), got %d — heredoc bypasses upload", len(mock.Uploads))
+	}
+	yaml := string(mock.Uploads[0].Content)
+	if !strings.Contains(yaml, "HelmChartConfig") {
+		t.Error("uploaded YAML should contain HelmChartConfig")
+	}
+	if !strings.Contains(yaml, "admin@example.com") {
+		t.Error("uploaded YAML should contain the ACME email")
+	}
+	if !strings.Contains(yaml, "letsencrypt") {
+		t.Error("uploaded YAML should contain letsencrypt resolver config")
+	}
+
+	// Verify KUBECONFIG is used, no heredoc markers
+	for _, cmd := range mock.Calls {
+		if !strings.Contains(cmd, "KUBECONFIG=") {
+			t.Errorf("should use KUBECONFIG env, got: %s", cmd)
+		}
+		if strings.Contains(cmd, "EOYAML") || strings.Contains(cmd, "cat <<") {
+			t.Errorf("should not use heredoc, got: %s", cmd)
+		}
+	}
+}
+
+func TestEnsureTraefikACME_NoACME(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
+			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
+		},
+	}
+
+	err := EnsureTraefikACME(context.Background(), mock, "", false)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	if len(mock.Uploads) != 1 {
+		t.Fatalf("expected 1 upload, got %d", len(mock.Uploads))
+	}
+	yaml := string(mock.Uploads[0].Content)
+	if !strings.Contains(yaml, "HelmChartConfig") {
+		t.Error("uploaded YAML should contain HelmChartConfig")
+	}
+	// No ACME mode disables websecure
+	if strings.Contains(yaml, "letsencrypt") {
+		t.Error("no-ACME mode should not contain letsencrypt config")
+	}
+	if !strings.Contains(yaml, "websecure") {
+		t.Error("no-ACME mode should disable websecure port")
+	}
+}
+
+func TestEnsureTraefikACME_WaitsForTraefikReady(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
+			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
+		},
+	}
+
+	err := EnsureTraefikACME(context.Background(), mock, "admin@example.com", true)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// Must have called get deploy traefik to wait for readiness
+	foundReadyCheck := false
+	for _, cmd := range mock.Calls {
+		if strings.Contains(cmd, "get deploy traefik") && strings.Contains(cmd, "jsonpath") {
+			foundReadyCheck = true
+		}
+	}
+	if !foundReadyCheck {
+		t.Errorf("EnsureTraefikACME must wait for traefik readiness after applying config, calls: %v", mock.Calls)
 	}
 }
 

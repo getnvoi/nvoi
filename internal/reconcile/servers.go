@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -45,15 +46,21 @@ func ServersAdd(ctx context.Context, dc *config.DeployContext, cfg *config.AppCo
 // ServersRemoveOrphans drains and deletes servers that are in live state
 // but not in the desired config. Called AFTER services/crons have been
 // reconciled so workloads have already moved to new nodes.
-func ServersRemoveOrphans(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) {
+// If drain fails, the server is NOT deleted and the error is returned.
+func ServersRemoveOrphans(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) error {
 	if live == nil {
-		return
+		return nil
 	}
 	desired := toSet(utils.SortedKeys(cfg.Servers))
 	for _, name := range live.Servers {
 		if !desired[name] {
-			drainNode(ctx, dc, name)
-			_ = app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: name})
+			if err := drainNode(ctx, dc, name); err != nil {
+				return fmt.Errorf("cannot remove server %s: %w", name, err)
+			}
+			if err := app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }

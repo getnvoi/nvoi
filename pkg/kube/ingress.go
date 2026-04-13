@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -102,15 +103,17 @@ func GenerateIngressYAML(route IngressRoute, ns string, acme bool) (string, erro
 // DeleteIngress removes the Ingress resource for a service.
 func DeleteIngress(ctx context.Context, ssh utils.SSHClient, ns, service string) error {
 	name := KubeIngressName(service)
-	_, err := RunKubectl(ctx, ssh, ns, fmt.Sprintf("delete ingress %s --ignore-not-found", name))
-	return err
+	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete ingress %s --ignore-not-found", name))); err != nil {
+		return fmt.Errorf("delete ingress %s: %w", name, err)
+	}
+	return nil
 }
 
 // GetIngressRoutes lists all nvoi-managed Ingress resources and parses them into routes.
 func GetIngressRoutes(ctx context.Context, ssh utils.SSHClient, ns string) ([]IngressRoute, error) {
-	out, err := RunKubectl(ctx, ssh, ns, fmt.Sprintf("get ingress -l %s=%s -o json 2>/dev/null", utils.LabelAppManagedBy, utils.LabelManagedBy))
+	out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get ingress -l %s=%s -o json 2>/dev/null", utils.LabelAppManagedBy, utils.LabelManagedBy)))
 	if err != nil {
-		return nil, nil
+		return nil, nil // no ingress resources
 	}
 
 	var list networkingv1.IngressList
@@ -148,6 +151,11 @@ func GetIngressRoutes(ctx context.Context, ssh utils.SSHClient, ns string) ([]In
 // EnsureTraefikACME applies a HelmChartConfig to configure Traefik's Let's Encrypt resolver.
 // Idempotent — safe to call multiple times.
 // When acme is false, no ACME resolver is configured (HTTP-only mode for tunnel setups).
+//
+// After applying, waits for the Traefik deployment to be ready. The k3s Helm
+// controller picks up HelmChartConfig changes asynchronously — without this wait,
+// Ingress resources applied immediately after may land before Traefik has loaded
+// the ACME certresolver config, causing cert issuance to never start.
 func EnsureTraefikACME(ctx context.Context, ssh utils.SSHClient, email string, acme bool) error {
 	var valuesContent string
 	if acme {
@@ -172,7 +180,33 @@ spec:
   valuesContent: |-
 %s`, valuesContent)
 
-	// HelmChartConfig is cluster-scoped in kube-system, apply without namespace flag.
-	_, err := ssh.Run(ctx, fmt.Sprintf("cat <<'EOYAML' | kubectl apply -f -\n%s\nEOYAML", yaml))
-	return err
+	if err := ApplyGlobal(ctx, ssh, yaml); err != nil {
+		return err
+	}
+
+	// Wait for the Traefik deployment to be ready after the Helm controller
+	// reconciles the HelmChartConfig. On first deploy this may take 30-60s
+	// as the controller creates/updates the Traefik deployment.
+	return waitForTraefikReady(ctx, ssh)
+}
+
+// waitForTraefikReady polls until the Traefik deployment in kube-system has
+// all replicas available. Confirms the Helm controller has processed any
+// HelmChartConfig changes and Traefik is running with the updated config.
+func waitForTraefikReady(ctx context.Context, ssh utils.SSHClient) error {
+	cmd := kctl("kube-system", "get deploy traefik -o jsonpath='{.status.readyReplicas}/{.spec.replicas}' 2>/dev/null")
+
+	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+		out, err := ssh.Run(ctx, cmd)
+		if err != nil {
+			return false, nil // deployment may not exist yet — retry
+		}
+		raw := strings.Trim(strings.TrimSpace(string(out)), "'")
+		// Expect "1/1" or "N/N" — ready replicas match desired.
+		parts := strings.SplitN(raw, "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return false, nil
+		}
+		return parts[0] == parts[1] && parts[0] != "0", nil
+	})
 }

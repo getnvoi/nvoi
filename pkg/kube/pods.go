@@ -16,7 +16,7 @@ type PodInfo struct {
 
 // GetAllPods returns simplified status for all pods in a namespace.
 func GetAllPods(ctx context.Context, ssh utils.SSHClient, ns string) ([]PodInfo, error) {
-	out, err := ssh.Run(ctx, kubectl(ns, "get pods -o json"))
+	out, err := ssh.Run(ctx, kctl(ns, "get pods -o json"))
 	if err != nil {
 		return nil, err
 	}

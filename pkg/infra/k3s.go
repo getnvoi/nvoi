@@ -21,7 +21,10 @@ type Node struct {
 // Idempotent — skips if already installed and Ready.
 func InstallK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.Writer) error {
 	// Already installed?
-	if _, err := ssh.Run(ctx, "command -v kubectl >/dev/null 2>&1 && sudo k3s kubectl get nodes 2>/dev/null | grep -q ' Ready '"); err == nil {
+	// Check if k3s is installed and at least one node is truly Ready.
+	// Uses jsonpath to query the Ready condition — avoids "NotReady" matching "Ready".
+	out2, err := ssh.Run(ctx, `command -v kubectl >/dev/null 2>&1 && sudo k3s kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null`)
+	if err == nil && strings.Contains(string(out2), "True") {
 		fmt.Fprintln(w, "k3s already installed")
 		return nil
 	}
@@ -60,11 +63,13 @@ func InstallK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.
 	// Wait for cluster ready
 	fmt.Fprintln(w, "waiting for k3s ready...")
 	if err := utils.Poll(ctx, 3*time.Second, 3*time.Minute, func() (bool, error) {
-		out, err := ssh.Run(ctx, fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config kubectl get nodes", utils.DefaultUser))
+		out, err := ssh.Run(ctx, fmt.Sprintf(
+			`KUBECONFIG=/home/%s/.kube/config kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}'`,
+			utils.DefaultUser))
 		if err != nil {
 			return false, nil
 		}
-		return strings.Contains(string(out), " Ready "), nil
+		return strings.Contains(string(out), "True"), nil
 	}); err != nil {
 		return fmt.Errorf("k3s not ready: %w", err)
 	}
@@ -149,16 +154,20 @@ func JoinK3sWorker(ctx context.Context, masterSSH, workerSSH utils.SSHClient, wo
 		return fmt.Errorf("install k3s agent: %w", err)
 	}
 
-	// Wait for node Ready on master
+	// Wait for worker node Ready on master
 	kubeconfig := fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config", utils.DefaultUser)
 	fmt.Fprintln(w, "waiting for worker to be Ready...")
 	if err := utils.Poll(ctx, 3*time.Second, 3*time.Minute, func() (bool, error) {
-		out, err := masterSSH.Run(ctx, fmt.Sprintf("%s kubectl get nodes -o wide", kubeconfig))
+		// Query all nodes' Ready conditions and internal IPs, match by IP.
+		out, err := masterSSH.Run(ctx, fmt.Sprintf(
+			`%s kubectl get nodes -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status},{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}'`,
+			kubeconfig))
 		if err != nil {
 			return false, nil
 		}
 		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(line, workerPrivateIP) && strings.Contains(line, " Ready ") {
+			parts := strings.SplitN(strings.Trim(line, "'"), ",", 2)
+			if len(parts) == 2 && parts[0] == "True" && parts[1] == workerPrivateIP {
 				return true, nil
 			}
 		}
@@ -183,8 +192,27 @@ EOF`, utils.K3sConfigDir, utils.K3sRegistriesConfig, registryHost, utils.Registr
 	if _, err := ssh.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("configure k3s registry: %w", err)
 	}
-	_, _ = ssh.Run(ctx, "sudo systemctl restart k3s 2>/dev/null || true")
-	_, _ = ssh.Run(ctx, "sudo systemctl restart k3s-agent 2>/dev/null || true")
+
+	// Restart whichever k3s service is active (server or agent), then wait for ready.
+	// On fresh install neither exists yet — skip restart, the install will pick up the config.
+	for _, svc := range []string{"k3s", "k3s-agent"} {
+		if _, err := ssh.Run(ctx, fmt.Sprintf("sudo systemctl is-active --quiet %s 2>/dev/null", svc)); err != nil {
+			continue // service not active — skip
+		}
+		if _, err := ssh.Run(ctx, fmt.Sprintf("sudo systemctl restart %s", svc)); err != nil {
+			return fmt.Errorf("restart %s after registry config: %w", svc, err)
+		}
+		// Wait for k3s to be ready after restart.
+		if err := utils.Poll(ctx, 2*time.Second, 60*time.Second, func() (bool, error) {
+			out, err := ssh.Run(ctx, `sudo k3s kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null`)
+			if err != nil {
+				return false, nil
+			}
+			return strings.Contains(string(out), "True"), nil
+		}); err != nil {
+			return fmt.Errorf("%s not ready after restart: %w", svc, err)
+		}
+	}
 	return nil
 }
 

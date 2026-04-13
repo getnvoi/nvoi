@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -230,12 +231,18 @@ func setupTeardown(log *opLog) *config.DeployContext {
 	activeDNS = &trackingDNS{log: log}
 	activeBucket = &trackingBucket{log: log}
 
+	sshKey, _, _ := utils.GenerateEd25519Key()
+
 	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName:  "myapp",
 			Env:      "prod",
 			Provider: "test-teardown",
 			Output:   silentOutput{},
+			SSHKey:   sshKey,
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return &testutil.MockSSH{}, nil
+			},
 		},
 		DNS:     app.ProviderRef{Name: "test-teardown-dns"},
 		Storage: app.ProviderRef{Name: "test-teardown-bucket"},
@@ -691,8 +698,15 @@ func TestTeardown_ErrorsNeverPropagate(t *testing.T) {
 	log.errors["delete-firewall:"+n.Firewall()] = fmt.Errorf("firewall locked")
 
 	err := teardown(context.Background(), dc, fullConfig(), true, true)
-	if err != nil {
-		t.Fatalf("teardown must never return an error, got: %v", err)
+	if err == nil {
+		t.Fatal("teardown should report errors, not swallow them")
+	}
+	// Best-effort: all operations still attempted despite errors.
+	if !log.has("delete-firewall:" + n.Firewall()) {
+		t.Error("firewall should still be attempted after DNS error")
+	}
+	if !log.has("delete-network:" + n.Network()) {
+		t.Error("network should still be attempted after server error")
 	}
 }
 
@@ -768,8 +782,8 @@ func TestTeardown_InvalidClusterNames(t *testing.T) {
 	cfg := &config.AppConfig{App: "", Env: "", Servers: map[string]config.ServerDef{}}
 
 	err := teardown(context.Background(), dc, cfg, false, false)
-	if err != nil {
-		t.Fatalf("should return nil even with invalid names, got: %v", err)
+	if err == nil {
+		t.Fatal("should return error with invalid names")
 	}
 }
 

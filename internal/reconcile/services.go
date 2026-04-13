@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -10,7 +11,7 @@ import (
 
 func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, packageEnvVars map[string]string) error {
 	svcNames := utils.SortedKeys(cfg.Services)
-	for i, name := range svcNames {
+	for _, name := range svcNames {
 		svc := cfg.Services[name]
 		image, err := resolveImageRef(ctx, dc, svc.Image, svc.Build)
 		if err != nil {
@@ -34,17 +35,15 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		}); err != nil {
 			return err
 		}
-		if i == len(svcNames)-1 {
-			kind := "deployment"
-			if len(svc.Volumes) > 0 {
-				kind = "statefulset"
-			}
-			if err := app.WaitRollout(ctx, app.WaitRolloutRequest{
-				Cluster: dc.Cluster, Service: name,
-				WorkloadKind: kind, HasHealthCheck: svc.Health != "",
-			}); err != nil {
-				return err
-			}
+		kind := "deployment"
+		if len(svc.Volumes) > 0 {
+			kind = "statefulset"
+		}
+		if err := app.WaitRollout(ctx, app.WaitRolloutRequest{
+			Cluster: dc.Cluster, Service: name,
+			WorkloadKind: kind, HasHealthCheck: svc.Health != "",
+		}); err != nil {
+			return err
 		}
 	}
 
@@ -57,7 +56,9 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		}
 		for _, name := range live.Services {
 			if !desired[name] && !protected[name] {
-				_ = app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Name: name})
+				if err := app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
+					dc.Cluster.Log().Warning(fmt.Sprintf("orphan service %s not removed: %s", name, err))
+				}
 			}
 		}
 	}

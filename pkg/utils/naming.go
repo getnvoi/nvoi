@@ -28,7 +28,13 @@ func NewNames(app, env string) (*Names, error) {
 	if app == "" || env == "" {
 		return nil, fmt.Errorf("app and env are required")
 	}
-	return &Names{app: sanitize(app), env: sanitize(env)}, nil
+	if err := ValidateName("app", app); err != nil {
+		return nil, err
+	}
+	if err := ValidateName("env", env); err != nil {
+		return nil, err
+	}
+	return &Names{app: app, env: env}, nil
 }
 
 func (n *Names) App() string { return n.app }
@@ -159,10 +165,47 @@ func ParseVolumeMount(s string) (source, target string, named bool, ok bool) {
 	return source, target, named, true
 }
 
-// ── Internal ───────────────────────────────────────────────────────────────────
+// ── Name validation ───────────────────────────────────────────────────────────
 
-var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
+// dns1123 matches valid DNS-1123 labels: lowercase alphanumeric + hyphens,
+// no leading/trailing hyphen, max 63 chars.
+var dns1123 = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
+// ValidateName checks that a name conforms to DNS-1123 label rules.
+// Used for app, env, server, service, cron, volume, storage, and build names.
+func ValidateName(field, value string) error {
+	if !dns1123.MatchString(value) {
+		return fmt.Errorf("%s %q is invalid — must be lowercase alphanumeric with hyphens, no leading/trailing hyphen, max 63 chars (e.g. my-app)", field, value)
+	}
+	return nil
+}
+
+// envVarName matches valid environment variable names: uppercase alphanumeric + underscores,
+// must start with a letter. Standard POSIX.
+var envVarName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+// ValidateEnvVarName checks that a name is a valid environment variable name.
+func ValidateEnvVarName(field, value string) error {
+	if !envVarName.MatchString(value) {
+		return fmt.Errorf("%s %q is invalid — must be uppercase alphanumeric with underscores, starting with a letter (e.g. JWT_SECRET)", field, value)
+	}
+	return nil
+}
+
+// validDomain matches valid domain names: labels separated by dots, each label
+// lowercase alphanumeric + hyphens, no leading/trailing hyphen.
+var validDomain = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+// ValidateDomain checks that a value is a valid domain name.
+func ValidateDomain(field, value string) error {
+	if !validDomain.MatchString(value) {
+		return fmt.Errorf("%s %q is invalid — must be a valid domain name (e.g. example.com, api.example.com)", field, value)
+	}
+	return nil
+}
+
+// sanitize normalizes a name to DNS-1123 format.
+// Used internally by NewNames — callers should validate first.
 func sanitize(s string) string {
 	s = strings.ToLower(s)
 	s = nonAlphaNum.ReplaceAllString(s, "-")
@@ -172,3 +215,5 @@ func sanitize(s string) string {
 	}
 	return s
 }
+
+var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)

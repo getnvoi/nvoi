@@ -394,6 +394,10 @@ Organized by domain with shared base clients:
 
 `ensureFirewall` only ensures the resource exists — never resets rules. Rules managed exclusively by `ReconcileFirewallRules` in the Firewall reconcile step.
 
+## Working tree
+
+The working tree frequently has uncommitted changes — that's normal. The on-disk file is always the intended version. When reviewing, never flag a mismatch between a prior commit and the working tree as a bug. The working tree is the source of truth. Commits happen when the user asks.
+
 ## Key rules
 
 1. `app` + `env` in `nvoi.yaml` are required. They're the namespace for everything.
@@ -413,6 +417,11 @@ Organized by domain with shared base clients:
 14. **Web-facing services require replicas >= 2.** Omitted defaults to 2, explicit 1 is a hard error.
 15. **Package-managed resources are protected from orphan detection.**
 16. **Database credentials are user-owned.** No auto-generation. Missing = hard error.
+18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) and API input (`validateDispatchInput`) are the only places that validate user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
+
+19. **One kubectl primitive: `kctl(ns, cmd)`.** Every kubectl-over-SSH call in `pkg/kube/` goes through this single unexported helper. `ns=""` for cluster-scoped, `ns="foo"` for namespaced. YAML applied via SFTP upload + `kctl`, never heredocs. No code outside `pkg/kube/` constructs kubectl strings. Exception: `pkg/infra/k3s.go` bootstrap uses `sudo k3s kubectl` before deploy-user kubeconfig exists.
+20. **Async provider actions polled to completion.** Every action that returns an ID must be polled via `waitForAction` before proceeding. Fire-and-forget = production race condition.
+21. **`DeleteServer` detaches firewall before termination.** Every provider. Hetzner: `detachFirewall` + poll. AWS: move to VPC default SG. Scaleway: reassign to project default SG. `DeleteFirewall` retries "still in use."
 
 ## Production hardening notes
 

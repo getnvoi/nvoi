@@ -111,7 +111,10 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 	}
 
 	// Ingress (k8s Ingress resources)
-	routes, _ := kube.GetIngressRoutes(ctx, ssh, ns)
+	routes, err := kube.GetIngressRoutes(ctx, ssh, ns)
+	if err != nil {
+		return result, fmt.Errorf("describe ingress: %w", err)
+	}
 	for _, r := range routes {
 		for _, d := range r.Domains {
 			result.Ingress = append(result.Ingress, DescribeIngress{

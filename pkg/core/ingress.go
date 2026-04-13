@@ -5,11 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// acmeVerifyTimeout bounds the total time spent verifying certs + HTTPS
+// across all domains for a single service. If it expires, the deploy
+// continues with a warning — certs finish issuing in the background.
+var acmeVerifyTimeout = 10 * time.Minute
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -116,26 +122,41 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	if req.ACME {
 		waitForCert := req.Hooks.waitForCertificate()
 		waitForHTTPS := req.Hooks.waitForHTTPS()
-		firstDomain := req.Route.Domains[0]
-
-		// Step 1: cert issued by ACME
-		out.Progress(fmt.Sprintf("waiting for certificate %s", firstDomain))
-		if err := waitForCert(ctx, ssh, firstDomain); err != nil {
-			return fmt.Errorf("certificate for %s not provisioned: %w", firstDomain, err)
-		}
-		out.Success(fmt.Sprintf("certificate %s ready", firstDomain))
-
-		// Step 2: service reachable over HTTPS
 		healthPath := req.HealthPath
 		if healthPath == "" {
 			healthPath = "/"
 		}
-		url := fmt.Sprintf("https://%s%s", firstDomain, healthPath)
-		out.Progress(fmt.Sprintf("waiting for %s", url))
-		if err := waitForHTTPS(ctx, ssh, firstDomain, healthPath); err != nil {
-			return fmt.Errorf("%s not reachable: %w", url, err)
+
+		// Single deadline across all domains. If it expires, warn and
+		// continue — certs finish issuing in the background, next deploy
+		// will confirm them.
+		acmeCtx, cancel := context.WithTimeout(ctx, acmeVerifyTimeout)
+		defer cancel()
+
+		for _, domain := range req.Route.Domains {
+			// Step 1: cert issued by ACME
+			out.Progress(fmt.Sprintf("waiting for certificate %s", domain))
+			if err := waitForCert(acmeCtx, ssh, domain); err != nil {
+				if acmeCtx.Err() != nil {
+					out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
+					return nil
+				}
+				return fmt.Errorf("certificate for %s not provisioned: %w", domain, err)
+			}
+			out.Success(fmt.Sprintf("certificate %s ready", domain))
+
+			// Step 2: service reachable over HTTPS
+			url := fmt.Sprintf("https://%s%s", domain, healthPath)
+			out.Progress(fmt.Sprintf("waiting for %s", url))
+			if err := waitForHTTPS(acmeCtx, ssh, domain, healthPath); err != nil {
+				if acmeCtx.Err() != nil {
+					out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
+					return nil
+				}
+				return fmt.Errorf("%s not reachable: %w", url, err)
+			}
+			out.Success(fmt.Sprintf("%s live", url))
 		}
-		out.Success(fmt.Sprintf("%s live", url))
 	}
 
 	return nil

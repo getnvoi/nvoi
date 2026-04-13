@@ -44,7 +44,7 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 	initialRestarts := map[string]int{}
 
 	err := utils.Poll(ctx, rolloutPollInterval, 5*time.Minute, func() (bool, error) {
-		cmd := kubectl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
+		cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
 			return false, nil // transient — retry
@@ -174,7 +174,7 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 // verifyStability re-polls pods after the stability delay and fails if any
 // pod's restart count increased since tracking began — indicating a post-startup crash.
 func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, selector string, initialRestarts map[string]int, emitter ProgressEmitter) error {
-	cmd := kubectl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
+	cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
 	out, err := ssh.Run(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("%s: stability check failed: %w", name, err)
@@ -236,13 +236,13 @@ func RecentLogs(ctx context.Context, ssh utils.SSHClient, ns, name, kind string,
 
 	// For bare pods (no kind), try --previous first to get crashed container logs
 	if kind == "" {
-		out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("logs %s --previous --tail=%d", target, tail)))
+		out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("logs %s --previous --tail=%d", target, tail)))
 		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
 			return strings.TrimSpace(string(out))
 		}
 	}
 
-	out, err := ssh.Run(ctx, kubectl(ns, fmt.Sprintf("logs %s --tail=%d", target, tail)))
+	out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("logs %s --tail=%d", target, tail)))
 	if err != nil {
 		return ""
 	}

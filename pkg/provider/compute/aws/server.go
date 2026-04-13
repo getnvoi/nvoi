@@ -132,14 +132,39 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 
 	instanceID := deref(inst.InstanceId)
 
-	// Detach volumes before termination — AWS volumes survive instance termination
+	// Detach volumes before termination — AWS volumes survive instance termination.
+	// Must succeed before proceeding to delete.
 	for _, bdm := range inst.BlockDeviceMappings {
 		if bdm.Ebs == nil || bdm.Ebs.VolumeId == nil {
 			continue
 		}
 		volID := deref(bdm.Ebs.VolumeId)
-		c.ec2.DetachVolume(ctx, &ec2.DetachVolumeInput{VolumeId: aws.String(volID)})
-		_ = c.waitForVolumeAvailable(ctx, volID)
+		if _, err := c.ec2.DetachVolume(ctx, &ec2.DetachVolumeInput{VolumeId: aws.String(volID)}); err != nil {
+			return fmt.Errorf("detach volume %s: %w", volID, err)
+		}
+		if err := c.waitForVolumeAvailable(ctx, volID); err != nil {
+			return fmt.Errorf("volume %s not available after detach: %w", volID, err)
+		}
+	}
+
+	// Detach security groups — AWS rejects SG delete if still attached to instances.
+	if len(inst.SecurityGroups) > 0 {
+		// Move instance to VPC default SG only, removing all nvoi-managed SGs.
+		var defaultSG string
+		for _, sg := range inst.SecurityGroups {
+			if deref(sg.GroupName) == "default" {
+				defaultSG = deref(sg.GroupId)
+				break
+			}
+		}
+		if defaultSG != "" {
+			if _, err := c.ec2.ModifyInstanceAttribute(ctx, &ec2.ModifyInstanceAttributeInput{
+				InstanceId: aws.String(instanceID),
+				Groups:     []string{defaultSG},
+			}); err != nil {
+				return fmt.Errorf("detach security groups from %s: %w", instanceID, err)
+			}
+		}
 	}
 
 	// Terminate instance

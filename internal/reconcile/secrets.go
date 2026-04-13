@@ -23,7 +23,9 @@ func Secrets(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 		desired := toSet(cfg.Secrets)
 		for _, key := range live.Secrets {
 			if !desired[key] {
-				_ = app.SecretDelete(ctx, app.SecretDeleteRequest{Cluster: dc.Cluster, Key: key})
+				if err := app.SecretDelete(ctx, app.SecretDeleteRequest{Cluster: dc.Cluster, Key: key}); err != nil {
+					dc.Cluster.Log().Warning(fmt.Sprintf("orphan secret %s not removed: %s", key, err))
+				}
 			}
 		}
 	}

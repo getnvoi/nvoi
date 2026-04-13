@@ -102,23 +102,23 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return nil // idempotent — already gone
 	}
 
+	// Fetch firewalls + volumes in one API call
+	firewallIDs, volumeIDs, err := c.getServerAttachments(ctx, srv.ID)
+	if err != nil {
+		return fmt.Errorf("get server attachments: %w", err)
+	}
+
 	// Detach firewalls
-	firewallIDs, err := c.getServerFirewalls(ctx, srv.ID)
-	if err == nil {
-		for _, fwID := range firewallIDs {
-			if err := c.detachFirewall(ctx, fwID, srv.ID); err != nil {
-				return fmt.Errorf("detach firewall %s: %w", fwID, err)
-			}
+	for _, fwID := range firewallIDs {
+		if err := c.detachFirewall(ctx, fwID, srv.ID); err != nil {
+			return fmt.Errorf("detach firewall %s: %w", fwID, err)
 		}
 	}
 
 	// Detach volumes
-	volumes, err := c.getServerVolumes(ctx, srv.ID)
-	if err == nil {
-		for _, volID := range volumes {
-			if err := c.detachVolume(ctx, volID); err != nil {
-				return fmt.Errorf("detach volume %s: %w", volID, err)
-			}
+	for _, volID := range volumeIDs {
+		if err := c.detachVolume(ctx, volID); err != nil {
+			return fmt.Errorf("detach volume %s: %w", volID, err)
 		}
 	}
 
@@ -129,10 +129,14 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		}
 	}
 
-	// Wait for gone
+	// Wait for gone — only trust s==nil when the API call succeeded.
+	// API errors (rate limit, network) must retry, not short-circuit.
 	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
 		s, err := c.getServerByName(ctx, req.Name)
-		return s == nil || err != nil, nil
+		if err != nil {
+			return false, nil // transient API error — retry
+		}
+		return s == nil, nil
 	})
 }
 
@@ -160,8 +164,9 @@ func (c *Client) ListServers(ctx context.Context, labels map[string]string) ([]*
 	return servers, nil
 }
 
-// getServerFirewalls returns firewall IDs attached to the server.
-func (c *Client) getServerFirewalls(ctx context.Context, serverID string) ([]string, error) {
+// getServerAttachments returns firewall IDs and volume IDs attached to the server
+// in a single API call. Both live on the same GET /servers/{id} response.
+func (c *Client) getServerAttachments(ctx context.Context, serverID string) (firewallIDs, volumeIDs []string, err error) {
 	var resp struct {
 		Server struct {
 			PublicNet struct {
@@ -169,33 +174,19 @@ func (c *Client) getServerFirewalls(ctx context.Context, serverID string) ([]str
 					ID int64 `json:"id"`
 				} `json:"firewalls"`
 			} `json:"public_net"`
-		} `json:"server"`
-	}
-	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/servers/%s", serverID), nil, &resp); err != nil {
-		return nil, err
-	}
-	var ids []string
-	for _, fw := range resp.Server.PublicNet.Firewalls {
-		ids = append(ids, strconv.FormatInt(fw.ID, 10))
-	}
-	return ids, nil
-}
-
-// getServerVolumes returns volume IDs attached to the server.
-func (c *Client) getServerVolumes(ctx context.Context, serverID string) ([]string, error) {
-	var resp struct {
-		Server struct {
 			Volumes []int64 `json:"volumes"`
 		} `json:"server"`
 	}
 	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/servers/%s", serverID), nil, &resp); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var ids []string
+	for _, fw := range resp.Server.PublicNet.Firewalls {
+		firewallIDs = append(firewallIDs, strconv.FormatInt(fw.ID, 10))
+	}
 	for _, v := range resp.Server.Volumes {
-		ids = append(ids, strconv.FormatInt(v, 10))
+		volumeIDs = append(volumeIDs, strconv.FormatInt(v, 10))
 	}
-	return ids, nil
+	return firewallIDs, volumeIDs, nil
 }
 
 func (c *Client) getServerByName(ctx context.Context, name string) (*provider.Server, error) {

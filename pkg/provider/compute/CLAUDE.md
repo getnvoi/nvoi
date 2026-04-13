@@ -74,14 +74,17 @@ Volumes are user data. The rules:
 - Firewall delete fails if still applied to a server (proven in production). Detach-first is required.
 
 ### AWS
-- Instance termination is async. `DeleteServer` already polls for `terminated` state.
-- Security groups (firewalls) cannot be deleted while attached to any instance, even terminated ones in cooldown. `DeleteServer` waiting for terminated state is necessary but may not be sufficient — SG delete may need retry.
-- Volumes survive instance termination. `DeleteServer` must explicitly detach before terminating.
+- Instance termination is async. `DeleteServer` polls for `terminated` state.
+- Security groups (firewalls) cannot be deleted while attached to any instance. `DeleteServer` moves the instance to the VPC default SG before termination.
+- Volumes survive instance termination. `DeleteServer` explicitly detaches and waits for `available` state before terminating. Errors are returned, not swallowed.
 - Network cleanup requires cascading: IGWs, subnets, route tables before VPC delete.
+- **Testing gap:** AWS `DeleteServer` uses concrete `*ec2.Client`, not an interface. Provider-level tests are pure function tests only. Behavior tested at `MockCompute` level in reconcile/teardown tests. Full coverage requires refactoring to an EC2 interface.
 
 ### Scaleway
-- Server terminate is async. `DeleteServer` already polls until gone.
-- Security groups can be deleted regardless of attachment state.
+- Server terminate is async. `DeleteServer` polls until gone.
+- Security groups **cannot** be deleted while instances reference them — API returns "group is in use." `DeleteServer` explicitly reassigns to the project default SG before termination. `DeleteFirewall` retries briefly on "in use" as defense-in-depth.
+- No dedicated "detach SG" API. The only way to release an SG is to reassign the server to a different SG via PATCH.
+- Every project has a default SG (`project_default: true`). Servers assigned to it when no custom SG is specified.
 - Volumes auto-detach on server delete.
 - Private network delete may fail if NICs are still attached — server deletion clears this.
 

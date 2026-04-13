@@ -133,6 +133,11 @@ func newRunner(repo *api.Repo, user *api.User) (*runner, error) {
 
 // dispatch maps a step kind to the corresponding pkg/core/ function.
 func (e *runner) dispatch(ctx context.Context, kind, name string, params map[string]any) error {
+	// Validate inputs at the API boundary — before anything touches infrastructure.
+	if err := validateDispatchInput(kind, name, params); err != nil {
+		return err
+	}
+
 	switch kind {
 	case "firewall.set":
 		allowed, err := parseFirewallFromParams(params)
@@ -309,6 +314,37 @@ func (e *runner) dispatch(ctx context.Context, kind, name string, params map[str
 	default:
 		return fmt.Errorf("unknown command kind: %s", kind)
 	}
+}
+
+// ── input validation ────────────────────────────────────────────────────────
+
+// validateDispatchInput validates user input at the API boundary before dispatch.
+// Same rules as config validation — ValidateName for resource names,
+// ValidateEnvVarName for secret keys, ValidateDomain for domains.
+func validateDispatchInput(kind, name string, params map[string]any) error {
+	switch kind {
+	case "secret.set", "secret.delete":
+		if name != "" {
+			return utils.ValidateEnvVarName("secret key", name)
+		}
+	case "dns.set", "dns.delete", "ingress.set", "ingress.delete":
+		for _, d := range utils.GetStringSlice(params, "domains") {
+			if err := utils.ValidateDomain("domain", d); err != nil {
+				return err
+			}
+		}
+		if name != "" {
+			return utils.ValidateName("service", name)
+		}
+	case "firewall.set":
+		// No name validation needed — firewall name is derived from app+env.
+	default:
+		// All other kinds: resource name must be DNS-1123 if provided.
+		if name != "" {
+			return utils.ValidateName("name", name)
+		}
+	}
+	return nil
 }
 
 // ── firewall param parsing ──────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
 	"github.com/getnvoi/nvoi/pkg/provider"
@@ -118,6 +119,67 @@ func TestIngressSet_ACME_Success(t *testing.T) {
 	}
 }
 
+func TestIngressSet_ACME_VerifiesAllDomains(t *testing.T) {
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+	}
+	var certChecked, httpsChecked []string
+	err := IngressSet(context.Background(), IngressSetRequest{
+		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:    true,
+		Hooks: &IngressHooks{
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
+				certChecked = append(certChecked, domain)
+				return nil
+			},
+			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+				httpsChecked = append(httpsChecked, domain)
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success: %v", err)
+	}
+	if len(certChecked) != 2 {
+		t.Errorf("expected cert check for 2 domains, got %d: %v", len(certChecked), certChecked)
+	}
+	if len(httpsChecked) != 2 {
+		t.Errorf("expected HTTPS check for 2 domains, got %d: %v", len(httpsChecked), httpsChecked)
+	}
+}
+
+func TestIngressSet_ACME_SecondDomainCertFails(t *testing.T) {
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+	}
+	err := IngressSet(context.Background(), IngressSetRequest{
+		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:    true,
+		Hooks: &IngressHooks{
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
+				if domain == "www.example.com" {
+					return fmt.Errorf("cert timeout")
+				}
+				return nil
+			},
+			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+				return nil
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when second domain cert fails")
+	}
+	if !strings.Contains(err.Error(), "www.example.com") {
+		t.Errorf("error should mention the failing domain, got: %v", err)
+	}
+}
+
 func TestIngressSet_NoACME_SkipsHTTPSWait(t *testing.T) {
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
@@ -136,6 +198,49 @@ func TestIngressSet_NoACME_SkipsHTTPSWait(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
+	}
+}
+
+func TestIngressSet_ACME_TimeoutWarnsInsteadOfFailing(t *testing.T) {
+	// Shrink the deadline so the test doesn't wait 10 minutes.
+	orig := acmeVerifyTimeout
+	acmeVerifyTimeout = 50 * time.Millisecond
+	defer func() { acmeVerifyTimeout = orig }()
+
+	out := &testutil.MockOutput{}
+	mock := &testutil.MockCompute{
+		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
+	}
+	err := IngressSet(context.Background(), IngressSetRequest{
+		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:    true,
+		Hooks: &IngressHooks{
+			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
+				// Block until context expires.
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
+				return nil
+			},
+		},
+	})
+	// Must NOT return an error — timeout is a warning, not a failure.
+	if err != nil {
+		t.Fatalf("timeout should warn, not fail. got: %v", err)
+	}
+	if len(out.Warnings) == 0 {
+		t.Fatal("expected a warning about ACME verification timeout")
+	}
+	found := false
+	for _, w := range out.Warnings {
+		if strings.Contains(w, "timed out") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warning should mention 'timed out', got: %v", out.Warnings)
 	}
 }
 
