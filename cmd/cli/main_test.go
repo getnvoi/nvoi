@@ -322,7 +322,9 @@ func TestCloudDispatch_LogsURLEncoding(t *testing.T) {
 
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"logs", "web", "--since", "5m&foo=bar"})
-	cmd.Execute()
+	err := cmd.Execute()
+	t.Logf("Execute error: %v", err)
+	t.Logf("gotRawQuery: %q", gotRawQuery)
 	if strings.Contains(gotRawQuery, "foo=bar") {
 		t.Fatalf("since param not escaped — raw query %q contains injected param", gotRawQuery)
 	}

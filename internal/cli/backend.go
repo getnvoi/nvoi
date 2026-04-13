@@ -157,7 +157,7 @@ func DatabaseBackupList(client *APIClient, repoPath func(string) string, dbName 
 		Size         int64  `json:"size"`
 		LastModified string `json:"last_modified"`
 	}
-	if err := client.Do("GET", repoPath(fmt.Sprintf("/database/backups?name=%s", esc(dbName))), nil, &entries); err != nil {
+	if err := client.Do("GET", repoPath(fmt.Sprintf("/database/backups?name=%s", url.QueryEscape(dbName))), nil, &entries); err != nil {
 		return err
 	}
 	if len(entries) == 0 {
@@ -172,7 +172,7 @@ func DatabaseBackupList(client *APIClient, repoPath func(string) string, dbName 
 
 // DatabaseBackupDownload downloads a backup via the API.
 func DatabaseBackupDownload(client *APIClient, repoPath func(string) string, dbName, backupKey, outFile string) error {
-	resp, err := client.DoRaw("GET", repoPath(fmt.Sprintf("/database/backups/%s?name=%s", esc(backupKey), esc(dbName))))
+	resp, err := client.DoRaw("GET", repoPath(fmt.Sprintf("/database/backups/%s?name=%s", esc(backupKey), url.QueryEscape(dbName))))
 	if err != nil {
 		return err
 	}
