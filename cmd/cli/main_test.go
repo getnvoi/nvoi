@@ -385,8 +385,8 @@ func TestCloudDispatch_CronRun(t *testing.T) {
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"cron", "run", "cleanup"})
 	cmd.Execute()
-	if gotPath != "/workspaces/ws-1/repos/repo-1/run" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/run", gotPath)
+	if gotPath != "/workspaces/ws-1/repos/repo-1/cron/cleanup/run" {
+		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/cron/cleanup/run", gotPath)
 	}
 }
 

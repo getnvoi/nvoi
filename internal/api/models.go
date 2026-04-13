@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -200,6 +201,7 @@ type Repo struct {
 	Environment   string         `gorm:"not null;default:'production'" json:"environment"` // production, staging, etc.
 	SSHPrivateKey string         `gorm:"type:text;not null" json:"-"`                      // encrypted PEM — auto-generated, never nil
 	SSHPublicKey  string         `gorm:"not null" json:"ssh_public_key"`                   // OpenSSH format — visible for deploy key setup
+	Config        string         `gorm:"type:text" json:"-"`                               // nvoi.yaml content — mutated by config CRUD, used by deploy
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
@@ -261,6 +263,25 @@ func (r *Repo) decryptSSHKey() error {
 		return fmt.Errorf("decrypt Repo.SSHPrivateKey: %w", err)
 	}
 	r.SSHPrivateKey = dec
+	return nil
+}
+
+// ParseConfig parses the stored YAML into an AppConfig.
+// Returns a zero config if the field is empty (fresh repo).
+func (r *Repo) ParseConfig() (*config.AppConfig, error) {
+	if r.Config == "" {
+		return &config.AppConfig{App: r.Name, Env: r.Environment}, nil
+	}
+	return config.ParseAppConfig([]byte(r.Config))
+}
+
+// SetConfig serializes an AppConfig back to YAML and stores it.
+func (r *Repo) SetConfig(cfg *config.AppConfig) error {
+	data, err := config.MarshalAppConfig(cfg)
+	if err != nil {
+		return err
+	}
+	r.Config = string(data)
 	return nil
 }
 
