@@ -122,6 +122,7 @@ servers:
     type: cax11
     region: nbg1
     role: master
+    disk: 50                   # root disk GB (optional, AWS + Scaleway only)
 
 firewall: default            # string or list of port:cidr rules
 
@@ -173,7 +174,7 @@ domains:
 
 - `app` and `env` required
 - `providers.compute` required
-- At least one server, exactly one master, all have type/region/role
+- At least one server, exactly one master, all have type/region/role. `disk` optional (creation-only, not resizable). Hetzner + `disk` = hard error (fixed per server type).
 - Volumes: size > 0, server exists
 - Services/crons: image XOR build, referenced build/storage/volumes exist
 - Volume mounts: `name:/path` format, volume must be on same server as workload
@@ -433,3 +434,4 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **SSH host key changed = hard error** with guidance to clear known hosts. Auto-cleared on server creation.
 - **Firewall never reset during server creation.** `ensureFirewall` only ensures existence.
 - **Concurrency control on deploy workflows.** `concurrency: { group: deploy, cancel-in-progress: false }`.
+- **Root disk size is creation-only.** `disk` in server config applies at `EnsureServer` time. Changing it on an existing server has no effect — `EnsureServer` returns the existing server as-is. Resize requires server recreation. Hetzner doesn't support custom root disk sizes at all (fixed per server type) — validated at config time.

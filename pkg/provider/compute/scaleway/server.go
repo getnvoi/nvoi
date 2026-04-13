@@ -118,6 +118,11 @@ func (c *Client) createServer(ctx context.Context, req provider.CreateServerRequ
 		return nil, fmt.Errorf("resolve image: %w", err)
 	}
 
+	rootSizeBytes := int64(20_000_000_000) // 20 GB default
+	if req.DiskGB > 0 {
+		rootSizeBytes = int64(req.DiskGB) * 1_000_000_000
+	}
+
 	body := serverCreateBody{
 		Name:              req.Name,
 		CommercialType:    req.ServerType,
@@ -126,7 +131,7 @@ func (c *Client) createServer(ctx context.Context, req provider.CreateServerRequ
 		Tags:              labelsToTags(req.Labels),
 		DynamicIPRequired: true,
 		Volumes: map[string]serverVolume{
-			"0": {Size: 20_000_000_000, VolumeType: volumeTypeForInstance(req.ServerType)},
+			"0": {Size: rootSizeBytes, VolumeType: volumeTypeForInstance(req.ServerType)},
 		},
 	}
 	if fwID != "" {

@@ -19,6 +19,7 @@ type ComputeSetRequest struct {
 	ServerType string
 	Region     string
 	Worker     bool
+	DiskGB     int
 }
 
 type ComputeSetResult struct {
@@ -64,6 +65,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		UserData:     userData,
 		FirewallName: names.Firewall(),
 		NetworkName:  names.Network(),
+		DiskGB:       req.DiskGB,
 		Labels:       labels,
 	})
 	if err != nil {

@@ -25,7 +25,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 
 	// Create desired servers. Orphans are NOT removed yet — workloads
 	// must move to new nodes first (zero-downtime server replacement).
-	if err := ServersAdd(ctx, dc, cfg); err != nil {
+	if err := ServersAdd(ctx, dc, live, cfg); err != nil {
 		return err
 	}
 

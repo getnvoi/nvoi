@@ -329,6 +329,46 @@ func TestValidateConfig_ValidHyphenatedNames(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_NegativeDisk(t *testing.T) {
+	cfg := validCfg()
+	cfg.Servers["master"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "master", Disk: -1}
+	assertValidationError(t, cfg, "disk must be >= 0")
+}
+
+func TestValidateConfig_DiskWithHetzner(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Compute = "hetzner"
+	cfg.Servers["master"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "master", Disk: 100}
+	assertValidationError(t, cfg, "hetzner does not support custom root disk sizes")
+}
+
+func TestValidateConfig_DiskWithScaleway(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Compute = "scaleway"
+	cfg.Servers["master"] = config.ServerDef{Type: "DEV1-M", Region: "fr-par-1", Role: "master", Disk: 50}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("disk with scaleway should be valid: %v", err)
+	}
+}
+
+func TestValidateConfig_DiskWithAWS(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Compute = "aws"
+	cfg.Servers["master"] = config.ServerDef{Type: "t3.medium", Region: "us-east-1", Role: "master", Disk: 100}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("disk with aws should be valid: %v", err)
+	}
+}
+
+func TestValidateConfig_DiskOmitted(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Compute = "hetzner"
+	// Disk is 0 (omitted) — should pass even for Hetzner
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("omitted disk should be valid: %v", err)
+	}
+}
+
 func assertValidationError(t *testing.T, cfg *config.AppConfig, substr string) {
 	t.Helper()
 	err := ValidateConfig(cfg)

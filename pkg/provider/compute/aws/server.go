@@ -80,6 +80,25 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 	if req.UserData != "" {
 		input.UserData = aws.String(base64.StdEncoding.EncodeToString([]byte(req.UserData)))
 	}
+	if req.DiskGB > 0 {
+		// Use the AMI's root device name to avoid hardcoding /dev/sda1 vs /dev/xvda.
+		rootDevice := "/dev/sda1"
+		amiResp, err := c.ec2.DescribeImages(ctx, &ec2.DescribeImagesInput{
+			ImageIds: []string{amiID},
+		})
+		if err == nil && len(amiResp.Images) > 0 && amiResp.Images[0].RootDeviceName != nil {
+			rootDevice = *amiResp.Images[0].RootDeviceName
+		}
+		input.BlockDeviceMappings = []ec2types.BlockDeviceMapping{
+			{
+				DeviceName: aws.String(rootDevice),
+				Ebs: &ec2types.EbsBlockDevice{
+					VolumeSize: aws.Int32(int32(req.DiskGB)),
+					VolumeType: ec2types.VolumeTypeGp3,
+				},
+			},
+		}
+	}
 
 	result, err := c.ec2.RunInstances(ctx, input)
 	if err != nil {

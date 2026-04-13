@@ -51,6 +51,12 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if srv.Role != "master" && srv.Role != "worker" {
 			return fmt.Errorf("servers.%s.role must be master or worker, got %q", name, srv.Role)
 		}
+		if srv.Disk < 0 {
+			return fmt.Errorf("servers.%s.disk must be >= 0", name)
+		}
+		if srv.Disk > 0 && cfg.Providers.Compute == "hetzner" {
+			return fmt.Errorf("servers.%s.disk: hetzner does not support custom root disk sizes — disk is fixed per server type", name)
+		}
 		if srv.Role == "master" {
 			masterCount++
 		}

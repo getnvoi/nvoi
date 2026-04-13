@@ -43,13 +43,16 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext) (*config.LiveSt
 		return s
 	}
 
-	state := &config.LiveState{Domains: map[string][]string{}}
+	state := &config.LiveState{Domains: map[string][]string{}, ServerDisk: map[string]int{}}
 	seen := map[string]bool{}
 	for _, s := range servers {
 		name := strip(s.Name)
 		if !seen[name] {
 			state.Servers = append(state.Servers, name)
 			seen[name] = true
+			if s.DiskGB > 0 {
+				state.ServerDisk[name] = s.DiskGB
+			}
 		}
 	}
 	for _, n := range res.Nodes {

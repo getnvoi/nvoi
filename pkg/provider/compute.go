@@ -97,6 +97,7 @@ type Volume struct {
 type CreateServerRequest struct {
 	Name, ServerType, Image, Location, UserData string
 	FirewallName, NetworkName                   string
+	DiskGB                                      int // root disk size; 0 = provider default
 	Labels                                      map[string]string
 }
 

@@ -355,6 +355,156 @@ func TestReconcileFirewallRules_NotFound(t *testing.T) {
 	}
 }
 
+// ── CreateServer disk size ───────────────────────────────────────────────────
+
+func TestCreateServer_CustomDisk(t *testing.T) {
+	var capturedRootSize int64
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// ensureFirewall
+		if r.Method == "GET" && strings.Contains(path, "/security_groups") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"security_groups": []map[string]any{
+					{"id": "sg-1", "name": "test-fw"},
+				},
+			})
+			return
+		}
+		// ensureNetwork
+		if r.Method == "GET" && strings.Contains(path, "/private_networks") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"private_networks": []map[string]any{
+					{"id": "net-1", "name": "test-net"},
+				},
+			})
+			return
+		}
+		// getServerByName — not found
+		if r.Method == "GET" && strings.HasSuffix(path, "/servers") {
+			json.NewEncoder(w).Encode(map[string]any{"servers": []any{}})
+			return
+		}
+		// resolveImage
+		if r.Method == "GET" && strings.Contains(path, "/images") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"images": []map[string]any{{"id": "img-1"}},
+			})
+			return
+		}
+		// createServer — capture the root volume size
+		if r.Method == "POST" && strings.HasSuffix(path, "/servers") {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if vols, ok := body["volumes"].(map[string]any); ok {
+				if v0, ok := vols["0"].(map[string]any); ok {
+					capturedRootSize = int64(v0["size"].(float64))
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"server": serverJSON{ID: "srv-1", Name: "test-srv", State: "running"},
+			})
+			return
+		}
+		// user_data, private_nics, poweron, refetch
+		if r.Method == "PATCH" || (r.Method == "POST" && strings.Contains(path, "/action")) {
+			w.WriteHeader(200)
+			json.NewEncoder(w).Encode(map[string]any{})
+			return
+		}
+		if r.Method == "PUT" {
+			w.WriteHeader(204)
+			return
+		}
+		if r.Method == "POST" && strings.Contains(path, "/private_nics") {
+			json.NewEncoder(w).Encode(map[string]any{"private_nic": map[string]any{"id": "nic-1"}})
+			return
+		}
+		if r.Method == "GET" && strings.Contains(path, "/servers/srv-1") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"server": serverJSON{ID: "srv-1", Name: "test-srv", State: "running"},
+			})
+			return
+		}
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+
+	_, err := c.EnsureServer(context.Background(), provider.CreateServerRequest{
+		Name:         "test-srv",
+		ServerType:   "DEV1-M",
+		Image:        "ubuntu-24.04",
+		Location:     "fr-par-1",
+		FirewallName: "test-fw",
+		NetworkName:  "test-net",
+		DiskGB:       50,
+		Labels:       map[string]string{"app": "test"},
+	})
+	if err != nil {
+		t.Fatalf("EnsureServer: %v", err)
+	}
+	expected := int64(50_000_000_000)
+	if capturedRootSize != expected {
+		t.Errorf("root volume size = %d bytes, want %d (50 GB)", capturedRootSize, expected)
+	}
+}
+
+func TestCreateServer_DefaultDisk(t *testing.T) {
+	var capturedRootSize int64
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if r.Method == "GET" && strings.Contains(path, "/security_groups") {
+			json.NewEncoder(w).Encode(map[string]any{"security_groups": []map[string]any{{"id": "sg-1", "name": "fw"}}})
+			return
+		}
+		if r.Method == "GET" && strings.Contains(path, "/private_networks") {
+			json.NewEncoder(w).Encode(map[string]any{"private_networks": []map[string]any{{"id": "net-1", "name": "net"}}})
+			return
+		}
+		if r.Method == "GET" && strings.HasSuffix(path, "/servers") {
+			json.NewEncoder(w).Encode(map[string]any{"servers": []any{}})
+			return
+		}
+		if r.Method == "GET" && strings.Contains(path, "/images") {
+			json.NewEncoder(w).Encode(map[string]any{"images": []map[string]any{{"id": "img-1"}}})
+			return
+		}
+		if r.Method == "POST" && strings.HasSuffix(path, "/servers") {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if vols, ok := body["volumes"].(map[string]any); ok {
+				if v0, ok := vols["0"].(map[string]any); ok {
+					capturedRootSize = int64(v0["size"].(float64))
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"server": serverJSON{ID: "srv-1", Name: "test-srv", State: "running"},
+			})
+			return
+		}
+		if r.Method == "GET" && strings.Contains(path, "/servers/srv-1") {
+			json.NewEncoder(w).Encode(map[string]any{"server": serverJSON{ID: "srv-1", Name: "test-srv", State: "running"}})
+			return
+		}
+		w.WriteHeader(200)
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+
+	_, err := c.EnsureServer(context.Background(), provider.CreateServerRequest{
+		Name: "test-srv", ServerType: "DEV1-M", Image: "ubuntu-24.04",
+		Location: "fr-par-1", FirewallName: "fw", NetworkName: "net",
+		Labels: map[string]string{"app": "test"},
+		// DiskGB omitted — should default to 20 GB
+	})
+	if err != nil {
+		t.Fatalf("EnsureServer: %v", err)
+	}
+	expected := int64(20_000_000_000)
+	if capturedRootSize != expected {
+		t.Errorf("root volume size = %d bytes, want %d (20 GB default)", capturedRootSize, expected)
+	}
+}
+
 // ── DeleteServer SG release ──────────────────────────────────────────────────
 
 func TestDeleteServer_ReleasesSecurityGroup(t *testing.T) {

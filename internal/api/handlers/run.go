@@ -156,6 +156,7 @@ func (e *runner) dispatch(ctx context.Context, kind, name string, params map[str
 			ServerType: utils.GetString(params, "type"),
 			Region:     utils.GetString(params, "region"),
 			Worker:     utils.GetString(params, "role") == "worker",
+			DiskGB:     utils.GetInt(params, "disk"),
 		})
 		return err
 

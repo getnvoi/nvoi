@@ -22,13 +22,14 @@ type DeployContext struct {
 
 // LiveState represents what's currently deployed.
 type LiveState struct {
-	Servers  []string
-	Services []string
-	Crons    []string
-	Volumes  []string
-	Storage  []string
-	Secrets  []string
-	Domains  map[string][]string
+	Servers    []string
+	ServerDisk map[string]int // server short name → root disk GB (from provider)
+	Services   []string
+	Crons      []string
+	Volumes    []string
+	Storage    []string
+	Secrets    []string
+	Domains    map[string][]string
 }
 
 type AppConfig struct {
@@ -70,6 +71,7 @@ type ServerDef struct {
 	Type   string `yaml:"type"`
 	Region string `yaml:"region"`
 	Role   string `yaml:"role"`
+	Disk   int    `yaml:"disk,omitempty"` // root disk size in GB (0 = provider default)
 }
 
 type VolumeDef struct {

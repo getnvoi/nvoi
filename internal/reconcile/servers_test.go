@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
@@ -21,7 +22,7 @@ func TestServersAdd_FreshDeploy(t *testing.T) {
 		},
 	}
 
-	if err := ServersAdd(context.Background(), dc, cfg); err != nil {
+	if err := ServersAdd(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !log.has("ensure-server:" + n.Server("master")) {
@@ -38,7 +39,7 @@ func TestServersAdd_AlreadyConverged(t *testing.T) {
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 
-	if err := ServersAdd(context.Background(), dc, cfg); err != nil {
+	if err := ServersAdd(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !log.has("ensure-server:" + n.Server("master")) {
@@ -101,7 +102,7 @@ func TestServersAdd_ScaleUp(t *testing.T) {
 		},
 	}
 
-	if err := ServersAdd(context.Background(), dc, cfg); err != nil {
+	if err := ServersAdd(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !log.has("ensure-server:" + n.Server("worker-2")) {
@@ -109,6 +110,119 @@ func TestServersAdd_ScaleUp(t *testing.T) {
 	}
 	if log.count("delete-server:") != 0 {
 		t.Errorf("scale-up should not delete: %v", log.all())
+	}
+}
+
+func TestServersAdd_DiskMismatch_Error(t *testing.T) {
+	log := &opLog{}
+	dc := convergeDC(log, convergeMock())
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]config.ServerDef{
+			"master": {Type: "cx23", Region: "fsn1", Role: "master", Disk: 100},
+		},
+	}
+	live := &config.LiveState{
+		Servers:    []string{"master"},
+		ServerDisk: map[string]int{"master": 50},
+	}
+
+	err := ServersAdd(context.Background(), dc, live, cfg)
+	if err == nil {
+		t.Fatal("expected error when disk differs from live")
+	}
+	if !strings.Contains(err.Error(), "root disk is 50 GB but config wants 100 GB") {
+		t.Errorf("wrong error: %s", err)
+	}
+}
+
+func TestServersAdd_DiskMatchesLive_OK(t *testing.T) {
+	log := &opLog{}
+	dc := convergeDC(log, convergeMock())
+	n := testNames()
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]config.ServerDef{
+			"master": {Type: "cx23", Region: "fsn1", Role: "master", Disk: 50},
+		},
+	}
+	live := &config.LiveState{
+		Servers:    []string{"master"},
+		ServerDisk: map[string]int{"master": 50},
+	}
+
+	if err := ServersAdd(context.Background(), dc, live, cfg); err != nil {
+		t.Fatalf("same disk should pass: %v", err)
+	}
+	if !log.has("ensure-server:" + n.Server("master")) {
+		t.Error("master not ensured")
+	}
+}
+
+func TestServersAdd_DiskOmittedOnExistingServer_OK(t *testing.T) {
+	log := &opLog{}
+	dc := convergeDC(log, convergeMock())
+	n := testNames()
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]config.ServerDef{
+			"master": {Type: "cx23", Region: "fsn1", Role: "master"},
+		},
+	}
+	live := &config.LiveState{
+		Servers:    []string{"master"},
+		ServerDisk: map[string]int{"master": 50},
+	}
+
+	// Disk omitted (0) — no check, passes through
+	if err := ServersAdd(context.Background(), dc, live, cfg); err != nil {
+		t.Fatalf("omitted disk on existing server should pass: %v", err)
+	}
+	if !log.has("ensure-server:" + n.Server("master")) {
+		t.Error("master not ensured")
+	}
+}
+
+func TestServersAdd_ProviderDidNotReportDisk_OK(t *testing.T) {
+	log := &opLog{}
+	dc := convergeDC(log, convergeMock())
+	n := testNames()
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]config.ServerDef{
+			"master": {Type: "cx23", Region: "fsn1", Role: "master", Disk: 50},
+		},
+	}
+	live := &config.LiveState{
+		Servers:    []string{"master"},
+		ServerDisk: map[string]int{}, // provider didn't report disk
+	}
+
+	// Can't validate what we can't see — passes through
+	if err := ServersAdd(context.Background(), dc, live, cfg); err != nil {
+		t.Fatalf("unknown live disk should pass: %v", err)
+	}
+	if !log.has("ensure-server:" + n.Server("master")) {
+		t.Error("master not ensured")
+	}
+}
+
+func TestServersAdd_DiskOnNewServer_OK(t *testing.T) {
+	log := &opLog{}
+	dc := convergeDC(log, convergeMock())
+	n := testNames()
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]config.ServerDef{
+			"master": {Type: "cx23", Region: "fsn1", Role: "master", Disk: 50},
+		},
+	}
+
+	if err := ServersAdd(context.Background(), dc, nil, cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !log.has("ensure-server:" + n.Server("master")) {
+		t.Error("master not created")
 	}
 }
 
@@ -158,7 +272,7 @@ func TestServerReplacement_AddBeforeRemove(t *testing.T) {
 	live := &config.LiveState{Servers: []string{"master", "worker-1"}}
 
 	// Phase 1: add desired
-	if err := ServersAdd(context.Background(), dc, cfg); err != nil {
+	if err := ServersAdd(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("ServersAdd: %v", err)
 	}
 	if !log.has("ensure-server:" + n.Server("worker-2")) {
