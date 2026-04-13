@@ -26,9 +26,6 @@ func NewDeployCmd(dc *config.DeployContext) *cobra.Command {
 
 func LoadConfig(cmd *cobra.Command) (*config.AppConfig, error) {
 	path, _ := cmd.Flags().GetString("config")
-	if path == "" {
-		path = "nvoi.yaml"
-	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)

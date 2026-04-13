@@ -52,6 +52,7 @@ type mode struct {
 	local    bool
 	dc       *config.DeployContext // local mode
 	cfg      *config.AppConfig     // local mode — parsed once, reused by all commands
+	v        *viper.Viper          // local mode — scoped instance for env var resolution
 	client   *cli.APIClient        // cloud mode
 	repoPath func(string) string   // cloud mode
 }
@@ -105,9 +106,11 @@ func initLocal(cmd *cobra.Command, m *mode) error {
 	if err != nil {
 		return err
 	}
-	viper.AutomaticEnv() // env var resolution for secrets in reconcile.Deploy
+	v := viper.New()
+	v.AutomaticEnv() // env var resolution for secrets in reconcile.Deploy
 	m.local = true
 	m.cfg = cfg
+	m.v = v
 	m.dc = core.BuildContextFromConfig(cmd, cfg)
 	return nil
 }
@@ -163,9 +166,6 @@ func addUnauthCloudOnly(root *cobra.Command, cmd *cobra.Command) {
 
 func readConfigFile(cmd *cobra.Command) ([]byte, error) {
 	configPath, _ := cmd.Flags().GetString("config")
-	if configPath == "" {
-		configPath = "nvoi.yaml"
-	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -181,7 +181,7 @@ func newDeployCmd(m *mode) *cobra.Command {
 		Short: "Deploy from config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if m.local {
-				return reconcile.Deploy(cmd.Context(), m.dc, m.cfg, viper.GetViper())
+				return reconcile.Deploy(cmd.Context(), m.dc, m.cfg, m.v)
 			}
 			data, err := readConfigFile(cmd)
 			if err != nil {

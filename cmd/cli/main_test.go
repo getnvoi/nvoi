@@ -13,15 +13,11 @@ import (
 	"github.com/getnvoi/nvoi/internal/cli"
 	"github.com/getnvoi/nvoi/internal/core"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 // ── Mode detection ──────────────────────────────────────────────────────────
 
 func TestLocalFlagWithoutConfig(t *testing.T) {
-	viper.Reset()
-	defer viper.Reset()
-
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"deploy", "--local", "--config", "/nonexistent/nvoi.yaml"})
 	err := cmd.Execute()
@@ -143,9 +139,6 @@ func TestLoginDoesNotRequireAuth(t *testing.T) {
 // ── Dispatch: local mode ────────────────────────────────────────────────────
 
 func TestLocalDispatch_Deploy(t *testing.T) {
-	viper.Reset()
-	defer viper.Reset()
-
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
 	// Config with app+env but no providers.compute — ValidateConfig rejects it.
@@ -165,9 +158,6 @@ func TestLocalDispatch_Deploy(t *testing.T) {
 }
 
 func TestLocalDispatch_Teardown(t *testing.T) {
-	viper.Reset()
-	defer viper.Reset()
-
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
 	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
