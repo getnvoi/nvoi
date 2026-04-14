@@ -83,6 +83,10 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 		return nil, err
 	}
 	if existing != nil {
+		// Reconcile firewall — ensure server is on the correct security group
+		if err := c.reconcileServerFirewall(ctx, existing.ID, req); err != nil {
+			return nil, fmt.Errorf("reconcile firewall: %w", err)
+		}
 		// Reconcile: attach private network if missing.
 		if req.NetworkName != "" {
 			net, err := c.getNetworkByName(ctx, req.NetworkName)

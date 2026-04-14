@@ -65,8 +65,19 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
 	}
 
-	// Firewall + network — shared provider resources, always nuked
-	collect(app.FirewallDelete(ctx, app.FirewallDeleteRequest{Cluster: dc.Cluster}))
+	// Firewalls — nuke all matching our prefix (desired=nil = delete everything)
+	names, _ := utils.NewNames(cfg.App, cfg.Env)
+	if names != nil {
+		for _, err := range app.FirewallRemoveOrphans(ctx, app.FirewallRemoveOrphansRequest{
+			Cluster: dc.Cluster,
+			Prefix:  names.Base() + "-",
+			Desired: nil,
+		}) {
+			collect(err)
+		}
+	}
+
+	// Network — always nuked
 	collect(app.NetworkDelete(ctx, app.NetworkDeleteRequest{Cluster: dc.Cluster}))
 
 	if len(errs) > 0 {

@@ -106,6 +106,77 @@ func (c *Client) detachFirewall(ctx context.Context, firewallID, serverID string
 	})
 }
 
+func (c *Client) attachFirewall(ctx context.Context, firewallID, serverID string) error {
+	intID, _ := strconv.ParseInt(serverID, 10, 64)
+	body := map[string]any{
+		"apply_to": []map[string]any{
+			{"type": "server", "server": map[string]any{"id": intID}},
+		},
+	}
+	var resp struct {
+		Actions []struct {
+			ID int64 `json:"id"`
+		} `json:"actions"`
+	}
+	if err := c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/apply_to_resources", firewallID), body, &resp); err != nil {
+		if strings.Contains(err.Error(), "already added") {
+			return nil // idempotent
+		}
+		return fmt.Errorf("attach firewall: %w", err)
+	}
+	for _, a := range resp.Actions {
+		if a.ID != 0 {
+			if err := c.waitForAction(ctx, a.ID); err != nil {
+				return fmt.Errorf("attach firewall action: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// reconcileServerFirewall ensures the server is attached to the desired firewall.
+// Detaches any other firewalls, attaches the correct one.
+func (c *Client) reconcileServerFirewall(ctx context.Context, serverID, desiredFWName string, labels map[string]string) error {
+	desiredFWID, err := c.ensureFirewall(ctx, desiredFWName, labels)
+	if err != nil {
+		return err
+	}
+
+	currentFWIDs, _, err := c.getServerAttachments(ctx, serverID)
+	if err != nil {
+		return err
+	}
+
+	// Check if already correct
+	hasDesired := false
+	for _, fwID := range currentFWIDs {
+		if fwID == desiredFWID {
+			hasDesired = true
+		}
+	}
+	if hasDesired && len(currentFWIDs) == 1 {
+		return nil // already on the right firewall, nothing else attached
+	}
+
+	// Detach wrong firewalls
+	for _, fwID := range currentFWIDs {
+		if fwID != desiredFWID {
+			if err := c.detachFirewall(ctx, fwID, serverID); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Attach correct firewall if not already
+	if !hasDesired {
+		if err := c.attachFirewall(ctx, desiredFWID, serverID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {
 	var resp struct {
 		Firewalls []struct {

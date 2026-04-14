@@ -35,6 +35,7 @@ type DeployContext struct {
 type LiveState struct {
 	Servers    []string
 	ServerDisk map[string]int // server short name → root disk GB (from provider)
+	Firewalls  []string
 	Services   []string
 	Crons      []string
 	Volumes    []string
@@ -57,6 +58,10 @@ type AppConfig struct {
 	Crons     map[string]CronDef     `yaml:"crons,omitempty"`
 	Domains   map[string][]string    `yaml:"domains,omitempty"`
 	ACMEEmail string                 `yaml:"acme_email,omitempty"`
+
+	// Resolved firewall names — populated by Resolve()
+	MasterFirewall string `yaml:"-"`
+	WorkerFirewall string `yaml:"-"`
 }
 
 // StorageNames returns all storage names: user-declared + database backup buckets.
@@ -148,6 +153,10 @@ func (c *AppConfig) Resolve() error {
 		vol.MountPath = names.VolumeMountPath(volName)
 		c.Volumes[volName] = vol
 	}
+
+	// Firewall names — per-role.
+	c.MasterFirewall = names.MasterFirewall()
+	c.WorkerFirewall = names.WorkerFirewall()
 
 	// Database resource names — from utils single-source functions.
 	for dbName, db := range c.Database {

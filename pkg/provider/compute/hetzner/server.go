@@ -52,6 +52,10 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 		return nil, err
 	}
 	if existing != nil {
+		// Reconcile firewall attachment — server may be on a legacy or wrong firewall
+		if err := c.reconcileServerFirewall(ctx, existing.ID, req.FirewallName, req.Labels); err != nil {
+			return nil, fmt.Errorf("reconcile firewall: %w", err)
+		}
 		return existing, nil
 	}
 

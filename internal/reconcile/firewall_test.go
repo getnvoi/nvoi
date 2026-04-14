@@ -7,17 +7,21 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 )
 
-func TestFirewall_Applied(t *testing.T) {
+func TestFirewall_BothRolesApplied(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &config.AppConfig{Firewall: []string{"default"}}
+	cfg := &config.AppConfig{App: "myapp", Env: "prod", Firewall: []string{"default"},
+		MasterFirewall: "nvoi-myapp-prod-master-fw", WorkerFirewall: "nvoi-myapp-prod-worker-fw"}
 
 	if err := Firewall(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !log.has("firewall:" + n.Firewall()) {
-		t.Errorf("firewall not applied: %v", log.all())
+	if !log.has("firewall:" + n.MasterFirewall()) {
+		t.Errorf("master firewall not applied: %v", log.all())
+	}
+	if !log.has("firewall:" + n.WorkerFirewall()) {
+		t.Errorf("worker firewall not applied: %v", log.all())
 	}
 }
 
@@ -38,12 +42,16 @@ func TestFirewall_Idempotent(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
-	cfg := &config.AppConfig{Firewall: []string{"default"}}
+	cfg := &config.AppConfig{App: "myapp", Env: "prod", Firewall: []string{"default"},
+		MasterFirewall: "nvoi-myapp-prod-master-fw", WorkerFirewall: "nvoi-myapp-prod-worker-fw"}
 
 	_ = Firewall(context.Background(), dc, nil, cfg)
 	_ = Firewall(context.Background(), dc, nil, cfg)
 
-	if log.count("firewall:"+n.Firewall()) != 2 {
-		t.Errorf("expected 2 calls (idempotent): %v", log.all())
+	if log.count("firewall:"+n.MasterFirewall()) != 2 {
+		t.Errorf("expected 2 master firewall calls: %v", log.all())
+	}
+	if log.count("firewall:"+n.WorkerFirewall()) != 2 {
+		t.Errorf("expected 2 worker firewall calls: %v", log.all())
 	}
 }
