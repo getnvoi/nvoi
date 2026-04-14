@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -21,7 +22,9 @@ func Volumes(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 		desired := toSet(utils.SortedKeys(cfg.Volumes))
 		for _, name := range live.Volumes {
 			if !desired[name] {
-				_ = app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name})
+				if err := app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
+					dc.Cluster.Log().Warning(fmt.Sprintf("orphan volume %s not removed: %s", name, err))
+				}
 			}
 		}
 	}
