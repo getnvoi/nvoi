@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"sort"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
@@ -30,97 +29,101 @@ func testCluster(ssh *testutil.MockSSH) Cluster {
 		Output:    &testutil.MockOutput{},
 		MasterSSH: ssh,
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+			if ssh == nil {
+				return nil, fmt.Errorf("no SSH")
+			}
 			return ssh, nil
 		},
 	}
 }
 
-func TestSecretSet(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			// get secret returns error = doesn't exist → create path
-			{Prefix: "get secret secrets", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
-			{Prefix: "create secret generic", Result: testutil.MockResult{}},
-		},
-	}
-
-	err := SecretSet(context.Background(), SecretSetRequest{
-		Cluster: testCluster(mock),
-		Key:     "MY_KEY",
-		Value:   "my-value",
-	})
-	if err != nil {
-		t.Fatalf("SecretSet: unexpected error: %v", err)
-	}
-}
-
-func TestSecretDelete(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			// get secret exists (no error)
-			{Prefix: "get secret secrets 2>/dev/null", Result: testutil.MockResult{}},
-			// ListSecretKeys — returns data with our key
-			{Prefix: "get secret secrets -o jsonpath", Result: testutil.MockResult{
-				Output: []byte(`'{"MY_KEY":"dGVzdA=="}'`),
-			}},
-			// patch to remove the key
-			{Prefix: "patch secret", Result: testutil.MockResult{}},
-		},
-	}
-
-	err := SecretDelete(context.Background(), SecretDeleteRequest{
-		Cluster: testCluster(mock),
-		Key:     "MY_KEY",
-	})
-	if err != nil {
-		t.Fatalf("SecretDelete: unexpected error: %v", err)
-	}
-}
-
-func TestSecretList(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get secret secrets -o jsonpath", Result: testutil.MockResult{
-				Output: []byte(`'{"KEY1":"dmFsdWUx","KEY2":"dmFsdWUy"}'`),
-			}},
-		},
-	}
-
+func TestSecretList_ConfigDriven(t *testing.T) {
 	keys, err := SecretList(context.Background(), SecretListRequest{
-		Cluster: testCluster(mock),
+		SecretNames: []string{"JWT_SECRET", "ENCRYPTION_KEY"},
 	})
 	if err != nil {
-		t.Fatalf("SecretList: unexpected error: %v", err)
+		t.Fatalf("SecretList: %v", err)
 	}
 	if len(keys) != 2 {
 		t.Fatalf("SecretList: got %d keys, want 2", len(keys))
 	}
-
-	sort.Strings(keys)
-	if keys[0] != "KEY1" || keys[1] != "KEY2" {
-		t.Errorf("SecretList: keys = %v, want [KEY1 KEY2]", keys)
+	if keys[0] != "JWT_SECRET" || keys[1] != "ENCRYPTION_KEY" {
+		t.Errorf("SecretList: keys = %v", keys)
 	}
 }
 
-func TestSecretReveal(t *testing.T) {
+func TestSecretList_Empty(t *testing.T) {
+	keys, err := SecretList(context.Background(), SecretListRequest{})
+	if err != nil {
+		t.Fatalf("SecretList: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("SecretList: got %d keys, want 0", len(keys))
+	}
+}
+
+func TestSecretReveal_FromPerServiceSecret(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte("super-secret"))
 	mock := &testutil.MockSSH{
 		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get secret secrets -o jsonpath", Result: testutil.MockResult{
+			// api-secrets has the key
+			{Prefix: "get secret api-secrets -o jsonpath='{.data.JWT_SECRET}'", Result: testutil.MockResult{
 				Output: []byte("'" + encoded + "'"),
 			}},
 		},
 	}
 
 	val, err := SecretReveal(context.Background(), SecretRevealRequest{
-		Cluster: testCluster(mock),
-		Key:     "MY_KEY",
+		Cluster:      testCluster(mock),
+		Key:          "JWT_SECRET",
+		ServiceNames: []string{"api"},
 	})
 	if err != nil {
-		t.Fatalf("SecretReveal: unexpected error: %v", err)
+		t.Fatalf("SecretReveal: %v", err)
 	}
 	if val != "super-secret" {
 		t.Errorf("SecretReveal: got %q, want %q", val, "super-secret")
+	}
+}
+
+func TestSecretReveal_FallbackToGlobalSecret(t *testing.T) {
+	// Per-service secret doesn't have it, global does (legacy cluster)
+	encoded := base64.StdEncoding.EncodeToString([]byte("legacy-value"))
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "get secret api-secrets", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
+			{Prefix: "get secret secrets -o jsonpath='{.data.MY_KEY}'", Result: testutil.MockResult{
+				Output: []byte("'" + encoded + "'"),
+			}},
+		},
+	}
+
+	val, err := SecretReveal(context.Background(), SecretRevealRequest{
+		Cluster:      testCluster(mock),
+		Key:          "MY_KEY",
+		ServiceNames: []string{"api"},
+	})
+	if err != nil {
+		t.Fatalf("SecretReveal: %v", err)
+	}
+	if val != "legacy-value" {
+		t.Errorf("SecretReveal: got %q, want %q", val, "legacy-value")
+	}
+}
+
+func TestSecretReveal_NotFound(t *testing.T) {
+	mock := &testutil.MockSSH{
+		Prefixes: []testutil.MockPrefix{
+			{Prefix: "get secret", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
+		},
+	}
+
+	_, err := SecretReveal(context.Background(), SecretRevealRequest{
+		Cluster:      testCluster(mock),
+		Key:          "NOPE",
+		ServiceNames: []string{"api"},
+	})
+	if err == nil {
+		t.Fatal("expected error for missing key")
 	}
 }

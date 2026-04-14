@@ -17,15 +17,17 @@ func TestStorage_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestStorage_NoProvider(t *testing.T) {
+func TestStorage_NoConfig(t *testing.T) {
+	// StorageList is config-derived — no SSH needed. With no config on repo,
+	// returns 200 with empty list (no storage names to resolve).
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/storage", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (no compute provider)", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (empty list)", w.Code)
 	}
 }
 

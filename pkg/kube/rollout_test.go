@@ -431,6 +431,111 @@ func TestDedup(t *testing.T) {
 	}
 }
 
+func TestWaitRollout_TerminatedError_FailsFastWithLogs(t *testing.T) {
+	podsJSON := `{
+		"items": [
+			{
+				"metadata": {"name": "web-abc"},
+				"status": {
+					"phase": "Running",
+					"containerStatuses": [{
+						"ready": false,
+						"restartCount": 2,
+						"state": {"terminated": {"exitCode": 1, "reason": "Error"}}
+					}]
+				}
+			}
+		]
+	}`
+
+	ssh := testutil.NewMockSSH(nil)
+	ssh.Prefixes = []testutil.MockPrefix{
+		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(podsJSON)}},
+		{Prefix: "logs", Result: testutil.MockResult{Output: []byte("django.db.utils.OperationalError: connection refused")}},
+	}
+
+	emitter := &testEmitter{}
+	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
+	if err == nil {
+		t.Fatal("expected error for terminated container, got nil")
+	}
+	if !strings.Contains(err.Error(), "exit") {
+		t.Fatalf("expected error to mention exit code, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "restarts: 2") {
+		t.Fatalf("expected error to mention restart count, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("expected error to include logs, got: %v", err)
+	}
+}
+
+func TestWaitRollout_TerminatedError_FirstRestart_Transient(t *testing.T) {
+	// First termination (restartCount=0) is transient — give it one chance to restart.
+	// Second poll returns ready. hasHealthCheck=true skips stability check.
+	errorPods := `{
+		"items": [{
+			"metadata": {"name": "web-abc"},
+			"status": {
+				"phase": "Running",
+				"containerStatuses": [{"ready": false, "restartCount": 0, "state": {"terminated": {"exitCode": 1, "reason": "Error"}}}]
+			}
+		}]
+	}`
+	readyPods := `{
+		"items": [{
+			"metadata": {"name": "web-abc"},
+			"status": {
+				"phase": "Running",
+				"containerStatuses": [{"ready": true, "restartCount": 1, "state": {"running": {}}}]
+			}
+		}]
+	}`
+
+	callCount := 0
+	ssh := &countingSSH{
+		responses: []string{errorPods, readyPods},
+		counter:   &callCount,
+	}
+
+	emitter := &testEmitter{}
+	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", true, emitter)
+	if err != nil {
+		t.Fatalf("expected success after transient error + recovery, got: %v", err)
+	}
+}
+
+// countingSSH returns sequential responses for "get pods" calls.
+type countingSSH struct {
+	responses []string
+	counter   *int
+	mu        sync.Mutex
+}
+
+func (c *countingSSH) Run(_ context.Context, cmd string) ([]byte, error) {
+	if strings.Contains(cmd, "get pods") {
+		c.mu.Lock()
+		idx := *c.counter
+		if idx >= len(c.responses) {
+			idx = len(c.responses) - 1
+		}
+		*c.counter++
+		c.mu.Unlock()
+		return []byte(c.responses[idx]), nil
+	}
+	return nil, nil
+}
+
+func (c *countingSSH) Close() error { return nil }
+func (c *countingSSH) Upload(_ context.Context, _ io.Reader, _ string, _ fs.FileMode) error {
+	return nil
+}
+func (c *countingSSH) Stat(_ context.Context, _ string) (*utils.RemoteFileInfo, error) {
+	return nil, nil
+}
+func (c *countingSSH) DialTCP(_ context.Context, _ string) (net.Conn, error)       { return nil, nil }
+func (c *countingSSH) RunStream(_ context.Context, _ string, _, _ io.Writer) error { return nil }
+
 func TestIndent(t *testing.T) {
 	input := "line1\nline2"
 	got := indent(input, "  ")

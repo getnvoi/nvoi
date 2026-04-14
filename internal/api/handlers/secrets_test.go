@@ -17,14 +17,16 @@ func TestSecrets_RequiresAuth(t *testing.T) {
 	}
 }
 
-func TestSecrets_NoProvider(t *testing.T) {
+func TestSecrets_NoConfig(t *testing.T) {
+	// SecretList is config-driven — no SSH needed. With no config on repo,
+	// returns 200 with empty list.
 	r, _ := testRouter(t, "octocat")
 	token, _, wsID := doLogin(t, r, "octocat")
 	repoID := createRepo(t, r, token, wsID, "my-app")
 	req := authRequest("GET", "/workspaces/"+wsID+"/repos/"+repoID+"/secrets", nil, token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (no compute provider)", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (empty list)", w.Code)
 	}
 }

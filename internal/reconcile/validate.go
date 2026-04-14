@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/packages"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -143,6 +144,9 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if err := validateVolumeServer(cfg, name, svc.Server, svc.Volumes); err != nil {
 			return err
 		}
+		if err := validateSecretRefs("services."+name+".secrets", svc.Secrets); err != nil {
+			return err
+		}
 	}
 
 	// ── Crons ─────────────────────────────────────────────────────────────
@@ -181,6 +185,9 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			return fmt.Errorf("crons.%s: multiple servers with a volume mount — volumes are pinned to one server", name)
 		}
 		if err := validateVolumeServer(cfg, name, cron.Server, cron.Volumes); err != nil {
+			return err
+		}
+		if err := validateSecretRefs("crons."+name+".secrets", cron.Secrets); err != nil {
 			return err
 		}
 	}
@@ -265,6 +272,22 @@ func validateVolumeServer(cfg *config.AppConfig, workload, server string, mounts
 		if server != "" && server != vol.Server {
 			return fmt.Errorf("%s: mounts volume %q (on server %q) but has server: %q — cannot move",
 				workload, volName, vol.Server, server)
+		}
+	}
+	return nil
+}
+
+func validateSecretRefs(context string, refs []string) error {
+	for _, ref := range refs {
+		envName, secretKey := kube.ParseSecretRef(ref)
+		if err := utils.ValidateEnvVarName(context, envName); err != nil {
+			return err
+		}
+		// If = is present, the right side MUST contain $.
+		// "FOO=BAR" without $ is ambiguous — reject it.
+		if strings.Contains(ref, "=") && !hasVarRef(secretKey) {
+			return fmt.Errorf("%s: %q requires $ on the right side of = (e.g. %s=$%s)",
+				context, ref, envName, secretKey)
 		}
 	}
 	return nil

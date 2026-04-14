@@ -157,7 +157,7 @@ func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
 		},
 	}
 
-	live, err := DescribeLive(context.Background(), dc)
+	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
 	if err == nil {
 		t.Fatal("expected error when ComputeList fails, got nil — would be misinterpreted as first deploy")
 	}
@@ -187,7 +187,7 @@ func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
 		},
 	}
 
-	live, err := DescribeLive(context.Background(), dc)
+	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
 	if err != nil {
 		t.Fatalf("first deploy should return nil error, got: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
 		},
 	}
 
-	live, err := DescribeLive(context.Background(), dc)
+	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
 	if err != nil {
 		t.Fatalf("DescribeLive: %v", err)
 	}

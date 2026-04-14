@@ -12,6 +12,10 @@ servers:
     type: cax11
     region: nbg1
     role: master
+  bugsink:
+    type: cax11
+    region: nbg1
+    role: worker
 
 firewall: default
 
@@ -19,16 +23,19 @@ volumes:
   pgdata:
     size: 25
     server: master
+  bugsinkdata:
+    size: 10
+    server: bugsink
 
 database:
   main:
     kind: postgres
     image: postgres:17
     volume: pgdata
-
-secrets:
-  - JWT_SECRET
-  - ENCRYPTION_KEY
+  bugsink:
+    kind: postgres
+    image: postgres:17
+    volume: bugsinkdata
 
 storage:
   releases: {}
@@ -42,16 +49,47 @@ services:
   api:
     build: api
     port: 8080
-    secrets: [JWT_SECRET, ENCRYPTION_KEY]
+    env:
+      - SENTRY_DSN=https://dd87a2600aeb4459828174599d2902d1@monit.nvoi.to/1
+    secrets:
+      - JWT_SECRET
+      - ENCRYPTION_KEY
+      - MAIN_DATABASE_URL
   web:
     build: web
     port: 3000
+    env:
+      - SENTRY_DSN=https://4af4869ae18342f0ad57818004c49f21@monit.nvoi.to/2
   distribution:
     build: distribution
     port: 3001
-    storage: [releases]
+    storage:
+      - releases
+  bugsink:
+    image: bugsink/bugsink:2
+    port: 8000
+    health: /health/ready
+    server: bugsink
+    env:
+      - BEHIND_HTTPS_PROXY=True
+      - BASE_URL=https://monit.nvoi.to
+      - ALLOWED_HOSTS=*
+      - SITE_TITLE=nvoi
+      - PHONEHOME=false
+      - SINGLE_USER=true
+      - EMAIL_HOST=smtp.gmail.com
+      - EMAIL_PORT=587
+      - EMAIL_USE_TLS=True
+      - DEFAULT_FROM_EMAIL=nvoi <noreply@nvoi.to>
+    secrets:
+      - SECRET_KEY=$BUGSINK_SECRET_KEY
+      - DATABASE_URL=$BUGSINK_DATABASE_URL
+      - CREATE_SUPERUSER=$BUGSINK_ADMIN_EMAIL:$BUGSINK_ADMIN_PASSWORD
+      - EMAIL_HOST_USER=$BUGSINK_EMAIL_HOST_USER
+      - EMAIL_HOST_PASSWORD=$BUGSINK_EMAIL_HOST_PASSWORD
 
 domains:
   web: [nvoi.to, www.nvoi.to]
   api: [api.nvoi.to]
   distribution: [get.nvoi.to]
+  bugsink: [monit.nvoi.to]

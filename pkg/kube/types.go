@@ -78,11 +78,25 @@ type ContainerStateWaiting struct {
 
 // ContainerStateTerminated is the terminated state detail.
 type ContainerStateTerminated struct {
-	Reason  string `json:"reason"`
-	Message string `json:"message"`
+	ExitCode int    `json:"exitCode"`
+	Reason   string `json:"reason"`
+	Message  string `json:"message"`
 }
 
 // PodList is the JSON shape for kubectl get pods -o json.
 type PodList struct {
 	Items []PodItem `json:"items"`
+}
+
+// EventItem is the JSON shape for a k8s Event from kubectl get events -o json.
+type EventItem struct {
+	Type    string `json:"type"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+	Count   int    `json:"count"`
+}
+
+// EventList is the JSON shape for kubectl get events -o json.
+type EventList struct {
+	Items []EventItem `json:"items"`
 }

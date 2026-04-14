@@ -35,24 +35,21 @@ func testCronCluster(ssh *testutil.MockSSH) Cluster {
 	}
 }
 
-func TestCronSet_ExpandsStorageRefs(t *testing.T) {
+func TestCronSet_SvcSecretsInManifest(t *testing.T) {
 	mock := &testutil.MockSSH{
 		Prefixes: []testutil.MockPrefix{
 			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "get secret secrets -o jsonpath", Result: testutil.MockResult{
-				Output: []byte(`'{"STORAGE_BACKUPS_ENDPOINT":"x","STORAGE_BACKUPS_BUCKET":"x","STORAGE_BACKUPS_ACCESS_KEY_ID":"x","STORAGE_BACKUPS_SECRET_ACCESS_KEY":"x"}'`),
-			}},
 			{Prefix: "replace -f", Result: testutil.MockResult{Output: []byte("not found"), Err: context.DeadlineExceeded}},
 			{Prefix: "apply --server-side --force-conflicts -f", Result: testutil.MockResult{}},
 		},
 	}
 
 	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:  testCronCluster(mock),
-		Name:     "backup",
-		Image:    "busybox",
-		Schedule: "0 1 * * *",
-		Storages: []string{"backups"},
+		Cluster:    testCronCluster(mock),
+		Name:       "backup",
+		Image:      "busybox",
+		Schedule:   "0 1 * * *",
+		SvcSecrets: []string{"STORAGE_BACKUPS_ENDPOINT", "STORAGE_BACKUPS_BUCKET"},
 	})
 	if err != nil {
 		t.Fatalf("CronSet: %v", err)
@@ -62,7 +59,10 @@ func TestCronSet_ExpandsStorageRefs(t *testing.T) {
 	}
 	content := string(mock.Uploads[0].Content)
 	if !strings.Contains(content, "STORAGE_BACKUPS_ENDPOINT") {
-		t.Fatalf("manifest missing expanded storage secret refs: %s", content)
+		t.Fatalf("manifest missing per-cron secret ref: %s", content)
+	}
+	if !strings.Contains(content, "backup-secrets") {
+		t.Fatalf("manifest should reference backup-secrets, got: %s", content)
 	}
 }
 

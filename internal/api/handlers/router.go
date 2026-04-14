@@ -7,6 +7,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humagin"
 	"github.com/getnvoi/nvoi/internal/api"
+	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -14,6 +15,7 @@ import (
 // NewRouter creates the API router with huma OpenAPI + Gin.
 func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 	r := gin.Default()
+	r.Use(sentrygin.New(sentrygin.Options{Repanic: true}))
 
 	r.Use(func(c *gin.Context) {
 		switch c.Request.URL.Path {

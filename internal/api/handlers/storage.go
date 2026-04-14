@@ -24,11 +24,11 @@ type EmptyStorageOutput struct {
 
 func ListStorageBuckets(db *gorm.DB) func(context.Context, *ListStorageInput) (*ListStorageOutput, error) {
 	return func(ctx context.Context, input *ListStorageInput) (*ListStorageOutput, error) {
-		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
+		cluster, cfgNames, err := repoClusterWithConfig(ctx, db, input.RepoScopedInput)
 		if err != nil {
 			return nil, err
 		}
-		items, err := pkgcore.StorageList(ctx, pkgcore.StorageListRequest{Cluster: *cluster})
+		items, err := pkgcore.StorageList(ctx, pkgcore.StorageListRequest{Cluster: *cluster, StorageNames: cfgNames.StorageNames})
 		if err != nil {
 			return nil, humaError(err)
 		}

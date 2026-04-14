@@ -58,18 +58,18 @@ func ParseSecretRef(ref string) (envName, secretKey string) {
 
 // ServiceSpec describes a service to deploy.
 type ServiceSpec struct {
-	Name       string
-	Image      string
-	Port       int
-	Command    string
-	Replicas   int
-	Env        []corev1.EnvVar
-	Secrets    []string // secret key references → env.valueFrom.secretKeyRef
-	SecretName string   // k8s Secret name (from names.KubeSecrets())
-	Volumes    []string // "pgdata:/var/lib/postgresql/data"
-	HealthPath string
-	Servers    []string // node placement (empty = master only)
-	Managed    bool     // true if any volume is provider-managed → StatefulSet
+	Name          string
+	Image         string
+	Port          int
+	Command       string
+	Replicas      int
+	Env           []corev1.EnvVar
+	SvcSecrets    []string // per-service secret refs → env.valueFrom.secretKeyRef
+	SvcSecretName string   // per-service k8s Secret name ("{svc}-secrets")
+	Volumes       []string // "pgdata:/var/lib/postgresql/data"
+	HealthPath    string
+	Servers       []string // node placement (empty = master only)
+	Managed       bool     // true if any volume is provider-managed → StatefulSet
 }
 
 // GenerateYAML produces k8s YAML for a single service: workload + Service.
@@ -83,13 +83,13 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 
 	// Container
 	envVars := append([]corev1.EnvVar{}, spec.Env...)
-	for _, ref := range spec.Secrets {
+	for _, ref := range spec.SvcSecrets {
 		envName, secretKey := ParseSecretRef(ref)
 		envVars = append(envVars, corev1.EnvVar{
 			Name: envName,
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: spec.SecretName},
+					LocalObjectReference: corev1.LocalObjectReference{Name: spec.SvcSecretName},
 					Key:                  secretKey,
 				},
 			},

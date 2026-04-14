@@ -55,10 +55,11 @@ func (n *Names) Bucket(name string) string { return fmt.Sprintf("%s-%s", n.Base(
 
 // KubeNamespace — each app+env gets its own. Service names stay short.
 // POSTGRES_HOST=db just works. No rewriting magic.
-func (n *Names) KubeNamespace() string          { return n.Base() }
-func (n *Names) KubeWorkload(svc string) string { return svc }
-func (n *Names) KubeService(svc string) string  { return svc }
-func (n *Names) KubeSecrets() string            { return "secrets" }
+func (n *Names) KubeNamespace() string                { return n.Base() }
+func (n *Names) KubeWorkload(svc string) string       { return svc }
+func (n *Names) KubeService(svc string) string        { return svc }
+func (n *Names) KubeSecrets() string                  { return "secrets" }
+func (n *Names) KubeServiceSecrets(svc string) string { return svc + "-secrets" }
 
 // ── Labels ─────────────────────────────────────────────────────────────────────
 
@@ -119,6 +120,18 @@ const (
 	LabelConfigChecksum = "nvoi/config-checksum"
 	RoleMaster          = "master"
 )
+
+// ── Database resource naming ──────────────────────────────────────────────────
+// Single source of truth for database resource name conventions.
+// Used by config.Resolve() and CLI-path consumers (pkg/core/database.go).
+// These derive deterministic k8s resource names from the database config key.
+
+func DatabaseServiceName(name string) string       { return name + "-db" }
+func DatabaseSecretName(name string) string        { return name + "-db-credentials" }
+func DatabaseBackupCronName(name string) string    { return name + "-db-backup" }
+func DatabaseBackupBucket(name string) string      { return name + "-db-backups" }
+func DatabasePodName(name string) string           { return name + "-db-0" }
+func DatabaseBackupCredsSecret(name string) string { return name + "-db-backup-secrets" }
 
 // ── Storage env naming ─────────────────────────────────────────────────────────
 

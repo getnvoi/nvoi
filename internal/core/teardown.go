@@ -17,6 +17,9 @@ import (
 // K8s resource management is reconcile's job, not teardown's.
 // Best-effort: continues through all resources, collects and returns all errors.
 func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
+	if err := cfg.Resolve(); err != nil {
+		return err
+	}
 	var errs []string
 	collect := func(err error) {
 		if err != nil {

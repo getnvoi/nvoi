@@ -16,15 +16,15 @@ import (
 )
 
 type CronSpec struct {
-	Name       string
-	Schedule   string
-	Image      string
-	Command    string
-	Env        []corev1.EnvVar
-	Secrets    []string
-	SecretName string
-	Volumes    []string
-	Servers    []string
+	Name          string
+	Schedule      string
+	Image         string
+	Command       string
+	Env           []corev1.EnvVar
+	SvcSecrets    []string // per-cron secret refs
+	SvcSecretName string   // per-cron k8s Secret name ("{cron}-secrets")
+	Volumes       []string
+	Servers       []string
 }
 
 func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[string]string) (string, error) {
@@ -36,13 +36,13 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 	}
 
 	envVars := append([]corev1.EnvVar{}, spec.Env...)
-	for _, ref := range spec.Secrets {
+	for _, ref := range spec.SvcSecrets {
 		envName, secretKey := ParseSecretRef(ref)
 		envVars = append(envVars, corev1.EnvVar{
 			Name: envName,
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: spec.SecretName},
+					LocalObjectReference: corev1.LocalObjectReference{Name: spec.SvcSecretName},
 					Key:                  secretKey,
 				},
 			},

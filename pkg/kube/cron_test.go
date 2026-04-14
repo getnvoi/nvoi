@@ -11,10 +11,9 @@ import (
 func TestGenerateCronYAML_Basic(t *testing.T) {
 	names := mustNames(t)
 	yamlStr, err := GenerateCronYAML(CronSpec{
-		Name:       "backup",
-		Schedule:   "0 1 * * *",
-		Image:      "busybox:latest",
-		SecretName: "secrets",
+		Name:     "backup",
+		Schedule: "0 1 * * *",
+		Image:    "busybox:latest",
 	}, names, nil)
 	if err != nil {
 		t.Fatalf("GenerateCronYAML: %v", err)
@@ -34,11 +33,11 @@ func TestGenerateCronYAML_Basic(t *testing.T) {
 func TestGenerateCronYAML_SecretAlias(t *testing.T) {
 	names := mustNames(t)
 	yamlStr, err := GenerateCronYAML(CronSpec{
-		Name:       "backup",
-		Schedule:   "0 1 * * *",
-		Image:      "busybox:latest",
-		Secrets:    []string{"AWS_SECRET_ACCESS_KEY=STORAGE_BACKUPS_SECRET_ACCESS_KEY"},
-		SecretName: "secrets",
+		Name:          "backup",
+		Schedule:      "0 1 * * *",
+		Image:         "busybox:latest",
+		SvcSecrets:    []string{"AWS_SECRET_ACCESS_KEY=STORAGE_BACKUPS_SECRET_ACCESS_KEY"},
+		SvcSecretName: "backup-secrets",
 	}, names, nil)
 	if err != nil {
 		t.Fatalf("GenerateCronYAML: %v", err)
@@ -51,12 +50,11 @@ func TestGenerateCronYAML_SecretAlias(t *testing.T) {
 func TestGenerateCronYAML_CommandWrappingAndNodeSelector(t *testing.T) {
 	names := mustNames(t)
 	yamlStr, err := GenerateCronYAML(CronSpec{
-		Name:       "backup",
-		Schedule:   "0 1 * * *",
-		Image:      "busybox:latest",
-		Command:    "echo hi",
-		SecretName: "secrets",
-		Servers:    []string{"master"},
+		Name:     "backup",
+		Schedule: "0 1 * * *",
+		Image:    "busybox:latest",
+		Command:  "echo hi",
+		Servers:  []string{"master"},
 	}, names, nil)
 	if err != nil {
 		t.Fatalf("GenerateCronYAML: %v", err)

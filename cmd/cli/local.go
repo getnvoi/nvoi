@@ -136,7 +136,11 @@ func (b *localBackend) Teardown(ctx context.Context, deleteVolumes, deleteStorag
 }
 
 func (b *localBackend) Describe(ctx context.Context, jsonOutput bool) error {
-	req := app.DescribeRequest{Cluster: b.dc.Cluster}
+	req := app.DescribeRequest{
+		Cluster:        b.dc.Cluster,
+		StorageNames:   b.cfg.StorageNames(),
+		ServiceSecrets: b.cfg.ServiceSecrets(),
+	}
 	if jsonOutput {
 		raw, err := app.DescribeJSON(ctx, req)
 		if err != nil {

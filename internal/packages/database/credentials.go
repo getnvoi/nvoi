@@ -35,8 +35,7 @@ func resolveCredentials(dc *config.DeployContext, name string, engine Engine) (*
 	return creds, nil
 }
 
-func storeCredentials(ctx context.Context, ssh utils.SSHClient, ns, name string, engine Engine, creds *config.DatabaseCredentials, dbURL string) error {
-	secretName := name + "-db-credentials"
+func storeCredentials(ctx context.Context, ssh utils.SSHClient, ns, name, secretName, svcName string, engine Engine, creds *config.DatabaseCredentials, dbURL string) error {
 	prefix := strings.ToUpper(name)
 	userEnv, passEnv, dbEnv := engine.EnvVarNames()
 
@@ -50,7 +49,7 @@ func storeCredentials(ctx context.Context, ssh utils.SSHClient, ns, name string,
 		prefix + "_" + passEnv:           creds.Password,
 		prefix + "_" + dbEnv:             creds.DBName,
 		prefix + "_DATABASE_URL":         dbURL,
-		prefix + "_" + engName + "_HOST": name + "-db",
+		prefix + "_" + engName + "_HOST": svcName,
 		prefix + "_" + engName + "_PORT": fmt.Sprintf("%d", engine.Port()),
 	}
 	for k, v := range kvs {

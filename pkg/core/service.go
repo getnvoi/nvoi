@@ -20,9 +20,8 @@ type ServiceSetRequest struct {
 	Port       int
 	Command    string
 	Replicas   int
-	EnvVars    []string // KEY=VALUE pairs
-	Secrets    []string // secret key references (must exist in cluster)
-	Storages   []string // storage names → expands to STORAGE_{NAME}_* secret refs
+	EnvVars    []string // KEY=VALUE pairs (plain text in manifest)
+	SvcSecrets []string // per-service secret refs → "{svc}-secrets" k8s Secret
 	Volumes    []string // name:/path
 	HealthPath string
 	Servers    []string
@@ -94,26 +93,19 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
 	}
 
-	// Expand --storage names into secret refs
-	for _, storageName := range req.Storages {
-		for _, key := range StorageSecretKeys(storageName) {
-			req.Secrets = append(req.Secrets, key)
-		}
-	}
-
 	spec := kube.ServiceSpec{
-		Name:       req.Name,
-		Image:      req.Image,
-		Port:       req.Port,
-		Command:    req.Command,
-		Replicas:   req.Replicas,
-		Env:        env,
-		Secrets:    req.Secrets,
-		SecretName: names.KubeSecrets(),
-		Volumes:    req.Volumes,
-		HealthPath: req.HealthPath,
-		Servers:    req.Servers,
-		Managed:    managed,
+		Name:          req.Name,
+		Image:         req.Image,
+		Port:          req.Port,
+		Command:       req.Command,
+		Replicas:      req.Replicas,
+		Env:           env,
+		SvcSecrets:    req.SvcSecrets,
+		SvcSecretName: names.KubeServiceSecrets(req.Name),
+		Volumes:       req.Volumes,
+		HealthPath:    req.HealthPath,
+		Servers:       req.Servers,
+		Managed:       managed,
 	}
 
 	out.Command("service", "set", req.Name)

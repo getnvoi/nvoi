@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 
 	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/getsentry/sentry-go"
+	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
@@ -71,12 +74,21 @@ type ContentPage struct {
 }
 
 func main() {
+	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
+		if err := sentry.Init(sentry.ClientOptions{Dsn: dsn}); err != nil {
+			slog.Warn("sentry init failed", "error", err)
+		} else {
+			defer sentry.Flush(2 * time.Second)
+		}
+	}
+
 	root := findRoot()
 	assets := loadManifest(root)
 	templates = loadTemplates(root)
 	contentDir := filepath.Join(root, "cmd/web/content")
 
 	r := gin.Default()
+	r.Use(sentrygin.New(sentrygin.Options{Repanic: true}))
 
 	// 301 www → naked domain (preserve path)
 	r.Use(func(c *gin.Context) {

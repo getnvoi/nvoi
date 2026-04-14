@@ -16,11 +16,15 @@ import (
 // Returns (nil, nil) on first deploy (no servers exist).
 // Returns error if servers exist but cluster state can't be read — prevents
 // silent orphan accumulation from flaky SSH.
-func DescribeLive(ctx context.Context, dc *config.DeployContext) (*config.LiveState, error) {
+func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) (*config.LiveState, error) {
 	// Check if any servers exist at the provider.
 	servers, listErr := app.ComputeList(ctx, app.ComputeListRequest{Cluster: dc.Cluster})
 
-	res, err := app.Describe(ctx, app.DescribeRequest{Cluster: dc.Cluster})
+	res, err := app.Describe(ctx, app.DescribeRequest{
+		Cluster:        dc.Cluster,
+		StorageNames:   cfg.StorageNames(),
+		ServiceSecrets: cfg.ServiceSecrets(),
+	})
 	if err != nil {
 		if listErr != nil {
 			// Both calls failed — provider may be down or credentials wrong.
@@ -74,9 +78,8 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext) (*config.LiveSt
 	for _, s := range res.Storage {
 		state.Storage = append(state.Storage, s.Name)
 	}
-	for _, s := range res.Secrets {
-		state.Secrets = append(state.Secrets, s.Key)
-	}
+	// Secrets no longer tracked in live state — per-service secrets
+	// are managed by the Services/Crons reconcilers directly.
 	for _, i := range res.Ingress {
 		state.Domains[i.Service] = append(state.Domains[i.Service], i.Domain)
 	}
@@ -87,7 +90,6 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext) (*config.LiveSt
 	sort.Strings(state.Crons)
 	sort.Strings(state.Volumes)
 	sort.Strings(state.Storage)
-	sort.Strings(state.Secrets)
 	for _, domains := range state.Domains {
 		sort.Strings(domains)
 	}

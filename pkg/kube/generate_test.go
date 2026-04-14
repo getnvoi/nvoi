@@ -176,11 +176,11 @@ func TestCommandWrapping(t *testing.T) {
 func TestSecretReferences(t *testing.T) {
 	names := mustNames(t)
 	spec := ServiceSpec{
-		Name:       "web",
-		Image:      "myapp:latest",
-		Port:       3000,
-		Secrets:    []string{"DB_PASSWORD", "RAILS_KEY"},
-		SecretName: "secrets",
+		Name:          "web",
+		Image:         "myapp:latest",
+		Port:          3000,
+		SvcSecrets:    []string{"DB_PASSWORD", "RAILS_KEY"},
+		SvcSecretName: "web-secrets",
 	}
 
 	yamlStr, _, err := GenerateYAML(spec, names, nil)
@@ -196,8 +196,8 @@ func TestSecretReferences(t *testing.T) {
 
 	envVars := dep.Spec.Template.Spec.Containers[0].Env
 	wantSecrets := map[string]string{
-		"DB_PASSWORD": "secrets",
-		"RAILS_KEY":   "secrets",
+		"DB_PASSWORD": "web-secrets",
+		"RAILS_KEY":   "web-secrets",
 	}
 	found := make(map[string]bool)
 	for _, ev := range envVars {
@@ -247,10 +247,10 @@ func TestParseSecretRef_Alias(t *testing.T) {
 func TestSecretAliasInYAML(t *testing.T) {
 	names := mustNames(t)
 	spec := ServiceSpec{
-		Name:       "db",
-		Image:      "postgres:17",
-		Secrets:    []string{"POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB", "PLAIN_KEY"},
-		SecretName: "secrets",
+		Name:          "db",
+		Image:         "postgres:17",
+		SvcSecrets:    []string{"POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB", "PLAIN_KEY"},
+		SvcSecretName: "db-secrets",
 	}
 
 	yamlStr, _, err := GenerateYAML(spec, names, nil)

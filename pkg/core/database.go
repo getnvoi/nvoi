@@ -103,8 +103,8 @@ func DatabaseSQL(ctx context.Context, req DatabaseSQLRequest) (string, error) {
 	defer ssh.Close()
 
 	ns := names.KubeNamespace()
-	pod := req.DBName + "-db-0"
-	secretName := req.DBName + "-db-credentials"
+	pod := utils.DatabasePodName(req.DBName)
+	secretName := utils.DatabaseSecretName(req.DBName)
 	prefix := utils.ToUpperSnake(req.DBName)
 
 	var user, dbname, sqlCmd string
@@ -138,8 +138,8 @@ func DatabaseSQL(ctx context.Context, req DatabaseSQLRequest) (string, error) {
 
 func backupCreds(ctx context.Context, ssh utils.SSHClient, names *utils.Names, dbName string) (endpoint, bucket, accessKey, secretKey string, err error) {
 	ns := names.KubeNamespace()
-	bucketName := dbName + "-db-backups"
-	secretName := names.KubeSecrets()
+	bucketName := utils.DatabaseBackupBucket(dbName)
+	secretName := utils.DatabaseBackupCredsSecret(dbName)
 
 	storageKey := func(suffix string) string {
 		upper := utils.ToUpperSnake(bucketName)

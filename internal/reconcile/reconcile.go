@@ -14,8 +14,11 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err := ValidateConfig(cfg); err != nil {
 		return err
 	}
+	if err := cfg.Resolve(); err != nil {
+		return err
+	}
 
-	live, err := DescribeLive(ctx, dc)
+	live, err := DescribeLive(ctx, dc, cfg)
 	if err != nil {
 		return err
 	}
@@ -48,24 +51,30 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err := Build(ctx, dc, cfg); err != nil {
 		return err
 	}
-	if err := Secrets(ctx, dc, live, cfg, v); err != nil {
+	secretValues, err := Secrets(ctx, dc, live, cfg, v)
+	if err != nil {
 		return err
 	}
 
 	// Packages (database, etc.) — after volumes/secrets, before services.
-	// Returns env vars to inject into all app services and crons.
+	// Returns env vars available as $VAR resolution sources.
 	packageEnvVars, err := packages.ReconcileAll(ctx, dc, cfg)
 	if err != nil {
 		return err
 	}
 
-	if err := Storage(ctx, dc, live, cfg); err != nil {
+	storageCreds, err := Storage(ctx, dc, live, cfg)
+	if err != nil {
 		return err
 	}
-	if err := Services(ctx, dc, live, cfg, packageEnvVars); err != nil {
+
+	// Build unified sources for $VAR resolution and per-service secret storage.
+	sources := mergeSources(secretValues, packageEnvVars, storageCreds)
+
+	if err := Services(ctx, dc, live, cfg, sources); err != nil {
 		return err
 	}
-	if err := Crons(ctx, dc, live, cfg, packageEnvVars); err != nil {
+	if err := Crons(ctx, dc, live, cfg, sources); err != nil {
 		return err
 	}
 

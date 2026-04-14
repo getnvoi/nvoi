@@ -39,9 +39,9 @@ func RenderDescribe(res *pkgcore.DescribeResult) {
 	}
 
 	if len(res.Secrets) > 0 {
-		t = g.Add("SECRETS", "KEY", "VALUE")
+		t = g.Add("SECRETS", "KEY", "SERVICE")
 		for _, s := range res.Secrets {
-			t.Row(s.Key, s.Value)
+			t.Row(s.Key, s.Service)
 		}
 	}
 

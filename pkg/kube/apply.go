@@ -212,6 +212,16 @@ func DeleteSecretKey(ctx context.Context, ssh utils.SSHClient, ns, secretName, k
 	return nil
 }
 
+// DeleteSecret removes an entire k8s Secret by name.
+// Idempotent — succeeds if the secret doesn't exist.
+func DeleteSecret(ctx context.Context, ssh utils.SSHClient, ns, secretName string) error {
+	cmd := kctl(ns, fmt.Sprintf("delete secret %s --ignore-not-found", secretName))
+	if _, err := ssh.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("delete secret %s: %w", secretName, err)
+	}
+	return nil
+}
+
 // GetSecretValue returns the decoded value of a single key from a k8s Secret.
 func GetSecretValue(ctx context.Context, ssh utils.SSHClient, ns, secretName, key string) (string, error) {
 	cmd := kctl(ns, fmt.Sprintf(

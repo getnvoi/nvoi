@@ -17,10 +17,11 @@ Strict sequence. Each step depends on the previous:
 2. **Firewall** — apply port rules. No orphan concept (single resource, replaced in full).
 3. **Volumes** — create, attach, mount. Orphans unmounted and deleted.
 4. **Build** — build container images. No orphan concept (registry is append-only).
-5. **Secrets** — set from environment. Orphan keys removed from k8s secret.
-6. **Storage** — create buckets, store S3 credentials as k8s secrets. Orphan buckets emptied and deleted.
-7. **Services** — deploy workloads (Deployment or StatefulSet). Orphans deleted via kubectl. Last service triggers WaitRollout.
-8. **Crons** — deploy CronJobs. Orphans deleted via kubectl.
+5. **Secrets** — set from environment. Orphan keys removed from global k8s secret.
+6. **Packages** — database StatefulSets, headless Services, backup buckets, backup CronJobs. Returns env vars for $VAR resolution.
+7. **Storage** — create buckets, return S3 credentials. Orphan buckets emptied and deleted.
+8. **Services** — deploy workloads (Deployment or StatefulSet). Per-service k8s Secrets hold resolved secrets + storage creds. Orphans deleted via kubectl.
+9. **Crons** — deploy CronJobs. Per-cron k8s Secrets hold resolved secrets + storage creds. Orphans deleted via kubectl.
 9. **DNS** — create A records via DNS provider. Orphan records deleted.
 10. **Ingress** — deploy Caddy routes. Orphan routes removed from Caddyfile.
 
@@ -74,17 +75,20 @@ if live state exists:
 ### Secrets
 
 - Values resolved from viper (environment variables) at deploy time.
+- Bare names (no `=`) resolved from env. `$VAR` references on the right side of `=` also resolved from env — no bare declaration required first.
 - Missing secret in environment = hard error (fail-fast, not silent skip).
-- Secrets stored as keys in a single k8s Secret named `secrets` in the namespace.
-- Orphan keys (in live but not in config) are removed from the k8s secret.
+- Global secrets (`cfg.Secrets`) stored in a single k8s Secret named `secrets` in the namespace.
+- Per-service/cron secrets stored in `{name}-secrets` k8s Secrets (see Services/Crons below).
+- Orphan keys (in live but not in config) are removed from the global k8s secret.
 - `SecretSet` patches the k8s secret via JSON merge patch (uploaded as file, not inline — no shell injection).
 
 ### Storage
 
-- `StorageSet` creates the bucket at the provider, then stores 4 S3 credentials as k8s secrets (endpoint, access key, secret key, region).
+- `StorageSet` creates the bucket at the provider and returns 4 S3 credentials (endpoint, bucket, access key, secret key). It does NOT write to k8s — credentials flow into per-service/cron secrets via `mergeSources`.
 - CORS and lifecycle rules applied if configured.
-- Orphan buckets are emptied then deleted. Orphan credential secrets are removed.
-- `storage:` on a service expands to secret references for the 4 credential keys.
+- Orphan buckets are emptied then deleted. Package-managed buckets (database backups) are protected.
+- `storage:` on a service/cron expands credentials into the per-service k8s Secret.
+- `cfg.StorageNames()` is the single source of truth for what storage exists (user-declared + database backup buckets).
 
 ### Services
 
@@ -92,14 +96,18 @@ if live state exists:
 - `server:` pins to a node via `nodeSelector` on the k8s label `nvoi.io/role={server}`.
 - Volume mounts auto-pin the service to the volume's server (via `ResolveServer`).
 - Volume in mounts → StatefulSet. No volumes → Deployment.
-- **Caddy is never treated as an orphan.** Live services list may include `caddy` — it's a system service managed by ingress, not by the services reconciler.
+- **Per-service secrets:** each service gets a `{name}-secrets` k8s Secret holding resolved `secrets:` entries + expanded `storage:` credentials. Secrets with `$VAR` references resolve from unified sources (env vars, package env vars, storage creds).
+- **Orphan key cleanup:** keys in the per-service secret that are no longer declared are removed.
+- **Package-managed services** (database StatefulSets) are protected from orphan deletion via `db.ServiceName`.
 - WaitRollout runs on the **last** service only (all previous are deployed without waiting). Terminal states (`CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`) exit immediately with logs.
 - `ServiceDelete` removes the Deployment/StatefulSet AND the k8s Service by name.
 
 ### Crons
 
 - Same conventions as services: `image` or `build`, `server:` pinning, secret/storage/volume references.
+- Each cron gets a `{name}-secrets` k8s Secret (same pattern as services).
 - `schedule` is required (cron expression).
+- **Package-managed crons** (database backup CronJobs) are protected from orphan deletion via `db.BackupCronName`.
 - Orphan CronJobs deleted via kubectl.
 
 ### DNS

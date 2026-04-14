@@ -3,9 +3,11 @@ package main
 import (
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/getnvoi/nvoi/internal/api"
 	"github.com/getnvoi/nvoi/internal/api/handlers"
+	"github.com/getsentry/sentry-go"
 
 	// Compute
 	_ "github.com/getnvoi/nvoi/pkg/provider/compute/aws"
@@ -26,6 +28,14 @@ import (
 )
 
 func main() {
+	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
+		if err := sentry.Init(sentry.ClientOptions{Dsn: dsn}); err != nil {
+			slog.Warn("sentry init failed", "error", err)
+		} else {
+			defer sentry.Flush(2 * time.Second)
+		}
+	}
+
 	db, err := api.OpenDB()
 	if err != nil {
 		slog.Error("fatal", "error", err)
