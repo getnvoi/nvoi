@@ -173,7 +173,7 @@ domains:
 - Services/crons: image XOR build, referenced build/storage/volumes exist
 - Volume mounts: `name:/path` format, volume must be on same server as workload
 - `server` and `servers` mutually exclusive. Multiple servers + volume = error.
-- Web-facing services (with domains): replicas omitted → defaults to 2. Explicit `replicas: 1` → hard error.
+- Web-facing services (with domains): replicas omitted → defaults to 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid — the rule ensures process-level redundancy, not node distribution.
 - Database: kind required (postgres or mysql), image and volume required, storage provider required, name collisions checked.
 
 ## Commands
@@ -328,17 +328,19 @@ SSH errors: `ErrHostKeyChanged` and `ErrAuthFailed` surface immediately with gui
 ```
 Deploy(ctx, dc, cfg, viper)
   → ValidateConfig(cfg)              — includes package validation
-  → DescribeLive(ctx, dc) → LiveState
+  → cfg.Resolve()                    — populate VolumeDef.MountPath, DatabaseDef resolved names
+  → DescribeLive(ctx, dc, cfg) → LiveState
   → ServersAdd(ctx, dc, cfg)          — create desired, NO orphan removal yet
   → establish MasterSSH
   → Firewall(ctx, dc, live, cfg)
   → Volumes(ctx, dc, live, cfg)
   → Build(ctx, dc, cfg)
-  → Secrets(ctx, dc, live, cfg, v)
+  → Secrets(ctx, dc, live, cfg, v) → secretValues
   → packages.ReconcileAll(ctx, dc, cfg) → packageEnvVars
-  → Storage(ctx, dc, live, cfg)
-  → Services(ctx, dc, live, cfg, packageEnvVars)
-  → Crons(ctx, dc, live, cfg, packageEnvVars)
+  → Storage(ctx, dc, live, cfg) → storageCreds
+  → mergeSources(secretValues, packageEnvVars, storageCreds) → sources
+  → Services(ctx, dc, live, cfg, sources)
+  → Crons(ctx, dc, live, cfg, sources)
   → ServersRemoveOrphans(ctx, dc, live, cfg) — drain + delete AFTER workloads moved
   → DNS(ctx, dc, live, cfg)
   → Ingress(ctx, dc, live, cfg)
@@ -347,22 +349,27 @@ Deploy(ctx, dc, cfg, viper)
 ### Database package
 
 `database:` in config triggers the database package. Per database:
-1. Detect engine from image (postgres, mysql, mariadb)
-2. Read credentials from environment (required, no auto-generation)
-3. Store as k8s Secret
-4. Apply StatefulSet + headless Service
+1. Detect engine from image (postgres, mysql)
+2. Read credentials from `DeployContext.DatabaseCreds` (required, no auto-generation)
+3. Store as k8s Secret (`db.SecretName`)
+4. Apply StatefulSet + headless Service (HostPath = `db.VolumeMountPath`)
 5. Wait for readiness probe
-6. Create backup bucket
-7. Apply backup CronJob
-8. Return env vars for injection into all app services
+6. Create backup bucket (`db.BackupBucket`)
+7. Store backup bucket creds in per-cron secret (`db.BackupCredSecret`)
+8. Apply backup CronJob (`db.BackupCronName`)
+9. Return env vars as `$VAR` resolution sources for downstream services
 
-Env vars injected (for database named `main` with postgres):
+Env vars returned (for database named `main` with postgres):
 ```
 MAIN_DATABASE_URL, MAIN_POSTGRES_USER, MAIN_POSTGRES_PASSWORD,
 MAIN_POSTGRES_DB, MAIN_POSTGRES_HOST, MAIN_POSTGRES_PORT
 ```
 
-Package-managed resources (`main-db`, `main-db-backup`, `main-db-backups`) are protected from orphan detection in Services, Crons, and Storage reconcilers.
+Services consume these via `secrets:` with `$VAR` resolution (e.g. `DATABASE_URL=$MAIN_DATABASE_URL`). They are NOT auto-injected — services must explicitly declare them.
+
+All database resource names are resolved once in `config.Resolve()` from `pkg/utils/naming.go` functions. Consumers read `DatabaseDef` fields — never inline concatenation. See `internal/packages/database/CLAUDE.md` for the full naming table.
+
+Package-managed resources are protected from orphan detection via resolved fields: `db.ServiceName`, `db.BackupCronName`, `db.BackupBucket`.
 
 ### Server provisioning
 
@@ -412,7 +419,7 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 11. **`pkg/core/` never imports `net/http`.** HTTP calls belong in `infra/` or `provider/`.
 12. **Errors flow up, render once.** `pkg/core/` returns errors. Cobra renders via `Output.Error()`.
 13. **No shell injection.** Secret values via file upload, not inline interpolation.
-14. **Web-facing services require replicas >= 2.** Omitted defaults to 2, explicit 1 is a hard error.
+14. **Web-facing services require replicas >= 2.** Omitted defaults to 2, explicit 1 is a hard error. This ensures process-level redundancy — 2 replicas on a single `server:` node is valid (zero-downtime rolling updates).
 15. **Package-managed resources are protected from orphan detection.**
 16. **Database credentials are user-owned.** No auto-generation. Missing = hard error.
 18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) and API input (`validateDispatchInput`) are the only places that validate user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
