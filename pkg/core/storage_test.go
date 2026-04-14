@@ -80,15 +80,7 @@ func TestStorageDelete_StillRemovesSecretsWhenBucketAlreadyGone(t *testing.T) {
 		return bucket
 	})
 
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get secret secrets 2>/dev/null", Result: testutil.MockResult{}},
-			{Prefix: "get secret secrets -o jsonpath", Result: testutil.MockResult{
-				Output: []byte(`'{"STORAGE_ASSETS_ENDPOINT":"a","STORAGE_ASSETS_BUCKET":"b","STORAGE_ASSETS_ACCESS_KEY_ID":"c","STORAGE_ASSETS_SECRET_ACCESS_KEY":"d"}'`),
-			}},
-			{Prefix: "patch secret", Result: testutil.MockResult{}},
-		},
-	}
+	ssh := &testutil.MockSSH{}
 
 	err := StorageDelete(context.Background(), StorageDeleteRequest{
 		Cluster: testCluster(ssh),
@@ -96,12 +88,9 @@ func TestStorageDelete_StillRemovesSecretsWhenBucketAlreadyGone(t *testing.T) {
 		Name:    "assets",
 	})
 	if err == nil || err != utils.ErrNotFound {
-		t.Fatalf("StorageDelete should preserve already-gone signal after secret cleanup, got %v", err)
+		t.Fatalf("StorageDelete should return ErrNotFound when bucket already gone, got %v", err)
 	}
 	if len(bucket.deleted) != 1 {
 		t.Fatalf("expected bucket delete attempt, got %v", bucket.deleted)
-	}
-	if len(ssh.Calls) == 0 {
-		t.Fatal("expected cluster secret cleanup to still run")
 	}
 }

@@ -9,16 +9,23 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) error {
+func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) (map[string]string, error) {
+	allCreds := map[string]string{}
+
 	for _, name := range utils.SortedKeys(cfg.Storage) {
 		st := cfg.Storage[name]
-		if err := app.StorageSet(ctx, app.StorageSetRequest{
+		creds, err := app.StorageSet(ctx, app.StorageSetRequest{
 			Cluster: dc.Cluster, Storage: dc.Storage,
 			Name: name, Bucket: st.Bucket, CORS: st.CORS, ExpireDays: st.ExpireDays,
-		}); err != nil {
-			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range creds {
+			allCreds[k] = v
 		}
 	}
+
 	if live != nil {
 		desired := toSet(utils.SortedKeys(cfg.Storage))
 		protected := map[string]bool{}
@@ -39,5 +46,5 @@ func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 			}
 		}
 	}
-	return nil
+	return allCreds, nil
 }

@@ -15,7 +15,7 @@ import (
 func generateBackupCronJob(name string, engine Engine, image, ns string, names *utils.Names, dbSvcName, schedule string, retain int, bucketName string) string {
 	cronName := name + "-db-backup"
 	dbSecretName := name + "-db-credentials"
-	bucketSecretName := names.KubeSecrets()
+	bucketSecretName := names.KubeServiceSecrets(cronName)
 	prefix := strings.ToUpper(name)
 	storagePrefix := strings.ToUpper(bucketName)
 	storagePrefix = strings.ReplaceAll(storagePrefix, "-", "_")

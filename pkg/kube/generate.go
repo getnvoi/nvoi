@@ -64,8 +64,6 @@ type ServiceSpec struct {
 	Command       string
 	Replicas      int
 	Env           []corev1.EnvVar
-	Secrets       []string // global secret key references → env.valueFrom.secretKeyRef
-	SecretName    string   // global k8s Secret name (from names.KubeSecrets())
 	SvcSecrets    []string // per-service secret refs → env.valueFrom.secretKeyRef
 	SvcSecretName string   // per-service k8s Secret name ("{svc}-secrets")
 	Volumes       []string // "pgdata:/var/lib/postgresql/data"
@@ -85,18 +83,6 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 
 	// Container
 	envVars := append([]corev1.EnvVar{}, spec.Env...)
-	for _, ref := range spec.Secrets {
-		envName, secretKey := ParseSecretRef(ref)
-		envVars = append(envVars, corev1.EnvVar{
-			Name: envName,
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: spec.SecretName},
-					Key:                  secretKey,
-				},
-			},
-		})
-	}
 	for _, ref := range spec.SvcSecrets {
 		envName, secretKey := ParseSecretRef(ref)
 		envVars = append(envVars, corev1.EnvVar{

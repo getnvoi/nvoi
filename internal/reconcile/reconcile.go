@@ -54,19 +54,24 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	}
 
 	// Packages (database, etc.) — after volumes/secrets, before services.
-	// Returns env vars to inject into all app services and crons.
+	// Returns env vars available as $VAR resolution sources.
 	packageEnvVars, err := packages.ReconcileAll(ctx, dc, cfg)
 	if err != nil {
 		return err
 	}
 
-	if err := Storage(ctx, dc, live, cfg); err != nil {
+	storageCreds, err := Storage(ctx, dc, live, cfg)
+	if err != nil {
 		return err
 	}
-	if err := Services(ctx, dc, live, cfg, packageEnvVars, secretValues); err != nil {
+
+	// Build unified sources for $VAR resolution and per-service secret storage.
+	sources := mergeSources(secretValues, packageEnvVars, storageCreds)
+
+	if err := Services(ctx, dc, live, cfg, sources); err != nil {
 		return err
 	}
-	if err := Crons(ctx, dc, live, cfg, packageEnvVars, secretValues); err != nil {
+	if err := Crons(ctx, dc, live, cfg, sources); err != nil {
 		return err
 	}
 

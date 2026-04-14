@@ -11,6 +11,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/packages"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -152,13 +153,23 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	// Backup bucket
 	bucketName := name + "-db-backups"
 	out.Progress(fmt.Sprintf("ensuring backup bucket %s", bucketName))
-	if err := app.StorageSet(ctx, app.StorageSetRequest{
+	storageCreds, err := app.StorageSet(ctx, app.StorageSetRequest{
 		Cluster: dc.Cluster, Storage: dc.Storage,
 		Name: bucketName,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("backup bucket: %w", err)
 	}
 	out.Success(fmt.Sprintf("backup bucket %s", bucketName))
+
+	// Store storage credentials in the backup cron's per-service secret
+	cronName := name + "-db-backup"
+	cronSecretName := names.KubeServiceSecrets(cronName)
+	for k, v := range storageCreds {
+		if err := kube.UpsertSecretKey(ctx, ssh, ns, cronSecretName, k, v); err != nil {
+			return nil, fmt.Errorf("backup storage secret %s: %w", k, err)
+		}
+	}
 
 	// Backup CronJob
 	schedule := db.Backup.Schedule

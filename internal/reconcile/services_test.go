@@ -17,7 +17,7 @@ func TestServices_FreshDeploy(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sshContains(ssh, "replace", "apply") {
@@ -35,7 +35,7 @@ func TestServices_OrphanRemoved(t *testing.T) {
 	}
 	live := &config.LiveState{Services: []string{"web", "old-api"}}
 
-	if err := Services(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sshCallMatches(ssh, "old-api", "delete") {
@@ -53,7 +53,7 @@ func TestServices_AlreadyConverged(t *testing.T) {
 	}
 	live := &config.LiveState{Services: []string{"web"}}
 
-	if err := Services(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, call := range ssh.Calls {
@@ -73,7 +73,7 @@ func TestServices_CompleteReplacement(t *testing.T) {
 	}
 	live := &config.LiveState{Services: []string{"old-web", "old-worker"}}
 
-	if err := Services(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sshCallMatches(ssh, "old-web", "delete") {
@@ -97,7 +97,7 @@ func TestServices_DatabasePackageManagedNotOrphaned(t *testing.T) {
 	// It must NOT be deleted — it's protected.
 	live := &config.LiveState{Services: []string{"web", "main-db"}}
 
-	if err := Services(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sshCallMatches(ssh, "main-db", "delete") {
@@ -118,7 +118,7 @@ func TestServices_EveryServiceGetsRolloutWait(t *testing.T) {
 		},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -147,7 +147,7 @@ func TestServices_DatabaseProtected(t *testing.T) {
 	}
 	live := &config.LiveState{Services: []string{"web", "main-db", "stale-worker"}}
 
-	if err := Services(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sshCallMatches(ssh, "main-db", "delete") {
@@ -168,9 +168,9 @@ func TestServices_PerServiceSecretCreated(t *testing.T) {
 			"web": {Image: "nginx", Port: 80, Secrets: []string{"WEB_SECRET"}},
 		},
 	}
-	secretValues := map[string]string{"WEB_SECRET": "s3cret"}
+	sources := map[string]string{"WEB_SECRET": "s3cret"}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil, secretValues); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Should upsert WEB_SECRET into web-secrets k8s Secret
@@ -189,9 +189,9 @@ func TestServices_PerServiceSecretWithDollarVar(t *testing.T) {
 			"web": {Image: "nginx", Port: 80, Secrets: []string{"DATABASE_URL=$MAIN_DATABASE_URL"}},
 		},
 	}
-	packageEnvVars := map[string]string{"MAIN_DATABASE_URL": "postgresql://host/db"}
+	sources := map[string]string{"MAIN_DATABASE_URL": "postgresql://host/db"}
 
-	if err := Services(context.Background(), dc, nil, cfg, packageEnvVars, nil); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Resolved value should be upserted into web-secrets
@@ -210,9 +210,9 @@ func TestServices_PerServiceSecretComposed(t *testing.T) {
 			"web": {Image: "nginx", Port: 80, Secrets: []string{"CREATE_SUPERUSER=$DB_USER:$DB_PASS"}},
 		},
 	}
-	pkg := map[string]string{"DB_USER": "admin", "DB_PASS": "secret"}
+	sources := map[string]string{"DB_USER": "admin", "DB_PASS": "secret"}
 
-	if err := Services(context.Background(), dc, nil, cfg, pkg, nil); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !uploadContains(ssh, "admin:secret") {
@@ -230,9 +230,9 @@ func TestServices_PerServiceSecretAliasedWithDollar(t *testing.T) {
 			"web": {Image: "nginx", Port: 80, Secrets: []string{"SECRET_KEY=$BUGSINK_SECRET_KEY"}},
 		},
 	}
-	secretValues := map[string]string{"BUGSINK_SECRET_KEY": "keyval"}
+	sources := map[string]string{"BUGSINK_SECRET_KEY": "keyval"}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil, secretValues); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !uploadContains(ssh, "keyval") {
@@ -250,9 +250,9 @@ func TestServices_EnvWithDollarResolved(t *testing.T) {
 			"web": {Image: "nginx", Port: 80, Env: []string{"BASE_URL=https://$HOST/api"}},
 		},
 	}
-	pkg := map[string]string{"HOST": "example.com"}
+	sources := map[string]string{"HOST": "example.com"}
 
-	if err := Services(context.Background(), dc, nil, cfg, pkg, nil); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The resolved value should appear in the uploaded YAML manifest
@@ -272,7 +272,7 @@ func TestServices_EnvLiteral(t *testing.T) {
 		},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !uploadContains(ssh, "bar") {
@@ -289,7 +289,7 @@ func TestServices_NoSecretsDeletesPerServiceSecret(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// With no secrets: field, the per-service secret should be deleted
@@ -308,7 +308,7 @@ func TestServices_OrphanServiceDeletesItsSecret(t *testing.T) {
 	}
 	live := &config.LiveState{Services: []string{"web", "old-api"}}
 
-	if err := Services(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// old-api is orphaned — its per-service secret should be cleaned up
@@ -317,7 +317,35 @@ func TestServices_OrphanServiceDeletesItsSecret(t *testing.T) {
 	}
 }
 
-func TestServices_PackageEnvVarsAutoInjected(t *testing.T) {
+func TestServices_StorageCredsInPerServiceSecret(t *testing.T) {
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Storage:  map[string]config.StorageDef{"assets": {}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80, Storage: []string{"assets"}}},
+	}
+	sources := map[string]string{
+		"STORAGE_ASSETS_ENDPOINT":          "https://s3.example.com",
+		"STORAGE_ASSETS_BUCKET":            "nvoi-myapp-prod-assets",
+		"STORAGE_ASSETS_ACCESS_KEY_ID":     "AKID",
+		"STORAGE_ASSETS_SECRET_ACCESS_KEY": "SECRET",
+	}
+
+	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Storage credentials should be upserted into web-secrets
+	if !uploadContains(ssh, "AKID") {
+		t.Error("storage access key not in per-service secret")
+	}
+	if !uploadContains(ssh, "SECRET") {
+		t.Error("storage secret key not in per-service secret")
+	}
+}
+
+func TestServices_NoAutoInjection(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
 	cfg := &config.AppConfig{
@@ -325,13 +353,13 @@ func TestServices_PackageEnvVarsAutoInjected(t *testing.T) {
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
-	pkg := map[string]string{"MAIN_DATABASE_URL": "postgresql://host/db"}
+	sources := map[string]string{"MAIN_DATABASE_URL": "postgresql://host/db"}
 
-	if err := Services(context.Background(), dc, nil, cfg, pkg, nil); err != nil {
+	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Package env vars should be auto-injected as plain text (backward compat)
-	if !uploadContains(ssh, "MAIN_DATABASE_URL") {
-		t.Error("package env var not auto-injected")
+	// Source values should NOT be auto-injected if service doesn't reference them
+	if uploadContains(ssh, "MAIN_DATABASE_URL") {
+		t.Error("source values should not be auto-injected — service must declare them explicitly")
 	}
 }

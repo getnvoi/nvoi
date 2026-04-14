@@ -11,8 +11,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, packageEnvVars map[string]string, secretValues map[string]string) error {
-	sources := mergeSources(packageEnvVars, secretValues)
+func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, sources map[string]string) error {
 	names, _ := dc.Cluster.Names()
 
 	svcNames := utils.SortedKeys(cfg.Services)
@@ -37,16 +36,15 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			}
 			plainEnv = append(plainEnv, k+"="+v)
 		}
-		// Auto-inject package env vars (backward compat)
-		for k, v := range packageEnvVars {
-			plainEnv = append(plainEnv, k+"="+v)
-		}
 
 		// Resolve secrets: entries — stored in per-service k8s Secret
 		svcSecretKVs, svcSecretRefs, err := resolveSecretEntries(name, svc.Secrets, sources)
 		if err != nil {
 			return err
 		}
+
+		// Expand storage: into per-service secret entries
+		expandStorageCreds(svc.Storage, sources, svcSecretKVs, &svcSecretRefs)
 
 		// Upsert per-service secrets into k8s
 		if err := upsertServiceSecrets(ctx, dc, names, name, svcSecretKVs); err != nil {
@@ -56,7 +54,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		if err := app.ServiceSet(ctx, app.ServiceSetRequest{
 			Cluster: dc.Cluster, Name: name, Image: image,
 			Port: svc.Port, Command: svc.Command, Replicas: replicas,
-			EnvVars: plainEnv, Storages: svc.Storage,
+			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
 			Volumes:    svc.Volumes, HealthPath: svc.Health, Servers: servers,
 		}); err != nil {
@@ -86,7 +84,6 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 				if err := app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
 					dc.Cluster.Log().Warning(fmt.Sprintf("orphan service %s not removed: %s", name, err))
 				}
-				// Delete the orphan's per-service secret
 				deleteServiceSecret(ctx, dc, names, name)
 			}
 		}
@@ -117,6 +114,19 @@ func resolveSecretEntries(workload string, secrets []string, sources map[string]
 		refs = append(refs, envName)
 	}
 	return kvs, refs, nil
+}
+
+// expandStorageCreds adds storage credentials to the per-service secret
+// for each storage bucket declared on the service/cron.
+func expandStorageCreds(storageNames []string, sources map[string]string, kvs map[string]string, refs *[]string) {
+	for _, storageName := range storageNames {
+		for _, key := range app.StorageSecretKeys(storageName) {
+			if val, ok := sources[key]; ok {
+				kvs[key] = val
+				*refs = append(*refs, key)
+			}
+		}
+	}
 }
 
 // upsertServiceSecrets creates/updates the per-service k8s Secret and
@@ -176,13 +186,16 @@ func deleteServiceSecret(ctx context.Context, dc *config.DeployContext, names *u
 }
 
 // mergeSources builds a unified lookup map for $VAR resolution.
-func mergeSources(packageEnvVars, secretValues map[string]string) map[string]string {
-	sources := make(map[string]string, len(packageEnvVars)+len(secretValues))
-	for k, v := range secretValues {
-		sources[k] = v
+func mergeSources(maps ...map[string]string) map[string]string {
+	size := 0
+	for _, m := range maps {
+		size += len(m)
 	}
-	for k, v := range packageEnvVars {
-		sources[k] = v
+	sources := make(map[string]string, size)
+	for _, m := range maps {
+		for k, v := range m {
+			sources[k] = v
+		}
 	}
 	return sources
 }

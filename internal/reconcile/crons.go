@@ -9,8 +9,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, packageEnvVars map[string]string, secretValues map[string]string) error {
-	sources := mergeSources(packageEnvVars, secretValues)
+func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, sources map[string]string) error {
 	names, _ := dc.Cluster.Names()
 
 	cronNames := utils.SortedKeys(cfg.Crons)
@@ -31,9 +30,6 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 			}
 			plainEnv = append(plainEnv, k+"="+v)
 		}
-		for k, v := range packageEnvVars {
-			plainEnv = append(plainEnv, k+"="+v)
-		}
 
 		// Resolve secrets: entries — stored in per-cron k8s Secret
 		svcSecretKVs, svcSecretRefs, err := resolveSecretEntries(name, cron.Secrets, sources)
@@ -41,16 +37,20 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 			return err
 		}
 
+		// Expand storage: into per-cron secret entries
+		expandStorageCreds(cron.Storage, sources, svcSecretKVs, &svcSecretRefs)
+
 		if err := upsertServiceSecrets(ctx, dc, names, name, svcSecretKVs); err != nil {
 			return err
 		}
 
 		if err := app.CronSet(ctx, app.CronSetRequest{
 			Cluster: dc.Cluster, Name: name, Image: image,
-			Command: cron.Command, EnvVars: plainEnv,
+			Command:    cron.Command,
+			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
-			Storages:   cron.Storage, Volumes: cron.Volumes,
-			Schedule: cron.Schedule, Servers: servers,
+			Volumes:    cron.Volumes,
+			Schedule:   cron.Schedule, Servers: servers,
 		}); err != nil {
 			return err
 		}

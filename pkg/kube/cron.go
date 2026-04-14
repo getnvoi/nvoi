@@ -21,8 +21,6 @@ type CronSpec struct {
 	Image         string
 	Command       string
 	Env           []corev1.EnvVar
-	Secrets       []string
-	SecretName    string
 	SvcSecrets    []string // per-cron secret refs
 	SvcSecretName string   // per-cron k8s Secret name ("{cron}-secrets")
 	Volumes       []string
@@ -38,18 +36,6 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 	}
 
 	envVars := append([]corev1.EnvVar{}, spec.Env...)
-	for _, ref := range spec.Secrets {
-		envName, secretKey := ParseSecretRef(ref)
-		envVars = append(envVars, corev1.EnvVar{
-			Name: envName,
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: spec.SecretName},
-					Key:                  secretKey,
-				},
-			},
-		})
-	}
 	for _, ref := range spec.SvcSecrets {
 		envName, secretKey := ParseSecretRef(ref)
 		envVars = append(envVars, corev1.EnvVar{

@@ -16,7 +16,7 @@ func TestCrons_FreshDeploy(t *testing.T) {
 		Crons:   map[string]config.CronDef{"cleanup": {Image: "busybox", Schedule: "0 * * * *", Command: "echo hi"}},
 	}
 
-	if err := Crons(context.Background(), dc, nil, cfg, nil, nil); err != nil {
+	if err := Crons(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sshContains(ssh, "replace", "apply") {
@@ -34,7 +34,7 @@ func TestCrons_OrphanRemoved(t *testing.T) {
 	}
 	live := &config.LiveState{Crons: []string{"cleanup", "old-job"}}
 
-	if err := Crons(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !sshCallMatches(ssh, "old-job", "delete") {
@@ -52,7 +52,7 @@ func TestCrons_AlreadyConverged(t *testing.T) {
 	}
 	live := &config.LiveState{Crons: []string{"cleanup"}}
 
-	if err := Crons(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sshCallMatches(ssh, "cleanup", "delete cronjob") {
@@ -72,7 +72,7 @@ func TestCrons_DatabaseBackupNotOrphaned(t *testing.T) {
 	// main-db-backup created by database package, not in cfg.Crons
 	live := &config.LiveState{Crons: []string{"cleanup", "main-db-backup", "stale-job"}}
 
-	if err := Crons(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sshCallMatches(ssh, "main-db-backup", "delete") {
@@ -96,7 +96,7 @@ func TestCrons_MultipleDatabasesProtected(t *testing.T) {
 	}
 	live := &config.LiveState{Crons: []string{"main-db-backup", "analytics-db-backup", "orphan-job"}}
 
-	if err := Crons(context.Background(), dc, live, cfg, nil, nil); err != nil {
+	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sshCallMatches(ssh, "main-db-backup", "delete") {

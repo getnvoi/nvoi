@@ -16,7 +16,7 @@ func TestStorage_FreshDeploy(t *testing.T) {
 		Storage: map[string]config.StorageDef{"assets": {CORS: true}},
 	}
 
-	err := Storage(context.Background(), dc, nil, cfg)
+	_, err := Storage(context.Background(), dc, nil, cfg)
 	if err == nil {
 		t.Fatal("expected error (no bucket provider registered)")
 	}
@@ -26,9 +26,12 @@ func TestStorage_NoStorage(t *testing.T) {
 	dc := testDC(convergeMock())
 	cfg := &config.AppConfig{}
 
-	err := Storage(context.Background(), dc, nil, cfg)
+	creds, err := Storage(context.Background(), dc, nil, cfg)
 	if err != nil {
 		t.Fatalf("no storage should be a no-op, got: %v", err)
+	}
+	if len(creds) != 0 {
+		t.Errorf("expected empty creds, got %v", creds)
 	}
 }
 
@@ -43,7 +46,7 @@ func TestStorage_OrphanDetected(t *testing.T) {
 
 	// Set fails (no bucket provider). Orphan "old-uploads" detected, delete also fails.
 	// No panic expected.
-	_ = Storage(context.Background(), dc, live, cfg)
+	_, _ = Storage(context.Background(), dc, live, cfg)
 }
 
 func TestStorage_AlreadyConverged(t *testing.T) {
@@ -56,5 +59,5 @@ func TestStorage_AlreadyConverged(t *testing.T) {
 	live := &config.LiveState{Storage: []string{"assets"}}
 
 	// Set fails (no bucket provider), but no orphans to delete.
-	_ = Storage(context.Background(), dc, live, cfg)
+	_, _ = Storage(context.Background(), dc, live, cfg)
 }
