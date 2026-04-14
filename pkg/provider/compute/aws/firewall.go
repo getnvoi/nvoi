@@ -267,6 +267,34 @@ func (c *Client) GetFirewallRules(ctx context.Context, name string) (provider.Po
 	return result, nil
 }
 
+// reconcileServerFirewall ensures an existing instance is in the correct security group.
+func (c *Client) reconcileServerFirewall(ctx context.Context, inst *ec2types.Instance, req provider.CreateServerRequest) error {
+	vpcID := deref(inst.VpcId)
+	sg, err := c.findSecurityGroupByName(ctx, req.FirewallName, vpcID)
+	if err != nil {
+		return err
+	}
+	if sg == nil {
+		// Firewall doesn't exist yet — will be created by ReconcileFirewallRules
+		return nil
+	}
+	desiredSGID := deref(sg.GroupId)
+
+	// Check if already on the right SG
+	for _, attached := range inst.SecurityGroups {
+		if deref(attached.GroupId) == desiredSGID && len(inst.SecurityGroups) == 1 {
+			return nil // already correct, sole SG
+		}
+	}
+
+	// Reassign to desired SG only
+	_, err = c.ec2.ModifyInstanceAttribute(ctx, &ec2.ModifyInstanceAttributeInput{
+		InstanceId: aws.String(deref(inst.InstanceId)),
+		Groups:     []string{desiredSGID},
+	})
+	return err
+}
+
 // ── Firewall helpers ──────────────────────────────────────────────────────────
 
 func permissionForCIDRs(protocol string, port int32, cidrs []string) ec2types.IpPermission {

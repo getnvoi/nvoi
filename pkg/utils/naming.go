@@ -43,8 +43,16 @@ func (n *Names) Env() string { return n.env }
 
 // ── Infrastructure names ───────────────────────────────────────────────────────
 
-func (n *Names) Base() string              { return fmt.Sprintf("nvoi-%s-%s", n.app, n.env) }
-func (n *Names) Firewall() string          { return n.Base() + "-fw" }
+func (n *Names) Base() string           { return fmt.Sprintf("nvoi-%s-%s", n.app, n.env) }
+func (n *Names) Firewall() string       { return n.Base() + "-fw" } // legacy — do not use for new code
+func (n *Names) MasterFirewall() string { return n.Base() + "-master-fw" }
+func (n *Names) WorkerFirewall() string { return n.Base() + "-worker-fw" }
+func (n *Names) FirewallForRole(role string) string {
+	if role == RoleMaster {
+		return n.MasterFirewall()
+	}
+	return n.WorkerFirewall()
+}
 func (n *Names) Network() string           { return n.Base() + "-net" }
 func (n *Names) Server(key string) string  { return fmt.Sprintf("%s-%s", n.Base(), key) }
 func (n *Names) Stack() string             { return n.Base() }

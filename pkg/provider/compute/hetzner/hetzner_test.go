@@ -94,8 +94,8 @@ func TestListServersWithLabels(t *testing.T) {
 
 func TestEnsureServer_AlreadyExists(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// getServerByName is called with GET /servers?name=existing-server
-		if r.Method == "GET" && contains(r.URL.String(), "/servers") {
+		// getServerByName — GET /servers?name=existing-server
+		if r.Method == "GET" && contains(r.URL.String(), "/servers?name=") {
 			json.NewEncoder(w).Encode(map[string]any{
 				"servers": []map[string]any{
 					{
@@ -103,11 +103,31 @@ func TestEnsureServer_AlreadyExists(t *testing.T) {
 						"name":   "existing-server",
 						"status": "running",
 						"public_net": map[string]any{
-							"ipv4": map[string]string{"ip": "5.6.7.8"},
-							"ipv6": map[string]string{"ip": ""},
+							"ipv4":      map[string]string{"ip": "5.6.7.8"},
+							"ipv6":      map[string]string{"ip": ""},
+							"firewalls": []map[string]any{{"id": 50}},
 						},
 						"private_net": []map[string]string{},
 					},
+				},
+			})
+			return
+		}
+		// ensureFirewall — GET /firewalls?name=...
+		if r.Method == "GET" && contains(r.URL.String(), "/firewalls") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"firewalls": []map[string]any{{"id": 50, "name": "nvoi-test-dev-fw"}},
+			})
+			return
+		}
+		// getServerAttachments — GET /servers/42
+		if r.Method == "GET" && contains(r.URL.Path, "/servers/42") {
+			json.NewEncoder(w).Encode(map[string]any{
+				"server": map[string]any{
+					"public_net": map[string]any{
+						"firewalls": []map[string]any{{"id": 50}},
+					},
+					"volumes": []int64{},
 				},
 			})
 			return

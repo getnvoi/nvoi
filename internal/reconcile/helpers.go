@@ -37,6 +37,7 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		return nil, fmt.Errorf("servers exist but cluster state unreadable — cannot detect orphans: %w", err)
 	}
 	volumes, _ := app.VolumeList(ctx, app.VolumeListRequest{Cluster: dc.Cluster})
+	firewalls, _ := app.FirewallListAll(ctx, app.FirewallListAllRequest{Cluster: dc.Cluster})
 
 	names, _ := dc.Cluster.Names()
 	prefix := names.Base() + "-"
@@ -78,6 +79,11 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	for _, s := range res.Storage {
 		state.Storage = append(state.Storage, s.Name)
 	}
+	for _, fw := range firewalls {
+		if len(fw.Name) > len(prefix) && fw.Name[:len(prefix)] == prefix {
+			state.Firewalls = append(state.Firewalls, fw.Name)
+		}
+	}
 	// Secrets no longer tracked in live state — per-service secrets
 	// are managed by the Services/Crons reconcilers directly.
 	for _, i := range res.Ingress {
@@ -86,6 +92,7 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 
 	// Sort all lists for deterministic output and safe positional comparison.
 	sort.Strings(state.Servers)
+	sort.Strings(state.Firewalls)
 	sort.Strings(state.Services)
 	sort.Strings(state.Crons)
 	sort.Strings(state.Volumes)

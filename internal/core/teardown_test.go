@@ -224,9 +224,12 @@ func setupTeardown(log *opLog) *config.DeployContext {
 			{ID: "1", Name: n.Server("master"), IPv4: "1.2.3.4"},
 			{ID: "2", Name: n.Server("worker"), IPv4: "5.6.7.8"},
 		},
-		volumes:   []*provider.Volume{{ID: "1", Name: n.Volume("pgdata")}},
-		firewalls: []*provider.Firewall{{ID: "1", Name: n.Firewall()}},
-		networks:  []*provider.Network{{ID: "1", Name: n.Network()}},
+		volumes: []*provider.Volume{{ID: "1", Name: n.Volume("pgdata")}},
+		firewalls: []*provider.Firewall{
+			{ID: "1", Name: n.MasterFirewall()},
+			{ID: "2", Name: n.WorkerFirewall()},
+		},
+		networks: []*provider.Network{{ID: "1", Name: n.Network()}},
 	}
 	activeDNS = &trackingDNS{log: log}
 	activeBucket = &trackingBucket{log: log}
@@ -250,7 +253,7 @@ func setupTeardown(log *opLog) *config.DeployContext {
 }
 
 func fullConfig() *config.AppConfig {
-	return &config.AppConfig{
+	cfg := &config.AppConfig{
 		App: "myapp",
 		Env: "prod",
 		Servers: map[string]config.ServerDef{
@@ -275,6 +278,8 @@ func fullConfig() *config.AppConfig {
 			"web": {"myapp.com", "www.myapp.com"},
 		},
 	}
+	cfg.Resolve()
+	return cfg
 }
 
 func names() *utils.Names {
@@ -466,8 +471,8 @@ func TestTeardown_FirewallAndNetworkAlwaysDeleted(t *testing.T) {
 	n := names()
 	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
-	if !log.has("delete-firewall:" + n.Firewall()) {
-		t.Errorf("firewall %q not deleted", n.Firewall())
+	if !log.has("delete-firewall:" + n.MasterFirewall()) {
+		t.Errorf("firewall %q not deleted", n.MasterFirewall())
 	}
 	if !log.has("delete-network:" + n.Network()) {
 		t.Errorf("network %q not deleted", n.Network())
@@ -481,7 +486,7 @@ func TestTeardown_FirewallAndNetworkAfterAllServers(t *testing.T) {
 	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
 	masterIdx := log.indexOf("delete-server:" + n.Server("master"))
-	fwIdx := log.indexOf("delete-firewall:" + n.Firewall())
+	fwIdx := log.indexOf("delete-firewall:" + n.MasterFirewall())
 	netIdx := log.indexOf("delete-network:" + n.Network())
 
 	if fwIdx <= masterIdx {
@@ -497,11 +502,11 @@ func TestTeardown_FirewallErrorDoesNotBlockNetwork(t *testing.T) {
 	dc := setupTeardown(log)
 	n := names()
 
-	log.errors["delete-firewall:"+n.Firewall()] = fmt.Errorf("firewall stuck")
+	log.errors["delete-firewall:"+n.MasterFirewall()] = fmt.Errorf("firewall stuck")
 
 	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
-	if !log.has("delete-firewall:" + n.Firewall()) {
+	if !log.has("delete-firewall:" + n.MasterFirewall()) {
 		t.Error("firewall delete not attempted")
 	}
 	if !log.has("delete-network:" + n.Network()) {
@@ -520,7 +525,7 @@ func TestTeardown_EmptyConfig_StillDeletesFirewallAndNetwork(t *testing.T) {
 
 	_ = Teardown(context.Background(), dc, cfg, true, true)
 
-	if !log.has("delete-firewall:" + n.Firewall()) {
+	if !log.has("delete-firewall:" + n.MasterFirewall()) {
 		t.Error("firewall not deleted on empty config")
 	}
 	if !log.has("delete-network:" + n.Network()) {
@@ -695,14 +700,14 @@ func TestTeardown_ErrorsNeverPropagate(t *testing.T) {
 	// Inject errors everywhere
 	log.errors["delete-dns:myapp.com"] = fmt.Errorf("dns timeout")
 	log.errors["delete-server:"+n.Server("worker")] = fmt.Errorf("api 500")
-	log.errors["delete-firewall:"+n.Firewall()] = fmt.Errorf("firewall locked")
+	log.errors["delete-firewall:"+n.MasterFirewall()] = fmt.Errorf("firewall locked")
 
 	err := Teardown(context.Background(), dc, fullConfig(), true, true)
 	if err == nil {
 		t.Fatal("teardown should report errors, not swallow them")
 	}
 	// Best-effort: all operations still attempted despite errors.
-	if !log.has("delete-firewall:" + n.Firewall()) {
+	if !log.has("delete-firewall:" + n.MasterFirewall()) {
 		t.Error("firewall should still be attempted after DNS error")
 	}
 	if !log.has("delete-network:" + n.Network()) {
@@ -719,7 +724,7 @@ func TestTeardown_ServerErrorDoesNotBlockFirewall(t *testing.T) {
 
 	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
-	if !log.has("delete-firewall:" + n.Firewall()) {
+	if !log.has("delete-firewall:" + n.MasterFirewall()) {
 		t.Error("firewall not deleted after server error")
 	}
 	if !log.has("delete-network:" + n.Network()) {
@@ -815,7 +820,7 @@ func TestTeardown_FullOrderDNS_Storage_Volumes_Workers_Masters_Firewall_Network(
 	vol := log.indexOf("delete-volume:" + n.Volume("pgdata"))
 	worker := log.indexOf("delete-server:" + n.Server("worker"))
 	master := log.indexOf("delete-server:" + n.Server("master"))
-	fw := log.indexOf("delete-firewall:" + n.Firewall())
+	fw := log.indexOf("delete-firewall:" + n.MasterFirewall())
 	net := log.indexOf("delete-network:" + n.Network())
 
 	for label, idx := range map[string]int{

@@ -280,6 +280,40 @@ func (c *Client) ReconcileFirewallRules(ctx context.Context, name string, allowe
 	return nil
 }
 
+// reconcileServerFirewall ensures an existing server is on the correct security group.
+func (c *Client) reconcileServerFirewall(ctx context.Context, serverID string, req provider.CreateServerRequest) error {
+	if req.FirewallName == "" {
+		return nil
+	}
+	fw, err := c.getFirewallByName(ctx, req.FirewallName)
+	if err != nil {
+		return err
+	}
+	if fw == nil {
+		return nil // firewall doesn't exist yet — will be created by ReconcileFirewallRules
+	}
+
+	// Check if server is already on this SG
+	var resp struct {
+		Server struct {
+			SecurityGroup struct {
+				ID string `json:"id"`
+			} `json:"security_group"`
+		} `json:"server"`
+	}
+	if err := c.doInstance(ctx, "GET", fmt.Sprintf("/servers/%s", serverID), nil, &resp); err != nil {
+		return err
+	}
+	if resp.Server.SecurityGroup.ID == fw.ID {
+		return nil // already correct
+	}
+
+	// Reassign to correct SG
+	return c.doInstance(ctx, "PATCH", fmt.Sprintf("/servers/%s", serverID), map[string]any{
+		"security_group": map[string]any{"id": fw.ID},
+	}, nil)
+}
+
 // GetFirewallRules returns the current public port rules on the named security group.
 func (c *Client) GetFirewallRules(ctx context.Context, name string) (provider.PortAllowList, error) {
 	fw, err := c.getFirewallByName(ctx, name)
