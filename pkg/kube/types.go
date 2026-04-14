@@ -78,8 +78,9 @@ type ContainerStateWaiting struct {
 
 // ContainerStateTerminated is the terminated state detail.
 type ContainerStateTerminated struct {
-	Reason  string `json:"reason"`
-	Message string `json:"message"`
+	ExitCode int    `json:"exitCode"`
+	Reason   string `json:"reason"`
+	Message  string `json:"message"`
 }
 
 // PodList is the JSON shape for kubectl get pods -o json.

@@ -111,11 +111,23 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 				}
 				if cs.State.Terminated != nil {
 					reason := cs.State.Terminated.Reason
-					if reason == "OOMKilled" {
+					exitCode := cs.State.Terminated.ExitCode
+					switch reason {
+					case "OOMKilled":
 						return false, fmt.Errorf("%s: OOMKilled — container ran out of memory", name)
-					}
-					if reason != "" {
-						states = append(states, reason)
+					case "Error", "":
+						// Container exited with non-zero. If it has restarted,
+						// fail fast with logs instead of waiting for CrashLoopBackOff.
+						if cs.RestartCount > 0 {
+							logs := RecentLogs(ctx, ssh, ns, name, kind, 30)
+							return false, fmt.Errorf("%s: container exited with code %d (restarts: %d)\nlogs:\n%s",
+								name, exitCode, cs.RestartCount, indent(logs, "  "))
+						}
+						states = append(states, fmt.Sprintf("Error (exit %d)", exitCode))
+					default:
+						if reason != "" {
+							states = append(states, reason)
+						}
 					}
 				}
 			}

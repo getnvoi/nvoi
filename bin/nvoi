@@ -23,6 +23,7 @@ fi
 if (( needs_build )); then
   mkdir -p "$BIN_DIR"
   go build -o "$BIN_PATH" ./cmd/cli
+  chmod +x "$BIN_PATH"
 fi
 
 exec "$BIN_PATH" --local "$@"
