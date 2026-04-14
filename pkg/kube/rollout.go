@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +27,9 @@ type ProgressEmitter interface {
 // rolloutPollInterval is the interval between readiness polls.
 var rolloutPollInterval = 3 * time.Second
 
+// rolloutTimeout is the maximum time to wait for all pods to become ready.
+var rolloutTimeout = 5 * time.Minute
+
 // stabilityDelay is the pause between "all ready" and the verification poll.
 var stabilityDelay = 4 * time.Second
 
@@ -43,7 +47,7 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 	// that happen after the pod briefly reaches Ready.
 	initialRestarts := map[string]int{}
 
-	err := utils.Poll(ctx, rolloutPollInterval, 5*time.Minute, func() (bool, error) {
+	err := utils.Poll(ctx, rolloutPollInterval, rolloutTimeout, func() (bool, error) {
 		cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
 		out, err := ssh.Run(ctx, cmd)
 		if err != nil {
@@ -73,6 +77,7 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 		ready := 0
 		total := len(pods.Items)
 		var states []string
+		var probeFailPod string
 
 		for _, pod := range pods.Items {
 			// Check for unschedulable — terminal
@@ -130,6 +135,13 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 						}
 					}
 				}
+				// Running but not Ready = readiness probe failing
+				if cs.State.Running != nil {
+					if probeFailPod == "" {
+						probeFailPod = pod.Metadata.Name
+					}
+					states = append(states, "probe failing")
+				}
 			}
 
 			if pod.Status.Phase == "Running" {
@@ -147,6 +159,19 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 			}
 		}
 
+		// Enrich "probe failing" with the actual error from pod events.
+		// Event messages naturally vary → status string changes → reprints.
+		if probeFailPod != "" {
+			if detail := probeFailureDetail(ctx, ssh, ns, probeFailPod); detail != "" {
+				for i, s := range states {
+					if s == "probe failing" {
+						states[i] = "probe failing: " + detail
+						break
+					}
+				}
+			}
+		}
+
 		// Build status line, print only on change
 		status := fmt.Sprintf("%d/%d ready", ready, total)
 		if len(states) > 0 {
@@ -159,6 +184,9 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 
 		return ready == total, nil
 	})
+	if errors.Is(err, utils.ErrTimeout) {
+		return timeoutDiagnostics(ctx, ssh, ns, name, kind, selector, lastStatus)
+	}
 	if err != nil {
 		return err
 	}
@@ -259,6 +287,25 @@ func RecentLogs(ctx context.Context, ssh utils.SSHClient, ns, name, kind string,
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// probeFailureDetail fetches the latest Warning event for a pod and returns
+// its message, truncated for single-line status display.
+func probeFailureDetail(ctx context.Context, ssh utils.SSHClient, ns, podName string) string {
+	events := recentEvents(ctx, ssh, ns, podName)
+	for _, ev := range events {
+		if ev.Message != "" {
+			return truncate(ev.Message, 80)
+		}
+	}
+	return ""
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 func dedup(ss []string) []string {

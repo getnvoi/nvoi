@@ -15,6 +15,7 @@ import (
 type DescribeRequest struct {
 	Cluster
 	StorageNames []string // from cfg — config is the source of truth
+	SecretNames  []string // from cfg — config knows what secrets exist
 }
 
 type DescribeNode struct {
@@ -132,14 +133,9 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		})
 	}
 
-	// Secrets (from global k8s Secret — user-declared secrets only)
-	keys, err := kube.ListSecretKeys(ctx, ssh, ns, names.KubeSecrets())
-	if err == nil {
-		secretName := names.KubeSecrets()
-		for _, k := range keys {
-			val, _ := kube.GetSecretValue(ctx, ssh, ns, secretName, k)
-			result.Secrets = append(result.Secrets, DescribeSecret{Key: k, Value: utils.Obfuscate(val)})
-		}
+	// Secrets — derived from config, not from scanning k8s secrets
+	for _, key := range req.SecretNames {
+		result.Secrets = append(result.Secrets, DescribeSecret{Key: key, Value: "(configured)"})
 	}
 
 	return result, nil
@@ -168,7 +164,7 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 		{"pods", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "pods", sel) }},
 		{"services", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "services", sel) }},
 		{"cronjobs", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "cronjobs", sel) }},
-		{"secrets", func() ([]byte, error) { return kube.GetNamedJSON(ctx, ssh, ns, "secret", names.KubeSecrets()) }},
+		// Global "secrets" k8s Secret no longer exists — secrets live in per-service secrets only.
 		{"ingresses", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "ingresses", kube.NvoiSelector) }},
 	}
 

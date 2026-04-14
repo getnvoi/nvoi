@@ -9,8 +9,7 @@ import (
 )
 
 func TestSecrets_FreshDeploy(t *testing.T) {
-	ssh := convergeMock()
-	dc := testDC(ssh)
+	dc := testDC(convergeMock())
 	cfg := &config.AppConfig{Secrets: []string{"DB_PASS", "API_KEY"}}
 	v := testViper("DB_PASS", "s3cret", "API_KEY", "key123")
 
@@ -18,32 +17,32 @@ func TestSecrets_FreshDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !uploadContains(ssh, "DB_PASS") {
-		t.Error("DB_PASS not set")
-	}
-	if !uploadContains(ssh, "API_KEY") {
-		t.Error("API_KEY not set")
-	}
 	if vals["DB_PASS"] != "s3cret" {
-		t.Errorf("expected DB_PASS=s3cret, got %q", vals["DB_PASS"])
+		t.Errorf("DB_PASS = %q, want s3cret", vals["DB_PASS"])
 	}
 	if vals["API_KEY"] != "key123" {
-		t.Errorf("expected API_KEY=key123, got %q", vals["API_KEY"])
+		t.Errorf("API_KEY = %q, want key123", vals["API_KEY"])
 	}
 }
 
-func TestSecrets_OrphanRemoved(t *testing.T) {
+func TestSecrets_ReturnsValues_NoK8sWrite(t *testing.T) {
+	// Secrets() no longer writes to the global k8s Secret.
+	// It only reads from viper and returns the map.
 	ssh := convergeMock()
 	dc := testDC(ssh)
-	live := &config.LiveState{Secrets: []string{"DB_PASS", "STALE_KEY"}}
 	cfg := &config.AppConfig{Secrets: []string{"DB_PASS"}}
 	v := testViper("DB_PASS", "s3cret")
 
-	if _, err := Secrets(context.Background(), dc, live, cfg, v); err != nil {
+	vals, err := Secrets(context.Background(), dc, nil, cfg, v)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !uploadContains(ssh, "DB_PASS") {
-		t.Error("DB_PASS not set")
+	if vals["DB_PASS"] != "s3cret" {
+		t.Errorf("DB_PASS = %q, want s3cret", vals["DB_PASS"])
+	}
+	// No SSH calls should have been made — Secrets() no longer touches k8s
+	if len(ssh.Calls) > 0 {
+		t.Errorf("Secrets() should not make SSH calls, got: %v", ssh.Calls)
 	}
 }
 
@@ -58,23 +57,22 @@ func TestSecrets_MissingFromEnv(t *testing.T) {
 }
 
 func TestSecrets_AlreadyConverged(t *testing.T) {
-	ssh := convergeMock()
-	dc := testDC(ssh)
+	dc := testDC(convergeMock())
 	live := &config.LiveState{Secrets: []string{"DB_PASS"}}
 	cfg := &config.AppConfig{Secrets: []string{"DB_PASS"}}
 	v := testViper("DB_PASS", "s3cret")
 
-	if _, err := Secrets(context.Background(), dc, live, cfg, v); err != nil {
+	vals, err := Secrets(context.Background(), dc, live, cfg, v)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !uploadContains(ssh, "DB_PASS") {
-		t.Error("DB_PASS should still be set (idempotent)")
+	if vals["DB_PASS"] != "s3cret" {
+		t.Errorf("DB_PASS = %q, want s3cret (idempotent)", vals["DB_PASS"])
 	}
 }
 
 func TestSecrets_CollectsPerServiceKeys(t *testing.T) {
-	ssh := convergeMock()
-	dc := testDC(ssh)
+	dc := testDC(convergeMock())
 	cfg := &config.AppConfig{
 		Services: map[string]config.ServiceDef{
 			"web": {Image: "nginx", Secrets: []string{"WEB_SECRET"}},
@@ -92,15 +90,12 @@ func TestSecrets_CollectsPerServiceKeys(t *testing.T) {
 }
 
 func TestSecrets_SkipsEntriesWithEquals(t *testing.T) {
-	// Entries with = always have $ (enforced by validation).
-	// They resolve from sources later, not from viper.
-	ssh := convergeMock()
-	dc := testDC(ssh)
+	dc := testDC(convergeMock())
 	cfg := &config.AppConfig{
 		Services: map[string]config.ServiceDef{
 			"web": {Image: "nginx", Secrets: []string{
-				"DATABASE_URL=$MAIN_DATABASE_URL", // has = → skipped in viper collection
-				"PLAIN_KEY",                       // bare → read from viper
+				"DATABASE_URL=$MAIN_DATABASE_URL",
+				"PLAIN_KEY",
 			}},
 		},
 	}
@@ -113,7 +108,6 @@ func TestSecrets_SkipsEntriesWithEquals(t *testing.T) {
 	if vals["PLAIN_KEY"] != "plainval" {
 		t.Errorf("expected PLAIN_KEY=plainval, got %q", vals["PLAIN_KEY"])
 	}
-	// Entries with = should NOT be collected from viper
 	if _, ok := vals["MAIN_DATABASE_URL"]; ok {
 		t.Error("entry with = should not be collected from viper")
 	}
@@ -123,8 +117,6 @@ func TestSecrets_SkipsEntriesWithEquals(t *testing.T) {
 }
 
 func TestSecrets_MissingPerServiceKey_SkippedAtCollection(t *testing.T) {
-	// Per-service bare keys missing from viper are skipped — they may come
-	// from packages/storage. The error surfaces at resolution time.
 	dc := testDC(convergeMock())
 	cfg := &config.AppConfig{
 		Services: map[string]config.ServiceDef{
@@ -142,7 +134,6 @@ func TestSecrets_MissingPerServiceKey_SkippedAtCollection(t *testing.T) {
 }
 
 func TestSecrets_MissingGlobalKey_Errors(t *testing.T) {
-	// Global secrets MUST be in viper — they have no other source.
 	dc := testDC(convergeMock())
 	cfg := &config.AppConfig{
 		Secrets: []string{"GLOBAL_MISSING"},

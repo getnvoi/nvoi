@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/viper"
 )
 
@@ -49,11 +48,10 @@ func collectSecretKeys(cfg *config.AppConfig) []string {
 	return keys
 }
 
-// Secrets reconciles the global k8s Secret, reads available secret values
-// from viper, and returns them for downstream $VAR resolution.
-// Keys not found in viper are skipped — they may be provided later by
-// packages or storage. Completeness is validated at resolution time.
-func Secrets(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, v *viper.Viper) (map[string]string, error) {
+// Secrets reads secret values from viper and returns them for downstream
+// $VAR resolution. No k8s writes — secrets reach the cluster only via
+// per-service k8s Secrets in the Services/Crons reconcilers.
+func Secrets(_ context.Context, _ *config.DeployContext, _ *config.LiveState, cfg *config.AppConfig, v *viper.Viper) (map[string]string, error) {
 	allKeys := collectSecretKeys(cfg)
 	secretValues := make(map[string]string, len(allKeys))
 
@@ -68,27 +66,6 @@ func Secrets(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 	for _, key := range cfg.Secrets {
 		if secretValues[key] == "" {
 			return nil, fmt.Errorf("secret %q listed in config but not found in environment", key)
-		}
-	}
-
-	// Store global secrets in the shared k8s Secret
-	for _, key := range cfg.Secrets {
-		if err := app.SecretSet(ctx, app.SecretSetRequest{
-			Cluster: dc.Cluster, Key: key, Value: secretValues[key],
-		}); err != nil {
-			return nil, err
-		}
-	}
-
-	// Orphan removal for global secrets
-	if live != nil {
-		desired := toSet(cfg.Secrets)
-		for _, key := range live.Secrets {
-			if !desired[key] {
-				if err := app.SecretDelete(ctx, app.SecretDeleteRequest{Cluster: dc.Cluster, Key: key}); err != nil {
-					dc.Cluster.Log().Warning(fmt.Sprintf("orphan secret %s not removed: %s", key, err))
-				}
-			}
 		}
 	}
 

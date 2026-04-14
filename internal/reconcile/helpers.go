@@ -23,6 +23,7 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	res, err := app.Describe(ctx, app.DescribeRequest{
 		Cluster:      dc.Cluster,
 		StorageNames: cfg.StorageNames(),
+		SecretNames:  cfg.Secrets,
 	})
 	if err != nil {
 		if listErr != nil {
@@ -77,9 +78,8 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	for _, s := range res.Storage {
 		state.Storage = append(state.Storage, s.Name)
 	}
-	for _, s := range res.Secrets {
-		state.Secrets = append(state.Secrets, s.Key)
-	}
+	// Secrets come from config — no global k8s secret to scan.
+	state.Secrets = append(state.Secrets, cfg.Secrets...)
 	for _, i := range res.Ingress {
 		state.Domains[i.Service] = append(state.Domains[i.Service], i.Domain)
 	}

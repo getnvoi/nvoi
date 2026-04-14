@@ -32,12 +32,16 @@ type ListResourcesOutput struct {
 
 func DescribeCluster(db *gorm.DB) func(context.Context, *DescribeClusterInput) (*DescribeClusterOutput, error) {
 	return func(ctx context.Context, input *DescribeClusterInput) (*DescribeClusterOutput, error) {
-		cluster, storageNames, err := repoClusterWithStorage(ctx, db, input.RepoScopedInput)
+		cluster, cfgNames, err := repoClusterWithConfig(ctx, db, input.RepoScopedInput)
 		if err != nil {
 			return nil, err
 		}
 
-		res, err := pkgcore.Describe(ctx, pkgcore.DescribeRequest{Cluster: *cluster, StorageNames: storageNames})
+		res, err := pkgcore.Describe(ctx, pkgcore.DescribeRequest{
+			Cluster:      *cluster,
+			StorageNames: cfgNames.StorageNames,
+			SecretNames:  cfgNames.SecretNames,
+		})
 		if err != nil {
 			return nil, humaError(err)
 		}
@@ -85,23 +89,29 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-// repoClusterWithStorage resolves a cluster and the config-derived storage names from a repo.
-func repoClusterWithStorage(ctx context.Context, db *gorm.DB, input RepoScopedInput) (*pkgcore.Cluster, []string, error) {
+// repoConfigNames resolves config-derived names (storage, secrets) from a repo.
+type repoConfigNames struct {
+	StorageNames []string
+	SecretNames  []string
+}
+
+func repoClusterWithConfig(ctx context.Context, db *gorm.DB, input RepoScopedInput) (*pkgcore.Cluster, repoConfigNames, error) {
 	user := api.UserFromContext(ctx)
 	repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
 	if err != nil {
-		return nil, nil, err
+		return nil, repoConfigNames{}, err
 	}
 	cluster := clusterFromRepo(repo)
-	var storageNames []string
+	var names repoConfigNames
 	if repo.Config != "" {
 		if cfg, err := config.ParseAppConfig([]byte(repo.Config)); err == nil {
 			if err := cfg.Resolve(); err == nil {
-				storageNames = cfg.StorageNames()
+				names.StorageNames = cfg.StorageNames()
 			}
+			names.SecretNames = cfg.Secrets
 		}
 	}
-	return cluster, storageNames, nil
+	return cluster, names, nil
 }
 
 // clusterFromRepo builds a Cluster from Repo's InfraProvider links. No RepoConfig needed.
