@@ -13,7 +13,7 @@ Output rendering for both CLIs. Same formatting everywhere.
 | `utils/` | Never | Never | Never |
 | `internal/render/` | Yes — it's the renderer | Yes | Yes |
 | `internal/core/` | Via `internal/render/` | Via render | Via render |
-| `internal/cli/` | Via `internal/render/` | Via render | Via render |
+| `internal/cloud/` | Via `internal/render/` | Via render | Via render |
 
 ## Output interface
 

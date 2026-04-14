@@ -164,7 +164,7 @@ domains:
 
 ### Validation
 
-`ValidateConfig()` + `packages.ValidateAll()` run before touching infrastructure:
+`ValidateConfig()` runs before touching infrastructure (includes package validation):
 
 - `app` and `env` required
 - `providers.compute` required
@@ -327,8 +327,7 @@ SSH errors: `ErrHostKeyChanged` and `ErrAuthFailed` surface immediately with gui
 
 ```
 Deploy(ctx, dc, cfg, viper)
-  → ValidateConfig(cfg)
-  → packages.ValidateAll(cfg)
+  → ValidateConfig(cfg)              — includes package validation
   → DescribeLive(ctx, dc) → LiveState
   → ServersAdd(ctx, dc, cfg)          — create desired, NO orphan removal yet
   → establish MasterSSH

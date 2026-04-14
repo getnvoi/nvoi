@@ -13,20 +13,27 @@ CLI command (e.g. nvoi deploy)
   → CLI renders JSONL through TUI
 ```
 
-For granular operations:
+For operational commands:
 ```
 CLI command (e.g. nvoi cron run db-backup)
-  → POST /repos/:rid/run {kind: "cron.run", name: "db-backup"}
-    → dispatch() → pkg/core.CronRun()
+  → POST /repos/:rid/cron/db-backup/run
+    → pkg/core.CronRun()
     → Stream JSONL output back
-    → Log CommandLog row
+```
+
+For config CRUD:
+```
+CLI command (e.g. nvoi config service set web --build web --port 3000)
+  → CLI: GET /repos/:rid/config → parse YAML → mutate → PUT /repos/:rid/config
+    → API: validate YAML parses → inject app+env from repo → ValidateConfig (warn) → save
+    → Returns: updated YAML + validation warnings
 ```
 
 ## Architecture
 
 ```
 internal/api/
-  models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo, CommandLog
+  models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo (with Config field), CommandLog
   db.go                  PostgreSQL + GORM + AutoMigrate (reads MAIN_DATABASE_URL)
   testdb.go              In-memory SQLite for tests
   encrypt.go             AES-256-GCM for secrets at rest
@@ -38,7 +45,9 @@ internal/api/
     router.go            Huma route registration + Gin auth middleware
     humaerr.go           Custom error format ({"error":"..."})
     inputs.go            Shared input types (WorkspaceScopedInput, RepoScopedInput)
-    run.go               POST /run — single dispatch endpoint, streams JSONL, logs CommandLog
+    config.go            GET /config (show) + PUT /config (save with validation warnings)
+    cron.go              POST /cron/{name}/run — trigger cron job, stream JSONL
+    stream.go            Shared JSONL streaming output (jsonlOutput, streamOperation)
     auth.go              POST /login
     workspaces.go        CRUD /workspaces
     repos.go             CRUD /repos — scoped through workspace + provider FK links
@@ -82,18 +91,22 @@ User
         └── Workspace
               ├── InfraProvider (kind + name + encrypted credentials)
               └── Repo
+                    ├── Config (YAML blob — mutated by config CRUD, used by deploy)
                     ├── ComputeProviderID → InfraProvider
                     ├── DNSProviderID → InfraProvider
                     ├── StorageProviderID → InfraProvider
                     ├── BuildProviderID → InfraProvider
-                    └── CommandLog (one row per /run call)
+                    └── CommandLog
 ```
 
-## The /run endpoint
+## Config CRUD
 
-Single endpoint for all mutation commands. Takes `{kind, name, params}`, dispatches to `pkg/core/`, streams JSONL, logs the result.
+Config is stored as a YAML blob on the Repo. CLI commands fetch, mutate, save:
 
-Supported kinds: `instance.set`, `instance.delete`, `volume.set`, `volume.delete`, `firewall.set`, `build`, `secret.set`, `secret.delete`, `storage.set`, `storage.delete`, `storage.empty`, `service.set`, `service.delete`, `cron.set`, `cron.delete`, `cron.run`, `dns.set`, `dns.delete`, `ingress.set`, `ingress.delete`.
+- `GET /config` — returns stored YAML + validation warnings
+- `PUT /config` — receives YAML, validates it parses, injects app+env from repo, runs `ValidateConfig` (warnings not rejections), saves
+
+The API is dumb storage. Surgical YAML manipulation happens in the CLI (`internal/cloud/config_*.go`). Save always succeeds (unless malformed YAML). Validation warnings are informational — deploy is the hard gate.
 
 ## Key rules
 
@@ -101,5 +114,5 @@ Supported kinds: `instance.set`, `instance.delete`, `volume.set`, `volume.delete
 2. **Provider credentials come from InfraProvider records.** No env-based resolution. `CredentialsMap()` returns schema-mapped keys.
 3. **Repo SSH keys are auto-generated.** Ed25519 keypair created at repo creation, private key encrypted at rest.
 4. **The API NEVER reads env vars for business logic.** `os.Getenv` is only for server startup config (`MAIN_DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`).
-5. **CommandLog is the history.** One row per /run call. Kind, name, status, duration.
+5. **Config save always succeeds.** Validation warnings returned, not rejections. Deploy rejects invalid config.
 6. **Never fail silently.** Encryption errors, SSH key generation errors, DB errors — always return the error.
