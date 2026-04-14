@@ -41,19 +41,26 @@ func collectSecretKeys(cfg *config.AppConfig) []string {
 	return keys
 }
 
-// Secrets reconciles the global k8s Secret, reads all declared secret values
+// Secrets reconciles the global k8s Secret, reads available secret values
 // from viper, and returns them for downstream $VAR resolution.
+// Keys not found in viper are skipped — they may be provided later by
+// packages or storage. Completeness is validated at resolution time.
 func Secrets(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, v *viper.Viper) (map[string]string, error) {
 	allKeys := collectSecretKeys(cfg)
 	secretValues := make(map[string]string, len(allKeys))
 
-	// Read all values from viper
+	// Read available values from viper — skip missing (may come from packages/storage)
 	for _, key := range allKeys {
-		val := v.GetString(key)
-		if val == "" {
+		if val := v.GetString(key); val != "" {
+			secretValues[key] = val
+		}
+	}
+
+	// Global secrets MUST be in viper — they have no other source
+	for _, key := range cfg.Secrets {
+		if secretValues[key] == "" {
 			return nil, fmt.Errorf("secret %q listed in config but not found in environment", key)
 		}
-		secretValues[key] = val
 	}
 
 	// Store global secrets in the shared k8s Secret

@@ -122,7 +122,9 @@ func TestSecrets_SkipsEntriesWithEquals(t *testing.T) {
 	}
 }
 
-func TestSecrets_MissingPerServiceKey(t *testing.T) {
+func TestSecrets_MissingPerServiceKey_SkippedAtCollection(t *testing.T) {
+	// Per-service bare keys missing from viper are skipped — they may come
+	// from packages/storage. The error surfaces at resolution time.
 	dc := testDC(convergeMock())
 	cfg := &config.AppConfig{
 		Services: map[string]config.ServiceDef{
@@ -130,8 +132,24 @@ func TestSecrets_MissingPerServiceKey(t *testing.T) {
 		},
 	}
 
+	vals, err := Secrets(context.Background(), dc, nil, cfg, testViper())
+	if err != nil {
+		t.Fatalf("Secrets should not error on missing per-service key: %v", err)
+	}
+	if _, ok := vals["MISSING_KEY"]; ok {
+		t.Error("MISSING_KEY should not be in secretValues")
+	}
+}
+
+func TestSecrets_MissingGlobalKey_Errors(t *testing.T) {
+	// Global secrets MUST be in viper — they have no other source.
+	dc := testDC(convergeMock())
+	cfg := &config.AppConfig{
+		Secrets: []string{"GLOBAL_MISSING"},
+	}
+
 	_, err := Secrets(context.Background(), dc, nil, cfg, testViper())
-	if err == nil || !strings.Contains(err.Error(), "MISSING_KEY") {
-		t.Fatalf("expected error for missing per-service secret, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "GLOBAL_MISSING") {
+		t.Fatalf("expected error for missing global secret, got: %v", err)
 	}
 }
