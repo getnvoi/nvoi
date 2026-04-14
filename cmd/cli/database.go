@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -23,14 +24,11 @@ func newDatabaseCmd(m *mode) *cobra.Command {
 		Short: "Trigger a backup immediately",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Backup "now" is a CronRun on the backup cron job.
-			// The backend resolves dbName; we append the convention suffix.
-			// TODO: this leaks the "-db-backup" naming convention into the command.
-			// Move to backend when both backends support a DatabaseBackupNow method.
 			name := dbName
 			if name == "" {
 				name = "main" // will be resolved by backend in the future
 			}
-			return m.backend.CronRun(cmd.Context(), name+"-db-backup")
+			return m.backend.CronRun(cmd.Context(), utils.DatabaseBackupCronName(name))
 		},
 	})
 

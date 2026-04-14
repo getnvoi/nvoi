@@ -49,6 +49,8 @@ services:
   api:
     build: api
     port: 8080
+    env:
+      - SENTRY_DSN=https://dd87a2600aeb4459828174599d2902d1@monit.nvoi.to/1
     secrets:
       - JWT_SECRET
       - ENCRYPTION_KEY
@@ -56,6 +58,8 @@ services:
   web:
     build: web
     port: 3000
+    env:
+      - SENTRY_DSN=https://4af4869ae18342f0ad57818004c49f21@monit.nvoi.to/2
   distribution:
     build: distribution
     port: 3001
@@ -69,16 +73,20 @@ services:
     env:
       - BEHIND_HTTPS_PROXY=True
       - BASE_URL=https://monit.nvoi.to
+      - ALLOWED_HOSTS=*
       - SITE_TITLE=nvoi
       - PHONEHOME=false
       - SINGLE_USER=true
+      - EMAIL_HOST=smtp.gmail.com
+      - EMAIL_PORT=587
+      - EMAIL_USE_TLS=True
+      - DEFAULT_FROM_EMAIL=nvoi <noreply@nvoi.to>
     secrets:
-      - BUGSINK_SECRET_KEY
       - SECRET_KEY=$BUGSINK_SECRET_KEY
-      - BUGSINK_ADMIN_EMAIL
-      - BUGSINK_ADMIN_PASSWORD
       - DATABASE_URL=$BUGSINK_DATABASE_URL
       - CREATE_SUPERUSER=$BUGSINK_ADMIN_EMAIL:$BUGSINK_ADMIN_PASSWORD
+      - EMAIL_HOST_USER=$BUGSINK_EMAIL_HOST_USER
+      - EMAIL_HOST_PASSWORD=$BUGSINK_EMAIL_HOST_PASSWORD
 
 domains:
   web: [nvoi.to, www.nvoi.to]

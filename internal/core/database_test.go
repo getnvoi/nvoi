@@ -169,19 +169,19 @@ func TestDatabaseBackupList_Success(t *testing.T) {
 	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
 	ssh.Prefixes = []testutil.MockPrefix{
 		{
-			Prefix: kctlPrefix(ns) + "get secret secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ENDPOINT}'",
+			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ENDPOINT}'",
 			Result: testutil.MockResult{Output: []byte(b64(s3.URL))},
 		},
 		{
-			Prefix: kctlPrefix(ns) + "get secret secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_BUCKET}'",
+			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_BUCKET}'",
 			Result: testutil.MockResult{Output: []byte(b64("test-bucket"))},
 		},
 		{
-			Prefix: kctlPrefix(ns) + "get secret secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ACCESS_KEY_ID}'",
+			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ACCESS_KEY_ID}'",
 			Result: testutil.MockResult{Output: []byte(b64("AKID"))},
 		},
 		{
-			Prefix: kctlPrefix(ns) + "get secret secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_SECRET_ACCESS_KEY}'",
+			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_SECRET_ACCESS_KEY}'",
 			Result: testutil.MockResult{Output: []byte(b64("secret"))},
 		},
 	}
@@ -247,19 +247,19 @@ func TestDatabaseBackupDownload_Success(t *testing.T) {
 	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
 	ssh.Prefixes = []testutil.MockPrefix{
 		{
-			Prefix: kctlPrefix(ns) + "get secret secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ENDPOINT}'",
+			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ENDPOINT}'",
 			Result: testutil.MockResult{Output: []byte(b64(s3.URL))},
 		},
 		{
-			Prefix: kctlPrefix(ns) + "get secret secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_BUCKET}'",
+			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_BUCKET}'",
 			Result: testutil.MockResult{Output: []byte(b64("test-bucket"))},
 		},
 		{
-			Prefix: kctlPrefix(ns) + "get secret secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ACCESS_KEY_ID}'",
+			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ACCESS_KEY_ID}'",
 			Result: testutil.MockResult{Output: []byte(b64("AKID"))},
 		},
 		{
-			Prefix: kctlPrefix(ns) + "get secret secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_SECRET_ACCESS_KEY}'",
+			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_SECRET_ACCESS_KEY}'",
 			Result: testutil.MockResult{Output: []byte(b64("secret"))},
 		},
 	}

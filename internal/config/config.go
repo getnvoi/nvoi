@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -58,6 +59,24 @@ type AppConfig struct {
 	ACMEEmail string                 `yaml:"acme_email,omitempty"`
 }
 
+// StorageNames returns all storage names: user-declared + database backup buckets.
+// This is the single source of truth for "what storage exists."
+func (c *AppConfig) StorageNames() []string {
+	seen := map[string]bool{}
+	for name := range c.Storage {
+		seen[name] = true
+	}
+	for _, db := range c.Database {
+		seen[db.BackupBucket] = true
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // DatabaseNames returns the names of all configured databases.
 func (c *AppConfig) DatabaseNames() []string {
 	if c == nil {
@@ -76,6 +95,46 @@ type DatabaseDef struct {
 	Image  string    `yaml:"image"`
 	Volume string    `yaml:"volume"`
 	Backup BackupDef `yaml:"backup,omitempty"`
+
+	// Resolved names — populated by Resolve(), never derived inline.
+	// Single source of truth for all database resource identifiers.
+	ServiceName      string `yaml:"-"` // {name}-db
+	SecretName       string `yaml:"-"` // {name}-db-credentials
+	BackupCronName   string `yaml:"-"` // {name}-db-backup
+	BackupBucket     string `yaml:"-"` // {name}-db-backups
+	BackupCredSecret string `yaml:"-"` // {name}-db-backup-secrets
+	VolumeMountPath  string `yaml:"-"` // from cfg.Volumes[Volume].MountPath
+}
+
+// Resolve populates all computed fields on VolumeDef and DatabaseDef.
+// Called once after ValidateConfig. Internal code trusts resolved values.
+// Derivation functions live in pkg/utils/naming.go — single source of truth.
+func (c *AppConfig) Resolve() error {
+	names, err := utils.NewNames(c.App, c.Env)
+	if err != nil {
+		return err
+	}
+
+	// Volume mount paths — one derivation, stored in config.
+	for volName, vol := range c.Volumes {
+		vol.MountPath = names.VolumeMountPath(volName)
+		c.Volumes[volName] = vol
+	}
+
+	// Database resource names — from utils single-source functions.
+	for dbName, db := range c.Database {
+		db.ServiceName = utils.DatabaseServiceName(dbName)
+		db.SecretName = utils.DatabaseSecretName(dbName)
+		db.BackupCronName = utils.DatabaseBackupCronName(dbName)
+		db.BackupBucket = utils.DatabaseBackupBucket(dbName)
+		db.BackupCredSecret = utils.DatabaseBackupCredsSecret(dbName)
+		if vol, ok := c.Volumes[db.Volume]; ok {
+			db.VolumeMountPath = vol.MountPath
+		}
+		c.Database[dbName] = db
+	}
+
+	return nil
 }
 
 type BackupDef struct {
@@ -98,8 +157,9 @@ type ServerDef struct {
 }
 
 type VolumeDef struct {
-	Size   int    `yaml:"size"`
-	Server string `yaml:"server"`
+	Size      int    `yaml:"size"`
+	Server    string `yaml:"server"`
+	MountPath string `yaml:"-"` // resolved: /mnt/data/{base}-{name}
 }
 
 type StorageDef struct {

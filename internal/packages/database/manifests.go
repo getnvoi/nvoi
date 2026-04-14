@@ -17,9 +17,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func generateManifests(name string, engine Engine, image, ns string, names *utils.Names, server string) string {
-	svcName := name + "-db"
-	secretName := name + "-db-credentials"
+func generateManifests(name, svcName, secretName, volumeMountPath string, engine Engine, image, ns string, server string) string {
 	prefix := strings.ToUpper(name)
 
 	labels := map[string]string{
@@ -80,7 +78,7 @@ func generateManifests(name string, engine Engine, image, ns string, names *util
 						Name: "data",
 						VolumeSource: corev1.VolumeSource{
 							HostPath: &corev1.HostPathVolumeSource{
-								Path: names.VolumeMountPath(name + "-db"),
+								Path: volumeMountPath,
 								Type: &hostPathType,
 							},
 						},

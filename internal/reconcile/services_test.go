@@ -90,9 +90,11 @@ func TestServices_DatabasePackageManagedNotOrphaned(t *testing.T) {
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Volumes:  map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master"}},
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 		Database: map[string]config.DatabaseDef{"main": {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"}},
 	}
+	cfg.Resolve()
 	// main-db is in live (created by database package) but not in cfg.Services.
 	// It must NOT be deleted — it's protected.
 	live := &config.LiveState{Services: []string{"web", "main-db"}}
@@ -142,9 +144,11 @@ func TestServices_DatabaseProtected(t *testing.T) {
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Volumes:  map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master"}},
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 		Database: map[string]config.DatabaseDef{"main": {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"}},
 	}
+	cfg.Resolve()
 	live := &config.LiveState{Services: []string{"web", "main-db", "stale-worker"}}
 
 	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {

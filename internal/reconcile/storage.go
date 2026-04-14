@@ -29,8 +29,8 @@ func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 	if live != nil {
 		desired := toSet(utils.SortedKeys(cfg.Storage))
 		protected := map[string]bool{}
-		for dbName := range cfg.Database {
-			protected[dbName+"-db-backups"] = true
+		for _, db := range cfg.Database {
+			protected[db.BackupBucket] = true
 		}
 		for _, name := range live.Storage {
 			if !desired[name] && !protected[name] {

@@ -16,11 +16,14 @@ import (
 // Returns (nil, nil) on first deploy (no servers exist).
 // Returns error if servers exist but cluster state can't be read — prevents
 // silent orphan accumulation from flaky SSH.
-func DescribeLive(ctx context.Context, dc *config.DeployContext) (*config.LiveState, error) {
+func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) (*config.LiveState, error) {
 	// Check if any servers exist at the provider.
 	servers, listErr := app.ComputeList(ctx, app.ComputeListRequest{Cluster: dc.Cluster})
 
-	res, err := app.Describe(ctx, app.DescribeRequest{Cluster: dc.Cluster})
+	res, err := app.Describe(ctx, app.DescribeRequest{
+		Cluster:      dc.Cluster,
+		StorageNames: cfg.StorageNames(),
+	})
 	if err != nil {
 		if listErr != nil {
 			// Both calls failed — provider may be down or credentials wrong.

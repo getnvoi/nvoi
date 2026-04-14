@@ -11,27 +11,35 @@ import (
 	"github.com/spf13/viper"
 )
 
-// collectSecretKeys gathers all bare secret keys that need to be read
-// from viper. Bare = no "=" in the entry. Entries with "=" always have $
-// (enforced by validation) and resolve from sources later, not from viper.
+// collectSecretKeys gathers all secret keys that need to be read from viper.
+// This includes:
+//   - Bare names (no "=") → the key itself is read from env
+//   - $VAR references on the right side of "=" → each referenced var is read from env
+//
+// This ensures EMAIL_HOST_USER=$BUGSINK_EMAIL_HOST_USER works without
+// declaring BUGSINK_EMAIL_HOST_USER as a separate bare entry first.
 func collectSecretKeys(cfg *config.AppConfig) []string {
 	seen := map[string]bool{}
 	for _, key := range cfg.Secrets {
 		seen[key] = true
 	}
-	for _, svc := range cfg.Services {
-		for _, ref := range svc.Secrets {
+	collect := func(refs []string) {
+		for _, ref := range refs {
 			if !strings.Contains(ref, "=") {
 				seen[ref] = true
+			} else {
+				// Extract $VAR references from the value side
+				for _, varName := range extractVarRefs(ref) {
+					seen[varName] = true
+				}
 			}
 		}
 	}
+	for _, svc := range cfg.Services {
+		collect(svc.Secrets)
+	}
 	for _, cron := range cfg.Crons {
-		for _, ref := range cron.Secrets {
-			if !strings.Contains(ref, "=") {
-				seen[ref] = true
-			}
-		}
+		collect(cron.Secrets)
 	}
 	keys := make([]string, 0, len(seen))
 	for k := range seen {

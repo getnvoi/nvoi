@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/getnvoi/nvoi/internal/api"
+	"github.com/getnvoi/nvoi/internal/config"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"gorm.io/gorm"
@@ -31,12 +32,12 @@ type ListResourcesOutput struct {
 
 func DescribeCluster(db *gorm.DB) func(context.Context, *DescribeClusterInput) (*DescribeClusterOutput, error) {
 	return func(ctx context.Context, input *DescribeClusterInput) (*DescribeClusterOutput, error) {
-		cluster, err := repoCluster(ctx, db, input.RepoScopedInput)
+		cluster, storageNames, err := repoClusterWithStorage(ctx, db, input.RepoScopedInput)
 		if err != nil {
 			return nil, err
 		}
 
-		res, err := pkgcore.Describe(ctx, pkgcore.DescribeRequest{Cluster: *cluster})
+		res, err := pkgcore.Describe(ctx, pkgcore.DescribeRequest{Cluster: *cluster, StorageNames: storageNames})
 		if err != nil {
 			return nil, humaError(err)
 		}
@@ -83,6 +84,25 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+// repoClusterWithStorage resolves a cluster and the config-derived storage names from a repo.
+func repoClusterWithStorage(ctx context.Context, db *gorm.DB, input RepoScopedInput) (*pkgcore.Cluster, []string, error) {
+	user := api.UserFromContext(ctx)
+	repo, err := findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
+	if err != nil {
+		return nil, nil, err
+	}
+	cluster := clusterFromRepo(repo)
+	var storageNames []string
+	if repo.Config != "" {
+		if cfg, err := config.ParseAppConfig([]byte(repo.Config)); err == nil {
+			if err := cfg.Resolve(); err == nil {
+				storageNames = cfg.StorageNames()
+			}
+		}
+	}
+	return cluster, storageNames, nil
+}
 
 // clusterFromRepo builds a Cluster from Repo's InfraProvider links. No RepoConfig needed.
 func clusterFromRepo(repo *api.Repo) *pkgcore.Cluster {

@@ -11,27 +11,38 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func TestParseStorageBucketKey(t *testing.T) {
-	tests := []struct {
-		key      string
-		wantName string
-		wantOK   bool
-	}{
-		{"STORAGE_MYDB_BUCKET", "mydb", true},
-		{"STORAGE_ASSETS_BUCKET", "assets", true},
-		{"OTHER_MYDB_BUCKET", "", false},
-		{"STORAGE_MYDB_ENDPOINT", "", false},
-		{"STORAGE__BUCKET", "", false},
+func TestStorageList_FromConfig(t *testing.T) {
+	items, err := StorageList(context.Background(), StorageListRequest{
+		Cluster:      testCluster(nil),
+		StorageNames: []string{"assets", "backups"},
+	})
+	if err != nil {
+		t.Fatalf("StorageList: %v", err)
 	}
-	for _, tt := range tests {
-		name, ok := parseStorageBucketKey(tt.key)
-		if ok != tt.wantOK {
-			t.Errorf("parseStorageBucketKey(%q): ok = %v, want %v", tt.key, ok, tt.wantOK)
-			continue
-		}
-		if name != tt.wantName {
-			t.Errorf("parseStorageBucketKey(%q): name = %q, want %q", tt.key, name, tt.wantName)
-		}
+	if len(items) != 2 {
+		t.Fatalf("StorageList: got %d items, want 2", len(items))
+	}
+	if items[0].Name != "assets" {
+		t.Errorf("items[0].Name = %q, want assets", items[0].Name)
+	}
+	if items[1].Name != "backups" {
+		t.Errorf("items[1].Name = %q, want backups", items[1].Name)
+	}
+	// Bucket names are derived from Names.Bucket()
+	if !strings.Contains(items[0].Bucket, "assets") {
+		t.Errorf("items[0].Bucket = %q, should contain 'assets'", items[0].Bucket)
+	}
+}
+
+func TestStorageList_Empty(t *testing.T) {
+	items, err := StorageList(context.Background(), StorageListRequest{
+		Cluster: testCluster(nil),
+	})
+	if err != nil {
+		t.Fatalf("StorageList: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("StorageList: got %d items, want 0", len(items))
 	}
 }
 

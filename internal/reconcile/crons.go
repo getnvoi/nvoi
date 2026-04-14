@@ -58,8 +58,8 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 	if live != nil {
 		desired := toSet(cronNames)
 		protected := map[string]bool{}
-		for dbName := range cfg.Database {
-			protected[dbName+"-db-backup"] = true
+		for _, db := range cfg.Database {
+			protected[db.BackupCronName] = true
 		}
 		for _, name := range live.Crons {
 			if !desired[name] && !protected[name] {

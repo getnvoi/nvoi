@@ -80,6 +80,37 @@ func resolveRef(val string, sources map[string]string) (string, error) {
 	return b.String(), nil
 }
 
+// extractVarRefs returns all $VAR and ${VAR} names referenced in s.
+func extractVarRefs(s string) []string {
+	var refs []string
+	i := 0
+	for i < len(s) {
+		if s[i] != '$' || i+1 >= len(s) {
+			i++
+			continue
+		}
+		next := s[i+1]
+		if next == '{' {
+			end := strings.IndexByte(s[i+2:], '}')
+			if end < 0 {
+				break
+			}
+			refs = append(refs, s[i+2:i+2+end])
+			i = i + 2 + end + 1
+		} else if isVarStart(next) {
+			j := i + 2
+			for j < len(s) && isVarChar(s[j]) {
+				j++
+			}
+			refs = append(refs, s[i+1:j])
+			i = j
+		} else {
+			i++
+		}
+	}
+	return refs
+}
+
 // resolveEntry parses a KEY=VALUE or KEY entry and resolves $VAR references.
 // Same function for env: and secrets: fields.
 func resolveEntry(entry string, sources map[string]string) (key, value string, err error) {

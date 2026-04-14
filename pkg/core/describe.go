@@ -14,6 +14,7 @@ import (
 
 type DescribeRequest struct {
 	Cluster
+	StorageNames []string // from cfg — config is the source of truth
 }
 
 type DescribeNode struct {
@@ -123,19 +124,19 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		}
 	}
 
-	// Secrets + Storage (from same k8s Secret)
+	// Storage — derived from config, not from scanning k8s secrets
+	for _, storageName := range req.StorageNames {
+		result.Storage = append(result.Storage, StorageItem{
+			Name:   storageName,
+			Bucket: names.Bucket(storageName),
+		})
+	}
+
+	// Secrets (from global k8s Secret — user-declared secrets only)
 	keys, err := kube.ListSecretKeys(ctx, ssh, ns, names.KubeSecrets())
 	if err == nil {
 		secretName := names.KubeSecrets()
 		for _, k := range keys {
-			if strings.HasPrefix(k, "STORAGE_") {
-				if name, ok := parseStorageBucketKey(k); ok {
-					if bucket, err := kube.GetSecretValue(ctx, ssh, ns, secretName, k); err == nil {
-						result.Storage = append(result.Storage, StorageItem{Name: name, Bucket: bucket})
-					}
-				}
-				continue
-			}
 			val, _ := kube.GetSecretValue(ctx, ssh, ns, secretName, k)
 			result.Secrets = append(result.Secrets, DescribeSecret{Key: k, Value: utils.Obfuscate(val)})
 		}

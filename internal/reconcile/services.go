@@ -76,8 +76,8 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		desired := toSet(svcNames)
 		// Exclude package-managed services from orphan detection
 		protected := map[string]bool{}
-		for dbName := range cfg.Database {
-			protected[dbName+"-db"] = true
+		for _, db := range cfg.Database {
+			protected[db.ServiceName] = true
 		}
 		for _, name := range live.Services {
 			if !desired[name] && !protected[name] {

@@ -50,16 +50,16 @@ func (d *DatabasePackage) Validate(cfg *config.AppConfig) error {
 		if cfg.Providers.Storage == "" {
 			return fmt.Errorf("database.%s: providers.storage is required for database backups", name)
 		}
-		// Collision checks
-		svcName := name + "-db"
+		// Collision checks — use utils single-source derivation functions
+		svcName := utils.DatabaseServiceName(name)
 		if _, ok := cfg.Services[svcName]; ok {
 			return fmt.Errorf("database.%s: service %q conflicts — managed by database package", name, svcName)
 		}
-		cronName := name + "-db-backup"
+		cronName := utils.DatabaseBackupCronName(name)
 		if _, ok := cfg.Crons[cronName]; ok {
 			return fmt.Errorf("database.%s: cron %q conflicts — managed by database package", name, cronName)
 		}
-		storageName := name + "-db-backups"
+		storageName := utils.DatabaseBackupBucket(name)
 		if _, ok := cfg.Storage[storageName]; ok {
 			return fmt.Errorf("database.%s: storage %q conflicts — managed by database package", name, storageName)
 		}
@@ -89,7 +89,8 @@ func (d *DatabasePackage) Teardown(ctx context.Context, dc *config.DeployContext
 		return nil
 	}
 	for _, name := range utils.SortedKeys(cfg.Database) {
-		bucketName := name + "-db-backups"
+		db := cfg.Database[name]
+		bucketName := db.BackupBucket
 		_ = app.StorageEmpty(ctx, app.StorageEmptyRequest{
 			Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env, Output: dc.Cluster.Output},
 			Storage: dc.Storage, Name: bucketName,
@@ -117,7 +118,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 
-	svcName := name + "-db"
+	svcName := db.ServiceName
 	ns := names.KubeNamespace()
 	port := engine.Port()
 	dbURL := engine.ConnectionURL(svcName, port, creds.User, creds.Password, creds.DBName)
@@ -129,7 +130,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	}
 	defer ssh.Close()
 
-	if err := storeCredentials(ctx, ssh, ns, name, engine, creds, dbURL); err != nil {
+	if err := storeCredentials(ctx, ssh, ns, name, db.SecretName, svcName, engine, creds, dbURL); err != nil {
 		return nil, err
 	}
 	out.Success("credentials stored")
@@ -137,7 +138,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	// Apply StatefulSet + headless Service
 	vol := cfg.Volumes[db.Volume]
 	serverName := vol.Server
-	manifest := generateManifests(name, engine, db.Image, ns, names, serverName)
+	manifest := generateManifests(name, svcName, db.SecretName, db.VolumeMountPath, engine, db.Image, ns, serverName)
 	if err := applyManifest(ctx, ssh, ns, manifest); err != nil {
 		return nil, err
 	}
@@ -151,7 +152,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	out.Success(fmt.Sprintf("%s ready", svcName))
 
 	// Backup bucket
-	bucketName := name + "-db-backups"
+	bucketName := db.BackupBucket
 	out.Progress(fmt.Sprintf("ensuring backup bucket %s", bucketName))
 	storageCreds, err := app.StorageSet(ctx, app.StorageSetRequest{
 		Cluster: dc.Cluster, Storage: dc.Storage,
@@ -163,8 +164,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	out.Success(fmt.Sprintf("backup bucket %s", bucketName))
 
 	// Store storage credentials in the backup cron's per-service secret
-	cronName := name + "-db-backup"
-	cronSecretName := names.KubeServiceSecrets(cronName)
+	cronSecretName := db.BackupCredSecret
 	for k, v := range storageCreds {
 		if err := kube.UpsertSecretKey(ctx, ssh, ns, cronSecretName, k, v); err != nil {
 			return nil, fmt.Errorf("backup storage secret %s: %w", k, err)
@@ -180,7 +180,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	if retain == 0 {
 		retain = 7
 	}
-	backupManifest := generateBackupCronJob(name, engine, db.Image, ns, names, svcName, schedule, retain, bucketName)
+	backupManifest := generateBackupCronJob(name, db.BackupCronName, db.SecretName, engine, db.Image, ns, names, svcName, schedule, retain, bucketName)
 	if err := applyManifest(ctx, ssh, ns, backupManifest); err != nil {
 		return nil, fmt.Errorf("backup cronjob: %w", err)
 	}

@@ -135,6 +135,32 @@ func TestResolveEntry_MultipleVars(t *testing.T) {
 	}
 }
 
+func TestExtractVarRefs(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"EMAIL=$SMTP_USER", []string{"SMTP_USER"}},
+		{"AUTH=$USER:$PASS", []string{"USER", "PASS"}},
+		{"URL=${HOST}/path", []string{"HOST"}},
+		{"plain=value", nil},
+		{"$100", nil},
+		{"CREATE=$A:$B", []string{"A", "B"}},
+	}
+	for _, tt := range tests {
+		got := extractVarRefs(tt.input)
+		if len(got) != len(tt.want) {
+			t.Errorf("extractVarRefs(%q) = %v, want %v", tt.input, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("extractVarRefs(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
 func TestHasVarRef(t *testing.T) {
 	tests := []struct {
 		input string

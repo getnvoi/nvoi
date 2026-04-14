@@ -121,6 +121,18 @@ const (
 	RoleMaster          = "master"
 )
 
+// ── Database resource naming ──────────────────────────────────────────────────
+// Single source of truth for database resource name conventions.
+// Used by config.Resolve() and CLI-path consumers (pkg/core/database.go).
+// These derive deterministic k8s resource names from the database config key.
+
+func DatabaseServiceName(name string) string       { return name + "-db" }
+func DatabaseSecretName(name string) string        { return name + "-db-credentials" }
+func DatabaseBackupCronName(name string) string    { return name + "-db-backup" }
+func DatabaseBackupBucket(name string) string      { return name + "-db-backups" }
+func DatabasePodName(name string) string           { return name + "-db-0" }
+func DatabaseBackupCredsSecret(name string) string { return name + "-db-backup-secrets" }
+
 // ── Storage env naming ─────────────────────────────────────────────────────────
 
 func StorageEnvPrefix(bucketName string) string {

@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -20,10 +18,7 @@ type StorageSetRequest struct {
 	ExpireDays int
 }
 
-// StorageCredentials holds the resolved credentials for a storage bucket.
-type StorageCredentials map[string]string
-
-func StorageSet(ctx context.Context, req StorageSetRequest) (StorageCredentials, error) {
+func StorageSet(ctx context.Context, req StorageSetRequest) (map[string]string, error) {
 	out := req.Log()
 	names, err := req.Names()
 	if err != nil {
@@ -74,7 +69,7 @@ func StorageSet(ctx context.Context, req StorageSetRequest) (StorageCredentials,
 	}
 
 	prefix := utils.StorageEnvPrefix(req.Name)
-	result := StorageCredentials{
+	result := map[string]string{
 		prefix + "_ENDPOINT":          creds.Endpoint,
 		prefix + "_BUCKET":            bucketName,
 		prefix + "_ACCESS_KEY_ID":     creds.AccessKeyID,
@@ -146,6 +141,7 @@ func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
 
 type StorageListRequest struct {
 	Cluster
+	StorageNames []string // from cfg — config is the source of truth
 }
 
 type StorageItem struct {
@@ -153,44 +149,17 @@ type StorageItem struct {
 	Bucket string `json:"bucket"`
 }
 
-func StorageList(ctx context.Context, req StorageListRequest) ([]StorageItem, error) {
-	ssh, names, err := req.Cluster.SSH(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer ssh.Close()
-
-	ns := names.KubeNamespace()
-	secretName := names.KubeSecrets()
-	keys, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
+func StorageList(_ context.Context, req StorageListRequest) ([]StorageItem, error) {
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return nil, err
 	}
 
-	var items []StorageItem
-	for _, key := range keys {
-		storageName, ok := parseStorageBucketKey(key)
-		if !ok {
-			continue
-		}
-		bucket, err := kube.GetSecretValue(ctx, ssh, ns, secretName, key)
-		if err != nil {
-			continue
-		}
-		items = append(items, StorageItem{Name: storageName, Bucket: bucket})
+	items := make([]StorageItem, 0, len(req.StorageNames))
+	for _, name := range req.StorageNames {
+		items = append(items, StorageItem{Name: name, Bucket: names.Bucket(name)})
 	}
 	return items, nil
-}
-
-func parseStorageBucketKey(key string) (string, bool) {
-	if !strings.HasPrefix(key, "STORAGE_") || !strings.HasSuffix(key, "_BUCKET") {
-		return "", false
-	}
-	name := key[len("STORAGE_") : len(key)-len("_BUCKET")]
-	if name == "" {
-		return "", false
-	}
-	return strings.ToLower(strings.ReplaceAll(name, "_", "-")), true
 }
 
 func StorageSecretKeys(name string) []string {
