@@ -41,10 +41,10 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 	// Validate source + builder combination
 	local := isLocalSource(req.Source)
 	if local && req.Builder == "daytona" {
-		return nil, fmt.Errorf("local source %q cannot use --builder daytona — Daytona needs a git repo", req.Source)
+		return nil, ErrInputf("local source %q cannot use --builder daytona — Daytona needs a git repo", req.Source)
 	}
 	if !local && req.Builder == "local" {
-		return nil, fmt.Errorf("remote source %q cannot use --builder local — local builder can't clone remote repos", req.Source)
+		return nil, ErrInputf("remote source %q cannot use --builder local — local builder can't clone remote repos", req.Source)
 	}
 
 	// Resolve git auth: signed URL overrides cmd-layer token
@@ -61,7 +61,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 
 	// Daytona + GitHub builders require git auth for remote sources
 	if (req.Builder == "daytona" || req.Builder == "github") && gitToken == "" {
-		return nil, fmt.Errorf("git authentication required for remote source.\n  Use a signed URL:  --source https://user:TOKEN@github.com/org/repo\n  Or install gh CLI:  gh auth login\n  Or pass explicitly: --git-token TOKEN\n  Or set env var:     export GITHUB_TOKEN=...")
+		return nil, ErrInput("git authentication required for remote source.\n  Use a signed URL:  --source https://user:TOKEN@github.com/org/repo\n  Or install gh CLI:  gh auth login\n  Or pass explicitly: --git-token TOKEN\n  Or set env var:     export GITHUB_TOKEN=...")
 	}
 
 	master, _, _, err := req.Cluster.Master(ctx)
@@ -82,7 +82,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 
 	// Validate architecture per builder
 	if req.Builder == "daytona" && platform == "linux/arm64" {
-		return nil, fmt.Errorf("--architecture arm64 is not available with --builder daytona — Daytona sandboxes are amd64 only")
+		return nil, ErrInput("--architecture arm64 is not available with --builder daytona — Daytona sandboxes are amd64 only")
 	}
 
 	out := req.Log()
@@ -146,7 +146,7 @@ func ParseBuildTargets(args []string) ([]BuildTarget, error) {
 func splitTarget(arg string) (name, source string, err error) {
 	idx := strings.Index(arg, ":")
 	if idx < 0 {
-		return "", "", fmt.Errorf("invalid target %q — expected name:source (e.g. web:./cmd/web)", arg)
+		return "", "", ErrInputf("invalid target %q — expected name:source (e.g. web:./cmd/web)", arg)
 	}
 	// Check if the colon is part of a URL scheme (e.g. "web:https://...")
 	// If what follows the colon starts with "//", this is the real delimiter.
@@ -155,7 +155,7 @@ func splitTarget(arg string) (name, source string, err error) {
 	name = arg[:idx]
 	source = arg[idx+1:]
 	if name == "" || source == "" {
-		return "", "", fmt.Errorf("invalid target %q — expected name:source (e.g. web:./cmd/web)", arg)
+		return "", "", ErrInputf("invalid target %q — expected name:source (e.g. web:./cmd/web)", arg)
 	}
 	return name, source, nil
 }
@@ -199,17 +199,17 @@ func BuildParallel(ctx context.Context, req BuildParallelRequest) error {
 
 	// Validate architecture per builder (before spawning goroutines)
 	if req.Builder == "daytona" && platform == "linux/arm64" {
-		return fmt.Errorf("--architecture arm64 is not available with --builder daytona — Daytona sandboxes are amd64 only")
+		return ErrInput("--architecture arm64 is not available with --builder daytona — Daytona sandboxes are amd64 only")
 	}
 
 	// Pre-validate all targets before spawning goroutines
 	for _, t := range req.Targets {
 		local := isLocalSource(t.Source)
 		if local && req.Builder == "daytona" {
-			return fmt.Errorf("target %s: local source %q cannot use --builder daytona — Daytona needs a git repo", t.Name, t.Source)
+			return ErrInputf("target %s: local source %q cannot use --builder daytona — Daytona needs a git repo", t.Name, t.Source)
 		}
 		if !local && req.Builder == "local" {
-			return fmt.Errorf("target %s: remote source %q cannot use --builder local — local builder can't clone remote repos", t.Name, t.Source)
+			return ErrInputf("target %s: remote source %q cannot use --builder local — local builder can't clone remote repos", t.Name, t.Source)
 		}
 	}
 
@@ -226,7 +226,7 @@ func BuildParallel(ctx context.Context, req BuildParallelRequest) error {
 			}
 		}
 		if hasAnyRemote && gitToken == "" {
-			return fmt.Errorf("git authentication required for remote source.\n  Use a signed URL:  --target name:https://user:TOKEN@github.com/org/repo\n  Or install gh CLI:  gh auth login\n  Or pass explicitly: --git-token TOKEN\n  Or set env var:     export GITHUB_TOKEN=...")
+			return ErrInput("git authentication required for remote source.\n  Use a signed URL:  --target name:https://user:TOKEN@github.com/org/repo\n  Or install gh CLI:  gh auth login\n  Or pass explicitly: --git-token TOKEN\n  Or set env var:     export GITHUB_TOKEN=...")
 		}
 	}
 
@@ -512,7 +512,7 @@ func BuildLatest(ctx context.Context, req BuildLatestRequest) (string, error) {
 
 	out, err := ssh.Run(ctx, fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list", registryAddr, req.Name))
 	if err != nil {
-		return "", fmt.Errorf("image %q not found in registry", req.Name)
+		return "", ErrNotFound("image", req.Name)
 	}
 
 	var tagList struct {
@@ -522,7 +522,7 @@ func BuildLatest(ctx context.Context, req BuildLatestRequest) (string, error) {
 		return "", fmt.Errorf("parse tags for %q: %w", req.Name, err)
 	}
 	if len(tagList.Tags) == 0 {
-		return "", fmt.Errorf("no tags found for %q", req.Name)
+		return "", ErrNotFound("image tags", req.Name)
 	}
 
 	sort.Strings(tagList.Tags)

@@ -58,7 +58,7 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 		}
 	}
 	if serverIP == "" {
-		return nil, fmt.Errorf("server %s not found", serverName)
+		return nil, ErrNotFound("server", serverName)
 	}
 
 	ssh, err := req.Connect(ctx, serverIP+":22")

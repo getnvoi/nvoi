@@ -29,6 +29,14 @@ func (d *DatabasePackage) Active(cfg *config.AppConfig) bool {
 
 func (d *DatabasePackage) Validate(cfg *config.AppConfig) error {
 	for name, db := range cfg.Database {
+		switch db.Kind {
+		case "postgres", "mysql":
+			// valid
+		case "":
+			return fmt.Errorf("database.%s.kind is required (postgres or mysql)", name)
+		default:
+			return fmt.Errorf("database.%s.kind: %q is not supported (postgres or mysql)", name, db.Kind)
+		}
 		if db.Image == "" {
 			return fmt.Errorf("database.%s.image is required", name)
 		}
@@ -96,17 +104,14 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	out := dc.Cluster.Log()
 	out.Command("database", "reconcile", name)
 
-	engine, err := DetectEngine(db.Image)
-	if err != nil {
-		return nil, err
-	}
+	engine := EngineFor(db.Kind)
 
 	names, err := dc.Cluster.Names()
 	if err != nil {
 		return nil, err
 	}
 
-	creds, err := resolveCredentials(name, engine)
+	creds, err := resolveCredentials(dc, name, engine)
 	if err != nil {
 		return nil, fmt.Errorf("credentials: %w", err)
 	}

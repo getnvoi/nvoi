@@ -10,33 +10,13 @@ import (
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
-	"github.com/spf13/cobra"
 )
 
-func NewTeardownCmd(dc *config.DeployContext) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "teardown",
-		Short: "Tear down all provider resources in config YAML",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(cmd)
-			if err != nil {
-				return err
-			}
-			deleteVolumes, _ := cmd.Flags().GetBool("delete-volumes")
-			deleteStorage, _ := cmd.Flags().GetBool("delete-storage")
-			return teardown(cmd.Context(), dc, cfg, deleteVolumes, deleteStorage)
-		},
-	}
-	cmd.Flags().Bool("delete-volumes", false, "also delete persistent volumes (preserved by default)")
-	cmd.Flags().Bool("delete-storage", false, "also delete storage buckets (preserved by default)")
-	return cmd
-}
-
-// teardown nukes external provider resources. Kubernetes resources (services,
+// Teardown nukes external provider resources. Kubernetes resources (services,
 // crons, ingress, secrets) live on the cluster and die with the servers.
 // K8s resource management is reconcile's job, not teardown's.
 // Best-effort: continues through all resources, collects and returns all errors.
-func teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
+func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
 	var errs []string
 	collect := func(err error) {
 		if err != nil {

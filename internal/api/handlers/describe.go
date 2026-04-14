@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 
-	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
@@ -39,7 +38,7 @@ func DescribeCluster(db *gorm.DB) func(context.Context, *DescribeClusterInput) (
 
 		res, err := pkgcore.Describe(ctx, pkgcore.DescribeRequest{Cluster: *cluster})
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 
 		return &DescribeClusterOutput{Body: *res}, nil
@@ -76,7 +75,7 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 
 		groups, err := pkgcore.Resources(ctx, req)
 		if err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 
 		return &ListResourcesOutput{Body: groups}, nil

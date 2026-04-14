@@ -66,7 +66,7 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 	for _, arg := range args {
 		service, domainPart, ok := strings.Cut(arg, ":")
 		if !ok || service == "" || domainPart == "" {
-			return nil, fmt.Errorf("invalid route %q — expected service:domain,domain", arg)
+			return nil, ErrInputf("invalid route %q — expected service:domain,domain", arg)
 		}
 		var domains []string
 		for _, d := range strings.Split(domainPart, ",") {
@@ -76,7 +76,7 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 			}
 		}
 		if len(domains) == 0 {
-			return nil, fmt.Errorf("invalid route %q — no domains", arg)
+			return nil, ErrInputf("invalid route %q — no domains", arg)
 		}
 		routes = append(routes, IngressRouteArg{Service: service, Domains: domains})
 	}

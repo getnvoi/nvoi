@@ -22,7 +22,7 @@ fi
 
 if (( needs_build )); then
   mkdir -p "$BIN_DIR"
-  go build -o "$BIN_PATH" ./cmd/core
+  go build -o "$BIN_PATH" ./cmd/cli
 fi
 
-exec "$BIN_PATH" "$@"
+exec "$BIN_PATH" --local "$@"

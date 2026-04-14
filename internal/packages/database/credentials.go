@@ -5,31 +5,22 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
-	"github.com/spf13/viper"
 )
 
-// Credentials holds the database credentials.
-type Credentials struct {
-	User     string
-	Password string
-	DBName   string
-}
-
-// resolveCredentials reads database credentials from environment variables.
-// All three are required — no auto-generation, no cluster fallback.
-// The user owns the credentials.
-func resolveCredentials(name string, engine Engine) (*Credentials, error) {
-	prefix := strings.ToUpper(name)
-	v := viper.GetViper()
-	userEnv, passEnv, dbEnv := engine.EnvVarNames()
-
-	creds := &Credentials{
-		User:     v.GetString(prefix + "_" + userEnv),
-		Password: v.GetString(prefix + "_" + passEnv),
-		DBName:   v.GetString(prefix + "_" + dbEnv),
+// resolveCredentials reads pre-resolved credentials from DeployContext.
+// Credentials are resolved at the OS boundary (internal/core/resolve.go)
+// and passed through DeployContext. This package never reads env vars.
+func resolveCredentials(dc *config.DeployContext, name string, engine Engine) (*config.DatabaseCredentials, error) {
+	creds := dc.DatabaseCreds[name]
+	if creds == nil {
+		return nil, fmt.Errorf("no credentials resolved for database %q", name)
 	}
+
+	prefix := strings.ToUpper(name)
+	userEnv, passEnv, dbEnv := engine.EnvVarNames()
 
 	if creds.User == "" {
 		return nil, fmt.Errorf("%s_%s is required in environment", prefix, userEnv)
@@ -44,7 +35,7 @@ func resolveCredentials(name string, engine Engine) (*Credentials, error) {
 	return creds, nil
 }
 
-func storeCredentials(ctx context.Context, ssh utils.SSHClient, ns, name string, engine Engine, creds *Credentials, dbURL string) error {
+func storeCredentials(ctx context.Context, ssh utils.SSHClient, ns, name string, engine Engine, creds *config.DatabaseCredentials, dbURL string) error {
 	secretName := name + "-db-credentials"
 	prefix := strings.ToUpper(name)
 	userEnv, passEnv, dbEnv := engine.EnvVarNames()

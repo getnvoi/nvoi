@@ -75,7 +75,7 @@ func ListProviders(db *gorm.DB) func(context.Context, *ListProvidersInput) (*Lis
 
 		var providers []api.InfraProvider
 		if err := db.Where("workspace_id = ?", ws.ID).Order("kind, alias").Find(&providers).Error; err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 
 		items := make([]providerItem, len(providers))
@@ -114,7 +114,7 @@ func SetProvider(db *gorm.DB) func(context.Context, *SetProviderInput) (*SetProv
 			existing.Provider = input.Body.Provider
 			existing.Credentials = input.Body.Credentials
 			if err := db.Save(&existing).Error; err != nil {
-				return nil, huma.Error500InternalServerError(err.Error())
+				return nil, humaError(err)
 			}
 			return &SetProviderOutput{Body: setProviderResult{
 				ID: existing.ID, Alias: existing.Alias,
@@ -132,7 +132,7 @@ func SetProvider(db *gorm.DB) func(context.Context, *SetProviderInput) (*SetProv
 			Credentials: input.Body.Credentials,
 		}
 		if err := db.Create(&prov).Error; err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, humaError(err)
 		}
 		return &SetProviderOutput{Body: setProviderResult{
 			ID: prov.ID, Alias: prov.Alias,

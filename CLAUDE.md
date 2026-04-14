@@ -23,7 +23,7 @@ A CLI that deploys containers to cloud servers from a declarative YAML config. `
 bin/test                   # enforced 5s timeout — MUST pass, no exceptions
 bin/test -v                # verbose
 go test ./... -cover       # coverage
-go build ./cmd/core
+go build ./cmd/cli
 ```
 
 **Test suite MUST complete in under 2 seconds per package.** `bin/test` enforces this with `go test -timeout 2s`. Any test that exceeds this is broken — fix it by injecting mocks for I/O waits (SSH polls, HTTP retries, stability delays). Never sleep in tests. Override production timeouts with `kube.SetTestTiming(time.Millisecond, time.Millisecond)` in test `init()`. This is non-negotiable.
@@ -76,34 +76,27 @@ go test ./...                  # run tests
 |------|---------|
 | `nvoi.yaml` | Infrastructure config (tracked) |
 | `.env` | Provider credentials + app secrets (not tracked) |
-| `bin/nvoi` | Universal entrypoint — sources .env, builds, runs |
+| `bin/nvoi` | Universal entrypoint — sources .env, builds `cmd/cli`, runs with `--local` |
 | `bin/deploy` | Shorthand for `bin/nvoi deploy` |
 | `bin/destroy` | Shorthand for `bin/nvoi teardown` |
-| `bin/core` | Direct `go run ./cmd/core` (no .env) |
-| `bin/cloud` | Cloud CLI — starts compose (API + postgres), runs `cmd/cli` |
 | `bin/dev` | Website development loop |
 
 ### Cloud CLI (local development)
 
-`bin/cloud` auto-starts the API + postgres via docker-compose, then runs the cloud CLI:
+For cloud mode development, start the API + postgres via docker-compose, then run the CLI without `--local`:
 
 ```bash
-bin/cloud login                # authenticate with GitHub token
-bin/cloud whoami               # show current user + context
-bin/cloud workspaces list      # list workspaces
-bin/cloud repos create myapp   # create repo
-bin/cloud repos use myapp      # set active repo
-bin/cloud provider set compute hetzner  # link provider
-bin/cloud deploy               # deploy via API (sends YAML, streams JSONL)
-bin/cloud describe             # live cluster state via API
-bin/cloud logs web             # stream logs via API
+docker compose up -d --wait     # start API + postgres
+export NVOI_API_BASE="http://localhost:8080"
+go run ./cmd/cli login          # authenticate with GitHub token
+go run ./cmd/cli deploy         # deploy via API
 ```
 
 The API runs at `localhost:8080` with a local postgres. `docker-compose.yml` handles the stack:
 - **api** — Go binary, reads `MAIN_DATABASE_URL`, serves Huma REST API
 - **postgres** — postgres:17-alpine, dev credentials (nvoi/nvoi/nvoi)
 
-The cloud CLI stores auth in `~/.config/nvoi/auth.json`.
+Auth stored in `~/.config/nvoi/auth.json`.
 
 ## Config format
 
@@ -133,7 +126,8 @@ volumes:
 
 database:                    # package — bundles StatefulSet, Service, credentials, backup
   main:
-    image: postgres:17       # required — also supports mysql, mariadb
+    kind: postgres           # required — postgres or mysql
+    image: postgres:17       # required — container image
     volume: pgdata           # required — references defined volume
 
 secrets:                     # user secrets, resolved from env vars
@@ -180,7 +174,7 @@ domains:
 - Volume mounts: `name:/path` format, volume must be on same server as workload
 - `server` and `servers` mutually exclusive. Multiple servers + volume = error.
 - Web-facing services (with domains): replicas omitted → defaults to 2. Explicit `replicas: 1` → hard error.
-- Database: image and volume required, storage provider required, name collisions checked.
+- Database: kind required (postgres or mysql), image and volume required, storage provider required, name collisions checked.
 
 ## Commands
 
@@ -207,8 +201,12 @@ Global flags: `--config` (default: `nvoi.yaml`), `--json` (JSONL output), `--ci`
 
 ```
 cmd/
-  core/main.go             Direct CLI entrypoint
-  cli/main.go              Cloud CLI entrypoint
+  cli/                     CLI entrypoint — Backend interface, one file per command
+    main.go                rootCmd, mode detection, --local flag
+    backend.go             Backend interface (12 methods)
+    local.go               localBackend — direct pkg/core calls
+    cloud.go               cloudBackend — HTTP relay to API
+    deploy.go..ssh.go      One file per command, backend-agnostic
   api/main.go              API server entrypoint
   web/main.go              Marketing website (Gin + Goldmark)
   distribution/main.go     Binary distribution server (R2-backed)
@@ -238,20 +236,13 @@ internal/
       credentials.go       Read from env vars (no auto-generation)
       manifests.go         StatefulSet + headless Service YAML generation
       backup.go            Backup CronJob generation
-  core/                    Direct CLI commands + env resolution
-    deploy.go              NewDeployCmd
-    teardown.go            NewTeardownCmd
-    describe.go            NewDescribeCmd, NewResourcesCmd
-    logs.go                NewLogsCmd
-    exec.go                NewExecCmd
-    ssh.go                 NewSSHCmd
-    cron.go                NewCronCmd (cron run)
-    database.go            NewDatabaseCmd (db backup now/list/download, db sql)
-    resolve.go             BuildContext() — viper + env vars → DeployContext
-  cli/                     Cloud CLI — HTTP relay to API
-    backend.go             deploy/teardown/describe/resources/logs/exec/ssh/cron
-    client.go              APIClient
+  core/                    Source-agnostic logic — teardown, database helpers
+    teardown.go            Teardown() — ordered resource deletion
+    database.go            DatabaseBackupList, DatabaseBackupDownload, DatabaseSQL
+  cloud/                   Cloud API client + cloud-only commands
+    client.go              APIClient (HTTP)
     auth.go                Auth config (~/.config/nvoi/auth.json)
+    backend.go             StreamRun, Describe, Resources, Logs, Exec, SSH, database ops
     login.go               GitHub token → JWT flow
     provider.go            nvoi provider set/list/delete
     repos.go               nvoi repos create/list/use/delete
@@ -262,7 +253,7 @@ internal/
     db.go                  PostgreSQL + AutoMigrate (reads MAIN_DATABASE_URL)
     handlers/              Route handlers
   render/                  Output renderers — TUI, Plain, JSON
-  testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
+  testutil/                MockSSH (utils.SSHClient), MockCompute, MockDNS, MockBucket, MockOutput
 
 pkg/
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
@@ -319,7 +310,14 @@ pkg/
 
 ### SSH model
 
-One SSH connection per deploy. `Cluster.MasterSSH` is set once after `ServersAdd()`, shared across all subsequent operations via `borrowedSSH` (no-op Close). API dispatch path connects on-demand (no `MasterSSH`).
+**Interface → implementation → mock:**
+- `utils.SSHClient` (`pkg/utils/ssh.go`) — the interface. Every SSH consumer takes this.
+- `infra.SSHClient` (`pkg/infra/ssh.go`) — the real implementation. Wraps `golang.org/x/crypto/ssh` with SFTP upload, TCP dial, persistent connection.
+- `testutil.MockSSH` (`internal/testutil/mock_ssh.go`) — test mock. Canned responses by exact command or prefix match. Records all calls for assertions.
+
+**Connection lifecycle:** One SSH connection per deploy. `Cluster.MasterSSH` (`utils.SSHClient`) is set once after `ServersAdd()`, shared across all subsequent operations via `borrowedSSH` (no-op Close). API dispatch path connects on-demand (no `MasterSSH`).
+
+**Testing:** Set `Cluster.MasterSSH = &testutil.MockSSH{...}` to inject canned SSH responses. `MockSSH` matches commands by exact string first, then by prefix. Use `ssh.Calls` to assert which commands ran, `ssh.Uploads` to assert file uploads. See `internal/core/teardown_test.go` and `internal/core/database_test.go` for patterns.
 
 `ComputeSet` connects to individual servers via `Cluster.Connect()` for provisioning (Docker, k3s, swap). Those are separate connections — not the master.
 
@@ -408,7 +406,7 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 5. Provider interfaces scale. Add a provider = implement the interface.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 7. SSH keys injected via cloud-init only. Single SSH connection per deploy (`MasterSSH`).
-8. **`os.Getenv` lives exclusively in `internal/core/`.** `pkg/core/`, `provider/`, `infra/`, `utils/` never read env vars.
+8. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/local.go` resolves from env vars, `cmd/api/` resolves from the database. Both produce the same `DeployContext`.
 9. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface.
 10. **`pkg/core/` never writes to stdout.** All output through `Output` interface.
 17. **Every provider operation goes through `pkg/core/`.** No caller should invoke a provider method directly. `pkg/core/` wraps every operation with output, error handling, and naming resolution. Teardown, reconcile, CLI commands — all go through `pkg/core/` functions. Direct provider calls bypass output and error reporting.
@@ -419,6 +417,16 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 15. **Package-managed resources are protected from orphan detection.**
 16. **Database credentials are user-owned.** No auto-generation. Missing = hard error.
 18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) and API input (`validateDispatchInput`) are the only places that validate user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
+22. **Single binary, two modes via Backend interface.** `cmd/cli` is the only CLI. `--local` dispatches to `localBackend` (pkg/core directly); default cloud mode dispatches to `cloudBackend` (API relay). Commands are backend-agnostic — no mode branching in command files. Cloud-only commands (login, whoami, workspaces, repos, provider) hard-error with `--local`.
+
+## CLI mode detection
+
+Single binary (`cmd/cli`). Mode selected by flag or auth state.
+
+- `--local` flag → **localBackend** (call `pkg/core/` with local provider creds). Reads `nvoi.yaml` + env vars.
+- `~/.config/nvoi/auth.json` exists → **cloudBackend** (relay through API). Default when authenticated.
+- No auth, no `--local` → error with guidance to authenticate or pass `--local`.
+- `nvoi.yaml` present but no auth → suggest both options.
 
 19. **One kubectl primitive: `kctl(ns, cmd)`.** Every kubectl-over-SSH call in `pkg/kube/` goes through this single unexported helper. `ns=""` for cluster-scoped, `ns="foo"` for namespaced. YAML applied via SFTP upload + `kctl`, never heredocs. No code outside `pkg/kube/` constructs kubectl strings. Exception: `pkg/infra/k3s.go` bootstrap uses `sudo k3s kubectl` before deploy-user kubeconfig exists.
 20. **Async provider actions polled to completion.** Every action that returns an ID must be polled via `waitForAction` before proceeding. Fire-and-forget = production race condition.

@@ -52,9 +52,7 @@ jobs:
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          out="nvoi-${GOOS}-${GOARCH}${ext}"
-          go build -ldflags="-s -w" -o "dist/${out}" ./cmd/core
-          echo "artifact=${out}" >> "$GITHUB_ENV"
+          go build -ldflags="-s -w" -o "dist/nvoi-${GOOS}-${GOARCH}${ext}" ./cmd/cli
 
       - uses: actions/upload-artifact@v4
         with:
@@ -93,4 +91,4 @@ jobs:
         env:
           SSH_KEY_PATH: ~/.ssh/id_ed25519
           HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
-        run: go run ./cmd/core exec distribution -- ./nvoi-dist pull "${{ github.ref_name }}"
+        run: go run ./cmd/cli --local exec distribution -- ./nvoi-dist pull "${{ github.ref_name }}"
