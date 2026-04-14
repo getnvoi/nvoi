@@ -89,6 +89,7 @@ func rootCmd() *cobra.Command {
 	addCloudOnly(root, cloud.NewWorkspacesCmd())
 	addCloudOnly(root, cloud.NewReposCmd())
 	addCloudOnly(root, cloud.NewProviderCmd())
+	addCloudOnly(root, cloud.NewConfigCmd())
 
 	root.SetErr(newErrorWriter(root))
 	root.SetErrPrefix("")

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/internal/packages"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -211,6 +212,11 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if err := utils.ValidateEnvVarName("secrets."+name, name); err != nil {
 			return err
 		}
+	}
+
+	// ── Packages (database, etc.) ────────────────────────────────────────
+	if err := packages.ValidateAll(cfg); err != nil {
+		return err
 	}
 
 	return nil

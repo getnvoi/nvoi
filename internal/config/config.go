@@ -196,3 +196,7 @@ func ParseAppConfig(data []byte) (*AppConfig, error) {
 	}
 	return &cfg, nil
 }
+
+func MarshalAppConfig(cfg *AppConfig) ([]byte, error) {
+	return yaml.Marshal(cfg)
+}
