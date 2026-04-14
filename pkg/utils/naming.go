@@ -55,10 +55,11 @@ func (n *Names) Bucket(name string) string { return fmt.Sprintf("%s-%s", n.Base(
 
 // KubeNamespace — each app+env gets its own. Service names stay short.
 // POSTGRES_HOST=db just works. No rewriting magic.
-func (n *Names) KubeNamespace() string          { return n.Base() }
-func (n *Names) KubeWorkload(svc string) string { return svc }
-func (n *Names) KubeService(svc string) string  { return svc }
-func (n *Names) KubeSecrets() string            { return "secrets" }
+func (n *Names) KubeNamespace() string                { return n.Base() }
+func (n *Names) KubeWorkload(svc string) string       { return svc }
+func (n *Names) KubeService(svc string) string        { return svc }
+func (n *Names) KubeSecrets() string                  { return "secrets" }
+func (n *Names) KubeServiceSecrets(svc string) string { return svc + "-secrets" }
 
 // ── Labels ─────────────────────────────────────────────────────────────────────
 

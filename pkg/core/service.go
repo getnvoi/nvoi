@@ -21,7 +21,8 @@ type ServiceSetRequest struct {
 	Command    string
 	Replicas   int
 	EnvVars    []string // KEY=VALUE pairs
-	Secrets    []string // secret key references (must exist in cluster)
+	Secrets    []string // global secret key references (must exist in cluster)
+	SvcSecrets []string // per-service secret refs → "{svc}-secrets" k8s Secret
 	Storages   []string // storage names → expands to STORAGE_{NAME}_* secret refs
 	Volumes    []string // name:/path
 	HealthPath string
@@ -102,18 +103,20 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 	}
 
 	spec := kube.ServiceSpec{
-		Name:       req.Name,
-		Image:      req.Image,
-		Port:       req.Port,
-		Command:    req.Command,
-		Replicas:   req.Replicas,
-		Env:        env,
-		Secrets:    req.Secrets,
-		SecretName: names.KubeSecrets(),
-		Volumes:    req.Volumes,
-		HealthPath: req.HealthPath,
-		Servers:    req.Servers,
-		Managed:    managed,
+		Name:          req.Name,
+		Image:         req.Image,
+		Port:          req.Port,
+		Command:       req.Command,
+		Replicas:      req.Replicas,
+		Env:           env,
+		Secrets:       req.Secrets,
+		SecretName:    names.KubeSecrets(),
+		SvcSecrets:    req.SvcSecrets,
+		SvcSecretName: names.KubeServiceSecrets(req.Name),
+		Volumes:       req.Volumes,
+		HealthPath:    req.HealthPath,
+		Servers:       req.Servers,
+		Managed:       managed,
 	}
 
 	out.Command("service", "set", req.Name)

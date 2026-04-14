@@ -48,7 +48,8 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err := Build(ctx, dc, cfg); err != nil {
 		return err
 	}
-	if err := Secrets(ctx, dc, live, cfg, v); err != nil {
+	secretValues, err := Secrets(ctx, dc, live, cfg, v)
+	if err != nil {
 		return err
 	}
 
@@ -62,10 +63,10 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err := Storage(ctx, dc, live, cfg); err != nil {
 		return err
 	}
-	if err := Services(ctx, dc, live, cfg, packageEnvVars); err != nil {
+	if err := Services(ctx, dc, live, cfg, packageEnvVars, secretValues); err != nil {
 		return err
 	}
-	if err := Crons(ctx, dc, live, cfg, packageEnvVars); err != nil {
+	if err := Crons(ctx, dc, live, cfg, packageEnvVars, secretValues); err != nil {
 		return err
 	}
 

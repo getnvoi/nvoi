@@ -369,6 +369,66 @@ func TestValidateConfig_DiskOmitted(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_ServiceSecretValidBareName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80, Secrets: []string{"JWT_SECRET"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("valid bare secret name should pass: %v", err)
+	}
+}
+
+func TestValidateConfig_ServiceSecretValidAliasWithDollar(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80, Secrets: []string{"SECRET_KEY=$BUGSINK_SECRET_KEY"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("valid aliased secret ref with $ should pass: %v", err)
+	}
+}
+
+func TestValidateConfig_ServiceSecretEqualsWithoutDollar(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80, Secrets: []string{"SECRET_KEY=BUGSINK_SECRET_KEY"}}
+	assertValidationError(t, cfg, "requires $")
+}
+
+func TestValidateConfig_ServiceSecretInvalidEnvName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80, Secrets: []string{"secret-key=$FOO"}}
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_ServiceSecretDollarSkipsKeyValidation(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80, Secrets: []string{"DB_URL=$MAIN_DATABASE_URL"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("$VAR in secret key should skip key validation: %v", err)
+	}
+}
+
+func TestValidateConfig_ServiceSecretComposedDollar(t *testing.T) {
+	cfg := validCfg()
+	cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80, Secrets: []string{"AUTH=$USER:$PASS"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("composed $VAR should pass: %v", err)
+	}
+}
+
+func TestValidateConfig_CronSecretInvalidName(t *testing.T) {
+	cfg := validCfg()
+	cfg.Crons = map[string]config.CronDef{
+		"job": {Image: "busybox", Schedule: "0 * * * *", Secrets: []string{"bad-name"}},
+	}
+	assertValidationError(t, cfg, "is invalid")
+}
+
+func TestValidateConfig_CronSecretEqualsWithoutDollar(t *testing.T) {
+	cfg := validCfg()
+	cfg.Crons = map[string]config.CronDef{
+		"job": {Image: "busybox", Schedule: "0 * * * *", Secrets: []string{"FOO=BAR"}},
+	}
+	assertValidationError(t, cfg, "requires $")
+}
+
 func assertValidationError(t *testing.T, cfg *config.AppConfig, substr string) {
 	t.Helper()
 	err := ValidateConfig(cfg)

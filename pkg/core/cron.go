@@ -16,15 +16,16 @@ import (
 
 type CronSetRequest struct {
 	Cluster
-	Name     string
-	Image    string
-	Command  string
-	EnvVars  []string
-	Secrets  []string
-	Storages []string
-	Volumes  []string
-	Schedule string
-	Servers  []string
+	Name       string
+	Image      string
+	Command    string
+	EnvVars    []string
+	Secrets    []string
+	SvcSecrets []string // per-cron secret refs → "{cron}-secrets" k8s Secret
+	Storages   []string
+	Volumes    []string
+	Schedule   string
+	Servers    []string
 }
 
 func CronSet(ctx context.Context, req CronSetRequest) error {
@@ -114,15 +115,17 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 
 	out.Command("cron", "set", req.Name)
 	yaml, err := kube.GenerateCronYAML(kube.CronSpec{
-		Name:       req.Name,
-		Schedule:   req.Schedule,
-		Image:      req.Image,
-		Command:    req.Command,
-		Env:        env,
-		Secrets:    req.Secrets,
-		SecretName: secretName,
-		Volumes:    req.Volumes,
-		Servers:    req.Servers,
+		Name:          req.Name,
+		Schedule:      req.Schedule,
+		Image:         req.Image,
+		Command:       req.Command,
+		Env:           env,
+		Secrets:       req.Secrets,
+		SecretName:    secretName,
+		SvcSecrets:    req.SvcSecrets,
+		SvcSecretName: names.KubeServiceSecrets(req.Name),
+		Volumes:       req.Volumes,
+		Servers:       req.Servers,
 	}, names, managedVolPaths)
 	if err != nil {
 		return fmt.Errorf("generate manifest: %w", err)
