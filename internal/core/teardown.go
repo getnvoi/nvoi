@@ -14,7 +14,12 @@ import (
 
 // Teardown nukes external provider resources. Kubernetes resources (services,
 // crons, ingress, secrets) live on the cluster and die with the servers.
-// K8s resource management is reconcile's job, not teardown's.
+//
+// Where possible, teardown reuses reconcile functions with an empty desired
+// state — the orphan detection loop deletes everything. Resources with
+// teardown-specific policy (conditional flags, config-based deletion) use
+// direct loops.
+//
 // Best-effort: continues through all resources, collects and returns all errors.
 func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
 	if err := cfg.Resolve(); err != nil {
@@ -27,7 +32,7 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}
 	}
 
-	// DNS records — external, at the DNS provider
+	// DNS — config-based. Provider API, no cluster query needed.
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		collect(app.DNSDelete(ctx, app.DNSDeleteRequest{
 			Cluster: dc.Cluster, DNS: dc.DNS,
@@ -35,7 +40,7 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}))
 	}
 
-	// Storage buckets — external, preserved by default
+	// Storage — conditional, config-based.
 	if deleteStorage {
 		for _, name := range utils.SortedKeys(cfg.Storage) {
 			collect(app.StorageEmpty(ctx, app.StorageEmptyRequest{
@@ -49,14 +54,19 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	// Package resources (database backup buckets, etc.)
 	packages.TeardownAll(ctx, dc, cfg, deleteStorage)
 
-	// Volumes — external, preserved by default
+	// Volumes — conditional. Reuses reconcile with empty desired set.
 	if deleteVolumes {
-		for _, name := range utils.SortedKeys(cfg.Volumes) {
-			collect(app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name}))
+		empty := &config.AppConfig{App: cfg.App, Env: cfg.Env}
+		empty.Resolve()
+		live := &config.LiveState{}
+		// Populate live volumes from config — teardown knows what exists
+		for name := range cfg.Volumes {
+			live.Volumes = append(live.Volumes, name)
 		}
+		collect(reconcile.Volumes(ctx, dc, live, empty))
 	}
 
-	// Servers — workers first, then master
+	// Servers — workers first, then master. No drain (cluster is dying).
 	masters, workers := reconcile.SplitServers(cfg.Servers)
 	for _, s := range workers {
 		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
@@ -65,7 +75,7 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
 	}
 
-	// Firewalls — nuke all matching our prefix (desired=nil = delete everything)
+	// Firewalls — reuses shared orphan removal. desired=nil deletes all.
 	names, _ := utils.NewNames(cfg.App, cfg.Env)
 	if names != nil {
 		for _, err := range app.FirewallRemoveOrphans(ctx, app.FirewallRemoveOrphansRequest{
@@ -77,7 +87,7 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}
 	}
 
-	// Network — always nuked
+	// Network — always nuked.
 	collect(app.NetworkDelete(ctx, app.NetworkDeleteRequest{Cluster: dc.Cluster}))
 
 	if len(errs) > 0 {
