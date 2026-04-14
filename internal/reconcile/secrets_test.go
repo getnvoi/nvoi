@@ -58,7 +58,7 @@ func TestSecrets_MissingFromEnv(t *testing.T) {
 
 func TestSecrets_AlreadyConverged(t *testing.T) {
 	dc := testDC(convergeMock())
-	live := &config.LiveState{Secrets: []string{"DB_PASS"}}
+	live := &config.LiveState{}
 	cfg := &config.AppConfig{Secrets: []string{"DB_PASS"}}
 	v := testViper("DB_PASS", "s3cret")
 

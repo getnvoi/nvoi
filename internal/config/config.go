@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -38,7 +39,6 @@ type LiveState struct {
 	Crons      []string
 	Volumes    []string
 	Storage    []string
-	Secrets    []string
 	Domains    map[string][]string
 }
 
@@ -75,6 +75,34 @@ func (c *AppConfig) StorageNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// ServiceSecrets returns a map of service/cron name → secret key names.
+// This is the source of truth for "which secrets are on which workload."
+func (c *AppConfig) ServiceSecrets() map[string][]string {
+	m := make(map[string][]string)
+	extract := func(refs []string) []string {
+		keys := make([]string, len(refs))
+		for i, ref := range refs {
+			if k, _, ok := strings.Cut(ref, "="); ok {
+				keys[i] = k
+			} else {
+				keys[i] = ref
+			}
+		}
+		return keys
+	}
+	for name, svc := range c.Services {
+		if len(svc.Secrets) > 0 {
+			m[name] = extract(svc.Secrets)
+		}
+	}
+	for name, cron := range c.Crons {
+		if len(cron.Secrets) > 0 {
+			m[name] = extract(cron.Secrets)
+		}
+	}
+	return m
 }
 
 // DatabaseNames returns the names of all configured databases.

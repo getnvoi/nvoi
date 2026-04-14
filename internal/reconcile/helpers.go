@@ -21,9 +21,9 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	servers, listErr := app.ComputeList(ctx, app.ComputeListRequest{Cluster: dc.Cluster})
 
 	res, err := app.Describe(ctx, app.DescribeRequest{
-		Cluster:      dc.Cluster,
-		StorageNames: cfg.StorageNames(),
-		SecretNames:  cfg.Secrets,
+		Cluster:        dc.Cluster,
+		StorageNames:   cfg.StorageNames(),
+		ServiceSecrets: cfg.ServiceSecrets(),
 	})
 	if err != nil {
 		if listErr != nil {
@@ -78,8 +78,8 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	for _, s := range res.Storage {
 		state.Storage = append(state.Storage, s.Name)
 	}
-	// Secrets come from config — no global k8s secret to scan.
-	state.Secrets = append(state.Secrets, cfg.Secrets...)
+	// Secrets no longer tracked in live state — per-service secrets
+	// are managed by the Services/Crons reconcilers directly.
 	for _, i := range res.Ingress {
 		state.Domains[i.Service] = append(state.Domains[i.Service], i.Domain)
 	}
@@ -90,7 +90,6 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	sort.Strings(state.Crons)
 	sort.Strings(state.Volumes)
 	sort.Strings(state.Storage)
-	sort.Strings(state.Secrets)
 	for _, domains := range state.Domains {
 		sort.Strings(domains)
 	}

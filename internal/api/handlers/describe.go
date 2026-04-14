@@ -38,9 +38,9 @@ func DescribeCluster(db *gorm.DB) func(context.Context, *DescribeClusterInput) (
 		}
 
 		res, err := pkgcore.Describe(ctx, pkgcore.DescribeRequest{
-			Cluster:      *cluster,
-			StorageNames: cfgNames.StorageNames,
-			SecretNames:  cfgNames.SecretNames,
+			Cluster:        *cluster,
+			StorageNames:   cfgNames.StorageNames,
+			ServiceSecrets: cfgNames.ServiceSecrets,
 		})
 		if err != nil {
 			return nil, humaError(err)
@@ -91,8 +91,8 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 
 // repoConfigNames resolves config-derived names (storage, secrets) from a repo.
 type repoConfigNames struct {
-	StorageNames []string
-	SecretNames  []string
+	StorageNames   []string
+	ServiceSecrets map[string][]string
 }
 
 func repoClusterWithConfig(ctx context.Context, db *gorm.DB, input RepoScopedInput) (*pkgcore.Cluster, repoConfigNames, error) {
@@ -108,7 +108,7 @@ func repoClusterWithConfig(ctx context.Context, db *gorm.DB, input RepoScopedInp
 			if err := cfg.Resolve(); err == nil {
 				names.StorageNames = cfg.StorageNames()
 			}
-			names.SecretNames = cfg.Secrets
+			names.ServiceSecrets = cfg.ServiceSecrets()
 		}
 	}
 	return cluster, names, nil

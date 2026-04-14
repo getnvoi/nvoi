@@ -14,8 +14,8 @@ import (
 
 type DescribeRequest struct {
 	Cluster
-	StorageNames []string // from cfg — config is the source of truth
-	SecretNames  []string // from cfg — config knows what secrets exist
+	StorageNames   []string            // from cfg — config is the source of truth
+	ServiceSecrets map[string][]string // service/cron name → secret keys declared on it
 }
 
 type DescribeNode struct {
@@ -63,8 +63,8 @@ type DescribeIngress struct {
 }
 
 type DescribeSecret struct {
-	Key   string `json:"key"`
-	Value string `json:"value"` // obfuscated
+	Key     string `json:"key"`
+	Service string `json:"service"` // which service/cron owns this secret
 }
 
 type DescribeResult struct {
@@ -133,9 +133,16 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		})
 	}
 
-	// Secrets — derived from config, not from scanning k8s secrets
-	for _, key := range req.SecretNames {
-		result.Secrets = append(result.Secrets, DescribeSecret{Key: key, Value: "(configured)"})
+	// Secrets — read live keys from each per-service k8s Secret
+	for _, svc := range utils.SortedKeys(req.ServiceSecrets) {
+		secretName := names.KubeServiceSecrets(svc)
+		keys, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
+		if err != nil {
+			continue // secret may not exist yet
+		}
+		for _, key := range keys {
+			result.Secrets = append(result.Secrets, DescribeSecret{Key: key, Service: svc})
+		}
 	}
 
 	return result, nil
