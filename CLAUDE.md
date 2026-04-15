@@ -79,7 +79,6 @@ go test ./...                  # run tests
 | `bin/nvoi` | Universal entrypoint — sources .env, builds `cmd/cli`, runs with `--local` |
 | `bin/deploy` | Shorthand for `bin/nvoi deploy` |
 | `bin/destroy` | Shorthand for `bin/nvoi teardown` |
-| `bin/dev` | Website development loop |
 
 ### Cloud CLI (local development)
 
@@ -138,16 +137,13 @@ storage:
   releases: {}
 
 build:
-  web: ./cmd/web
+  api: ./cmd/api
 
 services:
   api:
     build: api
     port: 8080
     secrets: [JWT_SECRET, ENCRYPTION_KEY]
-  web:
-    build: web
-    port: 3000
     server: master           # single node — nodeSelector
     # servers: [worker-1, worker-2]  # multi-node — nodeAffinity + topologySpread
 
@@ -158,7 +154,6 @@ crons:
     command: echo hi
 
 domains:
-  web: [myapp.com, www.myapp.com]
   api: [api.myapp.com]
 ```
 
@@ -208,7 +203,6 @@ cmd/
     cloud.go               cloudBackend — HTTP relay to API
     deploy.go..ssh.go      One file per command, backend-agnostic
   api/main.go              API server entrypoint
-  web/main.go              Marketing website (Gin + Goldmark)
   distribution/main.go     Binary distribution server (R2-backed)
 
 internal/
