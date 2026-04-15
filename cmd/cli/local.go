@@ -40,7 +40,7 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 	storageCreds, _ := resolveProviderCreds(source, "storage", cfg.Providers.Storage)
 	builderCreds, _ := resolveProviderCreds(source, "build", cfg.Providers.Build)
 	gitUsername, gitToken := resolveGitAuth()
-	dbCreds := resolveDatabaseCreds(cfg)
+	dbCreds := resolveDatabaseCreds(source, cfg)
 
 	// Resolve secrets provider's own creds for ESO bootstrap.
 	var secretsCreds map[string]string
@@ -128,7 +128,7 @@ func resolveGitAuth() (string, string) {
 	return "", ""
 }
 
-func resolveDatabaseCreds(cfg *config.AppConfig) map[string]*config.DatabaseCredentials {
+func resolveDatabaseCreds(source provider.CredentialSource, cfg *config.AppConfig) map[string]*config.DatabaseCredentials {
 	if len(cfg.Database) == 0 {
 		return nil
 	}
@@ -137,10 +137,13 @@ func resolveDatabaseCreds(cfg *config.AppConfig) map[string]*config.DatabaseCred
 		engine := database.EngineFor(db.Kind)
 		userEnv, passEnv, dbEnv := engine.EnvVarNames()
 		prefix := strings.ToUpper(name)
+		user, _ := source.Get(prefix + "_" + userEnv)
+		pass, _ := source.Get(prefix + "_" + passEnv)
+		dbName, _ := source.Get(prefix + "_" + dbEnv)
 		creds[name] = &config.DatabaseCredentials{
-			User:     os.Getenv(prefix + "_" + userEnv),
-			Password: os.Getenv(prefix + "_" + passEnv),
-			DBName:   os.Getenv(prefix + "_" + dbEnv),
+			User:     user,
+			Password: pass,
+			DBName:   dbName,
 		}
 	}
 	return creds
