@@ -72,8 +72,8 @@ func newProviderAddCmd() *cobra.Command {
 		Short: "Add a provider with credentials",
 		Long: `Adds an infrastructure provider to the active workspace.
 
-Provider: hetzner, cloudflare, aws, daytona, github, scaleway
-Kind: compute, dns, storage, build
+Provider: hetzner, cloudflare, aws, daytona, github, scaleway, doppler, awssm, infisical
+Kind: compute, dns, storage, build, secrets
 Name: user-chosen alias for linking to repos (defaults to provider name)
 
 Credentials are resolved from env vars automatically using the provider schema.
@@ -84,6 +84,7 @@ Examples:
   nvoi provider add cloudflare --kind dns --name cf-dns CF_API_KEY=xxx CF_ZONE_ID=xxx DNS_ZONE=nvoi.to
   nvoi provider add cloudflare --kind storage --name cf-storage CF_ACCOUNT_ID=xxx CF_R2_ACCESS_KEY_ID=xxx CF_R2_SECRET_ACCESS_KEY=xxx
   nvoi provider add daytona --kind build --name daytona-team DAYTONA_API_KEY=xxx
+  nvoi provider add doppler --kind secrets DOPPLER_TOKEN=xxx DOPPLER_PROJECT=myapp DOPPLER_CONFIG=production
   nvoi provider add hetzner --kind compute HETZNER_TOKEN=xxx   # alias defaults to "hetzner"`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -99,7 +100,7 @@ Examples:
 			providerName := args[0]
 			kind, _ := cmd.Flags().GetString("kind")
 			if kind == "" {
-				return fmt.Errorf("--kind is required (compute, dns, storage, build)")
+				return fmt.Errorf("--kind is required (compute, dns, storage, build, secrets)")
 			}
 			name, _ := cmd.Flags().GetString("name")
 			if name == "" {

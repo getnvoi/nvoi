@@ -29,6 +29,7 @@ type DeployContext struct {
 	GitUsername   string
 	GitToken      string
 	DatabaseCreds map[string]*DatabaseCredentials
+	SecretsCreds  map[string]string // resolved credentials for the secrets provider (nil = no secrets provider)
 }
 
 // LiveState represents what's currently deployed.
@@ -180,10 +181,17 @@ type BackupDef struct {
 }
 
 type ProvidersDef struct {
-	Compute string `yaml:"compute"`
-	DNS     string `yaml:"dns,omitempty"`
-	Storage string `yaml:"storage,omitempty"`
-	Build   string `yaml:"build,omitempty"`
+	Compute string              `yaml:"compute"`
+	DNS     string              `yaml:"dns,omitempty"`
+	Storage string              `yaml:"storage,omitempty"`
+	Build   string              `yaml:"build,omitempty"`
+	Secrets *SecretsProviderDef `yaml:"secrets,omitempty"`
+}
+
+// SecretsProviderDef configures an external secrets backend.
+// When set, credentials are fetched transiently at deploy time from the user's own secrets provider.
+type SecretsProviderDef struct {
+	Kind string `yaml:"kind"` // doppler | awssm | infisical
 }
 
 type ServerDef struct {

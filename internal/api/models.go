@@ -120,6 +120,7 @@ const (
 	ProviderKindDNS     ProviderKind = "dns"
 	ProviderKindStorage ProviderKind = "storage"
 	ProviderKindBuild   ProviderKind = "build"
+	ProviderKindSecrets ProviderKind = "secrets"
 )
 
 // InfraProvider stores a provider with its credentials at workspace scope.
@@ -211,12 +212,14 @@ type Repo struct {
 	DNSProviderID     *string `gorm:"index" json:"dns_provider_id,omitempty"`
 	StorageProviderID *string `gorm:"index" json:"storage_provider_id,omitempty"`
 	BuildProviderID   *string `gorm:"index" json:"build_provider_id,omitempty"`
+	SecretsProviderID *string `gorm:"index" json:"secrets_provider_id,omitempty"`
 
 	Workspace       Workspace      `gorm:"foreignKey:WorkspaceID" json:"-"`
 	ComputeProvider *InfraProvider `gorm:"foreignKey:ComputeProviderID" json:"compute_provider,omitempty"`
 	DNSProvider     *InfraProvider `gorm:"foreignKey:DNSProviderID" json:"dns_provider,omitempty"`
 	StorageProvider *InfraProvider `gorm:"foreignKey:StorageProviderID" json:"storage_provider,omitempty"`
 	BuildProvider   *InfraProvider `gorm:"foreignKey:BuildProviderID" json:"build_provider,omitempty"`
+	SecretsProvider *InfraProvider `gorm:"foreignKey:SecretsProviderID" json:"secrets_provider,omitempty"`
 }
 
 func (r *Repo) BeforeCreate(tx *gorm.DB) error {

@@ -46,6 +46,7 @@ type UpdateRepoInput struct {
 		DNSProvider     string `json:"dns_provider,omitempty" doc:"DNS provider alias"`
 		StorageProvider string `json:"storage_provider,omitempty" doc:"Storage provider alias"`
 		BuildProvider   string `json:"build_provider,omitempty" doc:"Build provider alias"`
+		SecretsProvider string `json:"secrets_provider,omitempty" doc:"Secrets provider alias"`
 	}
 }
 
@@ -132,6 +133,7 @@ func UpdateRepo(db *gorm.DB) func(context.Context, *UpdateRepoInput) (*UpdateRep
 			{input.Body.DNSProvider, api.ProviderKindDNS, "dns_provider_id"},
 			{input.Body.StorageProvider, api.ProviderKindStorage, "storage_provider_id"},
 			{input.Body.BuildProvider, api.ProviderKindBuild, "build_provider_id"},
+			{input.Body.SecretsProvider, api.ProviderKindSecrets, "secrets_provider_id"},
 		}
 		for _, link := range providerLinks {
 			if link.alias == "" {
@@ -184,7 +186,8 @@ func findRepo(db *gorm.DB, userID, workspaceID, repoID string) (*api.Repo, error
 		Preload("ComputeProvider").
 		Preload("DNSProvider").
 		Preload("StorageProvider").
-		Preload("BuildProvider")
+		Preload("BuildProvider").
+		Preload("SecretsProvider")
 	if err := q.First(&repo).Error; err != nil {
 		return nil, huma.Error404NotFound("repo not found")
 	}

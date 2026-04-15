@@ -34,6 +34,10 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/github"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
+	// Secrets
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/infisical"
 )
 
 func main() {

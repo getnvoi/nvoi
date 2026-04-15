@@ -131,12 +131,12 @@ func newReposUseCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "use <name-or-id>",
 		Short: "Set active repo and optionally link providers",
-		Long: `Sets the active repo. Pass --compute, --dns, --storage, --build to link
+		Long: `Sets the active repo. Pass --compute, --dns, --storage, --build, --secrets to link
 providers from the workspace by alias.
 
 Examples:
   nvoi repos use myapp
-  nvoi repos use myapp --compute hetzner-prod --dns cf-dns --storage cf-storage --build daytona-team`,
+  nvoi repos use myapp --compute hetzner-prod --dns cf-dns --storage cf-storage --build daytona-team --secrets doppler`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, cfg, err := AuthedClient()

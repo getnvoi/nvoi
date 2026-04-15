@@ -40,6 +40,11 @@ func buildDeployContext(out app.Output, cfg *config.AppConfig) *config.DeployCon
 	gitUsername, gitToken := resolveGitAuth()
 	dbCreds := resolveDatabaseCreds(cfg)
 
+	var secretsCreds map[string]string
+	if sp := cfg.Providers.Secrets; sp != nil {
+		secretsCreds, _ = resolveProviderCreds("secrets", sp.Kind)
+	}
+
 	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName:     cfg.App,
@@ -56,6 +61,7 @@ func buildDeployContext(out app.Output, cfg *config.AppConfig) *config.DeployCon
 		GitUsername:   gitUsername,
 		GitToken:      gitToken,
 		DatabaseCreds: dbCreds,
+		SecretsCreds:  secretsCreds,
 	}
 }
 

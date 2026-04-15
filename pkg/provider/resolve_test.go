@@ -37,6 +37,15 @@ func (stubCompute) ListResources(context.Context) ([]ResourceGroup, error)      
 func (stubCompute) ReconcileFirewallRules(context.Context, string, PortAllowList) error { return nil }
 func (stubCompute) GetFirewallRules(context.Context, string) (PortAllowList, error)     { return nil, nil }
 
+// stubSecrets is a minimal SecretsProvider for testing registration/resolution.
+type stubSecrets struct{}
+
+func (stubSecrets) ValidateCredentials(context.Context) error   { return nil }
+func (stubSecrets) Get(context.Context, string) (string, error) { return "", nil }
+func (stubSecrets) Set(context.Context, string, string) error   { return nil }
+func (stubSecrets) Delete(context.Context, string) error        { return nil }
+func (stubSecrets) List(context.Context) ([]string, error)      { return nil, nil }
+
 func init() {
 	RegisterCompute("test-compute", CredentialSchema{
 		Name: "test-compute",
@@ -46,6 +55,16 @@ func init() {
 		},
 	}, func(creds map[string]string) ComputeProvider {
 		return stubCompute{}
+	})
+
+	RegisterSecrets("test-secrets", CredentialSchema{
+		Name: "test-secrets",
+		Fields: []CredentialField{
+			{Key: "token", Required: true, EnvVar: "TEST_SECRETS_TOKEN", Flag: "token"},
+			{Key: "project", Required: false, EnvVar: "TEST_SECRETS_PROJECT", Flag: "project"},
+		},
+	}, func(creds map[string]string) SecretsProvider {
+		return stubSecrets{}
 	})
 }
 
@@ -160,5 +179,81 @@ func TestResolveComputeUnknownProvider(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no-such-provider") {
 		t.Errorf("unknown provider: error %q should mention provider name", err)
+	}
+}
+
+// ── Secrets provider tests ──────────────────────────────────────────────────
+
+func TestResolveSecretsValid(t *testing.T) {
+	p, err := ResolveSecrets("test-secrets", map[string]string{"token": "abc123"})
+	if err != nil {
+		t.Fatalf("valid creds: got error %v, want nil", err)
+	}
+	if p == nil {
+		t.Fatal("valid creds: got nil provider")
+	}
+}
+
+func TestResolveSecretsInvalidCreds(t *testing.T) {
+	_, err := ResolveSecrets("test-secrets", map[string]string{})
+	if err == nil {
+		t.Fatal("invalid creds: got nil, want error")
+	}
+	if !strings.Contains(err.Error(), "token") {
+		t.Errorf("invalid creds: error %q should mention missing field %q", err, "token")
+	}
+}
+
+func TestResolveSecretsUnknownProvider(t *testing.T) {
+	_, err := ResolveSecrets("no-such-provider", map[string]string{"token": "abc"})
+	if err == nil {
+		t.Fatal("unknown provider: got nil, want error")
+	}
+	if !strings.Contains(err.Error(), "no-such-provider") {
+		t.Errorf("unknown provider: error %q should mention provider name", err)
+	}
+}
+
+func TestGetSecretsSchema(t *testing.T) {
+	schema, err := GetSecretsSchema("test-secrets")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if schema.Name != "test-secrets" {
+		t.Errorf("schema.Name = %q, want test-secrets", schema.Name)
+	}
+}
+
+func TestGetSecretsSchema_Unknown(t *testing.T) {
+	_, err := GetSecretsSchema("nope")
+	if err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+func TestMapSecretsCredentials(t *testing.T) {
+	creds, err := MapSecretsCredentials("test-secrets", map[string]string{"TEST_SECRETS_TOKEN": "secret"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds["token"] != "secret" {
+		t.Errorf("token = %q, want secret", creds["token"])
+	}
+}
+
+func TestMapSecretsCredentials_UnknownProvider(t *testing.T) {
+	_, err := MapSecretsCredentials("nope", map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+func TestGetSchema_Secrets(t *testing.T) {
+	schema, err := GetSchema("secrets", "test-secrets")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if schema.Name != "test-secrets" {
+		t.Errorf("schema.Name = %q, want test-secrets", schema.Name)
 	}
 }

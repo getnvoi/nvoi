@@ -34,7 +34,7 @@ type SetProviderInput struct {
 	WorkspaceScopedInput
 	Body struct {
 		Alias       string           `json:"alias" required:"true" doc:"User-chosen name (e.g. hetzner-prod, cf-dns)"`
-		Kind        api.ProviderKind `json:"kind" required:"true" enum:"compute,dns,storage,build" doc:"Provider domain"`
+		Kind        api.ProviderKind `json:"kind" required:"true" enum:"compute,dns,storage,build,secrets" doc:"Provider domain"`
 		Provider    string           `json:"provider" required:"true" doc:"Provider implementation (hetzner, cloudflare, aws, daytona, github)"`
 		Credentials string           `json:"credentials" required:"true" doc:"Encrypted JSON credentials"`
 	}

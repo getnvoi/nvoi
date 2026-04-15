@@ -51,6 +51,13 @@ type bucketEntry struct {
 var computeProviders = map[string]computeEntry{}
 var buildProviders = map[string]buildEntry{}
 
+type secretsEntry struct {
+	schema  CredentialSchema
+	factory func(creds map[string]string) SecretsProvider
+}
+
+var secretsProviders = map[string]secretsEntry{}
+
 type dnsEntry struct {
 	schema  CredentialSchema
 	factory func(creds map[string]string) DNSProvider
@@ -71,6 +78,9 @@ func RegisterDNS(name string, schema CredentialSchema, factory func(creds map[st
 func RegisterBucket(name string, schema CredentialSchema, factory func(creds map[string]string) BucketProvider) {
 	bucketProviders[name] = bucketEntry{schema: schema, factory: factory}
 }
+func RegisterSecrets(name string, schema CredentialSchema, factory func(creds map[string]string) SecretsProvider) {
+	secretsProviders[name] = secretsEntry{schema: schema, factory: factory}
+}
 
 // GetSchema returns the credential schema for any provider kind + name.
 func GetSchema(kind, name string) (CredentialSchema, error) {
@@ -83,6 +93,8 @@ func GetSchema(kind, name string) (CredentialSchema, error) {
 		return GetBucketSchema(name)
 	case "build":
 		return GetBuildSchema(name)
+	case "secrets":
+		return GetSecretsSchema(name)
 	default:
 		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
 	}
@@ -214,6 +226,34 @@ func ResolveBucket(name string, creds map[string]string) (BucketProvider, error)
 	entry, ok := bucketProviders[name]
 	if !ok {
 		return nil, fmt.Errorf("unsupported storage provider: %q", name)
+	}
+	if err := entry.schema.Validate(creds); err != nil {
+		return nil, err
+	}
+	return entry.factory(creds), nil
+}
+
+func GetSecretsSchema(name string) (CredentialSchema, error) {
+	entry, ok := secretsProviders[name]
+	if !ok {
+		return CredentialSchema{}, fmt.Errorf("unsupported secrets provider: %q", name)
+	}
+	return entry.schema, nil
+}
+
+// MapSecretsCredentials maps env vars to secrets provider schema keys.
+func MapSecretsCredentials(providerName string, env map[string]string) (map[string]string, error) {
+	schema, err := GetSecretsSchema(providerName)
+	if err != nil {
+		return nil, err
+	}
+	return MapCredentials(schema, env), nil
+}
+
+func ResolveSecrets(name string, creds map[string]string) (SecretsProvider, error) {
+	entry, ok := secretsProviders[name]
+	if !ok {
+		return nil, fmt.Errorf("unsupported secrets provider: %q", name)
 	}
 	if err := entry.schema.Validate(creds); err != nil {
 		return nil, err

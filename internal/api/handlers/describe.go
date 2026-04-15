@@ -77,6 +77,7 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 				Creds: repo.StorageProvider.CredentialsMap(),
 			}
 		}
+		// SecretsProvider creds are available on the repo but not needed for Resources.
 
 		groups, err := pkgcore.Resources(ctx, req)
 		if err != nil {

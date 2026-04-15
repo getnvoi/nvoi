@@ -429,6 +429,38 @@ func TestValidateConfig_CronSecretEqualsWithoutDollar(t *testing.T) {
 	assertValidationError(t, cfg, "requires $")
 }
 
+// ── Secrets provider validation ─────────────────────────────────────────────
+
+func TestValidateConfig_SecretsProviderValid(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Secrets = &config.SecretsProviderDef{Kind: "doppler"}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateConfig_SecretsProviderMissingKind(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Secrets = &config.SecretsProviderDef{}
+	assertValidationError(t, cfg, "providers.secrets.kind is required")
+}
+
+func TestValidateConfig_SecretsProviderUnsupportedKind(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Secrets = &config.SecretsProviderDef{Kind: "vault"}
+	assertValidationError(t, cfg, "unsupported secrets provider")
+}
+
+func TestValidateConfig_SecretsProviderAllKinds(t *testing.T) {
+	for _, kind := range []string{"doppler", "awssm", "infisical"} {
+		cfg := validCfg()
+		cfg.Providers.Secrets = &config.SecretsProviderDef{Kind: kind}
+		if err := ValidateConfig(cfg); err != nil {
+			t.Fatalf("kind %q: unexpected error: %v", kind, err)
+		}
+	}
+}
+
 func assertValidationError(t *testing.T, cfg *config.AppConfig, substr string) {
 	t.Helper()
 	err := ValidateConfig(cfg)

@@ -13,8 +13,8 @@ import (
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
-// providerKinds is the single source of truth for the four provider kinds.
-var providerKinds = []string{"compute", "dns", "storage", "build"}
+// providerKinds is the single source of truth for the five provider kinds.
+var providerKinds = []string{"compute", "dns", "storage", "build", "secrets"}
 
 func esc(s string) string { return url.PathEscape(s) }
 
