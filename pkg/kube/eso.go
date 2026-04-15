@@ -151,6 +151,29 @@ func GenerateSecretStoreYAML(name, ns, kind, authName string, creds map[string]s
 	return strings.TrimSpace(string(b)), nil
 }
 
+// WaitForSecretStoreReady polls until the SecretStore reports Ready.
+// Hard error if it stays unready — catches bad credentials, invalid provider config, etc.
+func WaitForSecretStoreReady(ctx context.Context, ssh utils.SSHClient, ns, name string) error {
+	var lastStatus string
+	err := utils.Poll(ctx, esoPollInterval, esoTimeout, func() (bool, error) {
+		out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get secretstore %s -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}|{.status.conditions[?(@.type==\"Ready\")].message}' 2>/dev/null", name)))
+		if err != nil {
+			return false, nil
+		}
+		raw := strings.Trim(strings.TrimSpace(string(out)), "'")
+		parts := strings.SplitN(raw, "|", 2)
+		status := parts[0]
+		if len(parts) > 1 {
+			lastStatus = parts[1]
+		}
+		return status == "True", nil
+	})
+	if err != nil && lastStatus != "" {
+		return fmt.Errorf("%s: %s", name, lastStatus)
+	}
+	return err
+}
+
 // ── ExternalSecret CRD ──────────────────────────────────────────────────────
 
 // ExternalSecretSpec describes an ESO ExternalSecret to create.

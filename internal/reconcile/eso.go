@@ -68,6 +68,11 @@ func ESOSetup(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	if err := kube.ApplySecretStore(ctx, ssh, ns, esoStoreName, kind, esoBootstrapName, creds); err != nil {
 		return fmt.Errorf("eso: apply SecretStore: %w", err)
 	}
+
+	// 5. Validate SecretStore is Ready — catches bad credentials, wrong config, etc.
+	if err := kube.WaitForSecretStoreReady(ctx, ssh, ns, esoStoreName); err != nil {
+		return fmt.Errorf("eso: SecretStore not ready: %w", err)
+	}
 	dc.Cluster.Log().Success("SecretStore configured")
 
 	return nil
