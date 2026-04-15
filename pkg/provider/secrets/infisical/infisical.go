@@ -13,11 +13,14 @@ import (
 
 const defaultHost = "https://app.infisical.com"
 
-// Client manages secrets via the Infisical API.
+// Client manages secrets via the Infisical API using Universal Auth.
 type Client struct {
-	api         *utils.HTTPClient
-	projectID   string
-	environment string
+	api          *utils.HTTPClient
+	host         string
+	clientID     string
+	clientSecret string
+	projectSlug  string
+	environment  string
 }
 
 func New(creds map[string]string) *Client {
@@ -25,7 +28,6 @@ func New(creds map[string]string) *Client {
 	if host == "" {
 		host = defaultHost
 	}
-	token := creds["token"]
 	env := creds["environment"]
 	if env == "" {
 		env = "production"
@@ -33,19 +35,49 @@ func New(creds map[string]string) *Client {
 	return &Client{
 		api: &utils.HTTPClient{
 			BaseURL: host + "/api",
-			SetAuth: func(r *http.Request) {
-				r.Header.Set("Authorization", "Bearer "+token)
-			},
-			Label: "infisical",
+			Label:   "infisical",
 		},
-		projectID:   creds["project_id"],
-		environment: env,
+		host:         host,
+		clientID:     creds["client_id"],
+		clientSecret: creds["client_secret"],
+		projectSlug:  creds["project_slug"],
+		environment:  env,
 	}
 }
 
+// authenticate obtains an access token via Universal Auth.
+func (c *Client) authenticate(ctx context.Context) (string, error) {
+	var resp struct {
+		AccessToken string `json:"accessToken"`
+	}
+	body := map[string]string{
+		"clientId":     c.clientID,
+		"clientSecret": c.clientSecret,
+	}
+	if err := c.api.Do(ctx, "POST", "/v1/auth/universal-auth/login", body, &resp); err != nil {
+		return "", fmt.Errorf("infisical: authenticate: %w", err)
+	}
+	return resp.AccessToken, nil
+}
+
+// authedAPI returns an HTTPClient with a fresh access token.
+func (c *Client) authedAPI(ctx context.Context) (*utils.HTTPClient, error) {
+	token, err := c.authenticate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &utils.HTTPClient{
+		BaseURL: c.host + "/api",
+		SetAuth: func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer "+token)
+		},
+		Label: "infisical",
+	}, nil
+}
+
 func (c *Client) ValidateCredentials(ctx context.Context) error {
-	if c.projectID == "" {
-		return fmt.Errorf("infisical: project_id is required")
+	if c.projectSlug == "" {
+		return fmt.Errorf("infisical: project_slug is required")
 	}
 	_, err := c.List(ctx)
 	if err != nil {
@@ -60,7 +92,7 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 			SecretValue string `json:"secretValue"`
 		} `json:"secret"`
 	}
-	path := fmt.Sprintf("/v3/secrets/raw/%s?workspaceId=%s&environment=%s", key, c.projectID, c.environment)
+	path := fmt.Sprintf("/v3/secrets/raw/%s?workspaceId=%s&environment=%s", key, c.projectSlug, c.environment)
 	if err := c.api.Do(ctx, "GET", path, nil, &resp); err != nil {
 		return "", fmt.Errorf("infisical: get %q: %w", key, err)
 	}
@@ -69,7 +101,7 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 
 func (c *Client) Set(ctx context.Context, key, value string) error {
 	body := map[string]any{
-		"workspaceId": c.projectID,
+		"workspaceId": c.projectSlug,
 		"environment": c.environment,
 		"secretName":  key,
 		"secretValue": value,
@@ -89,7 +121,7 @@ func (c *Client) Set(ctx context.Context, key, value string) error {
 
 func (c *Client) Delete(ctx context.Context, key string) error {
 	body := map[string]any{
-		"workspaceId": c.projectID,
+		"workspaceId": c.projectSlug,
 		"environment": c.environment,
 		"secretName":  key,
 	}
@@ -106,7 +138,7 @@ func (c *Client) List(ctx context.Context) ([]string, error) {
 			SecretKey string `json:"secretKey"`
 		} `json:"secrets"`
 	}
-	path := fmt.Sprintf("/v3/secrets/raw?workspaceId=%s&environment=%s", c.projectID, c.environment)
+	path := fmt.Sprintf("/v3/secrets/raw?workspaceId=%s&environment=%s", c.projectSlug, c.environment)
 	if err := c.api.Do(ctx, "GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("infisical: list: %w", err)
 	}

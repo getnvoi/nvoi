@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	sigsyaml "sigs.k8s.io/yaml"
+
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -14,10 +16,9 @@ import (
 // EnsureESO installs External Secrets Operator via k3s HelmChart CRD.
 // Idempotent — skips if already installed and ready.
 func EnsureESO(ctx context.Context, ssh utils.SSHClient) error {
-	// Check if ESO deployment is already ready.
 	out, _ := ssh.Run(ctx, kctl("external-secrets", "get deploy external-secrets -o jsonpath='{.status.readyReplicas}' 2>/dev/null"))
 	if strings.TrimSpace(strings.Trim(string(out), "'")) != "" {
-		return nil // already running
+		return nil
 	}
 
 	yaml := `apiVersion: helm.cattle.io/v1
@@ -36,11 +37,9 @@ spec:
 	if err := ApplyGlobal(ctx, ssh, yaml); err != nil {
 		return fmt.Errorf("install ESO: %w", err)
 	}
-
 	return waitForESOReady(ctx, ssh)
 }
 
-// waitForESOReady polls until the ESO deployment is ready.
 func waitForESOReady(ctx context.Context, ssh utils.SSHClient) error {
 	return utils.Poll(ctx, esoPollInterval, esoTimeout, func() (bool, error) {
 		out, err := ssh.Run(ctx, kctl("external-secrets", "get deploy external-secrets -o jsonpath='{.status.readyReplicas}/{.spec.replicas}' 2>/dev/null"))
@@ -61,7 +60,7 @@ func waitForESOReady(ctx context.Context, ssh utils.SSHClient) error {
 func EnsureReloader(ctx context.Context, ssh utils.SSHClient) error {
 	out, _ := ssh.Run(ctx, kctl("reloader", "get deploy reloader-reloader -o jsonpath='{.status.readyReplicas}' 2>/dev/null"))
 	if strings.TrimSpace(strings.Trim(string(out), "'")) != "" {
-		return nil // already running
+		return nil
 	}
 
 	yaml := `apiVersion: helm.cattle.io/v1
@@ -78,7 +77,6 @@ spec:
 	if err := ApplyGlobal(ctx, ssh, yaml); err != nil {
 		return fmt.Errorf("install Reloader: %w", err)
 	}
-
 	return utils.Poll(ctx, esoPollInterval, esoTimeout, func() (bool, error) {
 		out, err := ssh.Run(ctx, kctl("reloader", "get deploy reloader-reloader -o jsonpath='{.status.readyReplicas}' 2>/dev/null"))
 		if err != nil {
@@ -88,91 +86,59 @@ spec:
 	})
 }
 
-// Timing for ESO/Reloader readiness polling.
 var esoPollInterval = 3 * time.Second
 var esoTimeout = 3 * time.Minute
 
 // ── SecretStore CRD ─────────────────────────────────────────────────────────
 
-// SecretStoreSpec describes the ESO SecretStore to create.
-type SecretStoreSpec struct {
-	Name     string // SecretStore name (e.g. "nvoi-secrets")
-	Kind     string // awssm, scaleway, doppler, infisical
-	AuthName string // k8s Secret name holding the bootstrap token
+// ESOProviderSpec is a function that returns the ESO provider block for a SecretStore.
+// authName is the k8s Secret holding bootstrap credentials.
+// creds are the resolved provider credentials (from env or DB).
+// Returns the "provider" value for the SecretStore spec.
+type ESOProviderSpec func(authName string, creds map[string]string) map[string]any
+
+// esoProviderRegistry holds registered ESO provider specs.
+// Populated by init() in each secrets provider package.
+var esoProviderRegistry = map[string]ESOProviderSpec{}
+
+// RegisterESOProvider registers an ESO provider spec factory.
+func RegisterESOProvider(kind string, fn ESOProviderSpec) {
+	esoProviderRegistry[kind] = fn
 }
 
 // ApplySecretStore generates and applies a SecretStore CRD.
-func ApplySecretStore(ctx context.Context, ssh utils.SSHClient, ns string, spec SecretStoreSpec) error {
-	yaml, err := GenerateSecretStoreYAML(spec, ns)
+func ApplySecretStore(ctx context.Context, ssh utils.SSHClient, ns, name, kind, authName string, creds map[string]string) error {
+	yaml, err := GenerateSecretStoreYAML(name, ns, kind, authName, creds)
 	if err != nil {
 		return err
 	}
 	return Apply(ctx, ssh, ns, yaml)
 }
 
-// GenerateSecretStoreYAML produces a SecretStore CRD for the given provider.
-func GenerateSecretStoreYAML(spec SecretStoreSpec, ns string) (string, error) {
-	var providerBlock string
-	switch spec.Kind {
-	case "awssm":
-		providerBlock = fmt.Sprintf(`  provider:
-    aws:
-      service: SecretsManager
-      auth:
-        secretRef:
-          accessKeyIDSecretRef:
-            name: %s
-            key: access_key_id
-          secretAccessKeySecretRef:
-            name: %s
-            key: secret_access_key
-      region: "%s"`, spec.AuthName, spec.AuthName, "us-east-1") // region injected at call site via bootstrap secret
-	case "scaleway":
-		providerBlock = fmt.Sprintf(`  provider:
-    scaleway:
-      accessKey:
-        secretRef:
-          name: %s
-          key: access_key
-      secretKey:
-        secretRef:
-          name: %s
-          key: secret_key
-      projectId:
-        secretRef:
-          name: %s
-          key: project_id
-      region: fr-par`, spec.AuthName, spec.AuthName, spec.AuthName)
-	case "doppler":
-		providerBlock = fmt.Sprintf(`  provider:
-    doppler:
-      auth:
-        secretRef:
-          dopplerToken:
-            name: %s
-            key: token`, spec.AuthName)
-	case "infisical":
-		providerBlock = fmt.Sprintf(`  provider:
-    infisical:
-      auth:
-        universalAuthCredentials:
-          serviceToken:
-            secretRef:
-              name: %s
-              key: token`, spec.AuthName)
-	default:
-		return "", fmt.Errorf("unsupported ESO provider kind: %q", spec.Kind)
+// GenerateSecretStoreYAML produces a SecretStore CRD using the registered provider spec.
+func GenerateSecretStoreYAML(name, ns, kind, authName string, creds map[string]string) (string, error) {
+	fn, ok := esoProviderRegistry[kind]
+	if !ok {
+		return "", fmt.Errorf("unsupported ESO provider: %q", kind)
 	}
 
-	yaml := fmt.Sprintf(`apiVersion: external-secrets.io/v1beta1
-kind: SecretStore
-metadata:
-  name: %s
-  namespace: %s
-spec:
-%s`, spec.Name, ns, providerBlock)
+	store := map[string]any{
+		"apiVersion": "external-secrets.io/v1beta1",
+		"kind":       "SecretStore",
+		"metadata": map[string]any{
+			"name":      name,
+			"namespace": ns,
+		},
+		"spec": map[string]any{
+			"provider": fn(authName, creds),
+		},
+	}
 
-	return yaml, nil
+	b, err := sigsyaml.Marshal(store)
+	if err != nil {
+		return "", fmt.Errorf("marshal SecretStore: %w", err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // ── ExternalSecret CRD ──────────────────────────────────────────────────────
@@ -186,39 +152,52 @@ type ExternalSecretSpec struct {
 }
 
 // GenerateExternalSecretYAML produces an ExternalSecret CRD.
-func GenerateExternalSecretYAML(spec ExternalSecretSpec, ns string) string {
-	var dataEntries []string
-	for _, key := range spec.Keys {
-		dataEntries = append(dataEntries, fmt.Sprintf(`  - secretKey: %s
-    remoteRef:
-      key: %s`, key, key))
+func GenerateExternalSecretYAML(spec ExternalSecretSpec, ns string) (string, error) {
+	data := make([]map[string]any, len(spec.Keys))
+	for i, key := range spec.Keys {
+		data[i] = map[string]any{
+			"secretKey": key,
+			"remoteRef": map[string]any{"key": key},
+		}
 	}
 
-	return fmt.Sprintf(`apiVersion: external-secrets.io/v1beta1
-kind: ExternalSecret
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    %s: %s
-spec:
-  refreshInterval: %s
-  secretStoreRef:
-    name: %s
-    kind: SecretStore
-  target:
-    name: %s
-    creationPolicy: Owner
-  data:
-%s`, spec.Name, ns,
-		utils.LabelAppManagedBy, utils.LabelManagedBy,
-		spec.RefreshInterval, spec.StoreName, spec.Name,
-		strings.Join(dataEntries, "\n"))
+	es := map[string]any{
+		"apiVersion": "external-secrets.io/v1beta1",
+		"kind":       "ExternalSecret",
+		"metadata": map[string]any{
+			"name":      spec.Name,
+			"namespace": ns,
+			"labels": map[string]string{
+				utils.LabelAppManagedBy: utils.LabelManagedBy,
+			},
+		},
+		"spec": map[string]any{
+			"refreshInterval": spec.RefreshInterval,
+			"secretStoreRef": map[string]any{
+				"name": spec.StoreName,
+				"kind": "SecretStore",
+			},
+			"target": map[string]any{
+				"name":           spec.Name,
+				"creationPolicy": "Owner",
+			},
+			"data": data,
+		},
+	}
+
+	b, err := sigsyaml.Marshal(es)
+	if err != nil {
+		return "", fmt.Errorf("marshal ExternalSecret: %w", err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // ApplyExternalSecret generates and applies an ExternalSecret CRD.
 func ApplyExternalSecret(ctx context.Context, ssh utils.SSHClient, ns string, spec ExternalSecretSpec) error {
-	yaml := GenerateExternalSecretYAML(spec, ns)
+	yaml, err := GenerateExternalSecretYAML(spec, ns)
+	if err != nil {
+		return err
+	}
 	return Apply(ctx, ssh, ns, yaml)
 }
 

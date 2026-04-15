@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 const (
@@ -14,11 +15,11 @@ const (
 )
 
 // ESOSetup installs ESO + Reloader and configures the SecretStore.
-// No-op if no secrets provider is configured (explicit or implied).
+// No-op if no secrets provider is configured.
 func ESOSetup(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
 	kind := cfg.Providers.Secrets
 	if kind == "" {
-		return nil // no secrets provider — baseline mode
+		return nil
 	}
 
 	ssh := dc.Cluster.MasterSSH
@@ -40,25 +41,31 @@ func ESOSetup(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	}
 	dc.Cluster.Log().Success("ESO installed")
 
-	// 2. Install Reloader (auto-restart pods on secret change)
+	// 2. Install Reloader
 	dc.Cluster.Log().Info("installing Reloader...")
 	if err := kube.EnsureReloader(ctx, ssh); err != nil {
 		return fmt.Errorf("eso: install reloader: %w", err)
 	}
 	dc.Cluster.Log().Success("Reloader installed")
 
-	// 3. Create bootstrap secret (the one credential ESO needs to authenticate)
+	// 3. Resolve credentials and create bootstrap secret
 	dc.Cluster.Log().Info("configuring SecretStore...")
-	if err := createBootstrapSecret(ctx, dc, cfg, kind, ns); err != nil {
-		return fmt.Errorf("eso: bootstrap secret: %w", err)
+	creds := resolveESOCreds(dc, kind)
+
+	schema, err := provider.GetSecretsSchema(kind)
+	if err != nil {
+		return fmt.Errorf("eso: unknown provider %q: %w", kind, err)
+	}
+	for _, f := range schema.Fields {
+		if v := creds[f.Key]; v != "" {
+			if err := kube.UpsertSecretKey(ctx, ssh, ns, esoBootstrapName, f.Key, v); err != nil {
+				return fmt.Errorf("eso: bootstrap secret key %s: %w", f.Key, err)
+			}
+		}
 	}
 
 	// 4. Apply SecretStore CRD
-	if err := kube.ApplySecretStore(ctx, ssh, ns, kube.SecretStoreSpec{
-		Name:     esoStoreName,
-		Kind:     kind,
-		AuthName: esoBootstrapName,
-	}); err != nil {
+	if err := kube.ApplySecretStore(ctx, ssh, ns, esoStoreName, kind, esoBootstrapName, creds); err != nil {
 		return fmt.Errorf("eso: apply SecretStore: %w", err)
 	}
 	dc.Cluster.Log().Success("SecretStore configured")
@@ -66,66 +73,12 @@ func ESOSetup(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	return nil
 }
 
-// createBootstrapSecret writes the secrets provider's own credentials
-// as a k8s Secret. For implied providers (aws, scaleway), this uses
-// the compute provider's credentials. For explicit providers (doppler,
-// infisical), this uses the secrets provider's resolved credentials.
-func createBootstrapSecret(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, kind, ns string) error {
-	ssh := dc.Cluster.MasterSSH
-
-	switch kind {
-	case "awssm":
-		// Compute creds double as secrets backend creds
-		creds := dc.Cluster.Credentials
-		if creds == nil {
-			return fmt.Errorf("aws compute credentials required for implied secrets provider")
-		}
-		for _, kv := range []struct{ k, v string }{
-			{"access_key_id", creds["access_key_id"]},
-			{"secret_access_key", creds["secret_access_key"]},
-			{"region", creds["region"]},
-		} {
-			if kv.v == "" {
-				continue
-			}
-			if err := kube.UpsertSecretKey(ctx, ssh, ns, esoBootstrapName, kv.k, kv.v); err != nil {
-				return err
-			}
-		}
-
-	case "scaleway":
-		creds := dc.Cluster.Credentials
-		if creds == nil {
-			return fmt.Errorf("scaleway compute credentials required for implied secrets provider")
-		}
-		for _, kv := range []struct{ k, v string }{
-			{"access_key", creds["access_key"]},
-			{"secret_key", creds["secret_key"]},
-			{"project_id", creds["project_id"]},
-		} {
-			if kv.v == "" {
-				continue
-			}
-			if err := kube.UpsertSecretKey(ctx, ssh, ns, esoBootstrapName, kv.k, kv.v); err != nil {
-				return err
-			}
-		}
-
-	case "doppler":
-		// Explicit secrets provider — creds resolved at DeployContext build time
-		if token := dc.SecretsCreds["token"]; token != "" {
-			if err := kube.UpsertSecretKey(ctx, ssh, ns, esoBootstrapName, "token", token); err != nil {
-				return err
-			}
-		}
-
-	case "infisical":
-		if token := dc.SecretsCreds["token"]; token != "" {
-			if err := kube.UpsertSecretKey(ctx, ssh, ns, esoBootstrapName, "token", token); err != nil {
-				return err
-			}
-		}
+// resolveESOCreds returns the credentials for the ESO bootstrap secret.
+// Uses SecretsCreds from DeployContext (resolved at build time from env/DB).
+func resolveESOCreds(dc *config.DeployContext, kind string) map[string]string {
+	if dc.SecretsCreds != nil && len(dc.SecretsCreds) > 0 {
+		return dc.SecretsCreds
 	}
-
-	return nil
+	// Fallback: compute credentials (for implied providers like awssm/scaleway).
+	return dc.Cluster.Credentials
 }
