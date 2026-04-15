@@ -144,3 +144,59 @@ func TestSecrets_MissingGlobalKey_Errors(t *testing.T) {
 		t.Fatalf("expected error for missing global secret, got: %v", err)
 	}
 }
+
+func TestSecrets_ESOActive_SkipsMissingGlobalKeys(t *testing.T) {
+	dc := testDC(convergeMock())
+	cfg := &config.AppConfig{
+		Providers: config.ProvidersDef{Secrets: "doppler"},
+		Secrets:   []string{"JWT_SECRET", "ENCRYPTION_KEY"},
+	}
+
+	// No secrets in viper — ESO will fetch them inside the cluster.
+	vals, err := Secrets(context.Background(), dc, nil, cfg, testViper())
+	if err != nil {
+		t.Fatalf("ESO active: should not error on missing secrets, got: %v", err)
+	}
+	if len(vals) != 0 {
+		t.Errorf("expected empty map (ESO handles these), got: %v", vals)
+	}
+}
+
+func TestSecrets_ESOActive_StillCollectsAvailableKeys(t *testing.T) {
+	dc := testDC(convergeMock())
+	cfg := &config.AppConfig{
+		Providers: config.ProvidersDef{Secrets: "infisical"},
+		Secrets:   []string{"JWT_SECRET"},
+		Services: map[string]config.ServiceDef{
+			"web": {Image: "nginx", Secrets: []string{"WEB_KEY"}},
+		},
+	}
+
+	// Some keys available in viper (e.g. for $VAR resolution), some not.
+	v := testViper("WEB_KEY", "webval")
+	vals, err := Secrets(context.Background(), dc, nil, cfg, v)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// WEB_KEY was in viper — collected for $VAR resolution.
+	if vals["WEB_KEY"] != "webval" {
+		t.Errorf("WEB_KEY = %q, want webval", vals["WEB_KEY"])
+	}
+	// JWT_SECRET missing from viper — no error because ESO handles it.
+	if _, ok := vals["JWT_SECRET"]; ok {
+		t.Error("JWT_SECRET should not be in vals (not in viper)")
+	}
+}
+
+func TestSecrets_NoESO_MissingGlobalKey_StillErrors(t *testing.T) {
+	dc := testDC(convergeMock())
+	cfg := &config.AppConfig{
+		// No Providers.Secrets — baseline mode
+		Secrets: []string{"MUST_EXIST"},
+	}
+
+	_, err := Secrets(context.Background(), dc, nil, cfg, testViper())
+	if err == nil || !strings.Contains(err.Error(), "MUST_EXIST") {
+		t.Fatalf("baseline mode: should error on missing global secret, got: %v", err)
+	}
+}

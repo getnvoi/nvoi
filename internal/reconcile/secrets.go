@@ -62,10 +62,14 @@ func Secrets(_ context.Context, _ *config.DeployContext, _ *config.LiveState, cf
 		}
 	}
 
-	// Global secrets MUST be in viper — they have no other source
-	for _, key := range cfg.Secrets {
-		if secretValues[key] == "" {
-			return nil, fmt.Errorf("secret %q listed in config but not found in environment", key)
+	// Global secrets MUST be in viper — unless ESO is managing them.
+	// When a secrets provider is configured, ESO fetches app secrets
+	// inside the cluster. They won't be in the local environment.
+	if cfg.Providers.Secrets == "" {
+		for _, key := range cfg.Secrets {
+			if secretValues[key] == "" {
+				return nil, fmt.Errorf("secret %q listed in config but not found in environment", key)
+			}
 		}
 	}
 
