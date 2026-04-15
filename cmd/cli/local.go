@@ -32,15 +32,19 @@ type localBackend struct {
 // os.Getenv lives here — the cmd/ boundary. Everything below receives resolved values.
 
 func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig) *config.DeployContext {
-	source := credentialSource(ctx, cfg)
-
-	computeCreds, _ := resolveProviderCreds(source, "compute", cfg.Providers.Compute)
+	// Infra provider creds always come from env — they're nvoi operational credentials.
+	envSource := provider.EnvSource{}
+	computeCreds, _ := resolveProviderCreds(envSource, "compute", cfg.Providers.Compute)
 	sshKey, _ := resolveSSHKey()
-	dnsCreds, _ := resolveProviderCreds(source, "dns", cfg.Providers.DNS)
-	storageCreds, _ := resolveProviderCreds(source, "storage", cfg.Providers.Storage)
-	builderCreds, _ := resolveProviderCreds(source, "build", cfg.Providers.Build)
+	dnsCreds, _ := resolveProviderCreds(envSource, "dns", cfg.Providers.DNS)
+	storageCreds, _ := resolveProviderCreds(envSource, "storage", cfg.Providers.Storage)
+	builderCreds, _ := resolveProviderCreds(envSource, "build", cfg.Providers.Build)
 	gitUsername, gitToken := resolveGitAuth()
-	dbCreds := resolveDatabaseCreds(source, cfg)
+
+	// App secrets (database creds, service secrets) come from the secrets provider
+	// when configured, otherwise from env.
+	appSource := appCredentialSource(ctx, cfg)
+	dbCreds := resolveDatabaseCreds(appSource, cfg)
 
 	// Resolve secrets provider's own creds for ESO bootstrap.
 	var secretsCreds map[string]string
@@ -68,11 +72,10 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 	}
 }
 
-// credentialSource returns the single CredentialSource for this deploy.
-// If a secrets provider is configured, its own credentials are bootstrapped
-// from env vars, then all other provider credentials are fetched through it.
-// If no secrets provider is configured, credentials come from env vars directly.
-func credentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
+// appCredentialSource returns the CredentialSource for app secrets (database creds,
+// service secrets). If a secrets provider is configured, fetches from it.
+// If not, falls back to env vars. Infra provider creds are always from env — not this.
+func appCredentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
 	if sp := cfg.Providers.Secrets; sp != "" {
 		// Bootstrap: the secrets provider's own creds always come from env.
 		spCreds, err := resolveProviderCreds(provider.EnvSource{}, "secrets", sp)
