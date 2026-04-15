@@ -41,6 +41,16 @@ spec:
 }
 
 func waitForESOReady(ctx context.Context, ssh utils.SSHClient) error {
+	// Wait for the CRDs to be registered — the deployment can be ready
+	// before the Helm controller finishes installing CRDs.
+	if err := utils.Poll(ctx, esoPollInterval, esoTimeout, func() (bool, error) {
+		_, err := ssh.Run(ctx, kctl("", "get crd secretstores.external-secrets.io 2>/dev/null"))
+		return err == nil, nil
+	}); err != nil {
+		return fmt.Errorf("ESO CRDs not ready: %w", err)
+	}
+
+	// Then wait for the operator deployment.
 	return utils.Poll(ctx, esoPollInterval, esoTimeout, func() (bool, error) {
 		out, err := ssh.Run(ctx, kctl("external-secrets", "get deploy external-secrets -o jsonpath='{.status.readyReplicas}/{.spec.replicas}' 2>/dev/null"))
 		if err != nil {
