@@ -16,7 +16,7 @@ const (
 // ESOSetup installs ESO + Reloader and configures the SecretStore.
 // No-op if no secrets provider is configured (explicit or implied).
 func ESOSetup(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
-	kind := cfg.ResolvedSecretsProvider()
+	kind := cfg.Providers.Secrets
 	if kind == "" {
 		return nil // no secrets provider — baseline mode
 	}

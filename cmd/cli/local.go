@@ -44,8 +44,8 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 
 	// Resolve secrets provider's own creds for ESO bootstrap.
 	var secretsCreds map[string]string
-	if sp := cfg.Providers.Secrets; sp != nil {
-		secretsCreds, _ = resolveProviderCreds(provider.EnvSource{}, "secrets", sp.Kind)
+	if sp := cfg.Providers.Secrets; sp != "" {
+		secretsCreds, _ = resolveProviderCreds(provider.EnvSource{}, "secrets", sp)
 	}
 
 	return &config.DeployContext{
@@ -73,11 +73,11 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 // from env vars, then all other provider credentials are fetched through it.
 // If no secrets provider is configured, credentials come from env vars directly.
 func credentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
-	if sp := cfg.Providers.Secrets; sp != nil {
+	if sp := cfg.Providers.Secrets; sp != "" {
 		// Bootstrap: the secrets provider's own creds always come from env.
-		spCreds, err := resolveProviderCreds(provider.EnvSource{}, "secrets", sp.Kind)
+		spCreds, err := resolveProviderCreds(provider.EnvSource{}, "secrets", sp)
 		if err == nil && len(spCreds) > 0 {
-			secretsProv, err := provider.ResolveSecrets(sp.Kind, spCreds)
+			secretsProv, err := provider.ResolveSecrets(sp, spCreds)
 			if err == nil {
 				return provider.SecretsSource{Ctx: ctx, Provider: secretsProv}
 			}

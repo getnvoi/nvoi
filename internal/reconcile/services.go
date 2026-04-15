@@ -47,7 +47,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		expandStorageCreds(svc.Storage, sources, svcSecretKVs, &svcSecretRefs)
 
 		// Write secrets to cluster: ESO ExternalSecret or plaintext k8s Secret
-		esoKind := cfg.ResolvedSecretsProvider()
+		esoKind := cfg.Providers.Secrets
 		if esoKind != "" && len(svcSecretRefs) > 0 {
 			// ESO path: create ExternalSecret CRD — ESO syncs values from external store
 			if err := upsertExternalSecret(ctx, dc, names, name, svcSecretRefs); err != nil {

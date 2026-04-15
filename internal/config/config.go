@@ -181,35 +181,11 @@ type BackupDef struct {
 }
 
 type ProvidersDef struct {
-	Compute string              `yaml:"compute"`
-	DNS     string              `yaml:"dns,omitempty"`
-	Storage string              `yaml:"storage,omitempty"`
-	Build   string              `yaml:"build,omitempty"`
-	Secrets *SecretsProviderDef `yaml:"secrets,omitempty"`
-}
-
-// SecretsProviderDef configures an external secrets backend.
-// When set, credentials are fetched transiently at deploy time from the user's own secrets provider.
-type SecretsProviderDef struct {
-	Kind string `yaml:"kind"` // doppler | awssm | infisical
-}
-
-// ResolvedSecretsProvider returns the effective secrets provider kind.
-// Explicit providers.secrets.kind takes priority. Otherwise, compute provider
-// implies a secrets backend: aws → awssm, scaleway → scaleway.
-// Returns "" if no secrets provider is available (e.g. Hetzner without explicit config).
-func (c *AppConfig) ResolvedSecretsProvider() string {
-	if c.Providers.Secrets != nil && c.Providers.Secrets.Kind != "" {
-		return c.Providers.Secrets.Kind
-	}
-	switch c.Providers.Compute {
-	case "aws":
-		return "awssm"
-	case "scaleway":
-		return "scaleway"
-	default:
-		return ""
-	}
+	Compute string `yaml:"compute"`
+	DNS     string `yaml:"dns,omitempty"`
+	Storage string `yaml:"storage,omitempty"`
+	Build   string `yaml:"build,omitempty"`
+	Secrets string `yaml:"secrets,omitempty"` // doppler | awssm | infisical — empty = baseline (no ESO)
 }
 
 type ServerDef struct {
