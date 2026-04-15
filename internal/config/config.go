@@ -29,6 +29,7 @@ type DeployContext struct {
 	GitUsername   string
 	GitToken      string
 	DatabaseCreds map[string]*DatabaseCredentials
+	SecretsCreds  map[string]string // secrets provider's own credentials for ESO bootstrap (nil = no secrets provider)
 }
 
 // LiveState represents what's currently deployed.
@@ -191,6 +192,24 @@ type ProvidersDef struct {
 // When set, credentials are fetched transiently at deploy time from the user's own secrets provider.
 type SecretsProviderDef struct {
 	Kind string `yaml:"kind"` // doppler | awssm | infisical
+}
+
+// ResolvedSecretsProvider returns the effective secrets provider kind.
+// Explicit providers.secrets.kind takes priority. Otherwise, compute provider
+// implies a secrets backend: aws → awssm, scaleway → scaleway.
+// Returns "" if no secrets provider is available (e.g. Hetzner without explicit config).
+func (c *AppConfig) ResolvedSecretsProvider() string {
+	if c.Providers.Secrets != nil && c.Providers.Secrets.Kind != "" {
+		return c.Providers.Secrets.Kind
+	}
+	switch c.Providers.Compute {
+	case "aws":
+		return "awssm"
+	case "scaleway":
+		return "scaleway"
+	default:
+		return ""
+	}
 }
 
 type ServerDef struct {

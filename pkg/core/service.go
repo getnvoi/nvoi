@@ -25,6 +25,7 @@ type ServiceSetRequest struct {
 	Volumes    []string // name:/path
 	HealthPath string
 	Servers    []string
+	ESOManaged bool // true if secrets are managed by External Secrets Operator
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
@@ -106,6 +107,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		HealthPath:    req.HealthPath,
 		Servers:       req.Servers,
 		Managed:       managed,
+		ESOManaged:    req.ESOManaged,
 	}
 
 	out.Command("service", "set", req.Name)

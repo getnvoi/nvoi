@@ -42,6 +42,10 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	defer ssh.Close()
 	dc.Cluster.MasterSSH = ssh
 
+	if err := ESOSetup(ctx, dc, cfg); err != nil {
+		return err
+	}
+
 	if err := Firewall(ctx, dc, live, cfg); err != nil {
 		return err
 	}

@@ -46,9 +46,18 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		// Expand storage: into per-service secret entries
 		expandStorageCreds(svc.Storage, sources, svcSecretKVs, &svcSecretRefs)
 
-		// Upsert per-service secrets into k8s
-		if err := upsertServiceSecrets(ctx, dc, names, name, svcSecretKVs); err != nil {
-			return err
+		// Write secrets to cluster: ESO ExternalSecret or plaintext k8s Secret
+		esoKind := cfg.ResolvedSecretsProvider()
+		if esoKind != "" && len(svcSecretRefs) > 0 {
+			// ESO path: create ExternalSecret CRD — ESO syncs values from external store
+			if err := upsertExternalSecret(ctx, dc, names, name, svcSecretRefs); err != nil {
+				return err
+			}
+		} else {
+			// Baseline path: write plaintext k8s Secret directly
+			if err := upsertServiceSecrets(ctx, dc, names, name, svcSecretKVs); err != nil {
+				return err
+			}
 		}
 
 		if err := app.ServiceSet(ctx, app.ServiceSetRequest{
@@ -57,6 +66,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
 			Volumes:    svc.Volumes, HealthPath: svc.Health, Servers: servers,
+			ESOManaged: esoKind != "",
 		}); err != nil {
 			return err
 		}
@@ -127,6 +137,27 @@ func expandStorageCreds(storageNames []string, sources map[string]string, kvs ma
 			}
 		}
 	}
+}
+
+// upsertExternalSecret creates/updates an ESO ExternalSecret CRD for a service.
+// ESO syncs the referenced keys from the SecretStore into a k8s Secret.
+func upsertExternalSecret(ctx context.Context, dc *config.DeployContext, names *utils.Names, svcName string, refs []string) error {
+	if names == nil {
+		return nil
+	}
+	ssh := dc.Cluster.MasterSSH
+	if ssh == nil {
+		return nil
+	}
+	ns := names.KubeNamespace()
+	secretName := names.KubeServiceSecrets(svcName)
+
+	return kube.ApplyExternalSecret(ctx, ssh, ns, kube.ExternalSecretSpec{
+		Name:            secretName,
+		StoreName:       esoStoreName,
+		Keys:            refs,
+		RefreshInterval: "1h",
+	})
 }
 
 // upsertServiceSecrets creates/updates the per-service k8s Secret and

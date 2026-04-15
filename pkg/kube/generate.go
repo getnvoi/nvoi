@@ -70,6 +70,7 @@ type ServiceSpec struct {
 	HealthPath    string
 	Servers       []string // node placement (empty = master only)
 	Managed       bool     // true if any volume is provider-managed → StatefulSet
+	ESOManaged    bool     // true if secrets are managed by External Secrets Operator
 }
 
 // GenerateYAML produces k8s YAML for a single service: workload + Service.
@@ -138,6 +139,12 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 	var workloadKind string
 	var docs []string
 
+	// When ESO manages secrets, add Reloader annotation so pods restart on secret change.
+	var podAnnotations map[string]string
+	if spec.ESOManaged {
+		podAnnotations = map[string]string{"reloader.stakater.com/auto": "true"}
+	}
+
 	if spec.Managed {
 		workloadKind = "statefulset"
 		one := int32(1)
@@ -148,7 +155,7 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 				ServiceName: spec.Name,
 				Replicas:    &one,
 				Selector:    &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: spec.Name}},
-				Template:    corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
+				Template:    corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations}, Spec: podSpec},
 			},
 		}
 		b, err := sigsyaml.Marshal(ss)
@@ -175,7 +182,7 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 					},
 				},
 				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: spec.Name}},
-				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
+				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: podAnnotations}, Spec: podSpec},
 			},
 		}
 		b, err := sigsyaml.Marshal(dep)

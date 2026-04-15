@@ -42,6 +42,12 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 	gitUsername, gitToken := resolveGitAuth()
 	dbCreds := resolveDatabaseCreds(cfg)
 
+	// Resolve secrets provider's own creds for ESO bootstrap.
+	var secretsCreds map[string]string
+	if sp := cfg.Providers.Secrets; sp != nil {
+		secretsCreds, _ = resolveProviderCreds(provider.EnvSource{}, "secrets", sp.Kind)
+	}
+
 	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName:     cfg.App,
@@ -58,6 +64,7 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 		GitUsername:   gitUsername,
 		GitToken:      gitToken,
 		DatabaseCreds: dbCreds,
+		SecretsCreds:  secretsCreds,
 	}
 }
 

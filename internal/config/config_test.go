@@ -262,3 +262,50 @@ services:
 		t.Fatalf("Providers.Secrets should be nil, got %+v", cfg.Providers.Secrets)
 	}
 }
+
+// ── ResolvedSecretsProvider tests ────────────────────────────────────────────
+
+func TestResolvedSecretsProvider_Explicit(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: ProvidersDef{
+			Compute: "hetzner",
+			Secrets: &SecretsProviderDef{Kind: "doppler"},
+		},
+	}
+	if got := cfg.ResolvedSecretsProvider(); got != "doppler" {
+		t.Errorf("got %q, want doppler", got)
+	}
+}
+
+func TestResolvedSecretsProvider_ImpliedAWS(t *testing.T) {
+	cfg := &AppConfig{Providers: ProvidersDef{Compute: "aws"}}
+	if got := cfg.ResolvedSecretsProvider(); got != "awssm" {
+		t.Errorf("got %q, want awssm", got)
+	}
+}
+
+func TestResolvedSecretsProvider_ImpliedScaleway(t *testing.T) {
+	cfg := &AppConfig{Providers: ProvidersDef{Compute: "scaleway"}}
+	if got := cfg.ResolvedSecretsProvider(); got != "scaleway" {
+		t.Errorf("got %q, want scaleway", got)
+	}
+}
+
+func TestResolvedSecretsProvider_HetznerNone(t *testing.T) {
+	cfg := &AppConfig{Providers: ProvidersDef{Compute: "hetzner"}}
+	if got := cfg.ResolvedSecretsProvider(); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestResolvedSecretsProvider_ExplicitOverridesImplied(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: ProvidersDef{
+			Compute: "aws",
+			Secrets: &SecretsProviderDef{Kind: "infisical"},
+		},
+	}
+	if got := cfg.ResolvedSecretsProvider(); got != "infisical" {
+		t.Errorf("got %q, want infisical (explicit overrides implied)", got)
+	}
+}
