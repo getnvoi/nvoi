@@ -133,7 +133,7 @@ func GenerateSecretStoreYAML(name, ns, kind, authName string, creds map[string]s
 	}
 
 	store := map[string]any{
-		"apiVersion": "external-secrets.io/v1beta1",
+		"apiVersion": "external-secrets.io/v1",
 		"kind":       "SecretStore",
 		"metadata": map[string]any{
 			"name":      name,
@@ -172,7 +172,7 @@ func GenerateExternalSecretYAML(spec ExternalSecretSpec, ns string) (string, err
 	}
 
 	es := map[string]any{
-		"apiVersion": "external-secrets.io/v1beta1",
+		"apiVersion": "external-secrets.io/v1",
 		"kind":       "ExternalSecret",
 		"metadata": map[string]any{
 			"name":      spec.Name,
