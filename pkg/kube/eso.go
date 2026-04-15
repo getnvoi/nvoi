@@ -158,7 +158,7 @@ func WaitForSecretStoreReady(ctx context.Context, ssh utils.SSHClient, ns, name 
 	err := utils.Poll(ctx, esoPollInterval, esoTimeout, func() (bool, error) {
 		out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get secretstore %s -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}|{.status.conditions[?(@.type==\"Ready\")].message}' 2>/dev/null", name)))
 		if err != nil {
-			return false, nil
+			return false, nil // no status yet, keep polling
 		}
 		raw := strings.Trim(strings.TrimSpace(string(out)), "'")
 		parts := strings.SplitN(raw, "|", 2)
@@ -166,12 +166,19 @@ func WaitForSecretStoreReady(ctx context.Context, ssh utils.SSHClient, ns, name 
 		if len(parts) > 1 {
 			lastStatus = parts[1]
 		}
-		return status == "True", nil
+		if status == "True" {
+			return true, nil
+		}
+		// Status is False with a message — fail immediately, won't self-heal.
+		if status == "False" && lastStatus != "" {
+			return false, fmt.Errorf("%s: %s", name, lastStatus)
+		}
+		return false, nil // no status yet, keep polling
 	})
-	if err != nil && lastStatus != "" {
-		return fmt.Errorf("%s: %s", name, lastStatus)
+	if err != nil {
+		return err
 	}
-	return err
+	return nil
 }
 
 // ── ExternalSecret CRD ──────────────────────────────────────────────────────
