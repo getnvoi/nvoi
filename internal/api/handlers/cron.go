@@ -21,7 +21,7 @@ func CronRun(db *gorm.DB) func(context.Context, *CronRunInput) (*huma.StreamResp
 		if err != nil {
 			return nil, err
 		}
-		cluster := clusterFromRepo(repo)
+		cluster := clusterFromRepo(ctx, repo)
 
 		return streamOperation(func(out pkgcore.Output) error {
 			cluster.Output = out

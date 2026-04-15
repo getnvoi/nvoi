@@ -28,7 +28,7 @@ func ListDNSRecords(db *gorm.DB) func(context.Context, *ListDNSInput) (*ListDNSO
 		records, err := pkgcore.DNSList(ctx, pkgcore.DNSListRequest{
 			DNS: pkgcore.ProviderRef{
 				Name:  repo.DNSProvider.Provider,
-				Creds: repo.DNSProvider.CredentialsMap(),
+				Creds: resolveRepoCreds(ctx, repo, "dns", repo.DNSProvider),
 			},
 		})
 		if err != nil {

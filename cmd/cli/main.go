@@ -117,7 +117,7 @@ func initLocal(cmd *cobra.Command, m *mode) error {
 	v.AutomaticEnv()
 	out := resolveOutput(cmd)
 	m.backend = &localBackend{
-		dc:  buildDeployContext(out, cfg),
+		dc:  buildDeployContext(cmd.Context(), out, cfg),
 		cfg: cfg,
 		v:   v,
 		out: out,

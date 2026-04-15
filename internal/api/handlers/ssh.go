@@ -29,7 +29,7 @@ func RunSSH(db *gorm.DB) func(context.Context, *RunSSHInput) (*huma.StreamRespon
 			return nil, err
 		}
 
-		cluster := clusterFromRepo(repo)
+		cluster := clusterFromRepo(ctx, repo)
 
 		return &huma.StreamResponse{
 			Body: func(ctx huma.Context) {

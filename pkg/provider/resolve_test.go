@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -255,5 +256,129 @@ func TestGetSchema_Secrets(t *testing.T) {
 	}
 	if schema.Name != "test-secrets" {
 		t.Errorf("schema.Name = %q, want test-secrets", schema.Name)
+	}
+}
+
+// ── CredentialSource + ResolveFrom tests ────────────────────────────────────
+
+func TestResolveFrom_MapSource(t *testing.T) {
+	schema := CredentialSchema{
+		Name: "test",
+		Fields: []CredentialField{
+			{Key: "token", EnvVar: "MY_TOKEN"},
+			{Key: "region", EnvVar: "MY_REGION"},
+		},
+	}
+	source := MapSource{M: map[string]string{"MY_TOKEN": "abc", "MY_REGION": "us"}}
+	creds, err := ResolveFrom(schema, source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds["token"] != "abc" {
+		t.Errorf("token = %q, want abc", creds["token"])
+	}
+	if creds["region"] != "us" {
+		t.Errorf("region = %q, want us", creds["region"])
+	}
+}
+
+func TestResolveFrom_MapSource_Missing(t *testing.T) {
+	schema := CredentialSchema{
+		Name: "test",
+		Fields: []CredentialField{
+			{Key: "token", EnvVar: "MY_TOKEN"},
+			{Key: "region", EnvVar: "MY_REGION"},
+		},
+	}
+	source := MapSource{M: map[string]string{"MY_TOKEN": "abc"}}
+	creds, err := ResolveFrom(schema, source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds["token"] != "abc" {
+		t.Errorf("token = %q, want abc", creds["token"])
+	}
+	if _, ok := creds["region"]; ok {
+		t.Error("missing key should not produce a value")
+	}
+}
+
+func TestResolveFrom_MapSource_Empty(t *testing.T) {
+	schema := CredentialSchema{
+		Name: "test",
+		Fields: []CredentialField{
+			{Key: "token", EnvVar: "MY_TOKEN"},
+		},
+	}
+	source := MapSource{M: map[string]string{"MY_TOKEN": ""}}
+	creds, err := ResolveFrom(schema, source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := creds["token"]; ok {
+		t.Error("empty value should not produce a key")
+	}
+}
+
+// errorSource is a CredentialSource that returns an error.
+type errorSource struct{ err error }
+
+func (s errorSource) Get(string) (string, error) { return "", s.err }
+
+func TestResolveFrom_ErrorSource(t *testing.T) {
+	schema := CredentialSchema{
+		Name: "test",
+		Fields: []CredentialField{
+			{Key: "token", EnvVar: "MY_TOKEN"},
+		},
+	}
+	source := errorSource{err: fmt.Errorf("connection refused")}
+	_, err := ResolveFrom(schema, source)
+	if err == nil {
+		t.Fatal("expected error from failing source")
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("error %q should mention underlying cause", err)
+	}
+	if !strings.Contains(err.Error(), "test") {
+		t.Errorf("error %q should mention schema name", err)
+	}
+}
+
+// fakeSecretsProvider implements SecretsProvider for testing SecretsSource.
+type fakeSecretsProvider struct {
+	secrets map[string]string
+}
+
+func (f fakeSecretsProvider) ValidateCredentials(context.Context) error { return nil }
+func (f fakeSecretsProvider) Get(_ context.Context, key string) (string, error) {
+	return f.secrets[key], nil
+}
+func (f fakeSecretsProvider) Set(context.Context, string, string) error { return nil }
+func (f fakeSecretsProvider) Delete(context.Context, string) error      { return nil }
+func (f fakeSecretsProvider) List(context.Context) ([]string, error)    { return nil, nil }
+
+func TestResolveFrom_SecretsSource(t *testing.T) {
+	schema := CredentialSchema{
+		Name: "test",
+		Fields: []CredentialField{
+			{Key: "token", EnvVar: "HETZNER_TOKEN"},
+			{Key: "region", EnvVar: "HETZNER_REGION"},
+		},
+	}
+	sp := fakeSecretsProvider{secrets: map[string]string{
+		"HETZNER_TOKEN":  "from-doppler",
+		"HETZNER_REGION": "fsn1",
+	}}
+	source := SecretsSource{Ctx: context.Background(), Provider: sp}
+	creds, err := ResolveFrom(schema, source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds["token"] != "from-doppler" {
+		t.Errorf("token = %q, want from-doppler", creds["token"])
+	}
+	if creds["region"] != "fsn1" {
+		t.Errorf("region = %q, want fsn1", creds["region"])
 	}
 }

@@ -1,6 +1,65 @@
 package provider
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"os"
+)
+
+// ── Credential source ─────────────────────────────────────────────────────────
+
+// CredentialSource abstracts where a credential value comes from.
+// The single resolution layer — callers never branch on source type.
+type CredentialSource interface {
+	// Get returns the value for a credential field's env var key.
+	// Returns ("", nil) if the key is absent — not an error.
+	Get(key string) (string, error)
+}
+
+// EnvSource reads credentials from os.Getenv. Used by --local mode.
+type EnvSource struct{}
+
+func (EnvSource) Get(key string) (string, error) {
+	return os.Getenv(key), nil
+}
+
+// MapSource reads credentials from an in-memory map. Used by cloud mode
+// (InfraProvider.CredentialsMap()) and tests.
+type MapSource struct {
+	M map[string]string
+}
+
+func (s MapSource) Get(key string) (string, error) {
+	return s.M[key], nil
+}
+
+// SecretsSource reads credentials from a SecretsProvider. Used when
+// providers.secrets is configured — fetches values transiently.
+type SecretsSource struct {
+	Ctx      context.Context
+	Provider SecretsProvider
+}
+
+func (s SecretsSource) Get(key string) (string, error) {
+	return s.Provider.Get(s.Ctx, key)
+}
+
+// ResolveFrom resolves credentials for a provider schema from any source.
+// Iterates schema fields, calls source.Get(field.EnvVar) for each.
+// Returns schema-keyed map (e.g. {"token": "xxx"}).
+func ResolveFrom(schema CredentialSchema, source CredentialSource) (map[string]string, error) {
+	creds := make(map[string]string, len(schema.Fields))
+	for _, f := range schema.Fields {
+		v, err := source.Get(f.EnvVar)
+		if err != nil {
+			return nil, fmt.Errorf("%s: fetch %s: %w", schema.Name, f.Key, err)
+		}
+		if v != "" {
+			creds[f.Key] = v
+		}
+	}
+	return creds, nil
+}
 
 // ── Credential schema ──────────────────────────────────────────────────────────
 

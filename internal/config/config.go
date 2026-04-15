@@ -29,7 +29,6 @@ type DeployContext struct {
 	GitUsername   string
 	GitToken      string
 	DatabaseCreds map[string]*DatabaseCredentials
-	SecretsCreds  map[string]string // resolved credentials for the secrets provider (nil = no secrets provider)
 }
 
 // LiveState represents what's currently deployed.

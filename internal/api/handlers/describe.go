@@ -62,22 +62,21 @@ func ListResources(db *gorm.DB) func(context.Context, *ListResourcesInput) (*Lis
 		if repo.ComputeProvider != nil {
 			req.Compute = pkgcore.ProviderRef{
 				Name:  repo.ComputeProvider.Provider,
-				Creds: repo.ComputeProvider.CredentialsMap(),
+				Creds: resolveRepoCreds(ctx, repo, "compute", repo.ComputeProvider),
 			}
 		}
 		if repo.DNSProvider != nil {
 			req.DNS = pkgcore.ProviderRef{
 				Name:  repo.DNSProvider.Provider,
-				Creds: repo.DNSProvider.CredentialsMap(),
+				Creds: resolveRepoCreds(ctx, repo, "dns", repo.DNSProvider),
 			}
 		}
 		if repo.StorageProvider != nil {
 			req.Storage = pkgcore.ProviderRef{
 				Name:  repo.StorageProvider.Provider,
-				Creds: repo.StorageProvider.CredentialsMap(),
+				Creds: resolveRepoCreds(ctx, repo, "storage", repo.StorageProvider),
 			}
 		}
-		// SecretsProvider creds are available on the repo but not needed for Resources.
 
 		groups, err := pkgcore.Resources(ctx, req)
 		if err != nil {
@@ -102,7 +101,7 @@ func repoClusterWithConfig(ctx context.Context, db *gorm.DB, input RepoScopedInp
 	if err != nil {
 		return nil, repoConfigNames{}, err
 	}
-	cluster := clusterFromRepo(repo)
+	cluster := clusterFromRepo(ctx, repo)
 	var names repoConfigNames
 	if repo.Config != "" {
 		if cfg, err := config.ParseAppConfig([]byte(repo.Config)); err == nil {
@@ -115,12 +114,46 @@ func repoClusterWithConfig(ctx context.Context, db *gorm.DB, input RepoScopedInp
 	return cluster, names, nil
 }
 
+// credentialSourceFromRepo returns the single CredentialSource for a repo.
+// If the repo has a linked secrets provider, credentials are fetched transiently.
+// Otherwise, credentials come from the InfraProvider's encrypted DB map.
+func credentialSourceFromRepo(ctx context.Context, repo *api.Repo, infraProv *api.InfraProvider) provider.CredentialSource {
+	if repo.SecretsProvider != nil {
+		spCreds := repo.SecretsProvider.CredentialsMap()
+		if sp, err := provider.ResolveSecrets(repo.SecretsProvider.Provider, spCreds); err == nil {
+			return provider.SecretsSource{Ctx: ctx, Provider: sp}
+		}
+	}
+	if infraProv != nil {
+		return provider.MapSource{M: infraProv.CredentialsMap()}
+	}
+	return provider.MapSource{M: nil}
+}
+
+// resolveRepoCreds resolves credentials for an infra provider using the repo's credential source.
+func resolveRepoCreds(ctx context.Context, repo *api.Repo, kind string, infraProv *api.InfraProvider) map[string]string {
+	if infraProv == nil {
+		return nil
+	}
+	source := credentialSourceFromRepo(ctx, repo, infraProv)
+	schema, err := provider.GetSchema(kind, infraProv.Provider)
+	if err != nil {
+		return infraProv.CredentialsMap() // fallback
+	}
+	creds, err := provider.ResolveFrom(schema, source)
+	if err != nil {
+		return infraProv.CredentialsMap() // fallback
+	}
+	return creds
+}
+
 // clusterFromRepo builds a Cluster from Repo's InfraProvider links. No RepoConfig needed.
-func clusterFromRepo(repo *api.Repo) *pkgcore.Cluster {
-	computeName, computeCreds := "", map[string]string(nil)
+func clusterFromRepo(ctx context.Context, repo *api.Repo) *pkgcore.Cluster {
+	computeName := ""
+	var computeCreds map[string]string
 	if repo.ComputeProvider != nil {
 		computeName = repo.ComputeProvider.Provider
-		computeCreds = repo.ComputeProvider.CredentialsMap()
+		computeCreds = resolveRepoCreds(ctx, repo, "compute", repo.ComputeProvider)
 	}
 	return &pkgcore.Cluster{
 		AppName:     repo.Name,
@@ -138,5 +171,5 @@ func repoCluster(ctx context.Context, db *gorm.DB, input RepoScopedInput) (*pkgc
 	if err != nil {
 		return nil, err
 	}
-	return clusterFromRepo(repo), nil
+	return clusterFromRepo(ctx, repo), nil
 }

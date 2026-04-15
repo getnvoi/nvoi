@@ -48,12 +48,12 @@ func EmptyStorage(db *gorm.DB) func(context.Context, *EmptyStorageInput) (*Empty
 			return nil, huma.Error400BadRequest("no storage provider configured")
 		}
 
-		cluster := clusterFromRepo(repo)
+		cluster := clusterFromRepo(ctx, repo)
 		err = pkgcore.StorageEmpty(ctx, pkgcore.StorageEmptyRequest{
 			Cluster: *cluster,
 			Storage: pkgcore.ProviderRef{
 				Name:  repo.StorageProvider.Provider,
-				Creds: repo.StorageProvider.CredentialsMap(),
+				Creds: resolveRepoCreds(ctx, repo, "storage", repo.StorageProvider),
 			},
 			Name: input.Name,
 		})
