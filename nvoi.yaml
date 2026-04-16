@@ -20,18 +20,11 @@ servers:
 firewall: default
 
 volumes:
-  pgdata:
-    size: 25
-    server: master
   bugsinkdata:
     size: 10
     server: bugsink
 
 database:
-  main:
-    kind: postgres
-    image: postgres:17
-    volume: pgdata
   bugsink:
     kind: postgres
     image: postgres:17
@@ -41,19 +34,9 @@ storage:
   releases: {}
 
 build:
-  api: ./cmd/api
   distribution: ./cmd/distribution
 
 services:
-  api:
-    build: api
-    port: 8080
-    env:
-      - SENTRY_DSN=https://dd87a2600aeb4459828174599d2902d1@monit.nvoi.to/1
-    secrets:
-      - JWT_SECRET
-      - ENCRYPTION_KEY
-      - MAIN_DATABASE_URL
   distribution:
     build: distribution
     port: 3001
@@ -83,6 +66,5 @@ services:
       - EMAIL_HOST_PASSWORD=$BUGSINK_EMAIL_HOST_PASSWORD
 
 domains:
-  api: [api.nvoi.to]
   distribution: [get.nvoi.to]
   bugsink: [monit.nvoi.to]

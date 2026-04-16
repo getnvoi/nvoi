@@ -1,13 +1,16 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/spf13/cobra"
+)
 
-func newDeployCmd(m *mode) *cobra.Command {
+func newDeployCmd(rt *runtime) *cobra.Command {
 	return &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy from config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return m.backend.Deploy(cmd.Context())
+			return reconcile.Deploy(cmd.Context(), rt.dc, rt.cfg, rt.v)
 		},
 	}
 }

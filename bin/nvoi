@@ -26,4 +26,4 @@ if (( needs_build )); then
   chmod +x "$BIN_PATH"
 fi
 
-exec "$BIN_PATH" --local "$@"
+exec "$BIN_PATH" "$@"

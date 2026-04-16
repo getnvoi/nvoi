@@ -4,8 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "cmd/api/**"
-      - "cmd/distribution/**"
+      - "cmd/**"
       - "internal/**"
       - "pkg/**"
       - "nvoi.yaml"
@@ -36,7 +35,7 @@ jobs:
 
       - name: Deploy
         env:
-          # Provider credentials (resolved by internal/core/resolve.go)
+          # Provider credentials
           HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
@@ -44,15 +43,10 @@ jobs:
           DNS_ZONE: nvoi.to
           SSH_KEY_PATH: ~/.ssh/id_ed25519
           # Database credentials (database package reads {NAME}_POSTGRES_*)
-          MAIN_POSTGRES_USER: ${{ secrets.MAIN_POSTGRES_USER }}
-          MAIN_POSTGRES_PASSWORD: ${{ secrets.MAIN_POSTGRES_PASSWORD }}
-          MAIN_POSTGRES_DB: ${{ secrets.MAIN_POSTGRES_DB }}
           BUGSINK_POSTGRES_USER: ${{ secrets.BUGSINK_POSTGRES_USER }}
           BUGSINK_POSTGRES_PASSWORD: ${{ secrets.BUGSINK_POSTGRES_PASSWORD }}
           BUGSINK_POSTGRES_DB: ${{ secrets.BUGSINK_POSTGRES_DB }}
           # App secrets
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           BUGSINK_SECRET_KEY: ${{ secrets.BUGSINK_SECRET_KEY }}
           BUGSINK_ADMIN_EMAIL: ${{ secrets.BUGSINK_ADMIN_EMAIL }}
           BUGSINK_ADMIN_PASSWORD: ${{ secrets.BUGSINK_ADMIN_PASSWORD }}

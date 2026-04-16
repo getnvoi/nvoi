@@ -80,23 +80,6 @@ go test ./...                  # run tests
 | `bin/deploy` | Shorthand for `bin/nvoi deploy` |
 | `bin/destroy` | Shorthand for `bin/nvoi teardown` |
 
-### Cloud CLI (local development)
-
-For cloud mode development, start the API + postgres via docker-compose, then run the CLI without `--local`:
-
-```bash
-docker compose up -d --wait     # start API + postgres
-export NVOI_API_BASE="http://localhost:8080"
-go run ./cmd/cli login          # authenticate with GitHub token
-go run ./cmd/cli deploy         # deploy via API
-```
-
-The API runs at `localhost:8080` with a local postgres. `docker-compose.yml` handles the stack:
-- **api** — Go binary, reads `MAIN_DATABASE_URL`, serves Huma REST API
-- **postgres** — postgres:17-alpine, dev credentials (nvoi/nvoi/nvoi)
-
-Auth stored in `~/.config/nvoi/auth.json`.
-
 ## Config format
 
 ```yaml
@@ -192,17 +175,16 @@ nvoi db sql "SELECT ..."                 # run SQL on database pod
 
 Global flags: `--config` (default: `nvoi.yaml`), `--json` (JSONL output), `--ci` (plain text).
 
+nvoi is a local-first CLI. Credentials live in your environment (`.env` or exported vars) and never leave your machine. There is no server, no account, no custody.
+
 ## Architecture
 
 ```
 cmd/
-  cli/                     CLI entrypoint — Backend interface, one file per command
-    main.go                rootCmd, mode detection, --local flag
-    backend.go             Backend interface (12 methods)
-    local.go               localBackend — direct pkg/core calls
-    cloud.go               cloudBackend — HTTP relay to API
-    deploy.go..ssh.go      One file per command, backend-agnostic
-  api/main.go              API server entrypoint
+  cli/                     CLI entrypoint — one file per command
+    main.go                rootCmd, runtime wiring, PersistentPreRunE
+    context.go             Credential resolution from env vars (cmd/ boundary for os.Getenv)
+    deploy.go..ssh.go      One file per command, dispatch to pkg/core / internal/*
   distribution/main.go     Binary distribution server (R2-backed)
 
 internal/
@@ -233,19 +215,6 @@ internal/
   core/                    Source-agnostic logic — teardown, database helpers
     teardown.go            Teardown() — ordered resource deletion
     database.go            DatabaseBackupList, DatabaseBackupDownload, DatabaseSQL
-  cloud/                   Cloud API client + cloud-only commands
-    client.go              APIClient (HTTP)
-    auth.go                Auth config (~/.config/nvoi/auth.json)
-    backend.go             StreamRun, Describe, Resources, Logs, Exec, SSH, database ops
-    login.go               GitHub token → JWT flow
-    provider.go            nvoi provider set/list/delete
-    repos.go               nvoi repos create/list/use/delete
-    workspaces.go          nvoi workspaces
-    whoami.go              nvoi whoami
-  api/                     REST API server (Huma + Gin + GORM)
-    models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo, CommandLog
-    db.go                  PostgreSQL + AutoMigrate (reads MAIN_DATABASE_URL)
-    handlers/              Route handlers
   render/                  Output renderers — TUI, Plain, JSON
   testutil/                MockSSH (utils.SSHClient), MockCompute, MockDNS, MockBucket, MockOutput
 
@@ -406,7 +375,7 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 5. Provider interfaces scale. Add a provider = implement the interface.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 7. SSH keys injected via cloud-init only. Single SSH connection per deploy (`MasterSSH`).
-8. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/local.go` resolves from env vars, `cmd/api/` resolves from the database. Both produce the same `DeployContext`.
+8. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/context.go` resolves from env vars into `DeployContext`.
 9. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface.
 10. **`pkg/core/` never writes to stdout.** All output through `Output` interface.
 17. **Every provider operation goes through `pkg/core/`.** No caller should invoke a provider method directly. `pkg/core/` wraps every operation with output, error handling, and naming resolution. Teardown, reconcile, CLI commands — all go through `pkg/core/` functions. Direct provider calls bypass output and error reporting.
@@ -416,17 +385,8 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 14. **Web-facing services require replicas >= 2.** Omitted defaults to 2, explicit 1 is a hard error. This ensures process-level redundancy — 2 replicas on a single `server:` node is valid (zero-downtime rolling updates).
 15. **Package-managed resources are protected from orphan detection.**
 16. **Database credentials are user-owned.** No auto-generation. Missing = hard error.
-18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) and API input (`validateDispatchInput`) are the only places that validate user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
-22. **Single binary, two modes via Backend interface.** `cmd/cli` is the only CLI. `--local` dispatches to `localBackend` (pkg/core directly); default cloud mode dispatches to `cloudBackend` (API relay). Commands are backend-agnostic — no mode branching in command files. Cloud-only commands (login, whoami, workspaces, repos, provider) hard-error with `--local`.
-
-## CLI mode detection
-
-Single binary (`cmd/cli`). Mode selected by flag or auth state.
-
-- `--local` flag → **localBackend** (call `pkg/core/` with local provider creds). Reads `nvoi.yaml` + env vars.
-- `~/.config/nvoi/auth.json` exists → **cloudBackend** (relay through API). Default when authenticated.
-- No auth, no `--local` → error with guidance to authenticate or pass `--local`.
-- `nvoi.yaml` present but no auth → suggest both options.
+18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) is the only place that validates user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
+22. **Single binary, one mode.** `cmd/cli` reads `nvoi.yaml`, resolves credentials from env vars, and calls `internal/reconcile` / `pkg/core/` directly. No server, no relay, no custody. Each command file dispatches to the shared `runtime` holding `DeployContext`, `AppConfig`, `viper`, and `Output`.
 
 19. **One kubectl primitive: `kctl(ns, cmd)`.** Every kubectl-over-SSH call in `pkg/kube/` goes through this single unexported helper. `ns=""` for cluster-scoped, `ns="foo"` for namespaced. YAML applied via SFTP upload + `kctl`, never heredocs. No code outside `pkg/kube/` constructs kubectl strings. Exception: `pkg/infra/k3s.go` bootstrap uses `sudo k3s kubectl` before deploy-user kubeconfig exists.
 20. **Async provider actions polled to completion.** Every action that returns an ID must be polled via `waitForAction` before proceeding. Fire-and-forget = production race condition.
