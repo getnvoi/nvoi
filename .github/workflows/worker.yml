@@ -1,0 +1,31 @@
+name: Worker
+
+# Deploy the distribution worker when its source changes on main.
+# release.yml also deploys it on every tag — this workflow covers the
+# mid-release case (worker-only fixes, JS tweaks, etc).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "worker/**"
+      - ".github/scripts/deploy-worker.sh"
+      - ".github/workflows/worker.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy distribution worker
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+        run: ./.github/scripts/deploy-worker.sh
