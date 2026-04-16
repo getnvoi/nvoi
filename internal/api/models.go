@@ -1,6 +1,9 @@
 package api
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -10,6 +13,20 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// cryptoRandRead is a var for testing.
+var cryptoRandRead = rand.Read
+
+// hashToken returns the hex-encoded SHA-256 hash of a token.
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+
+// ValidateAgentToken checks a bearer token against a repo's stored hash.
+func ValidateAgentToken(token, storedHash string) bool {
+	return storedHash != "" && hashToken(token) == storedHash
+}
 
 // NOTE: Provider enums (ComputeProvider, DNSProvider, etc.) are gone.
 // Provider selection lives on InfraProvider.Name — no enum validation needed.
@@ -196,16 +213,18 @@ func (p *InfraProvider) CredentialsMap() map[string]string {
 // ── Repo ──────────────────────────────────────────────────────────────────────
 
 type Repo struct {
-	ID            string         `gorm:"primaryKey" json:"id"`
-	WorkspaceID   string         `gorm:"not null;index" json:"workspace_id"`
-	Name          string         `gorm:"not null" json:"name"`
-	Environment   string         `gorm:"not null;default:'production'" json:"environment"` // production, staging, etc.
-	SSHPrivateKey string         `gorm:"type:text;not null" json:"-"`                      // encrypted PEM — auto-generated, never nil
-	SSHPublicKey  string         `gorm:"not null" json:"ssh_public_key"`                   // OpenSSH format — visible for deploy key setup
-	Config        string         `gorm:"type:text" json:"-"`                               // nvoi.yaml content — mutated by config CRUD, used by deploy
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+	ID             string         `gorm:"primaryKey" json:"id"`
+	WorkspaceID    string         `gorm:"not null;index" json:"workspace_id"`
+	Name           string         `gorm:"not null" json:"name"`
+	Environment    string         `gorm:"not null;default:'production'" json:"environment"` // production, staging, etc.
+	SSHPrivateKey  string         `gorm:"type:text;not null" json:"-"`                      // encrypted PEM — auto-generated, never nil
+	SSHPublicKey   string         `gorm:"not null" json:"ssh_public_key"`                   // OpenSSH format — visible for deploy key setup
+	AgentToken     string         `gorm:"type:text" json:"-"`                               // plaintext agent token — returned once at creation, then only hash is checked
+	AgentTokenHash string         `gorm:"index" json:"-"`                                   // SHA-256 hash for validation — the agent sends the plaintext, API checks the hash
+	Config         string         `gorm:"type:text" json:"-"`                               // nvoi.yaml content — mutated by config CRUD, used by deploy
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// Provider links — each repo picks one provider per kind from the workspace.
 	ComputeProviderID *string `gorm:"index" json:"compute_provider_id,omitempty"`
@@ -237,6 +256,16 @@ func (r *Repo) BeforeCreate(tx *gorm.DB) error {
 		}
 		r.SSHPrivateKey = string(priv)
 		r.SSHPublicKey = pub
+	}
+	// Auto-generate agent token — the plaintext is returned once at creation
+	// (for the user to put in .env as NVOI_API_TOKEN), then only the hash is used.
+	if r.AgentToken == "" {
+		token := make([]byte, 32)
+		if _, err := cryptoRandRead(token); err != nil {
+			return fmt.Errorf("generate agent token: %w", err)
+		}
+		r.AgentToken = hex.EncodeToString(token)
+		r.AgentTokenHash = hashToken(r.AgentToken)
 	}
 	return r.encryptSSHKey()
 }

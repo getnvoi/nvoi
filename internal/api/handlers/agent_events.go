@@ -82,9 +82,9 @@ func AgentEvents(db *gorm.DB) func(context.Context, *AgentEventsInput) (*AgentEv
 	}
 }
 
-// validateAgentToken checks the bearer token against the repo's workspace.
-// For now: matches any repo with the given app+env. The token is the
-// workspace-scoped NVOI_API_TOKEN that the agent sends.
+// validateAgentToken checks the bearer token against the repo's stored hash.
+// The agent sends the plaintext token (from NVOI_API_TOKEN env var), the API
+// hashes it and compares against the stored AgentTokenHash on the repo.
 func validateAgentToken(db *gorm.DB, authHeader, app, env string) bool {
 	if authHeader == "" {
 		return false
@@ -98,15 +98,10 @@ func validateAgentToken(db *gorm.DB, authHeader, app, env string) bool {
 		return false
 	}
 
-	// Find the repo by app+env, then check workspace membership.
-	// For MVP: the token IS the workspace ID (simple, no new table).
-	// Production: dedicated agent_tokens table with hashed tokens.
 	var repo api.Repo
 	if err := db.Where("name = ? AND environment = ?", app, env).First(&repo).Error; err != nil {
 		return false
 	}
 
-	// Check that the token matches the workspace ID.
-	// This is the MVP auth — agent knows its workspace ID.
-	return repo.WorkspaceID == token
+	return api.ValidateAgentToken(token, repo.AgentTokenHash)
 }
