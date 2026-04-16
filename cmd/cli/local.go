@@ -71,7 +71,7 @@ func (b *localBackend) Teardown(ctx context.Context, deleteVolumes, deleteStorag
 
 func (b *localBackend) Describe(ctx context.Context, jsonOutput bool) error {
 	req := app.DescribeRequest{
-		Cluster:        b.dc.Cluster,
+		Cluster: b.dc.Cluster, Output: b.out,
 		StorageNames:   b.cfg.StorageNames(),
 		ServiceSecrets: b.cfg.ServiceSecrets(),
 	}
@@ -112,7 +112,7 @@ func (b *localBackend) Resources(ctx context.Context, jsonOutput bool) error {
 
 func (b *localBackend) Logs(ctx context.Context, opts LogsOpts) error {
 	return app.Logs(ctx, app.LogsRequest{
-		Cluster: b.dc.Cluster, Service: opts.Service,
+		Cluster: b.dc.Cluster, Output: b.out, Service: opts.Service,
 		Follow: opts.Follow, Tail: opts.Tail, Since: opts.Since,
 		Previous: opts.Previous, Timestamps: opts.Timestamps,
 	})
@@ -120,16 +120,16 @@ func (b *localBackend) Logs(ctx context.Context, opts LogsOpts) error {
 
 func (b *localBackend) Exec(ctx context.Context, service string, command []string) error {
 	return app.Exec(ctx, app.ExecRequest{
-		Cluster: b.dc.Cluster, Service: service, Command: command,
+		Cluster: b.dc.Cluster, Output: b.out, Service: service, Command: command,
 	})
 }
 
 func (b *localBackend) SSH(ctx context.Context, command []string) error {
-	return app.SSH(ctx, app.SSHRequest{Cluster: b.dc.Cluster, Command: command})
+	return app.SSH(ctx, app.SSHRequest{Cluster: b.dc.Cluster, Output: b.out, Command: command})
 }
 
 func (b *localBackend) CronRun(ctx context.Context, name string) error {
-	return app.CronRun(ctx, app.CronRunRequest{Cluster: b.dc.Cluster, Name: name})
+	return app.CronRun(ctx, app.CronRunRequest{Cluster: b.dc.Cluster, Output: b.out, Name: name})
 }
 
 // ── Database ────────────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ func (b *localBackend) DatabaseBackupList(ctx context.Context, dbName string) er
 		return err
 	}
 	entries, err := app.DatabaseBackupList(ctx, app.DatabaseBackupListRequest{
-		Cluster: b.dc.Cluster, DBName: name,
+		Cluster: b.dc.Cluster, Output: b.out, DBName: name,
 	})
 	if err != nil {
 		return err
@@ -166,7 +166,7 @@ func (b *localBackend) DatabaseBackupDownload(ctx context.Context, dbName, key, 
 		return err
 	}
 	body, _, err := app.DatabaseBackupDownload(ctx, app.DatabaseBackupDownloadRequest{
-		Cluster: b.dc.Cluster, DBName: name, Key: key,
+		Cluster: b.dc.Cluster, Output: b.out, DBName: name, Key: key,
 	})
 	if err != nil {
 		return err
@@ -206,7 +206,7 @@ func (b *localBackend) DatabaseSQL(ctx context.Context, dbName, engine, query st
 		return fmt.Errorf("--kind is required (postgres or mysql)")
 	}
 	output, err := app.DatabaseSQL(ctx, app.DatabaseSQLRequest{
-		Cluster: b.dc.Cluster, DBName: name, Engine: engine, Query: query,
+		Cluster: b.dc.Cluster, Output: b.out, DBName: name, Engine: engine, Query: query,
 	})
 	if err != nil {
 		return err
