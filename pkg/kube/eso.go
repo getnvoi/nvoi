@@ -169,9 +169,25 @@ func WaitForSecretStoreReady(ctx context.Context, ssh utils.SSHClient, ns, name 
 		if status == "True" {
 			return true, nil
 		}
-		// Status is False with a message — fail immediately, won't self-heal.
-		if status == "False" && lastStatus != "" {
-			return false, fmt.Errorf("%s: %s", name, lastStatus)
+		// Status is False — fail immediately, won't self-heal.
+		// Pull the last ESO operator log line for the real error.
+		if status == "False" {
+			detail := lastStatus
+			logOut, logErr := ssh.Run(ctx, kctl("external-secrets", fmt.Sprintf("logs deploy/external-secrets --tail=5 2>/dev/null | grep %q | tail -1", name)))
+			if logErr == nil {
+				logLine := strings.TrimSpace(string(logOut))
+				// Extract the "error" field from the JSON log line.
+				if idx := strings.Index(logLine, `"error":"`); idx >= 0 {
+					errStart := idx + len(`"error":"`)
+					if end := strings.Index(logLine[errStart:], `"`); end >= 0 {
+						detail = logLine[errStart : errStart+end]
+					}
+				}
+			}
+			if detail == "" {
+				detail = "unknown error — check ESO operator logs"
+			}
+			return false, fmt.Errorf("%s: %s", name, detail)
 		}
 		return false, nil // no status yet, keep polling
 	})
