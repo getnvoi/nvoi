@@ -141,6 +141,78 @@ func TestReporter_RetriesOnFailure(t *testing.T) {
 	}
 }
 
+func TestReporter_CloseDoesNotBlockDuringBackoff(t *testing.T) {
+	// Server always fails — reporter enters backoff.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	r := NewReporter(srv.URL, "", "app", "prod")
+	r.Send(app.NewMessageEvent(app.EventSuccess, "event"))
+	// Wait for the first failed send to trigger backoff.
+	time.Sleep(reporterFlushEvery + 50*time.Millisecond)
+
+	// Close must return promptly even though backoff timer is pending.
+	done := make(chan struct{})
+	go func() {
+		r.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// ok
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Close() blocked during backoff — time.Sleep bug is back")
+	}
+}
+
+func TestReporter_AcceptsEventsDuringBackoff(t *testing.T) {
+	var mu sync.Mutex
+	var totalEvents int
+
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		callCount++
+		if callCount == 1 {
+			// First call fails — triggers backoff.
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		// Subsequent calls succeed.
+		var payload struct{ Events []app.Event }
+		json.Unmarshal(data, &payload)
+		mu.Lock()
+		totalEvents += len(payload.Events)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	r := NewReporter(srv.URL, "", "app", "prod")
+
+	// First event triggers a failed send → backoff.
+	r.Send(app.NewMessageEvent(app.EventSuccess, "first"))
+	time.Sleep(reporterFlushEvery + 50*time.Millisecond)
+
+	// Send more events DURING backoff — they must not be dropped.
+	for i := 0; i < 5; i++ {
+		r.Send(app.NewMessageEvent(app.EventProgress, "during-backoff"))
+	}
+
+	// Wait for backoff to elapse + flush.
+	time.Sleep(reporterFlushEvery*3 + 100*time.Millisecond)
+	r.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if totalEvents < 5 {
+		t.Errorf("expected at least 5 events delivered after backoff, got %d", totalEvents)
+	}
+}
+
 // ── teeOutput tests ────────────────────────────────────────────────────────
 
 func TestTeeOutput_NilReporter_ReturnsPrimary(t *testing.T) {
