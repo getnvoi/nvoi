@@ -6,11 +6,10 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/packages"
-	"github.com/spf13/viper"
 )
 
 // Deploy reconciles live infrastructure to match the YAML config.
-func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, v *viper.Viper) error {
+func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
 	if err := ValidateConfig(cfg); err != nil {
 		return err
 	}
@@ -51,7 +50,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err := Build(ctx, dc, cfg); err != nil {
 		return err
 	}
-	secretValues, err := Secrets(ctx, dc, live, cfg, v)
+	secretValues, err := Secrets(ctx, dc, live, cfg)
 	if err != nil {
 		return err
 	}

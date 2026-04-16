@@ -15,7 +15,7 @@ A CLI that deploys containers to cloud servers from a declarative YAML config. `
 - **Packages.** Higher-level abstractions that bundle infra + secrets + CLI. `database:` is the first package — creates StatefulSet, headless Service, credentials, backup bucket, backup CronJob from one config block. Packages hook into the reconcile loop between secrets and storage.
 - **Provider interfaces scale.** Hetzner, Cloudflare, AWS, Scaleway. Interface-first. Add a provider = implement the interface. Organized by domain: `compute/`, `dns/`, `storage/`, `build/`.
 - **SSH is the transport.** No agent binary. Single SSH connection per deploy (`MasterSSH`), reused across all operations.
-- **Secrets are k8s secrets.** Values live in the cluster only. Resolved from environment variables at deploy time.
+- **Secrets are k8s secrets.** Values live in the cluster only. Resolved at deploy time from env vars (default) or from an external secrets provider (`providers.secrets: doppler | awssm | infisical`).
 
 ## Build & Test
 
@@ -80,23 +80,6 @@ go test ./...                  # run tests
 | `bin/deploy` | Shorthand for `bin/nvoi deploy` |
 | `bin/destroy` | Shorthand for `bin/nvoi teardown` |
 
-### Cloud CLI (local development)
-
-For cloud mode development, start the API + postgres via docker-compose, then run the CLI without `--local`:
-
-```bash
-docker compose up -d --wait     # start API + postgres
-export NVOI_API_BASE="http://localhost:8080"
-go run ./cmd/cli login          # authenticate with GitHub token
-go run ./cmd/cli deploy         # deploy via API
-```
-
-The API runs at `localhost:8080` with a local postgres. `docker-compose.yml` handles the stack:
-- **api** — Go binary, reads `MAIN_DATABASE_URL`, serves Huma REST API
-- **postgres** — postgres:17-alpine, dev credentials (nvoi/nvoi/nvoi)
-
-Auth stored in `~/.config/nvoi/auth.json`.
-
 ## Config format
 
 ```yaml
@@ -108,6 +91,7 @@ providers:
   dns: cloudflare           # cloudflare | aws | scaleway
   storage: cloudflare       # cloudflare | aws | scaleway
   build: local              # local | daytona | github
+  secrets: infisical        # doppler | awssm | infisical — optional; see "Credential resolution"
 
 servers:
   master:
@@ -192,17 +176,16 @@ nvoi db sql "SELECT ..."                 # run SQL on database pod
 
 Global flags: `--config` (default: `nvoi.yaml`), `--json` (JSONL output), `--ci` (plain text).
 
+nvoi is a local-first CLI. Credentials live in your environment (`.env` or exported vars) and never leave your machine. There is no server, no account, no custody.
+
 ## Architecture
 
 ```
 cmd/
-  cli/                     CLI entrypoint — Backend interface, one file per command
-    main.go                rootCmd, mode detection, --local flag
-    backend.go             Backend interface (12 methods)
-    local.go               localBackend — direct pkg/core calls
-    cloud.go               cloudBackend — HTTP relay to API
-    deploy.go..ssh.go      One file per command, backend-agnostic
-  api/main.go              API server entrypoint
+  cli/                     CLI entrypoint — one file per command
+    main.go                rootCmd, runtime wiring, PersistentPreRunE
+    context.go             Credential resolution from env vars (cmd/ boundary for os.Getenv)
+    deploy.go..ssh.go      One file per command, dispatch to pkg/core / internal/*
   distribution/main.go     Binary distribution server (R2-backed)
 
 internal/
@@ -233,19 +216,6 @@ internal/
   core/                    Source-agnostic logic — teardown, database helpers
     teardown.go            Teardown() — ordered resource deletion
     database.go            DatabaseBackupList, DatabaseBackupDownload, DatabaseSQL
-  cloud/                   Cloud API client + cloud-only commands
-    client.go              APIClient (HTTP)
-    auth.go                Auth config (~/.config/nvoi/auth.json)
-    backend.go             StreamRun, Describe, Resources, Logs, Exec, SSH, database ops
-    login.go               GitHub token → JWT flow
-    provider.go            nvoi provider set/list/delete
-    repos.go               nvoi repos create/list/use/delete
-    workspaces.go          nvoi workspaces
-    whoami.go              nvoi whoami
-  api/                     REST API server (Huma + Gin + GORM)
-    models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo, CommandLog
-    db.go                  PostgreSQL + AutoMigrate (reads MAIN_DATABASE_URL)
-    handlers/              Route handlers
   render/                  Output renderers — TUI, Plain, JSON
   testutil/                MockSSH (utils.SSHClient), MockCompute, MockDNS, MockBucket, MockOutput
 
@@ -390,8 +360,39 @@ Organized by domain with shared base clients:
 | DNS | `providers.dns` | `DNSProvider` | cloudflare, aws, scaleway |
 | Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
 | Build | `providers.build` | `BuildProvider` | local, daytona, github |
+| Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
 
 `ensureFirewall` only ensures the resource exists — never resets rules. Rules managed exclusively by `ReconcileFirewallRules` in the Firewall reconcile step.
+
+## Credential resolution
+
+Every credential — provider tokens, DB creds, service `$VAR` expansion, SSH key, GitHub token — goes through a single `provider.CredentialSource` built at the `cmd/` boundary in `cmd/cli/context.go:credentialSource`.
+
+**Two modes, binary switch:**
+
+### Env mode (default — `providers.secrets` unset)
+
+`CredentialSource = EnvSource{}`. `source.Get(k)` is literally `os.Getenv(k)`. All referenced variables come from the shell/`.env`. Two local fallbacks exist for developer convenience:
+
+| Credential | Resolution order |
+|---|---|
+| Compute / DNS / Storage / Build creds | env (schema `EnvVar` field) |
+| `{DB}_POSTGRES_USER/PASSWORD/DB` | env |
+| Service `$VAR` in `secrets:` | env |
+| SSH private key | `SSH_PRIVATE_KEY` env → `SSH_KEY_PATH` env → `~/.ssh/id_ed25519` → `~/.ssh/id_rsa` |
+| GitHub token | `GITHUB_TOKEN` env → `gh auth token` subprocess |
+
+### Strict mode (`providers.secrets: doppler | awssm | infisical`)
+
+The provider bootstraps itself from env vars (e.g. `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET` / `_PROJECT_SLUG` / `_ENVIRONMENT` for Infisical — all `EnvSource` lookups), then **every other credential** is fetched through `SecretsSource.Get(k)` — which calls the provider API.
+
+- **No silent fallback.** Misconfigured provider (bad creds, missing bootstrap env) is a hard error at `credentialSource()`. Not a deferred failure during reconcile.
+- **No disk fallback for SSH key.** `SSH_PRIVATE_KEY` must exist in the provider as a multiline PEM blob. `SSH_KEY_PATH` indirection is rejected — the provider is THE source.
+- **No `gh` fallback for GitHub token.** Provider-only. If the token isn't there and it's needed downstream, the caller errors.
+
+**Naming convention for provider-stored keys:** whatever the env var name would be in env mode, that's the key name in the provider. `HETZNER_TOKEN` env → `HETZNER_TOKEN` secret. `{DB}_POSTGRES_PASSWORD` env → same in the provider. No prefixing, no mangling. Switching provider (Doppler → Infisical) means copying the same keys over.
+
+**Secrets provider in the registry:** new provider implementations live in `pkg/provider/secrets/{name}/` and satisfy `SecretsProvider` (`ValidateCredentials`, `Get`, `List` — no `Set`/`Delete`, read-only by design). Registration via `provider.RegisterSecrets(name, schema, factory)` in `init()`. `cmd/cli/main.go` imports each with a blank import to trigger registration.
 
 ## Working tree
 
@@ -406,7 +407,7 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 5. Provider interfaces scale. Add a provider = implement the interface.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 7. SSH keys injected via cloud-init only. Single SSH connection per deploy (`MasterSSH`).
-8. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/local.go` resolves from env vars, `cmd/api/` resolves from the database. Both produce the same `DeployContext`.
+8. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/context.go` builds a `CredentialSource` at the boundary — `EnvSource` (default) or `SecretsSource` (when `providers.secrets` is configured). Everything downstream calls `source.Get(key)`; nothing else touches env.
 9. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface.
 10. **`pkg/core/` never writes to stdout.** All output through `Output` interface.
 17. **Every provider operation goes through `pkg/core/`.** No caller should invoke a provider method directly. `pkg/core/` wraps every operation with output, error handling, and naming resolution. Teardown, reconcile, CLI commands — all go through `pkg/core/` functions. Direct provider calls bypass output and error reporting.
@@ -416,17 +417,8 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 14. **Web-facing services require replicas >= 2.** Omitted defaults to 2, explicit 1 is a hard error. This ensures process-level redundancy — 2 replicas on a single `server:` node is valid (zero-downtime rolling updates).
 15. **Package-managed resources are protected from orphan detection.**
 16. **Database credentials are user-owned.** No auto-generation. Missing = hard error.
-18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) and API input (`validateDispatchInput`) are the only places that validate user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
-22. **Single binary, two modes via Backend interface.** `cmd/cli` is the only CLI. `--local` dispatches to `localBackend` (pkg/core directly); default cloud mode dispatches to `cloudBackend` (API relay). Commands are backend-agnostic — no mode branching in command files. Cloud-only commands (login, whoami, workspaces, repos, provider) hard-error with `--local`.
-
-## CLI mode detection
-
-Single binary (`cmd/cli`). Mode selected by flag or auth state.
-
-- `--local` flag → **localBackend** (call `pkg/core/` with local provider creds). Reads `nvoi.yaml` + env vars.
-- `~/.config/nvoi/auth.json` exists → **cloudBackend** (relay through API). Default when authenticated.
-- No auth, no `--local` → error with guidance to authenticate or pass `--local`.
-- `nvoi.yaml` present but no auth → suggest both options.
+18. **Input validated once at the boundary.** Config parse (`ValidateConfig`) is the only place that validates user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. `NewNames()` validates, not sanitizes. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
+22. **Single binary, one mode.** `cmd/cli` reads `nvoi.yaml`, resolves credentials from env vars, and calls `internal/reconcile` / `pkg/core/` directly. No server, no relay, no custody. Each command file dispatches to the shared `runtime` holding `DeployContext`, `AppConfig`, `viper`, and `Output`.
 
 19. **One kubectl primitive: `kctl(ns, cmd)`.** Every kubectl-over-SSH call in `pkg/kube/` goes through this single unexported helper. `ns=""` for cluster-scoped, `ns="foo"` for namespaced. YAML applied via SFTP upload + `kctl`, never heredocs. No code outside `pkg/kube/` constructs kubectl strings. Exception: `pkg/infra/k3s.go` bootstrap uses `sudo k3s kubectl` before deploy-user kubeconfig exists.
 20. **Async provider actions polled to completion.** Every action that returns an ID must be polled via `waitForAction` before proceeding. Fire-and-forget = production race condition.

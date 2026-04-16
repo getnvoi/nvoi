@@ -1,14 +1,20 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/spf13/cobra"
+)
 
-func newSSHCmd(m *mode) *cobra.Command {
+func newSSHCmd(rt *runtime) *cobra.Command {
 	return &cobra.Command{
 		Use:   "ssh -- <command>",
 		Short: "Run command on master node",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return m.backend.SSH(cmd.Context(), args)
+			return app.SSH(cmd.Context(), app.SSHRequest{
+				Cluster: rt.dc.Cluster,
+				Command: args,
+			})
 		},
 	}
 }

@@ -31,6 +31,12 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	if cfg.Providers.Compute == "" {
 		return fmt.Errorf("providers.compute is required")
 	}
+	if sp := cfg.Providers.Secrets; sp != "" {
+		knownSecrets := map[string]bool{"doppler": true, "awssm": true, "infisical": true}
+		if !knownSecrets[sp] {
+			return fmt.Errorf("providers.secrets: unsupported secrets provider %q (doppler, awssm, infisical)", sp)
+		}
+	}
 
 	// ── Servers ───────────────────────────────────────────────────────────
 	if len(cfg.Servers) == 0 {

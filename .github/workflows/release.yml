@@ -91,4 +91,4 @@ jobs:
         env:
           SSH_KEY_PATH: ~/.ssh/id_ed25519
           HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
-        run: go run ./cmd/cli --local exec distribution -- ./nvoi-dist pull "${{ github.ref_name }}"
+        run: go run ./cmd/cli exec distribution -- ./nvoi-dist pull "${{ github.ref_name }}"
