@@ -35,23 +35,12 @@ jobs:
 
       - name: Deploy
         env:
-          # Provider credentials
-          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          DNS_ZONE: nvoi.to
           SSH_KEY_PATH: ~/.ssh/id_ed25519
-          # Database credentials (database package reads {NAME}_POSTGRES_*)
-          BUGSINK_POSTGRES_USER: ${{ secrets.BUGSINK_POSTGRES_USER }}
-          BUGSINK_POSTGRES_PASSWORD: ${{ secrets.BUGSINK_POSTGRES_PASSWORD }}
-          BUGSINK_POSTGRES_DB: ${{ secrets.BUGSINK_POSTGRES_DB }}
-          # App secrets
-          BUGSINK_SECRET_KEY: ${{ secrets.BUGSINK_SECRET_KEY }}
-          BUGSINK_ADMIN_EMAIL: ${{ secrets.BUGSINK_ADMIN_EMAIL }}
-          BUGSINK_ADMIN_PASSWORD: ${{ secrets.BUGSINK_ADMIN_PASSWORD }}
-          BUGSINK_EMAIL_HOST_USER: ${{ secrets.BUGSINK_EMAIL_HOST_USER }}
-          BUGSINK_EMAIL_HOST_PASSWORD: ${{ secrets.BUGSINK_EMAIL_HOST_PASSWORD }}
+          # Infisical bootstrap — every other credential is fetched through the secrets provider
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_SLUG: ${{ secrets.INFISICAL_PROJECT_SLUG }}
+          INFISICAL_ENVIRONMENT: ${{ secrets.INFISICAL_ENVIRONMENT }}
         run: |
           chmod +x ./bin/deploy
           ./bin/deploy

@@ -10,7 +10,7 @@ func newDeployCmd(rt *runtime) *cobra.Command {
 		Use:   "deploy",
 		Short: "Deploy from config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return reconcile.Deploy(cmd.Context(), rt.dc, rt.cfg, rt.v)
+			return reconcile.Deploy(cmd.Context(), rt.dc, rt.cfg)
 		},
 	}
 }

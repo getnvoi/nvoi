@@ -3,10 +3,12 @@ package awssm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	smtypes "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/provider/awsbase"
 )
@@ -38,6 +40,9 @@ func (c *Client) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
+// Get returns the value for a secret key. Returns ("", nil) if the key
+// does not exist — honoring the CredentialSource contract. Only real
+// failures (auth, network) are returned as errors.
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	if c.sm == nil {
 		return "", fmt.Errorf("awssm: client not initialized")
@@ -46,48 +51,16 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 		SecretId: aws.String(key),
 	})
 	if err != nil {
+		var notFound *smtypes.ResourceNotFoundException
+		if errors.As(err, &notFound) {
+			return "", nil
+		}
 		return "", fmt.Errorf("awssm: get %q: %w", key, err)
 	}
 	if out.SecretString == nil {
 		return "", fmt.Errorf("awssm: %q is a binary secret — only string secrets are supported", key)
 	}
 	return *out.SecretString, nil
-}
-
-func (c *Client) Set(ctx context.Context, key, value string) error {
-	if c.sm == nil {
-		return fmt.Errorf("awssm: client not initialized")
-	}
-	// Try update first, create if not found.
-	_, err := c.sm.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
-		SecretId:     aws.String(key),
-		SecretString: aws.String(value),
-	})
-	if err != nil {
-		// If the secret doesn't exist, create it.
-		_, createErr := c.sm.CreateSecret(ctx, &secretsmanager.CreateSecretInput{
-			Name:         aws.String(key),
-			SecretString: aws.String(value),
-		})
-		if createErr != nil {
-			return fmt.Errorf("awssm: set %q: put failed: %w, create failed: %w", key, err, createErr)
-		}
-	}
-	return nil
-}
-
-func (c *Client) Delete(ctx context.Context, key string) error {
-	if c.sm == nil {
-		return fmt.Errorf("awssm: client not initialized")
-	}
-	_, err := c.sm.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
-		SecretId:                   aws.String(key),
-		ForceDeleteWithoutRecovery: aws.Bool(true),
-	})
-	if err != nil {
-		return fmt.Errorf("awssm: delete %q: %w", key, err)
-	}
-	return nil
 }
 
 func (c *Client) List(ctx context.Context) ([]string, error) {

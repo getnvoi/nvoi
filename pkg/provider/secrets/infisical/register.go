@@ -5,10 +5,11 @@ import "github.com/getnvoi/nvoi/pkg/provider"
 var Schema = provider.CredentialSchema{
 	Name: "infisical",
 	Fields: []provider.CredentialField{
-		{Key: "token", Required: true, EnvVar: "INFISICAL_TOKEN", Flag: "token"},
-		{Key: "host", Required: false, EnvVar: "INFISICAL_HOST", Flag: "host"},
-		{Key: "project_id", Required: true, EnvVar: "INFISICAL_PROJECT_ID", Flag: "project-id"},
+		{Key: "client_id", Required: true, EnvVar: "INFISICAL_CLIENT_ID", Flag: "client-id"},
+		{Key: "client_secret", Required: true, EnvVar: "INFISICAL_CLIENT_SECRET", Flag: "client-secret"},
+		{Key: "project_slug", Required: true, EnvVar: "INFISICAL_PROJECT_SLUG", Flag: "project-slug"},
 		{Key: "environment", Required: false, EnvVar: "INFISICAL_ENVIRONMENT", Flag: "environment"},
+		{Key: "host", Required: false, EnvVar: "INFISICAL_HOST", Flag: "host"},
 	},
 }
 

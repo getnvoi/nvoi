@@ -13,11 +13,14 @@ import (
 
 const defaultHost = "https://app.infisical.com"
 
-// Client manages secrets via the Infisical API.
+// Client manages secrets via the Infisical API using Universal Auth.
 type Client struct {
-	api         *utils.HTTPClient
-	projectID   string
-	environment string
+	api          *utils.HTTPClient
+	host         string
+	clientID     string
+	clientSecret string
+	projectSlug  string
+	environment  string
 }
 
 func New(creds map[string]string) *Client {
@@ -25,7 +28,6 @@ func New(creds map[string]string) *Client {
 	if host == "" {
 		host = defaultHost
 	}
-	token := creds["token"]
 	env := creds["environment"]
 	if env == "" {
 		env = "production"
@@ -33,19 +35,49 @@ func New(creds map[string]string) *Client {
 	return &Client{
 		api: &utils.HTTPClient{
 			BaseURL: host + "/api",
-			SetAuth: func(r *http.Request) {
-				r.Header.Set("Authorization", "Bearer "+token)
-			},
-			Label: "infisical",
+			Label:   "infisical",
 		},
-		projectID:   creds["project_id"],
-		environment: env,
+		host:         host,
+		clientID:     creds["client_id"],
+		clientSecret: creds["client_secret"],
+		projectSlug:  creds["project_slug"],
+		environment:  env,
 	}
 }
 
+// authenticate obtains an access token via Universal Auth.
+func (c *Client) authenticate(ctx context.Context) (string, error) {
+	var resp struct {
+		AccessToken string `json:"accessToken"`
+	}
+	body := map[string]string{
+		"clientId":     c.clientID,
+		"clientSecret": c.clientSecret,
+	}
+	if err := c.api.Do(ctx, "POST", "/v1/auth/universal-auth/login", body, &resp); err != nil {
+		return "", fmt.Errorf("infisical: authenticate: %w", err)
+	}
+	return resp.AccessToken, nil
+}
+
+// authedAPI returns an HTTPClient with a fresh access token.
+func (c *Client) authedAPI(ctx context.Context) (*utils.HTTPClient, error) {
+	token, err := c.authenticate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &utils.HTTPClient{
+		BaseURL: c.host + "/api",
+		SetAuth: func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer "+token)
+		},
+		Label: "infisical",
+	}, nil
+}
+
 func (c *Client) ValidateCredentials(ctx context.Context) error {
-	if c.projectID == "" {
-		return fmt.Errorf("infisical: project_id is required")
+	if c.projectSlug == "" {
+		return fmt.Errorf("infisical: project_slug is required")
 	}
 	_, err := c.List(ctx)
 	if err != nil {
@@ -54,60 +86,41 @@ func (c *Client) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
+// Get returns the value for a secret key. Returns ("", nil) if the key
+// does not exist — honoring the CredentialSource contract. Only real
+// failures (auth, network) are returned as errors.
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
+	api, err := c.authedAPI(ctx)
+	if err != nil {
+		return "", err
+	}
 	var resp struct {
 		Secret struct {
 			SecretValue string `json:"secretValue"`
 		} `json:"secret"`
 	}
-	path := fmt.Sprintf("/v3/secrets/raw/%s?workspaceId=%s&environment=%s", key, c.projectID, c.environment)
-	if err := c.api.Do(ctx, "GET", path, nil, &resp); err != nil {
+	path := fmt.Sprintf("/v3/secrets/raw/%s?workspaceSlug=%s&environment=%s", key, c.projectSlug, c.environment)
+	if err := api.Do(ctx, "GET", path, nil, &resp); err != nil {
+		if utils.IsNotFound(err) {
+			return "", nil
+		}
 		return "", fmt.Errorf("infisical: get %q: %w", key, err)
 	}
 	return resp.Secret.SecretValue, nil
 }
 
-func (c *Client) Set(ctx context.Context, key, value string) error {
-	body := map[string]any{
-		"workspaceId": c.projectID,
-		"environment": c.environment,
-		"secretName":  key,
-		"secretValue": value,
-	}
-	// Try create; on conflict update.
-	err := c.api.Do(ctx, "POST", "/v3/secrets/raw", body, nil)
-	if err != nil {
-		// Update existing.
-		path := fmt.Sprintf("/v3/secrets/raw/%s", key)
-		updateErr := c.api.Do(ctx, "PATCH", path, body, nil)
-		if updateErr != nil {
-			return fmt.Errorf("infisical: set %q: create failed: %w, update failed: %w", key, err, updateErr)
-		}
-	}
-	return nil
-}
-
-func (c *Client) Delete(ctx context.Context, key string) error {
-	body := map[string]any{
-		"workspaceId": c.projectID,
-		"environment": c.environment,
-		"secretName":  key,
-	}
-	path := fmt.Sprintf("/v3/secrets/raw/%s", key)
-	if err := c.api.Do(ctx, "DELETE", path, body, nil); err != nil {
-		return fmt.Errorf("infisical: delete %q: %w", key, err)
-	}
-	return nil
-}
-
 func (c *Client) List(ctx context.Context) ([]string, error) {
+	api, err := c.authedAPI(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var resp struct {
 		Secrets []struct {
 			SecretKey string `json:"secretKey"`
 		} `json:"secrets"`
 	}
-	path := fmt.Sprintf("/v3/secrets/raw?workspaceId=%s&environment=%s", c.projectID, c.environment)
-	if err := c.api.Do(ctx, "GET", path, nil, &resp); err != nil {
+	path := fmt.Sprintf("/v3/secrets/raw?workspaceSlug=%s&environment=%s", c.projectSlug, c.environment)
+	if err := api.Do(ctx, "GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("infisical: list: %w", err)
 	}
 	names := make([]string, len(resp.Secrets))

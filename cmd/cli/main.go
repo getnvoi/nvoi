@@ -13,7 +13,6 @@ import (
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 
 	_ "github.com/getnvoi/nvoi/internal/packages/database"
 
@@ -52,7 +51,6 @@ func main() {
 type runtime struct {
 	dc  *config.DeployContext
 	cfg *config.AppConfig
-	v   *viper.Viper
 	out app.Output
 }
 
@@ -100,13 +98,14 @@ func initRuntime(cmd *cobra.Command, rt *runtime) error {
 	if err != nil {
 		return err
 	}
-	v := viper.New()
-	v.AutomaticEnv()
 	out := resolveOutput(cmd)
+	dc, err := buildDeployContext(cmd.Context(), out, cfg)
+	if err != nil {
+		return err
+	}
 	rt.cfg = cfg
-	rt.v = v
 	rt.out = out
-	rt.dc = buildDeployContext(cmd.Context(), out, cfg)
+	rt.dc = dc
 	return nil
 }
 

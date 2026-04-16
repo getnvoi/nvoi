@@ -208,7 +208,7 @@ func TestResolve_MissingAppEnv(t *testing.T) {
 	}
 }
 
-// ── SecretsProviderDef YAML parsing ──────────────────────────────────────────
+// ── Secrets provider YAML parsing ────────────────────────────────────────────
 
 func TestParseAppConfig_SecretsProvider(t *testing.T) {
 	yaml := `
@@ -216,8 +216,7 @@ app: myapp
 env: prod
 providers:
   compute: hetzner
-  secrets:
-    kind: doppler
+  secrets: doppler
 servers:
   master:
     type: cx23
@@ -231,11 +230,8 @@ services:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if cfg.Providers.Secrets == nil {
-		t.Fatal("Providers.Secrets is nil")
-	}
-	if cfg.Providers.Secrets.Kind != "doppler" {
-		t.Errorf("Kind = %q, want doppler", cfg.Providers.Secrets.Kind)
+	if cfg.Providers.Secrets != "doppler" {
+		t.Errorf("Providers.Secrets = %q, want doppler", cfg.Providers.Secrets)
 	}
 }
 
@@ -258,7 +254,7 @@ services:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if cfg.Providers.Secrets != nil {
-		t.Fatalf("Providers.Secrets should be nil, got %+v", cfg.Providers.Secrets)
+	if cfg.Providers.Secrets != "" {
+		t.Fatalf("Providers.Secrets should be empty, got %q", cfg.Providers.Secrets)
 	}
 }

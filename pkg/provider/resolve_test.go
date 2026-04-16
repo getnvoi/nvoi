@@ -120,59 +120,6 @@ func TestResolveComputeInvalidCreds(t *testing.T) {
 	}
 }
 
-func TestMapCredentials(t *testing.T) {
-	schema := CredentialSchema{
-		Name: "testprov",
-		Fields: []CredentialField{
-			{Key: "token", EnvVar: "TEST_TOKEN"},
-			{Key: "region", EnvVar: "TEST_REGION"},
-		},
-	}
-
-	// Both present.
-	env := map[string]string{"TEST_TOKEN": "abc", "TEST_REGION": "us", "UNRELATED": "xyz"}
-	creds := MapCredentials(schema, env)
-	if creds["token"] != "abc" {
-		t.Errorf("token = %q, want abc", creds["token"])
-	}
-	if creds["region"] != "us" {
-		t.Errorf("region = %q, want us", creds["region"])
-	}
-	if _, ok := creds["UNRELATED"]; ok {
-		t.Error("unrelated key should not be in creds")
-	}
-
-	// Missing env var → key absent.
-	creds = MapCredentials(schema, map[string]string{"TEST_TOKEN": "abc"})
-	if _, ok := creds["region"]; ok {
-		t.Error("missing env var should not produce a key")
-	}
-
-	// Empty value → key absent.
-	creds = MapCredentials(schema, map[string]string{"TEST_TOKEN": ""})
-	if _, ok := creds["token"]; ok {
-		t.Error("empty value should not produce a key")
-	}
-}
-
-func TestMapComputeCredentials(t *testing.T) {
-	// test-compute registered in init() above.
-	creds, err := MapComputeCredentials("test-compute", map[string]string{"TEST_TOKEN": "secret"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if creds["token"] != "secret" {
-		t.Errorf("token = %q, want secret", creds["token"])
-	}
-}
-
-func TestMapComputeCredentials_UnknownProvider(t *testing.T) {
-	_, err := MapComputeCredentials("nope", map[string]string{})
-	if err == nil {
-		t.Fatal("expected error for unknown provider")
-	}
-}
-
 func TestResolveComputeUnknownProvider(t *testing.T) {
 	_, err := ResolveCompute("no-such-provider", map[string]string{"token": "abc"})
 	if err == nil {
@@ -227,23 +174,6 @@ func TestGetSecretsSchema(t *testing.T) {
 
 func TestGetSecretsSchema_Unknown(t *testing.T) {
 	_, err := GetSecretsSchema("nope")
-	if err == nil {
-		t.Fatal("expected error for unknown provider")
-	}
-}
-
-func TestMapSecretsCredentials(t *testing.T) {
-	creds, err := MapSecretsCredentials("test-secrets", map[string]string{"TEST_SECRETS_TOKEN": "secret"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if creds["token"] != "secret" {
-		t.Errorf("token = %q, want secret", creds["token"])
-	}
-}
-
-func TestMapSecretsCredentials_UnknownProvider(t *testing.T) {
-	_, err := MapSecretsCredentials("nope", map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for unknown provider")
 	}

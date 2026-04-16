@@ -15,7 +15,7 @@ A CLI that deploys containers to cloud servers from a declarative YAML config. `
 - **Packages.** Higher-level abstractions that bundle infra + secrets + CLI. `database:` is the first package — creates StatefulSet, headless Service, credentials, backup bucket, backup CronJob from one config block. Packages hook into the reconcile loop between secrets and storage.
 - **Provider interfaces scale.** Hetzner, Cloudflare, AWS, Scaleway. Interface-first. Add a provider = implement the interface. Organized by domain: `compute/`, `dns/`, `storage/`, `build/`.
 - **SSH is the transport.** No agent binary. Single SSH connection per deploy (`MasterSSH`), reused across all operations.
-- **Secrets are k8s secrets.** Values live in the cluster only. Resolved from environment variables at deploy time.
+- **Secrets are k8s secrets.** Values live in the cluster only. Resolved at deploy time from env vars (default) or from an external secrets provider (`providers.secrets: doppler | awssm | infisical`).
 
 ## Build & Test
 
@@ -91,6 +91,7 @@ providers:
   dns: cloudflare           # cloudflare | aws | scaleway
   storage: cloudflare       # cloudflare | aws | scaleway
   build: local              # local | daytona | github
+  secrets: infisical        # doppler | awssm | infisical — optional; see "Credential resolution"
 
 servers:
   master:
@@ -359,8 +360,39 @@ Organized by domain with shared base clients:
 | DNS | `providers.dns` | `DNSProvider` | cloudflare, aws, scaleway |
 | Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
 | Build | `providers.build` | `BuildProvider` | local, daytona, github |
+| Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
 
 `ensureFirewall` only ensures the resource exists — never resets rules. Rules managed exclusively by `ReconcileFirewallRules` in the Firewall reconcile step.
+
+## Credential resolution
+
+Every credential — provider tokens, DB creds, service `$VAR` expansion, SSH key, GitHub token — goes through a single `provider.CredentialSource` built at the `cmd/` boundary in `cmd/cli/context.go:credentialSource`.
+
+**Two modes, binary switch:**
+
+### Env mode (default — `providers.secrets` unset)
+
+`CredentialSource = EnvSource{}`. `source.Get(k)` is literally `os.Getenv(k)`. All referenced variables come from the shell/`.env`. Two local fallbacks exist for developer convenience:
+
+| Credential | Resolution order |
+|---|---|
+| Compute / DNS / Storage / Build creds | env (schema `EnvVar` field) |
+| `{DB}_POSTGRES_USER/PASSWORD/DB` | env |
+| Service `$VAR` in `secrets:` | env |
+| SSH private key | `SSH_PRIVATE_KEY` env → `SSH_KEY_PATH` env → `~/.ssh/id_ed25519` → `~/.ssh/id_rsa` |
+| GitHub token | `GITHUB_TOKEN` env → `gh auth token` subprocess |
+
+### Strict mode (`providers.secrets: doppler | awssm | infisical`)
+
+The provider bootstraps itself from env vars (e.g. `INFISICAL_CLIENT_ID` / `_CLIENT_SECRET` / `_PROJECT_SLUG` / `_ENVIRONMENT` for Infisical — all `EnvSource` lookups), then **every other credential** is fetched through `SecretsSource.Get(k)` — which calls the provider API.
+
+- **No silent fallback.** Misconfigured provider (bad creds, missing bootstrap env) is a hard error at `credentialSource()`. Not a deferred failure during reconcile.
+- **No disk fallback for SSH key.** `SSH_PRIVATE_KEY` must exist in the provider as a multiline PEM blob. `SSH_KEY_PATH` indirection is rejected — the provider is THE source.
+- **No `gh` fallback for GitHub token.** Provider-only. If the token isn't there and it's needed downstream, the caller errors.
+
+**Naming convention for provider-stored keys:** whatever the env var name would be in env mode, that's the key name in the provider. `HETZNER_TOKEN` env → `HETZNER_TOKEN` secret. `{DB}_POSTGRES_PASSWORD` env → same in the provider. No prefixing, no mangling. Switching provider (Doppler → Infisical) means copying the same keys over.
+
+**Secrets provider in the registry:** new provider implementations live in `pkg/provider/secrets/{name}/` and satisfy `SecretsProvider` (`ValidateCredentials`, `Get`, `List` — no `Set`/`Delete`, read-only by design). Registration via `provider.RegisterSecrets(name, schema, factory)` in `init()`. `cmd/cli/main.go` imports each with a blank import to trigger registration.
 
 ## Working tree
 
@@ -375,7 +407,7 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 5. Provider interfaces scale. Add a provider = implement the interface.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
 7. SSH keys injected via cloud-init only. Single SSH connection per deploy (`MasterSSH`).
-8. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/context.go` resolves from env vars into `DeployContext`.
+8. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/context.go` builds a `CredentialSource` at the boundary — `EnvSource` (default) or `SecretsSource` (when `providers.secrets` is configured). Everything downstream calls `source.Get(key)`; nothing else touches env.
 9. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface.
 10. **`pkg/core/` never writes to stdout.** All output through `Output` interface.
 17. **Every provider operation goes through `pkg/core/`.** No caller should invoke a provider method directly. `pkg/core/` wraps every operation with output, error handling, and naming resolution. Teardown, reconcile, CLI commands — all go through `pkg/core/` functions. Direct provider calls bypass output and error reporting.

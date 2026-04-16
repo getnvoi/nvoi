@@ -433,28 +433,22 @@ func TestValidateConfig_CronSecretEqualsWithoutDollar(t *testing.T) {
 
 func TestValidateConfig_SecretsProviderValid(t *testing.T) {
 	cfg := validCfg()
-	cfg.Providers.Secrets = &config.SecretsProviderDef{Kind: "doppler"}
+	cfg.Providers.Secrets = "doppler"
 	if err := ValidateConfig(cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestValidateConfig_SecretsProviderMissingKind(t *testing.T) {
-	cfg := validCfg()
-	cfg.Providers.Secrets = &config.SecretsProviderDef{}
-	assertValidationError(t, cfg, "providers.secrets.kind is required")
-}
-
 func TestValidateConfig_SecretsProviderUnsupportedKind(t *testing.T) {
 	cfg := validCfg()
-	cfg.Providers.Secrets = &config.SecretsProviderDef{Kind: "vault"}
+	cfg.Providers.Secrets = "vault"
 	assertValidationError(t, cfg, "unsupported secrets provider")
 }
 
 func TestValidateConfig_SecretsProviderAllKinds(t *testing.T) {
 	for _, kind := range []string{"doppler", "awssm", "infisical"} {
 		cfg := validCfg()
-		cfg.Providers.Secrets = &config.SecretsProviderDef{Kind: kind}
+		cfg.Providers.Secrets = kind
 		if err := ValidateConfig(cfg); err != nil {
 			t.Fatalf("kind %q: unexpected error: %v", kind, err)
 		}

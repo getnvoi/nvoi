@@ -31,16 +31,12 @@ provider.RegisterX("name", CredentialSchema{...}, func(creds map[string]string) 
 Two layers:
 
 ```go
-// Pure mapping (shared by both CLIs and API):
-provider.MapCredentials(schema, env) → map[string]string  // HETZNER_TOKEN=xxx → token=xxx
-
-// CLI adds flag resolution on top (internal/core/resolve.go):
-resolveCredentials(cmd, schema, flagName) → map[string]string
+// CredentialSource abstracts where credentials come from (env, map, secrets provider).
+// ResolveFrom walks a schema and calls source.Get(field.EnvVar) for each field.
+provider.ResolveFrom(schema, source) → map[string]string  // HETZNER_TOKEN lookup → token=xxx
 ```
 
-Resolution order: `--xxx-credentials KEY=VALUE` flag → direct command flag (e.g. `--zone`) → env var from schema → `MapCredentials`.
-
-The API executor uses `MapCredentials` directly — no flags, env comes from the DB.
+At the cmd/ boundary: if `providers.secrets` is set, bootstrap that provider from `EnvSource{}`, then use `SecretsSource{}` for everything else. Otherwise `EnvSource{}`. See `cmd/cli/context.go:credentialSource`.
 
 **Region override:** `--compute-region` overrides `creds["region"]` after credential resolution.
 
