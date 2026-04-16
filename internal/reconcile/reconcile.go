@@ -29,21 +29,19 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	// Master is now guaranteed to exist. Establish a single SSH connection
-	// for all remaining operations.
-	master, _, _, err := dc.Cluster.Master(ctx)
-	if err != nil {
-		return fmt.Errorf("resolve master after server setup: %w", err)
-	}
-	ssh, err := dc.Cluster.Connect(ctx, master.IPv4+":22")
-	if err != nil {
-		return fmt.Errorf("establish master SSH: %w", err)
-	}
-	defer ssh.Close()
-	dc.Cluster.MasterSSH = ssh
-
-	// Create k8s client through SSH tunnel if not already set (agent sets it directly).
+	// Bootstrap path: SSH + tunneled KubeClient. Agent path: Kube already set, no SSH.
 	if dc.Cluster.Kube == nil {
+		master, _, _, err := dc.Cluster.Master(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve master after server setup: %w", err)
+		}
+		ssh, err := dc.Cluster.Connect(ctx, master.IPv4+":22")
+		if err != nil {
+			return fmt.Errorf("establish master SSH: %w", err)
+		}
+		defer ssh.Close()
+		dc.Cluster.MasterSSH = ssh
+
 		kubeClient, err := kube.NewTunneled(ctx, ssh)
 		if err != nil {
 			return fmt.Errorf("kube client via SSH tunnel: %w", err)
