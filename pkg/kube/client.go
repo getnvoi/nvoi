@@ -27,7 +27,6 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
@@ -77,10 +76,9 @@ func NewTunneled(ctx context.Context, ssh utils.SSHClient) (*KubeClient, error) 
 
 var kubeconfigPath_ = "/home/deploy/.kube/config"
 
-// NewFake creates a KubeClient backed by an in-memory fake clientset.
-// For tests only — no real cluster, no network, instant responses.
-func NewFake() *KubeClient {
-	cs := fake.NewSimpleClientset()
+// NewFromClientset creates a KubeClient from an existing clientset.
+// Used when the caller manages client construction (tests, custom configs).
+func NewFromClientset(cs kubernetes.Interface) *KubeClient {
 	return &KubeClient{cs: cs}
 }
 

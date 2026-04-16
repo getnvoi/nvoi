@@ -33,10 +33,13 @@ var rolloutTimeout = 5 * time.Minute
 // stabilityDelay is the pause between "all ready" and the verification poll.
 var stabilityDelay = 4 * time.Second
 
-// SetTestTiming overrides poll interval and stability delay for tests.
+// SetTestTiming overrides poll interval, stability delay, and timeouts for tests.
 func SetTestTiming(poll, stability time.Duration) {
 	rolloutPollInterval = poll
 	stabilityDelay = stability
+	rolloutTimeout = 50 * time.Millisecond
+	jobPollInterval = poll
+	jobTimeout = 50 * time.Millisecond
 }
 
 func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string, hasHealthCheck bool, emitter ProgressEmitter) error {

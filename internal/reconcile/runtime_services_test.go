@@ -125,16 +125,16 @@ func TestServices_EveryServiceGetsRolloutWait(t *testing.T) {
 	}
 
 	// All 3 services are sorted alphabetically: api, web, worker.
-	// Each must get a "get pods" call for rollout wait — not just the last.
-	podChecks := 0
+	// Each must get an apply call. Rollout wait goes through KubeClient (fake
+	// clientset with auto-ready pods), not SSH.
+	applyCount := 0
 	for _, call := range ssh.Calls {
-		if strings.Contains(call, "get pods") && strings.Contains(call, "-o json") {
-			podChecks++
+		if strings.Contains(call, "apply") && strings.Contains(call, "--server-side") {
+			applyCount++
 		}
 	}
-	// At minimum 3 pod checks (one per service). May be more due to stability re-checks.
-	if podChecks < 3 {
-		t.Errorf("expected at least 3 rollout pod checks (one per service), got %d — calls: %v", podChecks, ssh.Calls)
+	if applyCount < 3 {
+		t.Errorf("expected at least 3 apply calls (one per service), got %d — calls: %v", applyCount, ssh.Calls)
 	}
 }
 

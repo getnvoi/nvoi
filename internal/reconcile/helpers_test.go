@@ -14,6 +14,12 @@ import (
 	kubepkg "github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // ── Provider registration ─────────────────────────────────────────────────────
@@ -322,7 +328,7 @@ func testDC(ssh *testutil.MockSSH) *config.DeployContext {
 			SSHKey:    sshKey,
 			Output:    &testutil.MockOutput{},
 			MasterSSH: ssh,
-			Kube:      kubepkg.NewFake(),
+			Kube:      testKube(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
@@ -347,13 +353,57 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 			SSHKey:    sshKey,
 			Output:    &testutil.MockOutput{},
 			MasterSSH: ssh,
-			Kube:      kubepkg.NewFake(),
+			Kube:      testKube(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
 		},
 		Creds: provider.MapSource{M: map[string]string{}},
 	}
+}
+
+// testKube returns a KubeClient backed by a fake clientset that auto-creates
+// ready pods for any service. The reactor intercepts List calls and ensures
+// a ready pod exists for the queried label selector.
+func testKube() *kubepkg.KubeClient {
+	cs := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod"}},
+	)
+	// Pre-seed: add a reactor that auto-creates ready pods on List.
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		listAction := action.(k8stesting.ListAction)
+		sel := listAction.GetListRestrictions().Labels.String()
+		// Extract service name from selector "app.kubernetes.io/name=xxx"
+		svcName := ""
+		for _, part := range strings.Split(sel, ",") {
+			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+			if len(kv) == 2 && kv[0] == utils.LabelAppName {
+				svcName = kv[1]
+			}
+		}
+		if svcName == "" {
+			return false, nil, nil // let the default handler run
+		}
+		return true, &corev1.PodList{
+			Items: []corev1.Pod{{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      svcName + "-fake-pod",
+					Namespace: listAction.GetNamespace(),
+					Labels:    map[string]string{utils.LabelAppName: svcName, utils.LabelAppManagedBy: utils.LabelManagedBy},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					},
+					ContainerStatuses: []corev1.ContainerStatus{
+						{Name: svcName, Ready: true, RestartCount: 0},
+					},
+				},
+			}},
+		}, nil
+	})
+	return kubepkg.NewFromClientset(cs)
 }
 
 func testCreds(kvs ...string) provider.CredentialSource {
