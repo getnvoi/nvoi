@@ -25,8 +25,14 @@ type CreateRepoInput struct {
 	}
 }
 
+// CreateRepoOutput includes the agent token in plaintext — returned once at creation.
+// The token is not stored in the DB (only the hash is). This is the only time the user
+// can see the token, for setting NVOI_API_TOKEN in the agent's .env.
 type CreateRepoOutput struct {
-	Body api.Repo
+	Body struct {
+		api.Repo
+		AgentToken string `json:"agent_token"` // plaintext — shown once, then only hash is used
+	}
 }
 
 type GetRepoInput struct {
@@ -90,7 +96,10 @@ func CreateRepo(db *gorm.DB) func(context.Context, *CreateRepoInput) (*CreateRep
 			return nil, huma.Error500InternalServerError("failed to create repo")
 		}
 
-		return &CreateRepoOutput{Body: repo}, nil
+		out := &CreateRepoOutput{}
+		out.Body.Repo = repo
+		out.Body.AgentToken = repo.AgentToken // transient — in-memory only after BeforeCreate
+		return out, nil
 	}
 }
 

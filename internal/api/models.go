@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,15 +18,20 @@ import (
 // cryptoRandRead is a var for testing.
 var cryptoRandRead = rand.Read
 
-// hashToken returns the hex-encoded SHA-256 hash of a token.
-func hashToken(token string) string {
+// HashToken returns the hex-encoded SHA-256 hash of a token.
+func HashToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
 }
 
 // ValidateAgentToken checks a bearer token against a repo's stored hash.
+// Uses constant-time comparison to prevent timing side-channel attacks.
 func ValidateAgentToken(token, storedHash string) bool {
-	return storedHash != "" && hashToken(token) == storedHash
+	if storedHash == "" {
+		return false
+	}
+	got := HashToken(token)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(storedHash)) == 1
 }
 
 // NOTE: Provider enums (ComputeProvider, DNSProvider, etc.) are gone.
@@ -219,7 +225,7 @@ type Repo struct {
 	Environment    string         `gorm:"not null;default:'production'" json:"environment"` // production, staging, etc.
 	SSHPrivateKey  string         `gorm:"type:text;not null" json:"-"`                      // encrypted PEM — auto-generated, never nil
 	SSHPublicKey   string         `gorm:"not null" json:"ssh_public_key"`                   // OpenSSH format — visible for deploy key setup
-	AgentToken     string         `gorm:"type:text" json:"-"`                               // plaintext agent token — returned once at creation, then only hash is checked
+	AgentToken     string         `gorm:"-" json:"-"`                                       // transient — plaintext available in memory after creation, never persisted
 	AgentTokenHash string         `gorm:"index" json:"-"`                                   // SHA-256 hash for validation — the agent sends the plaintext, API checks the hash
 	Config         string         `gorm:"type:text" json:"-"`                               // nvoi.yaml content — mutated by config CRUD, used by deploy
 	CreatedAt      time.Time      `json:"created_at"`
@@ -257,15 +263,15 @@ func (r *Repo) BeforeCreate(tx *gorm.DB) error {
 		r.SSHPrivateKey = string(priv)
 		r.SSHPublicKey = pub
 	}
-	// Auto-generate agent token — the plaintext is returned once at creation
-	// (for the user to put in .env as NVOI_API_TOKEN), then only the hash is used.
-	if r.AgentToken == "" {
+	// Auto-generate agent token — plaintext stays in memory (gorm:"-"), only hash is persisted.
+	// The plaintext is returned once at creation for the user to put in .env as NVOI_API_TOKEN.
+	if r.AgentTokenHash == "" {
 		token := make([]byte, 32)
 		if _, err := cryptoRandRead(token); err != nil {
 			return fmt.Errorf("generate agent token: %w", err)
 		}
 		r.AgentToken = hex.EncodeToString(token)
-		r.AgentTokenHash = hashToken(r.AgentToken)
+		r.AgentTokenHash = HashToken(r.AgentToken)
 	}
 	return r.encryptSSHKey()
 }
@@ -348,10 +354,11 @@ type AgentEvent struct {
 	Command   string    `json:"command,omitempty"`                  // for command events
 	Action    string    `json:"action,omitempty"`                   // for command events
 	Name      string    `json:"name,omitempty"`                     // for command events
+	Extra     string    `gorm:"type:text" json:"extra,omitempty"`   // for command events (JSON — domains, volumes, etc.)
 	Payload   string    `gorm:"type:text" json:"payload,omitempty"` // for data events (JSON)
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 
-	Repo Repo `gorm:"foreignKey:RepoID" json:"-"`
+	Repo Repo `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 func (AgentEvent) TableName() string { return "agent_events" }

@@ -46,14 +46,14 @@ func TestRepo_AgentTokenNotInJSON(t *testing.T) {
 
 func TestValidateAgentToken_CorrectToken(t *testing.T) {
 	token := "abc123"
-	hash := hashToken(token)
+	hash := HashToken(token)
 	if !ValidateAgentToken(token, hash) {
 		t.Error("correct token should validate")
 	}
 }
 
 func TestValidateAgentToken_WrongToken(t *testing.T) {
-	hash := hashToken("correct")
+	hash := HashToken("correct")
 	if ValidateAgentToken("wrong", hash) {
 		t.Error("wrong token should not validate")
 	}
@@ -66,7 +66,7 @@ func TestValidateAgentToken_EmptyHash(t *testing.T) {
 }
 
 func TestValidateAgentToken_EmptyToken(t *testing.T) {
-	hash := hashToken("real")
+	hash := HashToken("real")
 	if ValidateAgentToken("", hash) {
 		t.Error("empty token should not validate")
 	}
@@ -91,6 +91,28 @@ func TestRepo_AgentTokenValidatesViaHash(t *testing.T) {
 	// A different token does not validate.
 	if ValidateAgentToken("wrong-token", repo.AgentTokenHash) {
 		t.Error("wrong token should not validate")
+	}
+}
+
+func TestRepo_AgentTokenHashQueryable(t *testing.T) {
+	db := TestDB()
+
+	user := User{GithubUsername: "test-query", GithubToken: "ghp_test"}
+	db.Create(&user)
+	ws := Workspace{Name: "default", CreatedBy: user.ID}
+	db.Create(&ws)
+
+	repo := Repo{WorkspaceID: ws.ID, Name: "myapp", Environment: "prod"}
+	db.Create(&repo)
+
+	// Verify the hash is stored and queryable.
+	hash := HashToken(repo.AgentToken)
+	var found Repo
+	if err := db.Where("agent_token_hash = ?", hash).First(&found).Error; err != nil {
+		t.Fatalf("query by agent_token_hash failed: %v", err)
+	}
+	if found.ID != repo.ID {
+		t.Errorf("found repo ID = %s, want %s", found.ID, repo.ID)
 	}
 }
 

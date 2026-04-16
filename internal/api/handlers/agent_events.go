@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -13,11 +14,8 @@ import (
 
 // AgentEventsInput is the request body for POST /agent/events.
 type AgentEventsInput struct {
-	// Auth is via a separate agent token header, not the JWT middleware.
-	Header struct {
-		Authorization string `header:"Authorization"`
-	}
-	Body struct {
+	Authorization string `header:"Authorization"` // agent token — own auth, not JWT
+	Body          struct {
 		App    string              `json:"app" required:"true"`
 		Env    string              `json:"env" required:"true"`
 		Events []AgentEventPayload `json:"events" required:"true"`
@@ -31,7 +29,9 @@ type AgentEventPayload struct {
 	Command string          `json:"command,omitempty"`
 	Action  string          `json:"action,omitempty"`
 	Name    string          `json:"name,omitempty"`
+	Extra   json.RawMessage `json:"extra,omitempty"` // command event metadata (domains, volumes, etc.)
 	Payload json.RawMessage `json:"payload,omitempty"`
+	Ts      *time.Time      `json:"ts,omitempty"` // agent-side timestamp — preserves event ordering within batches
 }
 
 // AgentEventsOutput is the response for POST /agent/events.
@@ -44,7 +44,7 @@ type AgentEventsOutput struct {
 // AgentEvents handles batched event ingestion from agents.
 func AgentEvents(db *gorm.DB) func(context.Context, *AgentEventsInput) (*AgentEventsOutput, error) {
 	return func(ctx context.Context, input *AgentEventsInput) (*AgentEventsOutput, error) {
-		repo, ok := authenticateAgent(db, input.Header.Authorization, input.Body.App, input.Body.Env)
+		repo, ok := authenticateAgent(db, input.Authorization, input.Body.App, input.Body.Env)
 		if !ok {
 			return nil, huma.Error401Unauthorized("invalid agent token")
 		}
@@ -56,6 +56,14 @@ func AgentEvents(db *gorm.DB) func(context.Context, *AgentEventsInput) (*AgentEv
 			if ev.Payload != nil {
 				payload = string(ev.Payload)
 			}
+			var extra string
+			if ev.Extra != nil {
+				extra = string(ev.Extra)
+			}
+			ts := now
+			if ev.Ts != nil {
+				ts = *ev.Ts
+			}
 			events = append(events, api.AgentEvent{
 				RepoID:    repo.ID,
 				App:       input.Body.App,
@@ -65,8 +73,9 @@ func AgentEvents(db *gorm.DB) func(context.Context, *AgentEventsInput) (*AgentEv
 				Command:   ev.Command,
 				Action:    ev.Action,
 				Name:      ev.Name,
+				Extra:     extra,
 				Payload:   payload,
-				CreatedAt: now,
+				CreatedAt: ts,
 			})
 		}
 
@@ -83,27 +92,27 @@ func AgentEvents(db *gorm.DB) func(context.Context, *AgentEventsInput) (*AgentEv
 }
 
 // authenticateAgent validates the bearer token and returns the matching repo.
-// The agent sends the plaintext token (from NVOI_API_TOKEN env var), the API
-// hashes it and compares against the stored AgentTokenHash on the repo.
+// Looks up the repo by the SHA-256 hash of the token (indexed, unique per repo),
+// then verifies the request's app/env match. This avoids the ambiguity of
+// name+env lookups across workspaces.
 func authenticateAgent(db *gorm.DB, authHeader, app, env string) (*api.Repo, bool) {
 	if authHeader == "" {
 		return nil, false
 	}
 	const prefix = "Bearer "
-	if len(authHeader) <= len(prefix) {
-		return nil, false
-	}
-	token := authHeader[len(prefix):]
-	if token == "" {
+	token, ok := strings.CutPrefix(authHeader, prefix)
+	if !ok || token == "" {
 		return nil, false
 	}
 
+	hash := api.HashToken(token)
 	var repo api.Repo
-	if err := db.Where("name = ? AND environment = ?", app, env).First(&repo).Error; err != nil {
+	if err := db.Where("agent_token_hash = ?", hash).First(&repo).Error; err != nil {
 		return nil, false
 	}
 
-	if !api.ValidateAgentToken(token, repo.AgentTokenHash) {
+	// Secondary check: the request's app/env must match the repo.
+	if repo.Name != app || repo.Environment != env {
 		return nil, false
 	}
 	return &repo, true
