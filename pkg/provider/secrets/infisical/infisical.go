@@ -87,31 +87,37 @@ func (c *Client) ValidateCredentials(ctx context.Context) error {
 }
 
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
+	api, err := c.authedAPI(ctx)
+	if err != nil {
+		return "", err
+	}
 	var resp struct {
 		Secret struct {
 			SecretValue string `json:"secretValue"`
 		} `json:"secret"`
 	}
-	path := fmt.Sprintf("/v3/secrets/raw/%s?workspaceId=%s&environment=%s", key, c.projectSlug, c.environment)
-	if err := c.api.Do(ctx, "GET", path, nil, &resp); err != nil {
+	path := fmt.Sprintf("/v3/secrets/raw/%s?workspaceSlug=%s&environment=%s", key, c.projectSlug, c.environment)
+	if err := api.Do(ctx, "GET", path, nil, &resp); err != nil {
 		return "", fmt.Errorf("infisical: get %q: %w", key, err)
 	}
 	return resp.Secret.SecretValue, nil
 }
 
 func (c *Client) Set(ctx context.Context, key, value string) error {
-	body := map[string]any{
-		"workspaceId": c.projectSlug,
-		"environment": c.environment,
-		"secretName":  key,
-		"secretValue": value,
-	}
-	// Try create; on conflict update.
-	err := c.api.Do(ctx, "POST", "/v3/secrets/raw", body, nil)
+	api, err := c.authedAPI(ctx)
 	if err != nil {
-		// Update existing.
+		return err
+	}
+	body := map[string]any{
+		"workspaceSlug": c.projectSlug,
+		"environment":   c.environment,
+		"secretName":    key,
+		"secretValue":   value,
+	}
+	err = api.Do(ctx, "POST", "/v3/secrets/raw", body, nil)
+	if err != nil {
 		path := fmt.Sprintf("/v3/secrets/raw/%s", key)
-		updateErr := c.api.Do(ctx, "PATCH", path, body, nil)
+		updateErr := api.Do(ctx, "PATCH", path, body, nil)
 		if updateErr != nil {
 			return fmt.Errorf("infisical: set %q: create failed: %w, update failed: %w", key, err, updateErr)
 		}
@@ -120,26 +126,34 @@ func (c *Client) Set(ctx context.Context, key, value string) error {
 }
 
 func (c *Client) Delete(ctx context.Context, key string) error {
+	api, err := c.authedAPI(ctx)
+	if err != nil {
+		return err
+	}
 	body := map[string]any{
-		"workspaceId": c.projectSlug,
-		"environment": c.environment,
-		"secretName":  key,
+		"workspaceSlug": c.projectSlug,
+		"environment":   c.environment,
+		"secretName":    key,
 	}
 	path := fmt.Sprintf("/v3/secrets/raw/%s", key)
-	if err := c.api.Do(ctx, "DELETE", path, body, nil); err != nil {
+	if err := api.Do(ctx, "DELETE", path, body, nil); err != nil {
 		return fmt.Errorf("infisical: delete %q: %w", key, err)
 	}
 	return nil
 }
 
 func (c *Client) List(ctx context.Context) ([]string, error) {
+	api, err := c.authedAPI(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var resp struct {
 		Secrets []struct {
 			SecretKey string `json:"secretKey"`
 		} `json:"secrets"`
 	}
-	path := fmt.Sprintf("/v3/secrets/raw?workspaceId=%s&environment=%s", c.projectSlug, c.environment)
-	if err := c.api.Do(ctx, "GET", path, nil, &resp); err != nil {
+	path := fmt.Sprintf("/v3/secrets/raw?workspaceSlug=%s&environment=%s", c.projectSlug, c.environment)
+	if err := api.Do(ctx, "GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("infisical: list: %w", err)
 	}
 	names := make([]string, len(resp.Secrets))
