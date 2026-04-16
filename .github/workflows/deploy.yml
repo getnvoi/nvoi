@@ -26,17 +26,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Write SSH key
-        run: |
-          umask 077
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-
       - name: Deploy
         env:
-          SSH_KEY_PATH: ~/.ssh/id_ed25519
-          # Infisical bootstrap — every other credential is fetched through the secrets provider
+          # Infisical bootstrap — every credential (SSH key included) is fetched through the secrets provider
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
           INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           INFISICAL_PROJECT_SLUG: ${{ secrets.INFISICAL_PROJECT_SLUG }}
