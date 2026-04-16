@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gopkg.in/yaml.v3"
@@ -32,7 +31,6 @@ type DeployContext struct {
 	GitToken      string
 	DatabaseCreds map[string]*DatabaseCredentials
 	Creds         provider.CredentialSource // single source for all credential resolution at runtime
-	Kube          *kube.KubeClient          // k8s API client — direct (agent) or SSH-tunneled (CLI bootstrap)
 }
 
 // LiveState represents what's currently deployed.

@@ -51,6 +51,7 @@ func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 			Credentials: computeCreds,
 			SSHKey:      opts.SSHKey,
 			Output:      out,
+			Kube:        opts.Kube,
 		},
 		DNS:           app.ProviderRef{Name: cfg.Providers.DNS, Creds: dnsCreds},
 		Storage:       app.ProviderRef{Name: cfg.Providers.Storage, Creds: storageCreds},
@@ -60,7 +61,6 @@ func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 		GitToken:      opts.GitToken,
 		DatabaseCreds: dbCreds,
 		Creds:         source,
-		Kube:          opts.Kube,
 	}
 }
 
