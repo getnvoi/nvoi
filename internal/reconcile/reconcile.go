@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/packages"
+	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
 // Deploy reconciles live infrastructure to match the YAML config.
@@ -40,6 +41,15 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	}
 	defer ssh.Close()
 	dc.Cluster.MasterSSH = ssh
+
+	// Create k8s client through SSH tunnel if not already set (agent sets it directly).
+	if dc.Cluster.Kube == nil {
+		kubeClient, err := kube.NewTunneled(ctx, ssh)
+		if err != nil {
+			return fmt.Errorf("kube client via SSH tunnel: %w", err)
+		}
+		dc.Cluster.Kube = kubeClient
+	}
 
 	if err := Firewall(ctx, dc, live, cfg); err != nil {
 		return err

@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -43,9 +44,13 @@ type Cluster struct {
 	Output      Output
 
 	// MasterSSH is the pre-established SSH connection to the master node.
-	// Set once after Servers() in reconcile. When set, SSH() returns a
-	// borrowed reference (no-op Close). When nil, SSH() connects on demand.
+	// Used for non-kubectl SSH: volume mount, docker, k3s bootstrap.
 	MasterSSH utils.SSHClient
+
+	// Kube is the client-go k8s API client. When set, all kubectl operations
+	// go through it — no shell commands, no kubectl binary.
+	// Agent: direct to localhost:6443. CLI bootstrap: SSH-tunneled.
+	Kube *kube.KubeClient
 
 	// SSHFunc overrides the default SSH connection for testing.
 	// When nil, uses infra.ConnectSSH (production path).
