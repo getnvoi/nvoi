@@ -104,35 +104,38 @@ func (r *Reporter) loop() {
 			if len(batch) >= reporterBatchSize && backoffTimer == nil {
 				if r.send(batch) {
 					backoff = reporterBackoffMin
+					batch = batch[:0]
 				} else {
 					backoff = nextBackoff(backoff)
 					backoffTimer = time.After(backoff)
+					batch = trimBatch(batch)
 				}
-				batch = batch[:0]
 			}
 
 		case <-ticker.C:
 			if len(batch) > 0 && backoffTimer == nil {
 				if r.send(batch) {
 					backoff = reporterBackoffMin
+					batch = batch[:0]
 				} else {
 					backoff = nextBackoff(backoff)
 					backoffTimer = time.After(backoff)
+					batch = trimBatch(batch)
 				}
-				batch = batch[:0]
 			}
 
 		case <-backoffTimer:
-			// Backoff elapsed — retry pending batch or resume normal flushing.
+			// Backoff elapsed — retry pending batch (retained from failed send).
 			backoffTimer = nil
 			if len(batch) > 0 {
 				if r.send(batch) {
 					backoff = reporterBackoffMin
+					batch = batch[:0]
 				} else {
 					backoff = nextBackoff(backoff)
 					backoffTimer = time.After(backoff)
+					batch = trimBatch(batch)
 				}
-				batch = batch[:0]
 			}
 
 		case <-r.done:
@@ -186,6 +189,16 @@ func (r *Reporter) send(events []app.Event) bool {
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// trimBatch caps a retained batch to reporterBatchSize to prevent unbounded growth
+// during extended API outages. Keeps the most recent events.
+func trimBatch(batch []app.Event) []app.Event {
+	if len(batch) > reporterBatchSize {
+		copy(batch, batch[len(batch)-reporterBatchSize:])
+		return batch[:reporterBatchSize]
+	}
+	return batch
 }
 
 func nextBackoff(current time.Duration) time.Duration {

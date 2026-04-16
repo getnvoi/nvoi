@@ -22,6 +22,7 @@ func TestDB() *gorm.DB {
 		&InfraProvider{},
 		&Repo{},
 		&CommandLog{},
+		&AgentEvent{},
 	); err != nil {
 		panic("migrate test db: " + err.Error())
 	}

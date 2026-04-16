@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 )
 
 // Output is the contract for emitting structured events from pkg/core/ to the viewer.
@@ -47,6 +48,7 @@ type Event struct {
 	Name    string          `json:"name,omitempty"`
 	Extra   map[string]any  `json:"extra,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"` // structured data for EventData
+	Ts      *time.Time      `json:"ts,omitempty"`      // creation timestamp — set by event constructors
 }
 
 // MarshalEvent serializes an event to a JSONL line (no trailing newline).
@@ -64,7 +66,8 @@ func ParseEvent(line string) (Event, error) {
 
 // NewCommandEvent creates a command event with optional extra key-value pairs.
 func NewCommandEvent(command, action, name string, extra ...any) Event {
-	ev := Event{Type: EventCommand, Command: command, Action: action, Name: name}
+	now := time.Now()
+	ev := Event{Type: EventCommand, Command: command, Action: action, Name: name, Ts: &now}
 	if len(extra) >= 2 {
 		ev.Extra = map[string]any{}
 		for i := 0; i+1 < len(extra); i += 2 {
@@ -78,14 +81,16 @@ func NewCommandEvent(command, action, name string, extra ...any) Event {
 
 // NewMessageEvent creates an event with just a type and message.
 func NewMessageEvent(eventType, message string) Event {
-	return Event{Type: eventType, Message: message}
+	now := time.Now()
+	return Event{Type: eventType, Message: message, Ts: &now}
 }
 
 // NewDataEvent creates an event carrying a structured payload.
 // Used for describe, resources, backup list — any query that returns data.
 func NewDataEvent(payload any) Event {
+	now := time.Now()
 	b, _ := json.Marshal(payload)
-	return Event{Type: EventData, Payload: json.RawMessage(b)}
+	return Event{Type: EventData, Payload: json.RawMessage(b), Ts: &now}
 }
 
 // ReplayEvent dispatches an event through an Output implementation.

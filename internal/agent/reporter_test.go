@@ -213,6 +213,81 @@ func TestReporter_AcceptsEventsDuringBackoff(t *testing.T) {
 	}
 }
 
+func TestReporter_RetryPreservesFailedBatch(t *testing.T) {
+	// Verify that events from a failed send are retried, not dropped.
+	var mu sync.Mutex
+	var receivedMessages []string
+
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		callCount++
+		n := callCount
+		mu.Unlock()
+		if n == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		var payload struct{ Events []app.Event }
+		json.Unmarshal(data, &payload)
+		mu.Lock()
+		for _, ev := range payload.Events {
+			receivedMessages = append(receivedMessages, ev.Message)
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	r := NewReporter(srv.URL, "", "app", "prod")
+	r.Send(app.NewMessageEvent(app.EventSuccess, "original-event"))
+
+	// Wait for the first flush to fail.
+	time.Sleep(reporterFlushEvery + 50*time.Millisecond)
+
+	// Wait for backoff to expire and retry.
+	time.Sleep(reporterBackoffMin*2 + reporterFlushEvery + 100*time.Millisecond)
+	r.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, msg := range receivedMessages {
+		if msg == "original-event" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("original event was lost after failed send — expected it to be retried. Got: %v", receivedMessages)
+	}
+}
+
+func TestTrimBatch(t *testing.T) {
+	// Under limit — no trimming.
+	small := make([]app.Event, 5)
+	got := trimBatch(small)
+	if len(got) != 5 {
+		t.Errorf("trimBatch(5) = %d, want 5", len(got))
+	}
+
+	// Over limit — trimmed to reporterBatchSize, keeping most recent.
+	large := make([]app.Event, reporterBatchSize+50)
+	for i := range large {
+		large[i] = app.NewMessageEvent(app.EventProgress, fmt.Sprintf("event-%d", i))
+	}
+	got = trimBatch(large)
+	if len(got) != reporterBatchSize {
+		t.Errorf("trimBatch(%d) = %d, want %d", len(large), len(got), reporterBatchSize)
+	}
+	// The last event should be the most recent (highest index from original).
+	lastMsg := got[len(got)-1].Message
+	expected := fmt.Sprintf("event-%d", reporterBatchSize+49)
+	if lastMsg != expected {
+		t.Errorf("last event = %q, want %q (most recent)", lastMsg, expected)
+	}
+}
+
 // ── teeOutput tests ────────────────────────────────────────────────────────
 
 func TestTeeOutput_NilReporter_ReturnsPrimary(t *testing.T) {
