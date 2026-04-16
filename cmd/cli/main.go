@@ -140,7 +140,11 @@ func initBackend(cmd *cobra.Command, m *mode) error {
 	}
 
 	// Bootstrap: run locally, install agent as part of provisioning.
-	m.backend = newLocalBackend(cmd.Context(), out, cfg)
+	lb, lbErr := newLocalBackend(cmd.Context(), out, cfg)
+	if lbErr != nil {
+		return lbErr
+	}
+	m.backend = lb
 	return nil
 }
 

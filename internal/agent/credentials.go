@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
@@ -16,17 +17,24 @@ import (
 // credentials are fetched through it.
 // If no secrets provider is configured, credentials come from env vars directly.
 // Exported — used by both the agent and the CLI client (to resolve compute creds for SSH).
-func CredentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
-	if sp := cfg.Providers.Secrets; sp != "" {
-		spCreds, err := ResolveProviderCreds(provider.EnvSource{}, "secrets", sp)
-		if err == nil && len(spCreds) > 0 {
-			secretsProv, err := provider.ResolveSecrets(sp, spCreds)
-			if err == nil {
-				return provider.SecretsSource{Ctx: ctx, Provider: secretsProv}
-			}
-		}
+func CredentialSource(ctx context.Context, cfg *config.AppConfig) (provider.CredentialSource, error) {
+	sp := cfg.Providers.Secrets
+	if sp == "" {
+		return provider.EnvSource{}, nil
 	}
-	return provider.EnvSource{}
+	// Secrets provider configured — must succeed. No silent fallback.
+	spCreds, err := ResolveProviderCreds(provider.EnvSource{}, "secrets", sp)
+	if err != nil {
+		return nil, fmt.Errorf("secrets provider %q: resolve bootstrap credentials: %w", sp, err)
+	}
+	if len(spCreds) == 0 {
+		return nil, fmt.Errorf("secrets provider %q: no bootstrap credentials found (check env vars)", sp)
+	}
+	secretsProv, err := provider.ResolveSecrets(sp, spCreds)
+	if err != nil {
+		return nil, fmt.Errorf("secrets provider %q: %w", sp, err)
+	}
+	return provider.SecretsSource{Ctx: ctx, Provider: secretsProv}, nil
 }
 
 // BuildDeployContext resolves all credentials and builds a DeployContext.
@@ -34,8 +42,11 @@ func CredentialSource(ctx context.Context, cfg *config.AppConfig) provider.Crede
 // Provider credentials come from CredentialSource (EnvSource or SecretsSource).
 // KubeClient comes from AgentOpts (created at agent startup, direct localhost:6443).
 // Called per command — provider credentials are resolved fresh each time.
-func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig, opts AgentOpts) *config.DeployContext {
-	source := CredentialSource(ctx, cfg)
+func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig, opts AgentOpts) (*config.DeployContext, error) {
+	source, err := CredentialSource(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	computeCreds, _ := ResolveProviderCreds(source, "compute", cfg.Providers.Compute)
 	dnsCreds, _ := ResolveProviderCreds(source, "dns", cfg.Providers.DNS)
@@ -61,7 +72,7 @@ func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 		GitToken:      opts.GitToken,
 		DatabaseCreds: dbCreds,
 		Creds:         source,
-	}
+	}, nil
 }
 
 // ResolveProviderCreds resolves credentials for a provider kind+name from any source.

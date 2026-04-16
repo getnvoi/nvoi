@@ -15,7 +15,10 @@ func TestBuildDeployContext_KubeOnCluster(t *testing.T) {
 	kc := kube.NewFromClientset(fake.NewSimpleClientset())
 	opts := AgentOpts{Kube: kc}
 
-	dc := BuildDeployContext(context.Background(), render.NewJSONOutput(nil), cfg, opts)
+	dc, err := BuildDeployContext(context.Background(), render.NewJSONOutput(nil), cfg, opts)
+	if err != nil {
+		t.Fatalf("BuildDeployContext: %v", err)
+	}
 
 	if dc.Cluster.Kube == nil {
 		t.Fatal("Cluster.Kube is nil — every pkg/core/ function will panic")

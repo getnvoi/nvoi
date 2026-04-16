@@ -38,7 +38,10 @@ type agentBackend struct {
 // stays open for the lifetime of the returned cleanup function.
 func connectToAgent(ctx context.Context, out app.Output, cfg *config.AppConfig, configPath string) (*agentBackend, func(), error) {
 	// Resolve master IP from provider API.
-	source := agent.CredentialSource(ctx, cfg)
+	source, err := agent.CredentialSource(ctx, cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)
+	}
 	computeCreds, err := agent.ResolveProviderCreds(source, "compute", cfg.Providers.Compute)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)

@@ -25,20 +25,20 @@ type localBackend struct {
 	out app.Output
 }
 
-func newLocalBackend(ctx context.Context, out app.Output, cfg *config.AppConfig) *localBackend {
+func newLocalBackend(ctx context.Context, out app.Output, cfg *config.AppConfig) (*localBackend, error) {
 	// Resolve env-dependent values here — cmd/ is the os.Getenv boundary.
 	sshKey, _ := resolveAgentSSHKey()
 	gitUsername, gitToken := resolveAgentGitAuth()
 
-	return &localBackend{
-		dc: agent.BuildDeployContext(ctx, out, cfg, agent.AgentOpts{
-			SSHKey:      sshKey,
-			GitUsername: gitUsername,
-			GitToken:    gitToken,
-		}),
-		cfg: cfg,
-		out: out,
+	dc, err := agent.BuildDeployContext(ctx, out, cfg, agent.AgentOpts{
+		SSHKey:      sshKey,
+		GitUsername: gitUsername,
+		GitToken:    gitToken,
+	})
+	if err != nil {
+		return nil, err
 	}
+	return &localBackend{dc: dc, cfg: cfg, out: out}, nil
 }
 
 // ── Backend methods ─────────────────────────────────────────────────────────

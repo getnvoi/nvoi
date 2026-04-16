@@ -43,8 +43,6 @@ type stubSecrets struct{}
 
 func (stubSecrets) ValidateCredentials(context.Context) error   { return nil }
 func (stubSecrets) Get(context.Context, string) (string, error) { return "", nil }
-func (stubSecrets) Set(context.Context, string, string) error   { return nil }
-func (stubSecrets) Delete(context.Context, string) error        { return nil }
 func (stubSecrets) List(context.Context) ([]string, error)      { return nil, nil }
 
 func init() {
@@ -354,9 +352,7 @@ func (f fakeSecretsProvider) ValidateCredentials(context.Context) error { return
 func (f fakeSecretsProvider) Get(_ context.Context, key string) (string, error) {
 	return f.secrets[key], nil
 }
-func (f fakeSecretsProvider) Set(context.Context, string, string) error { return nil }
-func (f fakeSecretsProvider) Delete(context.Context, string) error      { return nil }
-func (f fakeSecretsProvider) List(context.Context) ([]string, error)    { return nil, nil }
+func (f fakeSecretsProvider) List(context.Context) ([]string, error) { return nil, nil }
 
 func TestResolveFrom_SecretsSource(t *testing.T) {
 	schema := CredentialSchema{

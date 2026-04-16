@@ -123,7 +123,10 @@ func (a *Agent) cmdDeploy(ctx context.Context, out *jsonlOutput, r *http.Request
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	dc := BuildDeployContext(ctx, out, a.cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, a.cfg, a.opts)
+	if err != nil {
+		return err
+	}
 	return reconcile.Deploy(ctx, dc, a.cfg)
 }
 
@@ -137,7 +140,10 @@ func (a *Agent) cmdTeardown(ctx context.Context, out *jsonlOutput, r *http.Reque
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	dc := BuildDeployContext(ctx, out, a.cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, a.cfg, a.opts)
+	if err != nil {
+		return err
+	}
 	return core.Teardown(ctx, dc, a.cfg, req.DeleteVolumes, req.DeleteStorage)
 }
 
@@ -146,7 +152,10 @@ func (a *Agent) cmdDescribe(ctx context.Context, out *jsonlOutput, r *http.Reque
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
+	if err != nil {
+		return err
+	}
 
 	res, err := app.Describe(ctx, app.DescribeRequest{
 		Cluster:        dc.Cluster,
@@ -165,7 +174,10 @@ func (a *Agent) cmdResources(ctx context.Context, out *jsonlOutput, r *http.Requ
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
+	if err != nil {
+		return err
+	}
 
 	groups, err := app.Resources(ctx, app.ResourcesRequest{
 		Compute: app.ProviderRef{Name: dc.Cluster.Provider, Creds: dc.Cluster.Credentials},
@@ -185,7 +197,10 @@ func (a *Agent) cmdLogs(ctx context.Context, out *jsonlOutput, r *http.Request) 
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
+	if err != nil {
+		return err
+	}
 
 	follow := r.URL.Query().Get("follow") == "true"
 	since := r.URL.Query().Get("since")
@@ -214,7 +229,10 @@ func (a *Agent) cmdExec(ctx context.Context, out *jsonlOutput, r *http.Request) 
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
+	if err != nil {
+		return err
+	}
 	return app.Exec(ctx, app.ExecRequest{
 		Cluster: dc.Cluster, Service: service, Command: req.Command,
 	})
@@ -230,7 +248,10 @@ func (a *Agent) cmdSSH(ctx context.Context, out *jsonlOutput, r *http.Request) e
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
+	if err != nil {
+		return err
+	}
 	return app.SSH(ctx, app.SSHRequest{
 		Cluster: dc.Cluster, Command: req.Command,
 	})
@@ -243,7 +264,10 @@ func (a *Agent) cmdCronRun(ctx context.Context, out *jsonlOutput, r *http.Reques
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
+	if err != nil {
+		return err
+	}
 	return app.CronRun(ctx, app.CronRunRequest{
 		Cluster: dc.Cluster, Name: name,
 	})
@@ -255,7 +279,10 @@ func (a *Agent) cmdDBBackupList(ctx context.Context, out *jsonlOutput, r *http.R
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
+	if err != nil {
+		return err
+	}
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
@@ -283,7 +310,10 @@ func (a *Agent) cmdDBSQL(ctx context.Context, out *jsonlOutput, r *http.Request)
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
+	if err != nil {
+		return err
+	}
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
@@ -319,7 +349,11 @@ func (a *Agent) handleDBBackupDownload(w http.ResponseWriter, r *http.Request) {
 	cfg := a.cfg
 	a.mu.RUnlock()
 
-	dc := BuildDeployContext(r.Context(), render.NewJSONOutput(w), cfg, a.opts)
+	dc, err := BuildDeployContext(r.Context(), render.NewJSONOutput(w), cfg, a.opts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
