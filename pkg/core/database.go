@@ -25,13 +25,12 @@ type BackupEntry struct {
 }
 
 func DatabaseBackupList(ctx context.Context, req DatabaseBackupListRequest) ([]BackupEntry, error) {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return nil, err
 	}
-	defer ssh.Close()
 
-	endpoint, bucket, accessKey, secretKey, err := backupCreds(ctx, ssh, names, req.DBName)
+	endpoint, bucket, accessKey, secretKey, err := backupCreds(ctx, req.Kube, names, req.DBName)
 	if err != nil {
 		return nil, err
 	}
@@ -61,15 +60,12 @@ type DatabaseBackupDownloadRequest struct {
 }
 
 func DatabaseBackupDownload(ctx context.Context, req DatabaseBackupDownloadRequest) (io.ReadCloser, int64, error) {
-	// SSH is only needed to read backup credentials from k8s secrets.
-	// Close it before returning — the S3 stream is a direct HTTP connection,
-	// not tunneled through SSH.
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return nil, 0, err
 	}
-	endpoint, bucket, accessKey, secretKey, err := backupCreds(ctx, ssh, names, req.DBName)
-	ssh.Close()
+
+	endpoint, bucket, accessKey, secretKey, err := backupCreds(ctx, req.Kube, names, req.DBName)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -95,6 +91,7 @@ type DatabaseSQLRequest struct {
 	Query  string
 }
 
+// TODO: migrate to client-go remotecommand — SQL exec requires SPDY, keeping SSH path for now.
 func DatabaseSQL(ctx context.Context, req DatabaseSQLRequest) (string, error) {
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
@@ -110,15 +107,15 @@ func DatabaseSQL(ctx context.Context, req DatabaseSQLRequest) (string, error) {
 	var user, dbname, sqlCmd string
 	switch req.Engine {
 	case "postgres":
-		user, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_POSTGRES_USER")
-		dbname, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_POSTGRES_DB")
+		user, _ = req.Kube.GetSecretValue(ctx, ns, secretName, prefix+"_POSTGRES_USER")
+		dbname, _ = req.Kube.GetSecretValue(ctx, ns, secretName, prefix+"_POSTGRES_DB")
 		if user == "" {
 			return "", ErrNotReady(fmt.Sprintf("postgres credentials not found for %q — has the database been deployed?", req.DBName))
 		}
 		sqlCmd = fmt.Sprintf("exec %s -- psql -U %s -d %s -c %q", pod, user, dbname, req.Query)
 	case "mysql":
-		user, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_MYSQL_USER")
-		dbname, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, prefix+"_MYSQL_DATABASE")
+		user, _ = req.Kube.GetSecretValue(ctx, ns, secretName, prefix+"_MYSQL_USER")
+		dbname, _ = req.Kube.GetSecretValue(ctx, ns, secretName, prefix+"_MYSQL_DATABASE")
 		if user == "" {
 			return "", ErrNotReady(fmt.Sprintf("mysql credentials not found for %q — has the database been deployed?", req.DBName))
 		}
@@ -136,7 +133,7 @@ func DatabaseSQL(ctx context.Context, req DatabaseSQLRequest) (string, error) {
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
-func backupCreds(ctx context.Context, ssh utils.SSHClient, names *utils.Names, dbName string) (endpoint, bucket, accessKey, secretKey string, err error) {
+func backupCreds(ctx context.Context, kc *kube.KubeClient, names *utils.Names, dbName string) (endpoint, bucket, accessKey, secretKey string, err error) {
 	ns := names.KubeNamespace()
 	bucketName := utils.DatabaseBackupBucket(dbName)
 	secretName := utils.DatabaseBackupCredsSecret(dbName)
@@ -146,10 +143,10 @@ func backupCreds(ctx context.Context, ssh utils.SSHClient, names *utils.Names, d
 		return "STORAGE_" + upper + "_" + suffix
 	}
 
-	endpoint, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, storageKey("ENDPOINT"))
-	bucket, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, storageKey("BUCKET"))
-	accessKey, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, storageKey("ACCESS_KEY_ID"))
-	secretKey, _ = kube.GetSecretValue(ctx, ssh, ns, secretName, storageKey("SECRET_ACCESS_KEY"))
+	endpoint, _ = kc.GetSecretValue(ctx, ns, secretName, storageKey("ENDPOINT"))
+	bucket, _ = kc.GetSecretValue(ctx, ns, secretName, storageKey("BUCKET"))
+	accessKey, _ = kc.GetSecretValue(ctx, ns, secretName, storageKey("ACCESS_KEY_ID"))
+	secretKey, _ = kc.GetSecretValue(ctx, ns, secretName, storageKey("SECRET_ACCESS_KEY"))
 
 	if endpoint == "" || bucket == "" {
 		return "", "", "", "", ErrNotReady("backup bucket credentials not found — has the database been deployed?")

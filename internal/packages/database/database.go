@@ -11,7 +11,6 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/packages"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -122,15 +121,10 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	ns := names.KubeNamespace()
 	port := engine.Port()
 	dbURL := engine.ConnectionURL(svcName, port, creds.User, creds.Password, creds.DBName)
+	kc := dc.Cluster.Kube
 
 	// Store credentials as k8s secret
-	ssh, _, err := dc.Cluster.SSH(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer ssh.Close()
-
-	if err := storeCredentials(ctx, ssh, ns, name, db.SecretName, svcName, engine, creds, dbURL); err != nil {
+	if err := storeCredentials(ctx, kc, ns, name, db.SecretName, svcName, engine, creds, dbURL); err != nil {
 		return nil, err
 	}
 	out.Success("credentials stored")
@@ -139,14 +133,14 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	vol := cfg.Volumes[db.Volume]
 	serverName := vol.Server
 	manifest := generateManifests(name, svcName, db.SecretName, db.VolumeMountPath, engine, db.Image, ns, serverName)
-	if err := applyManifest(ctx, ssh, ns, manifest); err != nil {
+	if err := applyManifest(ctx, kc, ns, manifest); err != nil {
 		return nil, err
 	}
 	out.Success(fmt.Sprintf("%s applied", svcName))
 
-	// Wait for postgres ready
+	// Wait for database ready
 	out.Progress(fmt.Sprintf("waiting for %s ready", svcName))
-	if err := waitReady(ctx, ssh, ns, svcName, engine, creds.User); err != nil {
+	if err := waitReady(ctx, kc, ns, svcName); err != nil {
 		return nil, err
 	}
 	out.Success(fmt.Sprintf("%s ready", svcName))
@@ -166,7 +160,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	// Store storage credentials in the backup cron's per-service secret
 	cronSecretName := db.BackupCredSecret
 	for k, v := range storageCreds {
-		if err := kube.UpsertSecretKey(ctx, ssh, ns, cronSecretName, k, v); err != nil {
+		if err := kc.UpsertSecretKey(ctx, ns, cronSecretName, k, v); err != nil {
 			return nil, fmt.Errorf("backup storage secret %s: %w", k, err)
 		}
 	}
@@ -181,7 +175,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 		retain = 7
 	}
 	backupManifest := generateBackupCronJob(name, db.BackupCronName, db.SecretName, engine, db.Image, ns, names, svcName, schedule, retain, bucketName)
-	if err := applyManifest(ctx, ssh, ns, backupManifest); err != nil {
+	if err := applyManifest(ctx, kc, ns, backupManifest); err != nil {
 		return nil, fmt.Errorf("backup cronjob: %w", err)
 	}
 	out.Success(fmt.Sprintf("backup cron (schedule: %s, retain: %d)", schedule, retain))

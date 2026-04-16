@@ -2,8 +2,6 @@ package core
 
 import (
 	"context"
-
-	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
 // SecretListRequest returns configured secret names.
@@ -24,25 +22,24 @@ type SecretRevealRequest struct {
 }
 
 func SecretReveal(ctx context.Context, req SecretRevealRequest) (string, error) {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return "", err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
 
 	// Search per-service secrets for the key
 	for _, svc := range req.ServiceNames {
 		secretName := names.KubeServiceSecrets(svc)
-		val, err := kube.GetSecretValue(ctx, ssh, ns, secretName, req.Key)
+		val, err := req.Kube.GetSecretValue(ctx, ns, secretName, req.Key)
 		if err == nil && val != "" {
 			return val, nil
 		}
 	}
 
 	// Fall back to global secret for legacy clusters still migrating
-	val, err := kube.GetSecretValue(ctx, ssh, ns, names.KubeSecrets(), req.Key)
+	val, err := req.Kube.GetSecretValue(ctx, ns, names.KubeSecrets(), req.Key)
 	if err == nil && val != "" {
 		return val, nil
 	}

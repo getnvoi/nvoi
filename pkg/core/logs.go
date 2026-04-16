@@ -2,9 +2,10 @@ package core
 
 import (
 	"context"
-	"fmt"
+	"strconv"
+	"time"
 
-	"github.com/getnvoi/nvoi/pkg/kube"
+	corev1 "k8s.io/api/core/v1"
 )
 
 type LogsRequest struct {
@@ -18,32 +19,47 @@ type LogsRequest struct {
 }
 
 func Logs(ctx context.Context, req LogsRequest) error {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
-	sel := kube.PodSelector(req.Service)
 
-	args := fmt.Sprintf(" -l %s", sel)
-	if req.Follow {
-		args += " -f"
+	pod, err := req.Kube.FirstPod(ctx, ns, req.Service)
+	if err != nil {
+		return err
+	}
+
+	opts := &corev1.PodLogOptions{
+		Follow:     req.Follow,
+		Previous:   req.Previous,
+		Timestamps: req.Timestamps,
 	}
 	if req.Tail > 0 {
-		args += fmt.Sprintf(" --tail=%d", req.Tail)
+		t := int64(req.Tail)
+		opts.TailLines = &t
 	}
 	if req.Since != "" {
-		args += fmt.Sprintf(" --since=%s", req.Since)
-	}
-	if req.Previous {
-		args += " --previous"
-	}
-	if req.Timestamps {
-		args += " --timestamps"
+		if d, err := parseDuration(req.Since); err == nil {
+			secs := int64(d.Seconds())
+			opts.SinceSeconds = &secs
+		}
 	}
 
 	w := req.Log().Writer()
-	return kube.RunStream(ctx, ssh, ns, "logs"+args, w, w)
+	return req.Kube.StreamLogs(ctx, ns, pod, opts, w)
+}
+
+// parseDuration parses Go-style duration or kubectl-style duration (e.g. "5m", "1h", "24h").
+func parseDuration(s string) (time.Duration, error) {
+	// Try Go stdlib first
+	if d, err := time.ParseDuration(s); err == nil {
+		return d, nil
+	}
+	// kubectl accepts bare numbers as seconds
+	if secs, err := strconv.Atoi(s); err == nil {
+		return time.Duration(secs) * time.Second, nil
+	}
+	return 0, ErrInputf("invalid duration %q", s)
 }

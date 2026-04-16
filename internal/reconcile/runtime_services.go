@@ -7,7 +7,6 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -135,27 +134,24 @@ func upsertServiceSecrets(ctx context.Context, dc *config.DeployContext, names *
 	if names == nil {
 		return nil
 	}
-	ssh := dc.Cluster.MasterSSH
-	if ssh == nil {
-		return nil
-	}
+	kc := dc.Cluster.Kube
 	ns := names.KubeNamespace()
 	secretName := names.KubeServiceSecrets(svcName)
 
 	if len(kvs) == 0 {
 		// No secrets declared — delete the per-service secret if it exists
-		return kube.DeleteSecret(ctx, ssh, ns, secretName)
+		return kc.DeleteSecret(ctx, ns, secretName)
 	}
 
 	// Upsert each key
 	for key, val := range kvs {
-		if err := kube.UpsertSecretKey(ctx, ssh, ns, secretName, key, val); err != nil {
+		if err := kc.UpsertSecretKey(ctx, ns, secretName, key, val); err != nil {
 			return fmt.Errorf("service %s secret %s: %w", svcName, key, err)
 		}
 	}
 
 	// Orphan-remove keys no longer in the desired set
-	existing, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
+	existing, err := kc.ListSecretKeys(ctx, ns, secretName)
 	if err != nil {
 		return nil // secret may not exist yet on first deploy
 	}
@@ -165,7 +161,7 @@ func upsertServiceSecrets(ctx context.Context, dc *config.DeployContext, names *
 	}
 	for _, key := range existing {
 		if !desired[key] {
-			_ = kube.DeleteSecretKey(ctx, ssh, ns, secretName, key)
+			_ = kc.DeleteSecretKey(ctx, ns, secretName, key)
 		}
 	}
 	return nil
@@ -176,13 +172,10 @@ func deleteServiceSecret(ctx context.Context, dc *config.DeployContext, names *u
 	if names == nil {
 		return
 	}
-	ssh := dc.Cluster.MasterSSH
-	if ssh == nil {
-		return
-	}
+	kc := dc.Cluster.Kube
 	ns := names.KubeNamespace()
 	secretName := names.KubeServiceSecrets(svcName)
-	_ = kube.DeleteSecret(ctx, ssh, ns, secretName)
+	_ = kc.DeleteSecret(ctx, ns, secretName)
 }
 
 // mergeSources builds a unified lookup map for $VAR resolution.

@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -90,27 +89,26 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	out := req.Log()
 
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
-	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
+	if err := req.Kube.EnsureNamespace(ctx, ns); err != nil {
 		return err
 	}
 
 	out.Command("ingress", "set", req.Route.Service, "domains", req.Route.Domains)
 
 	// Resolve the service port from the cluster.
-	port, err := kube.GetServicePort(ctx, ssh, ns, req.Route.Service)
+	port, err := req.Kube.GetServicePort(ctx, ns, req.Route.Service)
 	if err != nil {
 		return fmt.Errorf("service %q has no port — ingress requires a service with --port: %w", req.Route.Service, err)
 	}
 
 	out.Progress("applying ingress")
-	if err := kube.ApplyIngress(ctx, ssh, ns, kube.IngressRoute{
+	if err := req.Kube.ApplyIngress(ctx, ns, kube.IngressRoute{
 		Service: req.Route.Service,
 		Port:    port,
 		Domains: req.Route.Domains,
@@ -120,6 +118,13 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	out.Success("ingress ready")
 
 	if req.ACME {
+		// SSH is needed for ACME verification (cert check + HTTPS curl from server).
+		ssh, _, err := req.Cluster.SSH(ctx)
+		if err != nil {
+			return err
+		}
+		defer ssh.Close()
+
 		waitForCert := req.Hooks.waitForCertificate()
 		waitForHTTPS := req.Hooks.waitForHTTPS()
 		healthPath := req.HealthPath
@@ -169,19 +174,14 @@ func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 	out := req.Log()
 	out.Command("ingress", "delete", req.Route.Service, "domains", req.Route.Domains)
 
-	ssh, names, sshErr := req.Cluster.SSH(ctx)
-	if sshErr != nil {
-		if errors.Is(sshErr, ErrNoMaster) {
-			out.Success("cluster gone — local resources already absent")
-			return nil
-		}
-		return sshErr
+	names, err := req.Cluster.Names()
+	if err != nil {
+		return err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
 	out.Progress("removing ingress")
-	if err := kube.DeleteIngress(ctx, ssh, ns, req.Route.Service); err != nil {
+	if err := req.Kube.DeleteIngress(ctx, ns, req.Route.Service); err != nil {
 		return err
 	}
 	out.Success("ingress removed")

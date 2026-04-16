@@ -14,6 +14,7 @@ type ExecRequest struct {
 	Command []string
 }
 
+// TODO: migrate to client-go remotecommand — exec requires SPDY, keeping SSH path for now.
 func Exec(ctx context.Context, req ExecRequest) error {
 	ssh, names, err := req.Cluster.SSH(ctx)
 	if err != nil {
@@ -23,7 +24,7 @@ func Exec(ctx context.Context, req ExecRequest) error {
 
 	ns := names.KubeNamespace()
 
-	pod, err := kube.FirstPod(ctx, ssh, ns, req.Service)
+	pod, err := req.Kube.FirstPod(ctx, ns, req.Service)
 	if err != nil {
 		return err
 	}

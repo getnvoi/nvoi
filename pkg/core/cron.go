@@ -2,14 +2,12 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -29,26 +27,17 @@ type CronSetRequest struct {
 func CronSet(ctx context.Context, req CronSetRequest) error {
 	out := req.Log()
 
-	master, names, prov, err := req.Cluster.Master(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
-
-	addr := master.IPv4 + ":22"
-	connectFn := req.Cluster.SSHFunc
-	if connectFn == nil {
-		connectFn = func(ctx context.Context, addr string) (utils.SSHClient, error) {
-			return infra.ConnectSSH(ctx, addr, utils.DefaultUser, req.SSHKey)
-		}
-	}
-	ssh, err := connectFn(ctx, addr)
+	prov, err := req.Cluster.Compute()
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
-	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
+	if err := req.Kube.EnsureNamespace(ctx, ns); err != nil {
 		return err
 	}
 
@@ -99,7 +88,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 	if err != nil {
 		return fmt.Errorf("generate manifest: %w", err)
 	}
-	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
+	if err := req.Kube.Apply(ctx, ns, yaml); err != nil {
 		return err
 	}
 	out.Success("applied")
@@ -114,28 +103,27 @@ type CronRunRequest struct {
 func CronRun(ctx context.Context, req CronRunRequest) error {
 	out := req.Log()
 
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
 	jobName := fmt.Sprintf("%s-run-%d", req.Name, time.Now().Unix())
 
 	out.Command("cron", "run", req.Name, "job", jobName)
 
-	if err := kube.CreateJobFromCronJob(ctx, ssh, ns, req.Name, jobName); err != nil {
+	if err := req.Kube.CreateJobFromCronJob(ctx, ns, req.Name, jobName); err != nil {
 		return err
 	}
 	out.Progress("waiting for completion")
 
-	if err := kube.WaitForJob(ctx, ssh, ns, jobName, out); err != nil {
+	if err := req.Kube.WaitForJob(ctx, ns, jobName, out); err != nil {
 		return err
 	}
 
 	// Stream logs
-	logs := kube.RecentLogs(ctx, ssh, ns, jobName, "", 50)
+	logs := req.Kube.RecentLogs(ctx, ns, jobName, 50)
 	if logs != "" {
 		w := out.Writer()
 		fmt.Fprintln(w, logs)
@@ -154,14 +142,10 @@ func CronDelete(ctx context.Context, req CronDeleteRequest) error {
 	out := req.Log()
 	out.Command("cron", "delete", req.Name)
 
-	ssh, names, err := req.Cluster.SSH(ctx)
-	if errors.Is(err, ErrNoMaster) {
-		return ErrNoMaster
-	}
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
 
-	return kube.DeleteCronByName(ctx, ssh, names.KubeNamespace(), req.Name)
+	return req.Kube.DeleteCronByName(ctx, names.KubeNamespace(), req.Name)
 }

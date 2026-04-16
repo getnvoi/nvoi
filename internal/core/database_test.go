@@ -11,8 +11,10 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // b64 encodes a string to base64, matching kubectl's secret output format.
@@ -30,6 +32,7 @@ func newDBTestContext(ssh *testutil.MockSSH) *config.DeployContext {
 			AppName:   "myapp",
 			Env:       "prod",
 			MasterSSH: ssh,
+			Kube:      kube.NewFromClientset(fake.NewSimpleClientset()),
 			Output:    silentOutput{},
 		},
 	}

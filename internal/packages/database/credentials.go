@@ -7,7 +7,6 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
-	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // resolveCredentials reads pre-resolved credentials from DeployContext.
@@ -35,11 +34,11 @@ func resolveCredentials(dc *config.DeployContext, name string, engine Engine) (*
 	return creds, nil
 }
 
-func storeCredentials(ctx context.Context, ssh utils.SSHClient, ns, name, secretName, svcName string, engine Engine, creds *config.DatabaseCredentials, dbURL string) error {
+func storeCredentials(ctx context.Context, kc *kube.KubeClient, ns, name, secretName, svcName string, engine Engine, creds *config.DatabaseCredentials, dbURL string) error {
 	prefix := strings.ToUpper(name)
 	userEnv, passEnv, dbEnv := engine.EnvVarNames()
 
-	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
+	if err := kc.EnsureNamespace(ctx, ns); err != nil {
 		return err
 	}
 
@@ -53,7 +52,7 @@ func storeCredentials(ctx context.Context, ssh utils.SSHClient, ns, name, secret
 		prefix + "_" + engName + "_PORT": fmt.Sprintf("%d", engine.Port()),
 	}
 	for k, v := range kvs {
-		if err := kube.UpsertSecretKey(ctx, ssh, ns, secretName, k, v); err != nil {
+		if err := kc.UpsertSecretKey(ctx, ns, secretName, k, v); err != nil {
 			return err
 		}
 	}

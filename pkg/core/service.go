@@ -2,13 +2,11 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -34,26 +32,17 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return ErrInput("--image is required")
 	}
 
-	master, names, prov, err := req.Cluster.Master(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
-
-	addr := master.IPv4 + ":22"
-	connectFn := req.Cluster.SSHFunc
-	if connectFn == nil {
-		connectFn = func(ctx context.Context, addr string) (utils.SSHClient, error) {
-			return infra.ConnectSSH(ctx, addr, utils.DefaultUser, req.SSHKey)
-		}
-	}
-	ssh, err := connectFn(ctx, addr)
+	prov, err := req.Cluster.Compute()
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
-	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
+	if err := req.Kube.EnsureNamespace(ctx, ns); err != nil {
 		return err
 	}
 
@@ -115,7 +104,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return fmt.Errorf("generate manifest: %w", err)
 	}
 
-	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
+	if err := req.Kube.Apply(ctx, ns, yaml); err != nil {
 		return err
 	}
 	out.Success("applied")
@@ -132,14 +121,10 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	out := req.Log()
 	out.Command("service", "delete", req.Name)
 
-	ssh, names, err := req.Cluster.SSH(ctx)
-	if errors.Is(err, ErrNoMaster) {
-		return ErrNoMaster
-	}
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
 
-	return kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name)
+	return req.Kube.DeleteByName(ctx, names.KubeNamespace(), req.Name)
 }

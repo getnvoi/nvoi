@@ -4,38 +4,37 @@ import (
 	"context"
 	"testing"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
+	"github.com/getnvoi/nvoi/pkg/kube"
+
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestDescribeNodes(t *testing.T) {
-	nodesJSON := `{
-		"items": [{
-			"metadata": {
-				"name": "nvoi-myapp-prod-master",
-				"labels": {
-					"nvoi-role": "master"
-				}
+	cs := fake.NewSimpleClientset(
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   "nvoi-myapp-prod-master",
+				Labels: map[string]string{"nvoi-role": "master"},
 			},
-			"status": {
-				"addresses": [
-					{"type": "InternalIP", "address": "10.0.1.1"},
-					{"type": "ExternalIP", "address": "1.2.3.4"}
-				],
-				"conditions": [
-					{"type": "Ready", "status": "True"}
-				]
-			}
-		}]
-	}`
-
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get nodes", Result: testutil.MockResult{Output: []byte(nodesJSON)}},
+			Status: corev1.NodeStatus{
+				Addresses: []corev1.NodeAddress{
+					{Type: corev1.NodeInternalIP, Address: "10.0.1.1"},
+					{Type: corev1.NodeExternalIP, Address: "1.2.3.4"},
+				},
+				Conditions: []corev1.NodeCondition{
+					{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+				},
+			},
 		},
-	}
+	)
+	kc := kube.NewFromClientset(cs)
 
 	ctx := context.Background()
-	nodes := describeNodes(ctx, ssh)
+	nodes := describeNodes(ctx, kc)
 
 	if len(nodes) != 1 {
 		t.Fatalf("len(nodes) = %d, want 1", len(nodes))
@@ -56,37 +55,34 @@ func TestDescribeNodes(t *testing.T) {
 }
 
 func TestDescribeWorkloads(t *testing.T) {
-	replicas := `{
-		"items": [{
-			"metadata": {
-				"name": "web",
-				"creationTimestamp": "2026-04-03T10:00:00Z"
+	replicas := int32(2)
+	cs := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "web",
+				Namespace:         "nvoi-myapp-prod",
+				CreationTimestamp: metav1.Now(),
+				Labels:            map[string]string{"app.kubernetes.io/managed-by": "nvoi"},
 			},
-			"spec": {
-				"replicas": 2,
-				"template": {
-					"spec": {
-						"containers": [{"image": "nginx:latest"}]
-					}
-				}
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "web", Image: "nginx:latest"}},
+					},
+				},
 			},
-			"status": {
-				"readyReplicas": 2
-			}
-		}]
-	}`
-
-	emptyList := `{"items": []}`
-
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get deployments", Result: testutil.MockResult{Output: []byte(replicas)}},
-			{Prefix: "get statefulsets", Result: testutil.MockResult{Output: []byte(emptyList)}},
+			Status: appsv1.DeploymentStatus{
+				ReadyReplicas: 2,
+			},
 		},
-	}
+	)
+	kc := kube.NewFromClientset(cs)
 
 	ctx := context.Background()
-	workloads := describeWorkloads(ctx, ssh, "nvoi-myapp-prod")
+	workloads := describeWorkloads(ctx, kc, "nvoi-myapp-prod")
 
 	if len(workloads) != 1 {
 		t.Fatalf("len(workloads) = %d, want 1", len(workloads))
@@ -107,34 +103,32 @@ func TestDescribeWorkloads(t *testing.T) {
 }
 
 func TestDescribePods(t *testing.T) {
-	podsJSON := `{
-		"items": [{
-			"metadata": {
-				"name": "web-abc123",
-				"creationTimestamp": "2026-04-03T10:00:00Z"
+	cs := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "web-abc123",
+				Namespace:         "nvoi-myapp-prod",
+				CreationTimestamp: metav1.Now(),
+				Labels:            map[string]string{"app.kubernetes.io/managed-by": "nvoi"},
 			},
-			"spec": {
-				"nodeName": "nvoi-myapp-prod-master"
+			Spec: corev1.PodSpec{
+				NodeName: "nvoi-myapp-prod-master",
 			},
-			"status": {
-				"phase": "Running",
-				"containerStatuses": [{
-					"ready": true,
-					"restartCount": 0,
-					"state": {}
-				}]
-			}
-		}]
-	}`
-
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(podsJSON)}},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:         "web",
+					Ready:        true,
+					RestartCount: 0,
+					State:        corev1.ContainerState{},
+				}},
+			},
 		},
-	}
+	)
+	kc := kube.NewFromClientset(cs)
 
 	ctx := context.Background()
-	pods := describePods(ctx, ssh, "nvoi-myapp-prod")
+	pods := describePods(ctx, kc, "nvoi-myapp-prod")
 
 	if len(pods) != 1 {
 		t.Fatalf("len(pods) = %d, want 1", len(pods))
@@ -155,30 +149,27 @@ func TestDescribePods(t *testing.T) {
 }
 
 func TestDescribeServices(t *testing.T) {
-	svcJSON := `{
-		"items": [{
-			"metadata": {
-				"name": "web"
+	cs := fake.NewSimpleClientset(
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "web",
+				Namespace: "nvoi-myapp-prod",
+				Labels:    map[string]string{"app.kubernetes.io/managed-by": "nvoi"},
 			},
-			"spec": {
-				"type": "ClusterIP",
-				"clusterIP": "10.43.0.100",
-				"ports": [{
-					"port": 3000,
-					"protocol": "TCP"
-				}]
-			}
-		}]
-	}`
-
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get services", Result: testutil.MockResult{Output: []byte(svcJSON)}},
+			Spec: corev1.ServiceSpec{
+				Type:      corev1.ServiceTypeClusterIP,
+				ClusterIP: "10.43.0.100",
+				Ports: []corev1.ServicePort{{
+					Port:     3000,
+					Protocol: corev1.ProtocolTCP,
+				}},
+			},
 		},
-	}
+	)
+	kc := kube.NewFromClientset(cs)
 
 	ctx := context.Background()
-	services := describeServices(ctx, ssh, "nvoi-myapp-prod")
+	services := describeServices(ctx, kc, "nvoi-myapp-prod")
 
 	if len(services) != 1 {
 		t.Fatalf("len(services) = %d, want 1", len(services))
@@ -203,49 +194,78 @@ func TestDescribeServices(t *testing.T) {
 // in the describe output. Managed children are real k8s resources — they must be
 // visible in describe identically in local and cloud modes.
 func TestDescribeManagedChildrenVisible(t *testing.T) {
-	// A managed postgres named "db" creates: deployment db, cronjob db-backup,
-	// service db, secrets POSTGRES_PASSWORD_DB + DATABASE_DB_*, storage db-backups.
-	// Describe must surface all of these through its existing parsers.
-
-	deploymentsJSON := `{"items": [{
-		"metadata": {"name": "db", "creationTimestamp": "2026-04-03T10:00:00Z"},
-		"spec": {"replicas": 1, "template": {"spec": {"containers": [{"image": "postgres:17"}]}}},
-		"status": {"readyReplicas": 1}
-	}]}`
-	statefulJSON := `{"items": []}`
-	cronsJSON := `{"items": [{
-		"metadata": {"name": "db-backup", "creationTimestamp": "2026-04-03T10:00:00Z"},
-		"spec": {"schedule": "0 2 * * *", "jobTemplate": {"spec": {"template": {"spec": {"containers": [{"image": "postgres:17"}]}}}}},
-		"status": {}
-	}]}`
-	servicesJSON := `{"items": [{
-		"metadata": {"name": "db"},
-		"spec": {"type": "ClusterIP", "clusterIP": "10.43.0.50", "ports": [{"port": 5432, "protocol": "TCP"}]}
-	}]}`
-
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get deployments", Result: testutil.MockResult{Output: []byte(deploymentsJSON)}},
-			{Prefix: "get statefulsets", Result: testutil.MockResult{Output: []byte(statefulJSON)}},
-			{Prefix: "get cronjobs", Result: testutil.MockResult{Output: []byte(cronsJSON)}},
-			{Prefix: "get services", Result: testutil.MockResult{Output: []byte(servicesJSON)}},
+	replicas := int32(1)
+	cs := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "db",
+				Namespace:         "nvoi-myapp-prod",
+				CreationTimestamp: metav1.Now(),
+				Labels:            map[string]string{"app.kubernetes.io/managed-by": "nvoi"},
+			},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "db"}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "db"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "db", Image: "postgres:17"}}},
+				},
+			},
+			Status: appsv1.DeploymentStatus{ReadyReplicas: 1},
 		},
-	}
+		&batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "db-backup",
+				Namespace:         "nvoi-myapp-prod",
+				CreationTimestamp: metav1.Now(),
+				Labels:            map[string]string{"app.kubernetes.io/managed-by": "nvoi"},
+			},
+			Spec: batchv1.CronJobSpec{
+				Schedule: "0 2 * * *",
+				JobTemplate: batchv1.JobTemplateSpec{
+					Spec: batchv1.JobSpec{
+						Template: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers:    []corev1.Container{{Name: "db-backup", Image: "postgres:17"}},
+								RestartPolicy: corev1.RestartPolicyNever,
+							},
+						},
+					},
+				},
+			},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "db",
+				Namespace: "nvoi-myapp-prod",
+				Labels:    map[string]string{"app.kubernetes.io/managed-by": "nvoi"},
+			},
+			Spec: corev1.ServiceSpec{
+				Type:      corev1.ServiceTypeClusterIP,
+				ClusterIP: "10.43.0.50",
+				Ports: []corev1.ServicePort{{
+					Port:     5432,
+					Protocol: corev1.ProtocolTCP,
+				}},
+			},
+		},
+	)
+	kc := kube.NewFromClientset(cs)
 
 	ctx := context.Background()
 	ns := "nvoi-myapp-prod"
 
-	workloads := describeWorkloads(ctx, ssh, ns)
+	workloads := describeWorkloads(ctx, kc, ns)
 	if len(workloads) != 1 || workloads[0].Name != "db" {
 		t.Errorf("workloads = %v, want db deployment", workloads)
 	}
 
-	crons := describeCrons(ctx, ssh, ns)
+	crons := describeCrons(ctx, kc, ns)
 	if len(crons) != 1 || crons[0].Name != "db-backup" {
 		t.Errorf("crons = %v, want db-backup", crons)
 	}
 
-	services := describeServices(ctx, ssh, ns)
+	services := describeServices(ctx, kc, ns)
 	if len(services) != 1 || services[0].Name != "db" {
 		t.Errorf("services = %v, want db service", services)
 	}
@@ -255,37 +275,35 @@ func TestDescribeManagedChildrenVisible(t *testing.T) {
 }
 
 func TestDescribeCrons(t *testing.T) {
-	cronsJSON := `{
-		"items": [{
-			"metadata": {
-				"name": "backup",
-				"creationTimestamp": "2026-04-03T10:00:00Z"
+	cs := fake.NewSimpleClientset(
+		&batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "backup",
+				Namespace:         "nvoi-myapp-prod",
+				CreationTimestamp: metav1.Now(),
+				Labels:            map[string]string{"app.kubernetes.io/managed-by": "nvoi"},
 			},
-			"spec": {
-				"schedule": "0 1 * * *",
-				"jobTemplate": {
-					"spec": {
-						"template": {
-							"spec": {
-								"containers": [{"image": "busybox:latest"}]
-							}
-						}
-					}
-				}
+			Spec: batchv1.CronJobSpec{
+				Schedule: "0 1 * * *",
+				JobTemplate: batchv1.JobTemplateSpec{
+					Spec: batchv1.JobSpec{
+						Template: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers:    []corev1.Container{{Name: "backup", Image: "busybox:latest"}},
+								RestartPolicy: corev1.RestartPolicyNever,
+							},
+						},
+					},
+				},
 			},
-			"status": {
-				"active": [{}]
-			}
-		}]
-	}`
-
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get cronjobs", Result: testutil.MockResult{Output: []byte(cronsJSON)}},
+			Status: batchv1.CronJobStatus{
+				Active: []corev1.ObjectReference{{}},
+			},
 		},
-	}
+	)
+	kc := kube.NewFromClientset(cs)
 
-	crons := describeCrons(context.Background(), ssh, "nvoi-myapp-prod")
+	crons := describeCrons(context.Background(), kc, "nvoi-myapp-prod")
 	if len(crons) != 1 {
 		t.Fatalf("len(crons) = %d, want 1", len(crons))
 	}

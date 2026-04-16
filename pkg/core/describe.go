@@ -10,6 +10,23 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// kubeGetJSON runs a KubeClient JSON query and unmarshals the result into dest.
+func kubeGetJSON(ctx context.Context, kc *kube.KubeClient, ns, resource string, dest any) error {
+	out, err := kc.GetJSON(ctx, ns, resource, kube.NvoiSelector)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(out, dest)
+}
+
+func kubeGetClusterJSON(ctx context.Context, kc *kube.KubeClient, resource string, dest any) error {
+	out, err := kc.GetJSON(ctx, "", resource, "")
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(out, dest)
+}
+
 // ── Request / Result types ──────────────────────────────────────────────────────
 
 type DescribeRequest struct {
@@ -82,38 +99,38 @@ type DescribeResult struct {
 // ── Public ──────────────────────────────────────────────────────────────────────
 
 func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error) {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return nil, err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
+	kc := req.Kube
 
 	result := &DescribeResult{Namespace: ns}
-	result.Nodes = describeNodes(ctx, ssh)
+	result.Nodes = describeNodes(ctx, kc)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
-	result.Workloads = describeWorkloads(ctx, ssh, ns)
+	result.Workloads = describeWorkloads(ctx, kc, ns)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
-	result.Pods = describePods(ctx, ssh, ns)
+	result.Pods = describePods(ctx, kc, ns)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
-	result.Services = describeServices(ctx, ssh, ns)
+	result.Services = describeServices(ctx, kc, ns)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
-	result.Crons = describeCrons(ctx, ssh, ns)
+	result.Crons = describeCrons(ctx, kc, ns)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
 
 	// Ingress (k8s Ingress resources)
-	routes, err := kube.GetIngressRoutes(ctx, ssh, ns)
+	routes, err := kc.GetIngressRoutes(ctx, ns)
 	if err != nil {
 		return result, fmt.Errorf("describe ingress: %w", err)
 	}
@@ -136,7 +153,7 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 	// Secrets — read live keys from each per-service k8s Secret
 	for _, svc := range utils.SortedKeys(req.ServiceSecrets) {
 		secretName := names.KubeServiceSecrets(svc)
-		keys, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
+		keys, err := kc.ListSecretKeys(ctx, ns, secretName)
 		if err != nil {
 			continue // secret may not exist yet
 		}
@@ -150,13 +167,13 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 
 // DescribeJSON returns raw kubectl JSON keyed by resource type.
 func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.RawMessage, error) {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return nil, err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
+	kc := req.Kube
 	sel := kube.NvoiSelector
 	result := map[string]json.RawMessage{}
 
@@ -165,14 +182,14 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 		fn  func() ([]byte, error)
 	}
 	queries := []query{
-		{"nodes", func() ([]byte, error) { return kube.GetClusterJSON(ctx, ssh, "nodes") }},
-		{"deployments", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "deployments", sel) }},
-		{"statefulsets", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "statefulsets", sel) }},
-		{"pods", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "pods", sel) }},
-		{"services", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "services", sel) }},
-		{"cronjobs", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "cronjobs", sel) }},
+		{"nodes", func() ([]byte, error) { return kc.GetJSON(ctx, "", "nodes", "") }},
+		{"deployments", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "deployments", sel) }},
+		{"statefulsets", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "statefulsets", sel) }},
+		{"pods", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "pods", sel) }},
+		{"services", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "services", sel) }},
+		{"cronjobs", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "cronjobs", sel) }},
 		// Global "secrets" k8s Secret no longer exists — secrets live in per-service secrets only.
-		{"ingresses", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "ingresses", kube.NvoiSelector) }},
+		{"ingresses", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "ingresses", kube.NvoiSelector) }},
 	}
 
 	for _, q := range queries {
@@ -183,28 +200,9 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 	return result, nil
 }
 
-// ── Internal helpers ────────────────────────────────────────────────────────────
-
-// kubeGet runs a kubectl get and unmarshals the JSON result into dest.
-func kubeGet(ctx context.Context, ssh utils.SSHClient, ns, resource string, dest any) error {
-	out, err := kube.GetJSON(ctx, ssh, ns, resource, kube.NvoiSelector)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(out, dest)
-}
-
-func kubeGetCluster(ctx context.Context, ssh utils.SSHClient, resource string, dest any) error {
-	out, err := kube.GetClusterJSON(ctx, ssh, resource)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(out, dest)
-}
-
 // ── kubectl parsers ─────────────────────────────────────────────────────────────
 
-func describeNodes(ctx context.Context, ssh utils.SSHClient) []DescribeNode {
+func describeNodes(ctx context.Context, kc *kube.KubeClient) []DescribeNode {
 	var resp struct {
 		Items []struct {
 			Metadata struct {
@@ -217,7 +215,7 @@ func describeNodes(ctx context.Context, ssh utils.SSHClient) []DescribeNode {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if kubeGetCluster(ctx, ssh, "nodes", &resp) != nil {
+	if kubeGetClusterJSON(ctx, kc, "nodes", &resp) != nil {
 		return nil
 	}
 	var out []DescribeNode
@@ -243,11 +241,11 @@ func describeNodes(ctx context.Context, ssh utils.SSHClient) []DescribeNode {
 	return out
 }
 
-func describeWorkloads(ctx context.Context, ssh utils.SSHClient, ns string) []DescribeWorkload {
+func describeWorkloads(ctx context.Context, kc *kube.KubeClient, ns string) []DescribeWorkload {
 	var out []DescribeWorkload
 	for _, kind := range []string{"deployments", "statefulsets"} {
 		var resp kube.WorkloadList
-		if kubeGet(ctx, ssh, ns, kind, &resp) != nil {
+		if kubeGetJSON(ctx, kc, ns, kind, &resp) != nil {
 			continue
 		}
 		kindName := strings.TrimSuffix(kind, "s")
@@ -266,7 +264,7 @@ func describeWorkloads(ctx context.Context, ssh utils.SSHClient, ns string) []De
 	return out
 }
 
-func describeCrons(ctx context.Context, ssh utils.SSHClient, ns string) []DescribeCron {
+func describeCrons(ctx context.Context, kc *kube.KubeClient, ns string) []DescribeCron {
 	var resp struct {
 		Items []struct {
 			Metadata struct {
@@ -293,7 +291,7 @@ func describeCrons(ctx context.Context, ssh utils.SSHClient, ns string) []Descri
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if kubeGet(ctx, ssh, ns, "cronjobs", &resp) != nil {
+	if kubeGetJSON(ctx, kc, ns, "cronjobs", &resp) != nil {
 		return nil
 	}
 	var out []DescribeCron
@@ -319,9 +317,9 @@ func describeCrons(ctx context.Context, ssh utils.SSHClient, ns string) []Descri
 	return out
 }
 
-func describePods(ctx context.Context, ssh utils.SSHClient, ns string) []DescribePod {
+func describePods(ctx context.Context, kc *kube.KubeClient, ns string) []DescribePod {
 	var resp kube.PodList
-	if kubeGet(ctx, ssh, ns, "pods", &resp) != nil {
+	if kubeGetJSON(ctx, kc, ns, "pods", &resp) != nil {
 		return nil
 	}
 	var out []DescribePod
@@ -343,7 +341,7 @@ func describePods(ctx context.Context, ssh utils.SSHClient, ns string) []Describ
 	return out
 }
 
-func describeServices(ctx context.Context, ssh utils.SSHClient, ns string) []DescribeService {
+func describeServices(ctx context.Context, kc *kube.KubeClient, ns string) []DescribeService {
 	var resp struct {
 		Items []struct {
 			Metadata struct{ Name string } `json:"metadata"`
@@ -357,7 +355,7 @@ func describeServices(ctx context.Context, ssh utils.SSHClient, ns string) []Des
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	if kubeGet(ctx, ssh, ns, "services", &resp) != nil {
+	if kubeGetJSON(ctx, kc, ns, "services", &resp) != nil {
 		return nil
 	}
 	var out []DescribeService

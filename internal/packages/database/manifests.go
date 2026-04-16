@@ -2,9 +2,7 @@ package database
 
 import (
 	"context"
-	"fmt"
 	"strings"
-	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -103,16 +101,10 @@ func generateManifests(name, svcName, secretName, volumeMountPath string, engine
 	return strings.TrimSpace(string(ssYAML)) + "\n---\n" + strings.TrimSpace(string(svcYAML))
 }
 
-func applyManifest(ctx context.Context, ssh utils.SSHClient, ns, manifest string) error {
-	return kube.Apply(ctx, ssh, ns, manifest)
+func applyManifest(ctx context.Context, kc *kube.KubeClient, ns, manifest string) error {
+	return kc.Apply(ctx, ns, manifest)
 }
 
-func waitReady(ctx context.Context, ssh utils.SSHClient, ns, svcName string, engine Engine, user string) error {
-	pod := svcName + "-0"
-	probeCmd := engine.ReadinessProbe(user)
-	cmd := fmt.Sprintf("exec %s -- %s", pod, strings.Join(probeCmd, " "))
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
-		_, err := kube.RunKubectl(ctx, ssh, ns, cmd)
-		return err == nil, nil
-	})
+func waitReady(ctx context.Context, kc *kube.KubeClient, ns, svcName string) error {
+	return kc.WaitRolloutReady(ctx, ns, svcName, "statefulset", false, nil)
 }

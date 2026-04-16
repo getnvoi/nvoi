@@ -636,6 +636,12 @@ func int64Ptr(i int64) *int64 { return &i }
 func (k *KubeClient) GetJSON(ctx context.Context, ns, resource, selector string) ([]byte, error) {
 	// Map resource string to typed list call.
 	switch resource {
+	case "nodes":
+		list, err := k.cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil {
+			return nil, err
+		}
+		return marshalJSON(list)
 	case "deployments", "deploy":
 		list, err := k.cs.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 		if err != nil {

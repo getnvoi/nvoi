@@ -8,7 +8,6 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -108,12 +107,8 @@ func drainNode(ctx context.Context, dc *config.DeployContext, name string) error
 	if err != nil {
 		return fmt.Errorf("drain %s: %w", name, err)
 	}
-	ssh := dc.Cluster.MasterSSH
-	if ssh == nil {
-		return fmt.Errorf("drain %s: no master SSH connection", name)
-	}
 	dc.Cluster.Log().Command("node", "drain", names.Server(name))
-	return kube.DrainAndRemoveNode(ctx, ssh, names.Server(name))
+	return dc.Cluster.Kube.DrainAndRemoveNode(ctx, names.Server(name))
 }
 
 func clusterWith(dc *config.DeployContext, creds map[string]string) app.Cluster {

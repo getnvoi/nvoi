@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func init() {
@@ -29,6 +31,7 @@ func testCronCluster(ssh *testutil.MockSSH) Cluster {
 		AppName: "myapp", Env: "prod",
 		Provider: "cron-test", Credentials: map[string]string{},
 		Output: &testutil.MockOutput{},
+		Kube:   kube.NewFromClientset(fake.NewSimpleClientset()),
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			return ssh, nil
 		},
