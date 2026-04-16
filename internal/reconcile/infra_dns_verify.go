@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -21,11 +22,6 @@ var dnsGracePeriod = 3 * time.Second
 func verifyDNSPropagation(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) {
 	out := dc.Log()
 
-	ssh := dc.Cluster.MasterSSH
-	if ssh == nil {
-		return
-	}
-
 	master, _, _, err := dc.Cluster.Master(ctx)
 	if err != nil {
 		return
@@ -42,9 +38,8 @@ func verifyDNSPropagation(ctx context.Context, dc *config.DeployContext, cfg *co
 	unresolved := 0
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		for _, domain := range cfg.Domains[svcName] {
-			// Resolve from the server — matches what curl will see in WaitForHTTPS.
-			cmd := fmt.Sprintf("getent hosts %s 2>/dev/null", domain)
-			result, err := ssh.Run(ctx, cmd)
+			// Resolve from the master — matches what curl will see in WaitForHTTPS.
+			result, err := runOnMaster(ctx, dc, fmt.Sprintf("getent hosts %s 2>/dev/null", domain))
 			if err != nil {
 				unresolved++
 				continue
@@ -64,4 +59,13 @@ func verifyDNSPropagation(ctx context.Context, dc *config.DeployContext, cfg *co
 				"if DNS does not propagate in time. If cert fails, redeploy.",
 			unresolved, expectedIP))
 	}
+}
+
+// runOnMaster executes a shell command on the master node.
+// Bootstrap path: runs over SSH. Agent path: runs locally (agent IS the master).
+func runOnMaster(ctx context.Context, dc *config.DeployContext, cmd string) ([]byte, error) {
+	if ssh := dc.Cluster.MasterSSH; ssh != nil {
+		return ssh.Run(ctx, cmd)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", cmd).CombinedOutput()
 }

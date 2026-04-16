@@ -134,7 +134,9 @@ func TestVerifyDNSPropagation_MultipleDomains(t *testing.T) {
 	}
 }
 
-func TestVerifyDNSPropagation_NoMasterSSH_Noop(t *testing.T) {
+func TestVerifyDNSPropagation_NoMasterSSH_RunsLocally(t *testing.T) {
+	// Agent path: MasterSSH is nil, but the function should still run
+	// getent locally (agent IS the master). It won't silently skip.
 	dc := dnsDC(nil)
 	dc.Cluster.MasterSSH = nil
 	out := dc.Output.(*testutil.MockOutput)
@@ -145,11 +147,12 @@ func TestVerifyDNSPropagation_NoMasterSSH_Noop(t *testing.T) {
 		Domains:   map[string][]string{"web": {"myapp.com"}},
 	}
 
-	// Should not panic or error — just skip.
+	// Should not panic — runs getent locally. Domain won't resolve in
+	// test env, so we expect a warning (feature works, not silently dead).
 	verifyDNSPropagation(context.Background(), dc, cfg)
 
-	if len(out.Warnings) > 0 {
-		t.Error("should not warn when no SSH connection available")
+	if len(out.Warnings) == 0 {
+		t.Error("expected warning when domain doesn't resolve locally (agent path)")
 	}
 }
 
