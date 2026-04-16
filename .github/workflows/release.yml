@@ -65,10 +65,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
       - uses: actions/download-artifact@v4
         with:
           path: dist/
@@ -80,15 +76,15 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-      - name: Write SSH key
-        run: |
-          umask 077
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+  worker:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Pull release into R2
+      - name: Deploy distribution worker
         env:
-          SSH_KEY_PATH: ~/.ssh/id_ed25519
-          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
-        run: go run ./cmd/cli exec distribution -- ./nvoi-dist pull "${{ github.ref_name }}"
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+        run: ./.github/scripts/deploy-worker.sh
