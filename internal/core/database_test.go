@@ -14,6 +14,9 @@ import (
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -26,13 +29,14 @@ func kctlPrefix(ns string) string {
 }
 
 // newDBTestContext builds a DeployContext with MockSSH for database tests.
-func newDBTestContext(ssh *testutil.MockSSH) *config.DeployContext {
+func newDBTestContext(ssh *testutil.MockSSH, objects ...runtime.Object) *config.DeployContext {
+	cs := fake.NewSimpleClientset(objects...)
 	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName:   "myapp",
 			Env:       "prod",
 			MasterSSH: ssh,
-			Kube:      kube.NewFromClientset(fake.NewSimpleClientset()),
+			Kube:      kube.NewFromClientset(cs),
 			Output:    silentOutput{},
 		},
 	}
@@ -49,20 +53,20 @@ func TestDatabaseSQL_Postgres(t *testing.T) {
 	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
 	ssh.Prefixes = []testutil.MockPrefix{
 		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-credentials -o jsonpath='{.data.MAIN_POSTGRES_USER}'",
-			Result: testutil.MockResult{Output: []byte(b64("pguser"))},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-credentials -o jsonpath='{.data.MAIN_POSTGRES_DB}'",
-			Result: testutil.MockResult{Output: []byte(b64("mydb"))},
-		},
-		{
 			Prefix: kctlPrefix(ns) + "exec main-db-0 -- psql",
 			Result: testutil.MockResult{Output: []byte(" count\n-------\n     1\n(1 row)\n")},
 		},
 	}
 
-	dc := newDBTestContext(ssh)
+	dbSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "main-db-credentials", Namespace: ns},
+		Data: map[string][]byte{
+			"MAIN_POSTGRES_USER": []byte("pguser"),
+			"MAIN_POSTGRES_DB":   []byte("mydb"),
+		},
+	}
+
+	dc := newDBTestContext(ssh, dbSecret)
 	err := DatabaseSQL(newCmd(), dc, "main", "postgres", "SELECT count(*) FROM users")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -86,28 +90,20 @@ func TestDatabaseSQL_MySQL(t *testing.T) {
 	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
 	ssh.Prefixes = []testutil.MockPrefix{
 		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-credentials -o jsonpath='{.data.MAIN_POSTGRES_USER}'",
-			Result: testutil.MockResult{Err: fmt.Errorf("not found")},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-credentials -o jsonpath='{.data.MAIN_POSTGRES_DB}'",
-			Result: testutil.MockResult{Err: fmt.Errorf("not found")},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-credentials -o jsonpath='{.data.MAIN_MYSQL_USER}'",
-			Result: testutil.MockResult{Output: []byte(b64("root"))},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-credentials -o jsonpath='{.data.MAIN_MYSQL_DATABASE}'",
-			Result: testutil.MockResult{Output: []byte(b64("appdb"))},
-		},
-		{
 			Prefix: kctlPrefix(ns) + "exec main-db-0 -- mysql",
 			Result: testutil.MockResult{Output: []byte("1 row in set")},
 		},
 	}
 
-	dc := newDBTestContext(ssh)
+	dbSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "main-db-credentials", Namespace: ns},
+		Data: map[string][]byte{
+			"MAIN_MYSQL_USER":     []byte("root"),
+			"MAIN_MYSQL_DATABASE": []byte("appdb"),
+		},
+	}
+
+	dc := newDBTestContext(ssh, dbSecret)
 	err := DatabaseSQL(newCmd(), dc, "main", "mysql", "SELECT 1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -170,26 +166,18 @@ func TestDatabaseBackupList_Success(t *testing.T) {
 
 	ns := "nvoi-myapp-prod"
 	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
-	ssh.Prefixes = []testutil.MockPrefix{
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ENDPOINT}'",
-			Result: testutil.MockResult{Output: []byte(b64(s3.URL))},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_BUCKET}'",
-			Result: testutil.MockResult{Output: []byte(b64("test-bucket"))},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ACCESS_KEY_ID}'",
-			Result: testutil.MockResult{Output: []byte(b64("AKID"))},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_SECRET_ACCESS_KEY}'",
-			Result: testutil.MockResult{Output: []byte(b64("secret"))},
+
+	backupSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "main-db-backup-secrets", Namespace: ns},
+		Data: map[string][]byte{
+			"STORAGE_MAIN_DB_BACKUPS_ENDPOINT":          []byte(s3.URL),
+			"STORAGE_MAIN_DB_BACKUPS_BUCKET":            []byte("test-bucket"),
+			"STORAGE_MAIN_DB_BACKUPS_ACCESS_KEY_ID":     []byte("AKID"),
+			"STORAGE_MAIN_DB_BACKUPS_SECRET_ACCESS_KEY": []byte("secret"),
 		},
 	}
 
-	dc := newDBTestContext(ssh)
+	dc := newDBTestContext(ssh, backupSecret)
 	err := DatabaseBackupList(newCmd(), dc, "main")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -248,26 +236,18 @@ func TestDatabaseBackupDownload_Success(t *testing.T) {
 
 	ns := "nvoi-myapp-prod"
 	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
-	ssh.Prefixes = []testutil.MockPrefix{
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ENDPOINT}'",
-			Result: testutil.MockResult{Output: []byte(b64(s3.URL))},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_BUCKET}'",
-			Result: testutil.MockResult{Output: []byte(b64("test-bucket"))},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_ACCESS_KEY_ID}'",
-			Result: testutil.MockResult{Output: []byte(b64("AKID"))},
-		},
-		{
-			Prefix: kctlPrefix(ns) + "get secret main-db-backup-secrets -o jsonpath='{.data.STORAGE_MAIN_DB_BACKUPS_SECRET_ACCESS_KEY}'",
-			Result: testutil.MockResult{Output: []byte(b64("secret"))},
+
+	backupSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "main-db-backup-secrets", Namespace: ns},
+		Data: map[string][]byte{
+			"STORAGE_MAIN_DB_BACKUPS_ENDPOINT":          []byte(s3.URL),
+			"STORAGE_MAIN_DB_BACKUPS_BUCKET":            []byte("test-bucket"),
+			"STORAGE_MAIN_DB_BACKUPS_ACCESS_KEY_ID":     []byte("AKID"),
+			"STORAGE_MAIN_DB_BACKUPS_SECRET_ACCESS_KEY": []byte("secret"),
 		},
 	}
 
-	dc := newDBTestContext(ssh)
+	dc := newDBTestContext(ssh, backupSecret)
 	outFile := t.TempDir() + "/downloaded.sql.gz"
 	err := DatabaseBackupDownload(newCmd(), dc, "main", "backups/2025-01-01.sql.gz", outFile)
 	if err != nil {

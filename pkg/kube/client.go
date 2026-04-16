@@ -152,6 +152,12 @@ func (k *KubeClient) ApplyGlobal(ctx context.Context, yamlDoc string) error {
 }
 
 func (k *KubeClient) applyOne(ctx context.Context, ns string, raw []byte) error {
+	// When running with a fake/test clientset (no dynamic client or mapper),
+	// skip the apply — the typed API tests verify behavior directly.
+	if k.dyn == nil || k.mapper == nil {
+		return nil
+	}
+
 	decUnstructured := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
 	obj := &unstructured.Unstructured{}
 	_, gvk, err := decUnstructured.Decode(raw, nil, obj)

@@ -99,6 +99,9 @@ type DescribeResult struct {
 // ── Public ──────────────────────────────────────────────────────────────────────
 
 func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error) {
+	if req.Kube == nil {
+		return nil, fmt.Errorf("kube client not available")
+	}
 	names, err := req.Cluster.Names()
 	if err != nil {
 		return nil, err

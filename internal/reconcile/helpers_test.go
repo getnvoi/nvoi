@@ -145,6 +145,7 @@ func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
 	// If ComputeList fails (provider API down, bad credentials), DescribeLive
 	// must NOT return (nil, nil) — that means "first deploy" and would cause
 	// duplicate server creation. It must return an error.
+	// Kube is nil — cluster is unreachable (testing infrastructure failure).
 	log := &opLog{}
 	mock := &trackingMock{log: log, ListErr: fmt.Errorf("API unreachable")}
 	activeMock = mock
@@ -156,7 +157,6 @@ func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
 			Provider: "test-reconcile", Credentials: map[string]string{},
 			SSHKey: sshKey,
 			Output: &testutil.MockOutput{},
-			Kube:   testKube(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return nil, fmt.Errorf("no SSH")
 			},
@@ -175,6 +175,7 @@ func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
 func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
 	// When ComputeList succeeds with zero servers and Describe fails (no master),
 	// that's a genuine first deploy — (nil, nil) is correct.
+	// Kube is nil — no cluster exists yet.
 	log := &opLog{}
 	mock := &trackingMock{log: log}
 	mock.Servers = nil // no servers at provider
@@ -187,7 +188,6 @@ func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
 			Provider: "test-reconcile", Credentials: map[string]string{},
 			SSHKey: sshKey,
 			Output: &testutil.MockOutput{},
-			Kube:   testKube(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return nil, fmt.Errorf("no master")
 			},

@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -22,6 +24,7 @@ func ingressCluster(out *testutil.MockOutput, ssh utils.SSHClient, mock *testuti
 	return Cluster{
 		AppName: "test", Env: "prod",
 		Provider: provName, Output: out,
+		Kube:    kube.NewFromClientset(fake.NewSimpleClientset()),
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) { return ssh, nil },
 	}
 }

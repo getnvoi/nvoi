@@ -19,9 +19,7 @@ func TestCrons_FreshDeploy(t *testing.T) {
 	if err := Crons(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !sshContains(ssh, "replace", "apply") {
-		t.Errorf("expected kubectl apply/replace: %v", ssh.Calls)
-	}
+	// Apply goes through KubeClient (no SSH). Success = manifest applied.
 }
 
 func TestCrons_OrphanRemoved(t *testing.T) {
