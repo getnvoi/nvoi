@@ -27,10 +27,12 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}
 	}
 
+	out := dc.Output
+
 	// DNS records — external, at the DNS provider
 	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		collect(app.DNSDelete(ctx, app.DNSDeleteRequest{
-			Cluster: dc.Cluster, DNS: dc.DNS,
+			Cluster: dc.Cluster, Output: out, DNS: dc.DNS,
 			Service: svcName, Domains: cfg.Domains[svcName],
 		}))
 	}
@@ -39,10 +41,10 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	if deleteStorage {
 		for _, name := range utils.SortedKeys(cfg.Storage) {
 			collect(app.StorageEmpty(ctx, app.StorageEmptyRequest{
-				Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env, Output: dc.Cluster.Output},
-				Storage: dc.Storage, Name: name,
+				Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env},
+				Output:  out, Storage: dc.Storage, Name: name,
 			}))
-			collect(app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name}))
+			collect(app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Output: out, Storage: dc.Storage, Name: name}))
 		}
 	}
 
@@ -52,24 +54,24 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	// Volumes — external, preserved by default
 	if deleteVolumes {
 		for _, name := range utils.SortedKeys(cfg.Volumes) {
-			collect(app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name}))
+			collect(app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Output: out, Name: name}))
 		}
 	}
 
 	// Servers — workers first, then master
 	masters, workers := reconcile.SplitServers(cfg.Servers)
 	for _, s := range workers {
-		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
+		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Output: out, Name: s.Name}))
 	}
 	for _, s := range masters {
-		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
+		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Output: out, Name: s.Name}))
 	}
 
 	// Firewalls — nuke all matching our prefix (desired=nil = delete everything)
 	names, _ := utils.NewNames(cfg.App, cfg.Env)
 	if names != nil {
 		for _, err := range app.FirewallRemoveOrphans(ctx, app.FirewallRemoveOrphansRequest{
-			Cluster: dc.Cluster,
+			Cluster: dc.Cluster, Output: out,
 			Prefix:  names.Base() + "-",
 			Desired: nil,
 		}) {
@@ -78,7 +80,7 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	}
 
 	// Network — always nuked
-	collect(app.NetworkDelete(ctx, app.NetworkDeleteRequest{Cluster: dc.Cluster}))
+	collect(app.NetworkDelete(ctx, app.NetworkDeleteRequest{Cluster: dc.Cluster, Output: out}))
 
 	if len(errs) > 0 {
 		return fmt.Errorf("teardown completed with %d error(s):\n  %s", len(errs), strings.Join(errs, "\n  "))

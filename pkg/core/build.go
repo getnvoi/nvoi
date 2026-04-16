@@ -25,6 +25,7 @@ func isLocalSource(source string) bool {
 
 type BuildRunRequest struct {
 	Cluster
+	Output             Output
 	Builder            string
 	BuilderCredentials map[string]string
 	Source             string
@@ -85,7 +86,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 		return nil, ErrInput("--architecture arm64 is not available with --builder daytona — Daytona sandboxes are amd64 only")
 	}
 
-	out := req.Log()
+	out := log(req.Output)
 	out.Command("build", "run", req.Name, "builder", req.Builder, "source", source)
 
 	result, err := builder.Build(ctx, provider.BuildRequest{
@@ -112,7 +113,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 
 	// Prune old tags if --history is set
 	if req.History > 0 {
-		if err := pruneRegistryTags(ctx, req.Cluster, master, req.Name, req.History); err != nil {
+		if err := pruneRegistryTags(ctx, req.Cluster, req.Output, master, req.Name, req.History); err != nil {
 			out.Warning(fmt.Sprintf("failed to prune old tags: %v", err))
 		}
 	}
@@ -163,6 +164,7 @@ func splitTarget(arg string) (name, source string, err error) {
 // BuildParallelRequest builds multiple images concurrently.
 type BuildParallelRequest struct {
 	Cluster
+	Output             Output
 	Builder            string
 	BuilderCredentials map[string]string
 	Targets            []BuildTarget
@@ -173,7 +175,7 @@ type BuildParallelRequest struct {
 
 // BuildParallel runs builds concurrently, one goroutine per target.
 func BuildParallel(ctx context.Context, req BuildParallelRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 
 	master, _, _, err := req.Cluster.Master(ctx)
 	if err != nil {
@@ -336,8 +338,8 @@ func detectPlatform(ctx context.Context, masterIP string, sshKey []byte) string 
 	return "linux/amd64"
 }
 
-func pruneRegistryTags(ctx context.Context, c Cluster, master *provider.Server, imageName string, keep int) error {
-	log := c.Log()
+func pruneRegistryTags(ctx context.Context, c Cluster, o Output, master *provider.Server, imageName string, keep int) error {
+	plog := log(o)
 	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, c.SSHKey)
 	if err != nil {
 		return err
@@ -393,7 +395,7 @@ func pruneRegistryTags(ctx context.Context, c Cluster, master *provider.Server, 
 		if _, err := ssh.Run(ctx, deleteCmd); err != nil {
 			continue
 		}
-		log.Info(fmt.Sprintf("pruned %s:%s", imageName, tag))
+		plog.Info(fmt.Sprintf("pruned %s:%s", imageName, tag))
 	}
 
 	ssh.Run(ctx, "docker exec nvoi-registry bin/registry garbage-collect /etc/docker/registry/config.yml --delete-untagged 2>/dev/null")
@@ -428,6 +430,7 @@ type RegistryImage struct {
 
 type BuildListRequest struct {
 	Cluster
+	Output Output
 }
 
 func BuildList(ctx context.Context, req BuildListRequest) ([]RegistryImage, error) {
@@ -478,7 +481,8 @@ func BuildList(ctx context.Context, req BuildListRequest) ([]RegistryImage, erro
 
 type BuildLatestRequest struct {
 	Cluster
-	Name string
+	Output Output
+	Name   string
 }
 
 func BuildLatest(ctx context.Context, req BuildLatestRequest) (string, error) {

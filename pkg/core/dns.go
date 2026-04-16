@@ -13,6 +13,7 @@ import (
 
 type DNSSetRequest struct {
 	Cluster
+	Output  Output
 	DNS     ProviderRef
 	Service string
 	Domains []string
@@ -20,7 +21,7 @@ type DNSSetRequest struct {
 
 // DNSSet creates/updates DNS A records. DNS only — ingress is separate.
 func DNSSet(ctx context.Context, req DNSSetRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 
 	master, _, _, err := req.Cluster.Master(ctx)
 	if err != nil {
@@ -48,6 +49,7 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 
 type DNSDeleteRequest struct {
 	Cluster
+	Output  Output
 	DNS     ProviderRef
 	Service string
 	Domains []string
@@ -55,7 +57,7 @@ type DNSDeleteRequest struct {
 
 // DNSDelete removes DNS A records.
 func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	out.Command("dns", "delete", req.Service)
 
 	dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)

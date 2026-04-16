@@ -7,6 +7,7 @@ import (
 
 type SSHRequest struct {
 	Cluster
+	Output  Output
 	Command []string
 }
 
@@ -17,7 +18,7 @@ func SSH(ctx context.Context, req SSHRequest) error {
 	}
 	defer ssh.Close()
 
-	out := req.Log()
+	out := log(req.Output)
 	cmd := strings.Join(req.Command, " ")
 	return ssh.RunStream(ctx, cmd, out.Writer(), out.Writer())
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
@@ -37,18 +38,18 @@ type agentBackend struct {
 // agent's localhost listener, and returns an agentBackend. The SSH tunnel
 // stays open for the lifetime of the returned cleanup function.
 func connectToAgent(ctx context.Context, out app.Output, cfg *config.AppConfig, configPath string) (*agentBackend, func(), error) {
-	// Resolve master IP from provider API.
+	// Resolve credentials — failures here are config/env errors, not "no master".
 	source, err := agent.CredentialSource(ctx, cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)
+		return nil, nil, err
 	}
 	computeCreds, err := agent.ResolveProviderCreds(source, "compute", cfg.Providers.Compute)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)
+		return nil, nil, err
 	}
 	sshKey, err := resolveAgentSSHKey()
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)
+		return nil, nil, err
 	}
 
 	cluster := app.Cluster{
@@ -57,9 +58,9 @@ func connectToAgent(ctx context.Context, out app.Output, cfg *config.AppConfig, 
 		Provider:    cfg.Providers.Compute,
 		Credentials: computeCreds,
 		SSHKey:      sshKey,
-		Output:      out,
 	}
 
+	// Only this call determines "no master exists" — the one case where bootstrap is appropriate.
 	master, _, _, err := cluster.Master(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)
@@ -107,8 +108,20 @@ func connectToAgent(ctx context.Context, out app.Output, cfg *config.AppConfig, 
 		ssh.Close()
 	}
 
+	// Read auth token from the agent's disk via the SSH connection.
+	var token string
+	tokenPath := infra.AgentTokenFile(cfg.App, cfg.Env)
+	if tokenBytes, err := ssh.Run(ctx, fmt.Sprintf("cat %s 2>/dev/null", tokenPath)); err == nil {
+		token = strings.TrimSpace(string(tokenBytes))
+	}
+
+	client := &http.Client{}
+	if token != "" {
+		client.Transport = &bearerTransport{token: token}
+	}
+
 	return &agentBackend{
-		client:     &http.Client{},
+		client:     client,
 		baseURL:    "http://" + localAddr,
 		out:        out,
 		configPath: configPath,
@@ -323,6 +336,16 @@ func (b *agentBackend) DatabaseSQL(ctx context.Context, dbName, engine, query st
 	json.Unmarshal(data, &output)
 	fmt.Print(output)
 	return nil
+}
+
+// bearerTransport injects the Authorization header on every request.
+type bearerTransport struct {
+	token string
+}
+
+func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+t.token)
+	return http.DefaultTransport.RoundTrip(req)
 }
 
 // CLI-side credential resolution delegates to internal/agent for the shared

@@ -19,12 +19,12 @@ func dnsDC(ssh *testutil.MockSSH) *config.DeployContext {
 			AppName: "myapp", Env: "prod",
 			Provider: "test-compute", Credentials: map[string]string{},
 			SSHKey:    sshKey,
-			Output:    &testutil.MockOutput{},
 			MasterSSH: ssh,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
 		},
+		Output: &testutil.MockOutput{},
 	}
 }
 
@@ -36,7 +36,7 @@ func TestVerifyDNSPropagation_ResolvesViaSSH(t *testing.T) {
 		},
 	}
 	dc := dnsDC(ssh)
-	out := dc.Cluster.Output.(*testutil.MockOutput)
+	out := dc.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Compute: "test-compute"},
@@ -69,7 +69,7 @@ func TestVerifyDNSPropagation_WarnsWhenNotResolved(t *testing.T) {
 		},
 	}
 	dc := dnsDC(ssh)
-	out := dc.Cluster.Output.(*testutil.MockOutput)
+	out := dc.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Compute: "test-compute"},
@@ -92,7 +92,7 @@ func TestVerifyDNSPropagation_WarnsWhenWrongIP(t *testing.T) {
 		},
 	}
 	dc := dnsDC(ssh)
-	out := dc.Cluster.Output.(*testutil.MockOutput)
+	out := dc.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Compute: "test-compute"},
@@ -116,7 +116,7 @@ func TestVerifyDNSPropagation_MultipleDomains(t *testing.T) {
 		},
 	}
 	dc := dnsDC(ssh)
-	out := dc.Cluster.Output.(*testutil.MockOutput)
+	out := dc.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Compute: "test-compute"},
@@ -137,7 +137,7 @@ func TestVerifyDNSPropagation_MultipleDomains(t *testing.T) {
 func TestVerifyDNSPropagation_NoMasterSSH_Noop(t *testing.T) {
 	dc := dnsDC(nil)
 	dc.Cluster.MasterSSH = nil
-	out := dc.Cluster.Output.(*testutil.MockOutput)
+	out := dc.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Compute: "test-compute"},
@@ -162,7 +162,7 @@ func TestVerifyDNSPropagation_NoMasterServer_Noop(t *testing.T) {
 		return &testutil.MockCompute{Servers: nil}
 	})
 	dc.Cluster.Provider = provName
-	out := dc.Cluster.Output.(*testutil.MockOutput)
+	out := dc.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Compute: provName},

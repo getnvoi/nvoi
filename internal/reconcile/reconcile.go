@@ -9,6 +9,20 @@ import (
 	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
+// ErrDeployInterrupted is returned when a deploy is cancelled mid-reconcile.
+// The error message includes the last completed step so the user knows where
+// it stopped. The next `nvoi deploy` picks up from there — idempotent by design.
+var ErrDeployInterrupted = fmt.Errorf("deploy interrupted")
+
+// checkCancel returns ErrDeployInterrupted if the context has been cancelled,
+// annotated with the last completed step.
+func checkCancel(ctx context.Context, lastStep string) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("%w after %s: %v", ErrDeployInterrupted, lastStep, ctx.Err())
+	}
+	return nil
+}
+
 // Deploy reconciles live infrastructure to match the YAML config.
 func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
 	if err := ValidateConfig(cfg); err != nil {
@@ -26,6 +40,9 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	// Create desired servers. Orphans are NOT removed yet — workloads
 	// must move to new nodes first (zero-downtime server replacement).
 	if err := ServersAdd(ctx, dc, live, cfg); err != nil {
+		return err
+	}
+	if err := checkCancel(ctx, "servers"); err != nil {
 		return err
 	}
 
@@ -52,14 +69,26 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err := Firewall(ctx, dc, live, cfg); err != nil {
 		return err
 	}
+	if err := checkCancel(ctx, "firewall"); err != nil {
+		return err
+	}
 	if err := Volumes(ctx, dc, live, cfg); err != nil {
+		return err
+	}
+	if err := checkCancel(ctx, "volumes"); err != nil {
 		return err
 	}
 	if err := Build(ctx, dc, cfg); err != nil {
 		return err
 	}
+	if err := checkCancel(ctx, "build"); err != nil {
+		return err
+	}
 	secretValues, err := Secrets(ctx, dc, live, cfg)
 	if err != nil {
+		return err
+	}
+	if err := checkCancel(ctx, "secrets"); err != nil {
 		return err
 	}
 
@@ -69,9 +98,15 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err != nil {
 		return err
 	}
+	if err := checkCancel(ctx, "packages"); err != nil {
+		return err
+	}
 
 	storageCreds, err := Storage(ctx, dc, live, cfg)
 	if err != nil {
+		return err
+	}
+	if err := checkCancel(ctx, "storage"); err != nil {
 		return err
 	}
 
@@ -81,12 +116,21 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err := Services(ctx, dc, live, cfg, sources); err != nil {
 		return err
 	}
+	if err := checkCancel(ctx, "services"); err != nil {
+		return err
+	}
 	if err := Crons(ctx, dc, live, cfg, sources); err != nil {
+		return err
+	}
+	if err := checkCancel(ctx, "crons"); err != nil {
 		return err
 	}
 
 	// Workloads have moved. Now safe to drain + delete orphan servers.
 	if err := ServersRemoveOrphans(ctx, dc, live, cfg); err != nil {
+		return err
+	}
+	if err := checkCancel(ctx, "orphan removal"); err != nil {
 		return err
 	}
 

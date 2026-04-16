@@ -8,6 +8,7 @@ import (
 // rollout to complete. Scoped to one service — doesn't block on unrelated pods.
 type WaitRolloutRequest struct {
 	Cluster
+	Output         Output
 	Service        string // service name (deployment/statefulset name)
 	WorkloadKind   string // "deployment" or "statefulset"
 	HasHealthCheck bool   // true if the service has a readiness probe
@@ -15,7 +16,7 @@ type WaitRolloutRequest struct {
 
 // WaitRollout waits for a specific service's rollout to complete.
 func WaitRollout(ctx context.Context, req WaitRolloutRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Cluster.Names()
 	if err != nil {
 		return err

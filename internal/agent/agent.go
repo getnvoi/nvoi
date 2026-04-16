@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/core"
@@ -30,18 +31,58 @@ type AgentOpts struct {
 	GitUsername string           // git auth username (e.g. "x-access-token")
 	GitToken    string           // git auth token
 	Kube        *kube.KubeClient // k8s client — direct to localhost:6443 on the master
+	Token       string           // bearer token for agent auth — read from disk at startup
+}
+
+// agentState is the cached, immutable state swapped atomically on config push.
+// Reads are lock-free. Writes (config push) build a new state and swap.
+type agentState struct {
+	cfg *config.AppConfig
+	dc  *config.DeployContext // fully resolved, minus Output (stamped per-request)
 }
 
 // Agent is the deploy runtime. One per master node.
 type Agent struct {
-	cfg  *config.AppConfig
-	opts AgentOpts
-	mu   sync.RWMutex // write: deploy/teardown/config push. read: everything else.
+	state    atomic.Pointer[agentState] // lock-free reads, atomic swap on push
+	opts     AgentOpts
+	deployMu sync.Mutex // serializes deploy/teardown — reads don't block
 }
 
 // New creates an agent with the given config and pre-resolved options.
-func New(cfg *config.AppConfig, opts AgentOpts) *Agent {
-	return &Agent{cfg: cfg, opts: opts}
+// Resolves credentials at startup — fails if secrets provider is unreachable.
+func New(ctx context.Context, cfg *config.AppConfig, opts AgentOpts) (*Agent, error) {
+	a := &Agent{opts: opts}
+	if err := a.loadConfig(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// loadConfig builds a new agentState from config + credentials and swaps it in.
+// Called at startup and on config push. Validates config, resolves credentials,
+// builds DeployContext. If any step fails, the old state is preserved.
+func (a *Agent) loadConfig(ctx context.Context, cfg *config.AppConfig) error {
+	if err := reconcile.ValidateConfig(cfg); err != nil {
+		return fmt.Errorf("validate config: %w", err)
+	}
+	if err := cfg.Resolve(); err != nil {
+		return fmt.Errorf("resolve config: %w", err)
+	}
+	dc, err := BuildDeployContext(ctx, nil, cfg, a.opts)
+	if err != nil {
+		return fmt.Errorf("build deploy context: %w", err)
+	}
+	a.state.Store(&agentState{cfg: cfg, dc: dc})
+	return nil
+}
+
+// snapshot returns the current state and a per-request DeployContext with Output stamped.
+func (a *Agent) snapshot(out app.Output) (*config.AppConfig, *config.DeployContext) {
+	s := a.state.Load()
+	// Shallow copy DeployContext so Output is per-request, rest is shared.
+	dc := *s.dc
+	dc.Output = out
+	return s.cfg, &dc
 }
 
 // ── Handler type ────────────────────────────────────────────────────────────
@@ -55,13 +96,28 @@ type CommandFunc func(ctx context.Context, out *jsonlOutput, r *http.Request) er
 
 // handle wraps a CommandFunc into an http.HandlerFunc. It creates the JSONL
 // stream writer and calls the handler. The handler never sees w.
+// Auth is checked before the handler runs.
 func (a *Agent) handle(fn CommandFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.checkAuth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		out := streamOutput(w)
 		if err := fn(r.Context(), out, r); err != nil {
 			out.Error(err)
 		}
 	}
+}
+
+// checkAuth validates the bearer token. Always passes if no token is configured
+// (backwards compat with agents installed before token auth).
+func (a *Agent) checkAuth(r *http.Request) bool {
+	if a.opts.Token == "" {
+		return true
+	}
+	h := r.Header.Get("Authorization")
+	return h == "Bearer "+a.opts.Token
 }
 
 // RegisterRoutes wires all agent endpoints onto the mux.
@@ -88,6 +144,10 @@ func (a *Agent) RegisterRoutes(mux *http.ServeMux) {
 // ── Config push / Health ────────────────────────────────────────────────────
 
 func (a *Agent) handleConfigPush(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -98,24 +158,21 @@ func (a *Agent) handleConfigPush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("parse config: %v", err), http.StatusBadRequest)
 		return
 	}
-	if err := cfg.Resolve(); err != nil {
-		http.Error(w, fmt.Sprintf("resolve config: %v", err), http.StatusBadRequest)
+	// Full validation + credential resolution + atomic swap.
+	// If any step fails, the agent keeps its last good state.
+	if err := a.loadConfig(r.Context(), cfg); err != nil {
+		http.Error(w, fmt.Sprintf("config rejected: %v", err), http.StatusBadRequest)
 		return
 	}
-	a.mu.Lock()
-	a.cfg = cfg
-	a.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
 }
 
 func (a *Agent) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
+	s := a.state.Load()
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "ok",
-		"app":    cfg.App,
-		"env":    cfg.Env,
+		"app":    s.cfg.App,
+		"env":    s.cfg.Env,
 	})
 }
 
@@ -123,19 +180,16 @@ func (a *Agent) handleHealth(w http.ResponseWriter, _ *http.Request) {
 // Each handler receives Output only. JSONL is the only output path.
 
 func (a *Agent) cmdDeploy(ctx context.Context, out *jsonlOutput, r *http.Request) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.deployMu.Lock()
+	defer a.deployMu.Unlock()
 
-	dc, err := BuildDeployContext(ctx, out, a.cfg, a.opts)
-	if err != nil {
-		return err
-	}
-	return reconcile.Deploy(ctx, dc, a.cfg)
+	cfg, dc := a.snapshot(out)
+	return reconcile.Deploy(ctx, dc, cfg)
 }
 
 func (a *Agent) cmdTeardown(ctx context.Context, out *jsonlOutput, r *http.Request) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.deployMu.Lock()
+	defer a.deployMu.Unlock()
 
 	var req struct {
 		DeleteVolumes bool `json:"delete_volumes"`
@@ -145,25 +199,14 @@ func (a *Agent) cmdTeardown(ctx context.Context, out *jsonlOutput, r *http.Reque
 		return fmt.Errorf("decode request: %w", err)
 	}
 
-	dc, err := BuildDeployContext(ctx, out, a.cfg, a.opts)
-	if err != nil {
-		return err
-	}
-	return core.Teardown(ctx, dc, a.cfg, req.DeleteVolumes, req.DeleteStorage)
+	cfg, dc := a.snapshot(out)
+	return core.Teardown(ctx, dc, cfg, req.DeleteVolumes, req.DeleteStorage)
 }
 
-func (a *Agent) cmdDescribe(ctx context.Context, out *jsonlOutput, r *http.Request) error {
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
-	if err != nil {
-		return err
-	}
-
+func (a *Agent) cmdDescribe(ctx context.Context, out *jsonlOutput, _ *http.Request) error {
+	cfg, dc := a.snapshot(out)
 	res, err := app.Describe(ctx, app.DescribeRequest{
-		Cluster:        dc.Cluster,
+		Cluster: dc.Cluster, Output: dc.Output,
 		StorageNames:   cfg.StorageNames(),
 		ServiceSecrets: cfg.ServiceSecrets(),
 	})
@@ -174,16 +217,8 @@ func (a *Agent) cmdDescribe(ctx context.Context, out *jsonlOutput, r *http.Reque
 	return nil
 }
 
-func (a *Agent) cmdResources(ctx context.Context, out *jsonlOutput, r *http.Request) error {
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
-	if err != nil {
-		return err
-	}
-
+func (a *Agent) cmdResources(ctx context.Context, out *jsonlOutput, _ *http.Request) error {
+	_, dc := a.snapshot(out)
 	groups, err := app.Resources(ctx, app.ResourcesRequest{
 		Compute: app.ProviderRef{Name: dc.Cluster.Provider, Creds: dc.Cluster.Credentials},
 		DNS:     dc.DNS,
@@ -198,14 +233,7 @@ func (a *Agent) cmdResources(ctx context.Context, out *jsonlOutput, r *http.Requ
 
 func (a *Agent) cmdLogs(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	service := r.PathValue("service")
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
-	if err != nil {
-		return err
-	}
+	_, dc := a.snapshot(out)
 
 	follow := r.URL.Query().Get("follow") == "true"
 	since := r.URL.Query().Get("since")
@@ -217,7 +245,7 @@ func (a *Agent) cmdLogs(ctx context.Context, out *jsonlOutput, r *http.Request) 
 	}
 
 	return app.Logs(ctx, app.LogsRequest{
-		Cluster: dc.Cluster, Service: service,
+		Cluster: dc.Cluster, Output: dc.Output, Service: service,
 		Follow: follow, Tail: tail, Since: since,
 		Previous: previous, Timestamps: timestamps,
 	})
@@ -232,16 +260,9 @@ func (a *Agent) cmdExec(ctx context.Context, out *jsonlOutput, r *http.Request) 
 		return fmt.Errorf("decode request: %w", err)
 	}
 
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
-	if err != nil {
-		return err
-	}
+	_, dc := a.snapshot(out)
 	return app.Exec(ctx, app.ExecRequest{
-		Cluster: dc.Cluster, Service: service, Command: req.Command,
+		Cluster: dc.Cluster, Output: dc.Output, Service: service, Command: req.Command,
 	})
 }
 
@@ -253,52 +274,30 @@ func (a *Agent) cmdSSH(ctx context.Context, out *jsonlOutput, r *http.Request) e
 		return fmt.Errorf("decode request: %w", err)
 	}
 
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
-	if err != nil {
-		return err
-	}
+	_, dc := a.snapshot(out)
 	return app.SSH(ctx, app.SSHRequest{
-		Cluster: dc.Cluster, Command: req.Command,
+		Cluster: dc.Cluster, Output: dc.Output, Command: req.Command,
 	})
 }
 
 func (a *Agent) cmdCronRun(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	name := r.PathValue("name")
-
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
-	if err != nil {
-		return err
-	}
+	_, dc := a.snapshot(out)
 	return app.CronRun(ctx, app.CronRunRequest{
-		Cluster: dc.Cluster, Name: name,
+		Cluster: dc.Cluster, Output: dc.Output, Name: name,
 	})
 }
 
 func (a *Agent) cmdDBBackupList(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	dbName := r.PathValue("name")
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
-	if err != nil {
-		return err
-	}
+	cfg, dc := a.snapshot(out)
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
 		return err
 	}
 	entries, err := app.DatabaseBackupList(ctx, app.DatabaseBackupListRequest{
-		Cluster: dc.Cluster, DBName: name,
+		Cluster: dc.Cluster, Output: dc.Output, DBName: name,
 	})
 	if err != nil {
 		return err
@@ -317,14 +316,7 @@ func (a *Agent) cmdDBSQL(ctx context.Context, out *jsonlOutput, r *http.Request)
 		return fmt.Errorf("decode request: %w", err)
 	}
 
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(ctx, out, cfg, a.opts)
-	if err != nil {
-		return err
-	}
+	cfg, dc := a.snapshot(out)
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
@@ -340,7 +332,7 @@ func (a *Agent) cmdDBSQL(ctx context.Context, out *jsonlOutput, r *http.Request)
 		return fmt.Errorf("engine is required (postgres or mysql)")
 	}
 	output, err := app.DatabaseSQL(ctx, app.DatabaseSQLRequest{
-		Cluster: dc.Cluster, DBName: name, Engine: engine, Query: req.Query,
+		Cluster: dc.Cluster, Output: dc.Output, DBName: name, Engine: engine, Query: req.Query,
 	})
 	if err != nil {
 		return err
@@ -353,18 +345,14 @@ func (a *Agent) cmdDBSQL(ctx context.Context, out *jsonlOutput, r *http.Request)
 // Backup download is raw binary — not JSONL.
 
 func (a *Agent) handleDBBackupDownload(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	dbName := r.PathValue("name")
 	key := r.PathValue("key")
 
-	a.mu.RLock()
-	cfg := a.cfg
-	a.mu.RUnlock()
-
-	dc, err := BuildDeployContext(r.Context(), render.NewJSONOutput(w), cfg, a.opts)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	cfg, dc := a.snapshot(render.NewJSONOutput(w))
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
@@ -372,7 +360,7 @@ func (a *Agent) handleDBBackupDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _, err := app.DatabaseBackupDownload(r.Context(), app.DatabaseBackupDownloadRequest{
-		Cluster: dc.Cluster, DBName: name, Key: key,
+		Cluster: dc.Cluster, Output: dc.Output, DBName: name, Key: key,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

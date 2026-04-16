@@ -9,12 +9,13 @@ import (
 
 type FirewallSetRequest struct {
 	Cluster
+	Output     Output
 	Name       string // firewall resource name (e.g. names.MasterFirewall())
 	AllowedIPs provider.PortAllowList
 }
 
 func FirewallSet(ctx context.Context, req FirewallSetRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	prov, err := req.Compute()
 	if err != nil {
 		return err
@@ -38,11 +39,12 @@ func FirewallSet(ctx context.Context, req FirewallSetRequest) error {
 
 type FirewallDeleteRequest struct {
 	Cluster
-	Name string // firewall resource name
+	Output Output
+	Name   string // firewall resource name
 }
 
 func FirewallDelete(ctx context.Context, req FirewallDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	prov, err := req.Compute()
 	if err != nil {
 		return err
@@ -73,10 +75,11 @@ func FirewallDelete(ctx context.Context, req FirewallDeleteRequest) error {
 
 type NetworkDeleteRequest struct {
 	Cluster
+	Output Output
 }
 
 func NetworkDelete(ctx context.Context, req NetworkDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Names()
 	if err != nil {
 		return err
@@ -112,6 +115,7 @@ func NetworkDelete(ctx context.Context, req NetworkDeleteRequest) error {
 
 type FirewallListAllRequest struct {
 	Cluster
+	Output Output
 }
 
 func FirewallListAll(ctx context.Context, req FirewallListAllRequest) ([]*provider.Firewall, error) {
@@ -127,13 +131,14 @@ func FirewallListAll(ctx context.Context, req FirewallListAllRequest) ([]*provid
 // Teardown passes desired = nil (delete everything).
 type FirewallRemoveOrphansRequest struct {
 	Cluster
+	Output  Output
 	Prefix  string          // names.Base() + "-" — only touch our firewalls
 	Desired map[string]bool // firewalls to keep (nil = delete all)
 }
 
 func FirewallRemoveOrphans(ctx context.Context, req FirewallRemoveOrphansRequest) []error {
-	out := req.Log()
-	all, err := FirewallListAll(ctx, FirewallListAllRequest{Cluster: req.Cluster})
+	out := log(req.Output)
+	all, err := FirewallListAll(ctx, FirewallListAllRequest{Cluster: req.Cluster, Output: req.Output})
 	if err != nil {
 		return []error{err}
 	}
@@ -147,7 +152,7 @@ func FirewallRemoveOrphans(ctx context.Context, req FirewallRemoveOrphansRequest
 			continue // desired, keep
 		}
 		if err := FirewallDelete(ctx, FirewallDeleteRequest{
-			Cluster: req.Cluster, Name: fw.Name,
+			Cluster: req.Cluster, Output: req.Output, Name: fw.Name,
 		}); err != nil {
 			out.Warning(fmt.Sprintf("orphan firewall %s not removed: %s", fw.Name, err))
 			errs = append(errs, err)

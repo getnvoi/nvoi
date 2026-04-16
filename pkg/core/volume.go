@@ -10,6 +10,7 @@ import (
 
 type VolumeSetRequest struct {
 	Cluster
+	Output Output
 	Name   string
 	Size   int
 	Server string
@@ -20,7 +21,7 @@ type VolumeSetResult struct {
 }
 
 func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, error) {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Names()
 	if err != nil {
 		return nil, err
@@ -78,11 +79,12 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 
 type VolumeDeleteRequest struct {
 	Cluster
-	Name string
+	Output Output
+	Name   string
 }
 
 func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Names()
 	if err != nil {
 		return err
@@ -136,6 +138,7 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 
 type VolumeListRequest struct {
 	Cluster
+	Output Output
 }
 
 func VolumeList(ctx context.Context, req VolumeListRequest) ([]*provider.Volume, error) {

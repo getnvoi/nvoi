@@ -2,9 +2,9 @@ package main
 
 import "context"
 
-// Backend dispatches CLI commands to local (pkg/core) or cloud (API).
+// Backend dispatches CLI commands to the agent (SSH tunnel) or local bootstrap.
 // Commands read flags and pass values — backends resolve the rest.
-// dbName and engine can be empty; the backend fills in from config or API.
+// dbName and engine can be empty; the backend fills in from config.
 type Backend interface {
 	Deploy(ctx context.Context) error
 	Teardown(ctx context.Context, deleteVolumes, deleteStorage bool) error

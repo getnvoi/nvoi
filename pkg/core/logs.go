@@ -10,6 +10,7 @@ import (
 
 type LogsRequest struct {
 	Cluster
+	Output     Output
 	Service    string
 	Follow     bool
 	Tail       int
@@ -47,7 +48,7 @@ func Logs(ctx context.Context, req LogsRequest) error {
 		}
 	}
 
-	w := req.Log().Writer()
+	w := log(req.Output).Writer()
 	return req.Kube.StreamLogs(ctx, ns, pod, opts, w)
 }
 

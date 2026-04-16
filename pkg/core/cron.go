@@ -14,6 +14,7 @@ import (
 
 type CronSetRequest struct {
 	Cluster
+	Output     Output
 	Name       string
 	Image      string
 	Command    string
@@ -25,7 +26,7 @@ type CronSetRequest struct {
 }
 
 func CronSet(ctx context.Context, req CronSetRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 
 	names, err := req.Cluster.Names()
 	if err != nil {
@@ -97,11 +98,12 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 
 type CronRunRequest struct {
 	Cluster
-	Name string
+	Output Output
+	Name   string
 }
 
 func CronRun(ctx context.Context, req CronRunRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 
 	names, err := req.Cluster.Names()
 	if err != nil {
@@ -135,11 +137,12 @@ func CronRun(ctx context.Context, req CronRunRequest) error {
 
 type CronDeleteRequest struct {
 	Cluster
-	Name string
+	Output Output
+	Name   string
 }
 
 func CronDelete(ctx context.Context, req CronDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	out.Command("cron", "delete", req.Name)
 
 	names, err := req.Cluster.Names()

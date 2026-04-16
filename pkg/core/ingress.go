@@ -46,6 +46,7 @@ func (h *IngressHooks) waitForHTTPS() func(context.Context, utils.SSHClient, str
 
 type IngressSetRequest struct {
 	Cluster
+	Output     Output
 	Route      IngressRouteArg
 	HealthPath string        // if set, verify HTTPS responds on this path after cert
 	ACME       bool          // true = Traefik ACME (Let's Encrypt), false = HTTP only (tunnel)
@@ -54,7 +55,8 @@ type IngressSetRequest struct {
 
 type IngressDeleteRequest struct {
 	Cluster
-	Route IngressRouteArg
+	Output Output
+	Route  IngressRouteArg
 }
 
 // ── ParseIngressArgs ────────────────────────────────────────────────────────
@@ -87,7 +89,7 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 // IngressSet creates or updates a k8s Ingress resource for a service.
 // One Ingress per service — no shared state, no read-modify-write.
 func IngressSet(ctx context.Context, req IngressSetRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 
 	names, err := req.Cluster.Names()
 	if err != nil {
@@ -171,7 +173,7 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 
 // IngressDelete removes the Ingress resource for a service.
 func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	out.Command("ingress", "delete", req.Route.Service, "domains", req.Route.Domains)
 
 	names, err := req.Cluster.Names()

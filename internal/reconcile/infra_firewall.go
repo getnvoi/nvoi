@@ -26,7 +26,7 @@ func Firewall(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 
 	// Master gets public ports (80, 443) — ingress runs here
 	if err := app.FirewallSet(ctx, app.FirewallSetRequest{
-		Cluster:    dc.Cluster,
+		Cluster: dc.Cluster, Output: dc.Output,
 		Name:       cfg.MasterFirewall,
 		AllowedIPs: publicRules,
 	}); err != nil {
@@ -35,7 +35,7 @@ func Firewall(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 
 	// Workers get base rules only (SSH + internal) — no public ports
 	if err := app.FirewallSet(ctx, app.FirewallSetRequest{
-		Cluster:    dc.Cluster,
+		Cluster: dc.Cluster, Output: dc.Output,
 		Name:       cfg.WorkerFirewall,
 		AllowedIPs: nil,
 	}); err != nil {
@@ -44,8 +44,8 @@ func Firewall(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 
 	// Orphan detection — same function teardown uses with desired=nil
 	app.FirewallRemoveOrphans(ctx, app.FirewallRemoveOrphansRequest{
-		Cluster: dc.Cluster,
-		Prefix:  names.Base() + "-",
+		Cluster: dc.Cluster, Output: dc.Output,
+		Prefix: names.Base() + "-",
 		Desired: map[string]bool{
 			cfg.MasterFirewall: true,
 			cfg.WorkerFirewall: true,

@@ -382,7 +382,7 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 4. `teardown` nukes external provider resources. Volumes and storage preserved by default.
 5. Provider interfaces scale. Add a provider = implement the interface.
 6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
-7. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/agent.go` resolves env values, passes them to the agent via `AgentOpts`.
+7. **`os.Getenv` is never called directly except through `EnvSource`, which is selected at the `cmd/` boundary.** `internal/`, `pkg/` never decide to read env vars — they receive a `CredentialSource` from `cmd/`. `cmd/cli/agent.go` resolves env values, passes them to the agent via `AgentOpts`.
 8. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface.
 9. **`pkg/core/` never writes to stdout.** All output through `Output` interface.
 10. **Every provider operation goes through `pkg/core/`.** No direct provider calls.
@@ -409,3 +409,5 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **Concurrency control on deploy workflows.** `concurrency: { group: deploy, cancel-in-progress: false }`.
 - **Root disk size is creation-only.** Resize requires server recreation.
 - **Pod eviction errors propagated during drain.** Failed eviction on a Ready node blocks server deletion.
+- **Agent credentials on master.** The agent model puts provider credentials on the master's disk (`.env` in the agent working directory, mode 0600, owned by deploy). This is a trade-off vs the SSH model where creds never left the laptop. When `providers.secrets` is configured, only the secrets provider bootstrap creds need to be on disk — everything else is fetched at runtime via CredentialSource. Without a secrets provider, the full `.env` is required. Configuring a secrets provider minimizes the blast radius of a compromised master.
+- **Agent auth.** Bearer token generated at install time, stored at `{agentDir}/agent.token` (mode 0600). All endpoints except `/health` require it. Backwards-compatible: agents installed before token auth accept all requests (empty token = no check). The agent hard-rejects binding to `0.0.0.0` — localhost only, SSH tunnel provides access.

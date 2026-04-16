@@ -91,18 +91,18 @@ func (d *DatabasePackage) Teardown(ctx context.Context, dc *config.DeployContext
 		db := cfg.Database[name]
 		bucketName := db.BackupBucket
 		_ = app.StorageEmpty(ctx, app.StorageEmptyRequest{
-			Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env, Output: dc.Cluster.Output},
-			Storage: dc.Storage, Name: bucketName,
+			Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env},
+			Output:  dc.Output, Storage: dc.Storage, Name: bucketName,
 		})
 		_ = app.StorageDelete(ctx, app.StorageDeleteRequest{
-			Cluster: dc.Cluster, Storage: dc.Storage, Name: bucketName,
+			Cluster: dc.Cluster, Output: dc.Output, Storage: dc.Storage, Name: bucketName,
 		})
 	}
 	return nil
 }
 
 func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, name string, db config.DatabaseDef) (map[string]string, error) {
-	out := dc.Cluster.Log()
+	out := dc.Log()
 	out.Command("database", "reconcile", name)
 
 	engine := EngineFor(db.Kind)
@@ -149,7 +149,7 @@ func reconcileDatabase(ctx context.Context, dc *config.DeployContext, cfg *confi
 	bucketName := db.BackupBucket
 	out.Progress(fmt.Sprintf("ensuring backup bucket %s", bucketName))
 	storageCreds, err := app.StorageSet(ctx, app.StorageSetRequest{
-		Cluster: dc.Cluster, Storage: dc.Storage,
+		Cluster: dc.Cluster, Output: dc.Output, Storage: dc.Storage,
 		Name: bucketName,
 	})
 	if err != nil {

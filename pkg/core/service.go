@@ -13,6 +13,7 @@ import (
 
 type ServiceSetRequest struct {
 	Cluster
+	Output     Output
 	Name       string
 	Image      string
 	Port       int
@@ -26,7 +27,7 @@ type ServiceSetRequest struct {
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 
 	if req.Image == "" {
 		return ErrInput("--image is required")
@@ -114,11 +115,12 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 
 type ServiceDeleteRequest struct {
 	Cluster
-	Name string
+	Output Output
+	Name   string
 }
 
 func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	out.Command("service", "delete", req.Name)
 
 	names, err := req.Cluster.Names()

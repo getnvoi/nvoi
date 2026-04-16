@@ -17,7 +17,7 @@ func volumeCluster(mock *testutil.MockCompute, ssh *testutil.MockSSH) Cluster {
 	})
 	return Cluster{
 		AppName: "myapp", Env: "prod",
-		Provider: provName, Output: &testutil.MockOutput{},
+		Provider: provName,
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			return ssh, nil
 		},

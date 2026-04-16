@@ -3,6 +3,8 @@ package infra
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -17,6 +19,11 @@ const (
 // AgentDir returns the agent working directory for an app+env.
 func AgentDir(app, env string) string {
 	return fmt.Sprintf("%s/%s-%s", agentBaseDir, app, env)
+}
+
+// AgentTokenFile returns the path to the agent auth token for an app+env.
+func AgentTokenFile(app, env string) string {
+	return AgentDir(app, env) + "/agent.token"
 }
 
 // InstallAgent installs the nvoi binary, config, credentials, and systemd
@@ -43,6 +50,18 @@ func InstallAgent(ctx context.Context, ssh utils.SSHClient, app, env string, con
 	if len(envFile) > 0 {
 		if err := ssh.Upload(ctx, bytes.NewReader(envFile), dir+"/.env", 0600); err != nil {
 			return fmt.Errorf("upload .env: %w", err)
+		}
+	}
+
+	// 3b. Generate auth token (only if not already present).
+	tokenPath := AgentTokenFile(app, env)
+	if _, err := ssh.Run(ctx, fmt.Sprintf("test -f %s", tokenPath)); err != nil {
+		token := make([]byte, 32)
+		if _, err := rand.Read(token); err != nil {
+			return fmt.Errorf("generate agent token: %w", err)
+		}
+		if err := ssh.Upload(ctx, bytes.NewReader([]byte(hex.EncodeToString(token))), tokenPath, 0600); err != nil {
+			return fmt.Errorf("upload agent token: %w", err)
 		}
 	}
 

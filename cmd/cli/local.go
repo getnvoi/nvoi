@@ -53,6 +53,9 @@ func (b *localBackend) Deploy(ctx context.Context) error {
 	if b.dc.Cluster.MasterSSH != nil {
 		b.out.Command("agent", "install", b.cfg.App)
 		configData, _ := config.MarshalAppConfig(b.cfg)
+		// TODO: when providers.secrets is configured, filter .env to bootstrap-only
+		// keys (secrets provider creds + SSH_KEY_PATH + GITHUB_TOKEN) instead of
+		// uploading the full file. Minimizes credential exposure on the master.
 		envData, _ := os.ReadFile(".env")
 		if err := infra.InstallAgent(ctx, b.dc.Cluster.MasterSSH, b.cfg.App, b.cfg.Env, configData, envData); err != nil {
 			b.out.Warning(fmt.Sprintf("agent install: %v (deploy succeeded, agent can be installed manually)", err))

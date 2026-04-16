@@ -11,6 +11,7 @@ import (
 
 type StorageSetRequest struct {
 	Cluster
+	Output     Output
 	Storage    ProviderRef
 	Name       string
 	Bucket     string
@@ -19,7 +20,7 @@ type StorageSetRequest struct {
 }
 
 func StorageSet(ctx context.Context, req StorageSetRequest) (map[string]string, error) {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Names()
 	if err != nil {
 		return nil, err
@@ -82,12 +83,13 @@ func StorageSet(ctx context.Context, req StorageSetRequest) (map[string]string, 
 
 type StorageDeleteRequest struct {
 	Cluster
+	Output  Output
 	Storage ProviderRef
 	Name    string
 }
 
 func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Names()
 	if err != nil {
 		return err
@@ -117,12 +119,13 @@ func StorageDelete(ctx context.Context, req StorageDeleteRequest) error {
 
 type StorageEmptyRequest struct {
 	Cluster
+	Output  Output
 	Storage ProviderRef
 	Name    string
 }
 
 func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Names()
 	if err != nil {
 		return err
@@ -141,6 +144,7 @@ func StorageEmpty(ctx context.Context, req StorageEmptyRequest) error {
 
 type StorageListRequest struct {
 	Cluster
+	Output       Output
 	StorageNames []string // from cfg — config is the source of truth
 }
 

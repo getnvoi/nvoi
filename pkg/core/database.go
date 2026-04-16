@@ -16,6 +16,7 @@ import (
 
 type DatabaseBackupListRequest struct {
 	Cluster
+	Output Output
 	DBName string
 }
 
@@ -56,6 +57,7 @@ func DatabaseBackupList(ctx context.Context, req DatabaseBackupListRequest) ([]B
 
 type DatabaseBackupDownloadRequest struct {
 	Cluster
+	Output Output
 	DBName string
 	Key    string
 }
@@ -87,6 +89,7 @@ func DatabaseBackupDownload(ctx context.Context, req DatabaseBackupDownloadReque
 
 type DatabaseSQLRequest struct {
 	Cluster
+	Output Output
 	DBName string
 	Engine string // "postgres" or "mysql" — from config kind
 	Query  string

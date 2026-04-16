@@ -6,6 +6,7 @@ import (
 
 type ExecRequest struct {
 	Cluster
+	Output  Output
 	Service string
 	Command []string
 }
@@ -22,6 +23,6 @@ func Exec(ctx context.Context, req ExecRequest) error {
 		return err
 	}
 
-	w := req.Log().Writer()
+	w := log(req.Output).Writer()
 	return req.Kube.ExecInPod(ctx, ns, pod, req.Command, w, w)
 }

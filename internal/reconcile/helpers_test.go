@@ -156,7 +156,6 @@ func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
 			SSHKey: sshKey,
-			Output: &testutil.MockOutput{},
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return nil, fmt.Errorf("no SSH")
 			},
@@ -187,7 +186,6 @@ func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
 			SSHKey: sshKey,
-			Output: &testutil.MockOutput{},
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return nil, fmt.Errorf("no master")
 			},
@@ -221,7 +219,6 @@ func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
 			SSHKey:    sshKey,
-			Output:    &testutil.MockOutput{},
 			MasterSSH: ssh,
 			Kube:      testKube(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
@@ -329,7 +326,6 @@ func testDC(ssh *testutil.MockSSH) *config.DeployContext {
 			AppName: "myapp", Env: "prod",
 			Provider: "test-compute", Credentials: map[string]string{},
 			SSHKey:    sshKey,
-			Output:    &testutil.MockOutput{},
 			MasterSSH: ssh,
 			Kube:      testKube(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
@@ -354,7 +350,6 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
 			SSHKey:    sshKey,
-			Output:    &testutil.MockOutput{},
 			MasterSSH: ssh,
 			Kube:      testKube(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {

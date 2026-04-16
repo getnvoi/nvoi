@@ -31,15 +31,7 @@ func TestDeploy_NoMaster_Declined(t *testing.T) {
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
 	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\nproviders:\n  compute: hetzner\nservers:\n  master:\n    type: cx23\n    region: fsn1\n    role: master\nservices:\n  web:\n    image: nginx\n"), 0o644)
 
-	t.Setenv("HOME", dir) // no SSH key → ErrNoMaster
-
-	// Pipe "n" to stdin to decline the prompt.
-	r, w, _ := os.Pipe()
-	w.WriteString("n\n")
-	w.Close()
-	oldStdin := os.Stdin
-	os.Stdin = r
-	defer func() { os.Stdin = oldStdin }()
+	t.Setenv("HOME", dir) // no SSH key → credential error (not ErrNoMaster)
 
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"deploy", "--config", cfgPath})
@@ -47,8 +39,10 @@ func TestDeploy_NoMaster_Declined(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "aborted") {
-		t.Fatalf("error = %q, want aborted", err.Error())
+	// No SSH key = hard error, not a bootstrap prompt. The user needs to
+	// create an SSH key before anything works (agent tunnel or bootstrap).
+	if !strings.Contains(err.Error(), "SSH key") {
+		t.Fatalf("error = %q, want SSH key error", err.Error())
 	}
 }
 
@@ -59,17 +53,17 @@ func TestDeploy_NoMaster_AutoConfirm(t *testing.T) {
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
 	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
 
-	t.Setenv("HOME", dir) // no SSH key → ErrNoMaster
+	t.Setenv("HOME", dir) // no SSH key → credential error (not ErrNoMaster)
 
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"deploy", "--config", cfgPath, "-y"})
 	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("expected error (no compute provider)")
+		t.Fatal("expected error")
 	}
-	// Should reach the local bootstrap path → hits validation
-	if !strings.Contains(err.Error(), "providers.compute is required") {
-		t.Fatalf("error = %q, want validation error from local bootstrap", err.Error())
+	// No SSH key = hard error even with -y. Bootstrap also needs SSH.
+	if !strings.Contains(err.Error(), "SSH key") {
+		t.Fatalf("error = %q, want SSH key error", err.Error())
 	}
 }
 

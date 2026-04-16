@@ -36,8 +36,7 @@ func testCronCluster(ssh *testutil.MockSSH) Cluster {
 	return Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: "cron-test", Credentials: map[string]string{},
-		Output: &testutil.MockOutput{},
-		Kube:   kube.NewFromClientset(fake.NewSimpleClientset()),
+		Kube: kube.NewFromClientset(fake.NewSimpleClientset()),
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			return ssh, nil
 		},

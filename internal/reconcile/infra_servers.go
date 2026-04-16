@@ -30,7 +30,7 @@ func ServersAdd(ctx context.Context, dc *config.DeployContext, live *config.Live
 			creds["region"] = s.Region
 		}
 		if _, err := app.ComputeSet(ctx, app.ComputeSetRequest{
-			Cluster: clusterWith(dc, creds), Name: s.Name,
+			Cluster: clusterWith(dc, creds), Output: dc.Output, Name: s.Name,
 			ServerType: s.Type, Region: s.Region,
 			Worker: s.Role == "worker", DiskGB: s.Disk,
 		}); err != nil {
@@ -54,7 +54,7 @@ func ServersRemoveOrphans(ctx context.Context, dc *config.DeployContext, live *c
 			if err := drainNode(ctx, dc, name); err != nil {
 				return fmt.Errorf("cannot remove server %s: %w", name, err)
 			}
-			if err := app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
+			if err := app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Output: dc.Output, Name: name}); err != nil {
 				return err
 			}
 		}

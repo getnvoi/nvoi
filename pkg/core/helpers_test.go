@@ -27,7 +27,6 @@ func testCluster(ssh *testutil.MockSSH) Cluster {
 	return Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: "test", Credentials: map[string]string{},
-		Output:    &testutil.MockOutput{},
 		MasterSSH: ssh,
 		Kube:      kube.NewFromClientset(fake.NewSimpleClientset()),
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
@@ -38,6 +37,8 @@ func testCluster(ssh *testutil.MockSSH) Cluster {
 		},
 	}
 }
+
+var testOutput Output = &testutil.MockOutput{}
 
 type silentOutput struct{}
 

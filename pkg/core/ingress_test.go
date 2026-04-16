@@ -19,16 +19,16 @@ import (
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-func ingressCluster(out *testutil.MockOutput, ssh utils.SSHClient, mock *testutil.MockCompute, objects ...runtime.Object) Cluster {
+func ingressCluster(ssh utils.SSHClient, mock *testutil.MockCompute, objects ...runtime.Object) Cluster {
 	provName := fmt.Sprintf("ingress-test-%p", mock)
 	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
 		return mock
 	})
 	return Cluster{
 		AppName: "test", Env: "prod",
-		Provider: provName, Output: out,
-		Kube:    kube.NewFromClientset(fake.NewSimpleClientset(objects...)),
-		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) { return ssh, nil },
+		Provider: provName,
+		Kube:     kube.NewFromClientset(fake.NewSimpleClientset(objects...)),
+		SSHFunc:  func(ctx context.Context, addr string) (utils.SSHClient, error) { return ssh, nil },
 	}
 }
 
@@ -97,9 +97,9 @@ func TestIngressSet_ACME_HardErrorWhenUnreachable(t *testing.T) {
 	}
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
-		ACME:    true,
+		Cluster: ingressCluster(ingressSetSSH(), mock, webService()), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		ACME:  true,
 		Hooks: &IngressHooks{
 			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error { return nil },
 			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
@@ -121,9 +121,9 @@ func TestIngressSet_ACME_Success(t *testing.T) {
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
-		ACME:    true,
+		Cluster: ingressCluster(ingressSetSSH(), mock, webService()), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		ACME:  true,
 		Hooks: &IngressHooks{
 			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error { return nil },
 			WaitForHTTPS:       func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error { return nil },
@@ -141,9 +141,9 @@ func TestIngressSet_ACME_VerifiesAllDomains(t *testing.T) {
 	}
 	var certChecked, httpsChecked []string
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
-		ACME:    true,
+		Cluster: ingressCluster(ingressSetSSH(), mock, webService()), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:  true,
 		Hooks: &IngressHooks{
 			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
 				certChecked = append(certChecked, domain)
@@ -172,9 +172,9 @@ func TestIngressSet_ACME_SecondDomainCertFails(t *testing.T) {
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
-		ACME:    true,
+		Cluster: ingressCluster(ingressSetSSH(), mock, webService()), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:  true,
 		Hooks: &IngressHooks{
 			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
 				if domain == "www.example.com" {
@@ -201,9 +201,9 @@ func TestIngressSet_NoACME_SkipsHTTPSWait(t *testing.T) {
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
-		ACME:    false, // tunnel mode — no HTTPS wait
+		Cluster: ingressCluster(ingressSetSSH(), mock, webService()), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		ACME:  false, // tunnel mode — no HTTPS wait
 		Hooks: &IngressHooks{
 			WaitForHTTPS: func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error {
 				t.Fatal("WaitForHTTPS should not be called when ACME is false")
@@ -227,9 +227,9 @@ func TestIngressSet_ACME_TimeoutWarnsInsteadOfFailing(t *testing.T) {
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
-		ACME:    true,
+		Cluster: ingressCluster(ingressSetSSH(), mock, webService()), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
+		ACME:  true,
 		Hooks: &IngressHooks{
 			WaitForCertificate: func(ctx context.Context, ssh utils.SSHClient, domain string) error {
 				// Block until context expires.
@@ -264,8 +264,8 @@ func TestIngressSet_NoCluster(t *testing.T) {
 	mock := &testutil.MockCompute{Servers: nil}
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, nil, mock),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Cluster: ingressCluster(nil, mock), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 	})
 	if err == nil {
 		t.Fatal("expected error when no cluster exists")
@@ -288,8 +288,8 @@ func TestIngressDelete_Success(t *testing.T) {
 	}
 
 	err := IngressDelete(context.Background(), IngressDeleteRequest{
-		Cluster: ingressCluster(out, ssh, mock),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Cluster: ingressCluster(ssh, mock), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
@@ -301,8 +301,8 @@ func TestIngressDelete_ClusterGone(t *testing.T) {
 	mock := &testutil.MockCompute{Servers: nil} // ErrNoMaster
 
 	err := IngressDelete(context.Background(), IngressDeleteRequest{
-		Cluster: ingressCluster(out, nil, mock),
-		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
+		Cluster: ingressCluster(nil, mock), Output: out,
+		Route: IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 	})
 	if err != nil {
 		t.Fatalf("expected success: %v", err)

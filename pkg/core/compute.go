@@ -15,6 +15,7 @@ import (
 
 type ComputeSetRequest struct {
 	Cluster
+	Output     Output
 	Name       string
 	ServerType string
 	Region     string
@@ -27,7 +28,7 @@ type ComputeSetResult struct {
 }
 
 func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, error) {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Names()
 	if err != nil {
 		return nil, err
@@ -190,11 +191,12 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 
 type ComputeDeleteRequest struct {
 	Cluster
-	Name string
+	Output Output
+	Name   string
 }
 
 func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
-	out := req.Log()
+	out := log(req.Output)
 	names, err := req.Names()
 	if err != nil {
 		return err
@@ -235,6 +237,7 @@ func ComputeDelete(ctx context.Context, req ComputeDeleteRequest) error {
 
 type ComputeListRequest struct {
 	Cluster
+	Output Output
 }
 
 func ComputeList(ctx context.Context, req ComputeListRequest) ([]*provider.Server, error) {

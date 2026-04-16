@@ -31,6 +31,7 @@ func kubeGetClusterJSON(ctx context.Context, kc *kube.KubeClient, resource strin
 
 type DescribeRequest struct {
 	Cluster
+	Output         Output
 	StorageNames   []string            // from cfg — config is the source of truth
 	ServiceSecrets map[string][]string // service/cron name → secret keys declared on it
 }

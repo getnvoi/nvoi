@@ -28,7 +28,7 @@ type ProviderRef struct {
 }
 
 // Cluster identifies a deployment target: app + env + compute provider + SSH key.
-// Embedded by every request type.
+// Embedded by every request type. Pure identity — no per-request state.
 //
 // Two SSH modes:
 //   - MasterSSH set: reconcile path. Connection established once after Servers(),
@@ -41,7 +41,6 @@ type Cluster struct {
 	Provider    string
 	Credentials map[string]string
 	SSHKey      []byte
-	Output      Output
 
 	// MasterSSH is the pre-established SSH connection to the master node.
 	// Used for non-kubectl SSH: volume mount, docker, k3s bootstrap.
@@ -57,10 +56,11 @@ type Cluster struct {
 	SSHFunc func(ctx context.Context, addr string) (utils.SSHClient, error)
 }
 
-// Log returns the Output, falling back to a no-op if nil.
-func (c *Cluster) Log() Output {
-	if c.Output != nil {
-		return c.Output
+// log returns the Output, falling back to a no-op if nil.
+// Every request function calls this as its first line.
+func log(o Output) Output {
+	if o != nil {
+		return o
 	}
 	return nopOutput{}
 }

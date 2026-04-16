@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -21,8 +22,10 @@ type DatabaseCredentials struct {
 }
 
 // DeployContext holds everything needed to execute against a cluster.
+// Cluster is pure identity (cacheable). Output is per-request.
 type DeployContext struct {
 	Cluster       app.Cluster
+	Output        app.Output // per-request — reconcile/teardown/packages use this
 	DNS           app.ProviderRef
 	Storage       app.ProviderRef
 	Builder       string
@@ -32,6 +35,25 @@ type DeployContext struct {
 	DatabaseCreds map[string]*DatabaseCredentials
 	Creds         provider.CredentialSource // single source for all credential resolution at runtime
 }
+
+// Log returns the Output, falling back to a no-op if nil.
+func (dc *DeployContext) Log() app.Output {
+	if dc.Output != nil {
+		return dc.Output
+	}
+	return nopOutput{}
+}
+
+// nopOutput silently discards all events (same as pkg/core nopOutput).
+type nopOutput struct{}
+
+func (nopOutput) Command(string, string, string, ...any) {}
+func (nopOutput) Progress(string)                        {}
+func (nopOutput) Success(string)                         {}
+func (nopOutput) Warning(string)                         {}
+func (nopOutput) Info(string)                            {}
+func (nopOutput) Error(error)                            {}
+func (nopOutput) Writer() io.Writer                      { return io.Discard }
 
 // LiveState represents what's currently deployed.
 type LiveState struct {

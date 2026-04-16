@@ -241,7 +241,6 @@ func setupTeardown(log *opLog) *config.DeployContext {
 			AppName:  "myapp",
 			Env:      "prod",
 			Provider: "test-teardown",
-			Output:   silentOutput{},
 			SSHKey:   sshKey,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return &testutil.MockSSH{}, nil

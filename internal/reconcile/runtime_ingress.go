@@ -26,7 +26,7 @@ func Ingress(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 				healthPath = svc.Health
 			}
 			if err := app.IngressSet(ctx, app.IngressSetRequest{
-				Cluster:    dc.Cluster,
+				Cluster: dc.Cluster, Output: dc.Output,
 				Route:      app.IngressRouteArg{Service: svcName, Domains: cfg.Domains[svcName]},
 				HealthPath: healthPath,
 				ACME:       true, // direct mode — Traefik handles TLS via Let's Encrypt
@@ -43,10 +43,10 @@ func Ingress(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 		for svcName, domains := range live.Domains {
 			if _, ok := cfg.Domains[svcName]; !ok {
 				if err := app.IngressDelete(ctx, app.IngressDeleteRequest{
-					Cluster: dc.Cluster,
-					Route:   app.IngressRouteArg{Service: svcName, Domains: domains},
+					Cluster: dc.Cluster, Output: dc.Output,
+					Route: app.IngressRouteArg{Service: svcName, Domains: domains},
 				}); err != nil {
-					dc.Cluster.Log().Warning(fmt.Sprintf("orphan ingress for %s not removed: %s", svcName, err))
+					dc.Log().Warning(fmt.Sprintf("orphan ingress for %s not removed: %s", svcName, err))
 				}
 			}
 		}

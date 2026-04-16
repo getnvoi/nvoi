@@ -26,7 +26,6 @@ func clusterWithSSHFunc(sshFn func(ctx context.Context, addr string) (utils.SSHC
 	return Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: "cluster-test",
-		Output:   &testutil.MockOutput{},
 		SSHFunc:  sshFn,
 	}
 }

@@ -13,7 +13,7 @@ func Volumes(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 	for _, name := range utils.SortedKeys(cfg.Volumes) {
 		vol := cfg.Volumes[name]
 		if _, err := app.VolumeSet(ctx, app.VolumeSetRequest{
-			Cluster: dc.Cluster, Name: name, Size: vol.Size, Server: vol.Server,
+			Cluster: dc.Cluster, Output: dc.Output, Name: name, Size: vol.Size, Server: vol.Server,
 		}); err != nil {
 			return err
 		}
@@ -22,8 +22,8 @@ func Volumes(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 		desired := toSet(utils.SortedKeys(cfg.Volumes))
 		for _, name := range live.Volumes {
 			if !desired[name] {
-				if err := app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
-					dc.Cluster.Log().Warning(fmt.Sprintf("orphan volume %s not removed: %s", name, err))
+				if err := app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Output: dc.Output, Name: name}); err != nil {
+					dc.Log().Warning(fmt.Sprintf("orphan volume %s not removed: %s", name, err))
 				}
 			}
 		}

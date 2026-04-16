@@ -17,10 +17,10 @@ import (
 // silent orphan accumulation from flaky SSH.
 func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) (*config.LiveState, error) {
 	// Check if any servers exist at the provider.
-	servers, listErr := app.ComputeList(ctx, app.ComputeListRequest{Cluster: dc.Cluster})
+	servers, listErr := app.ComputeList(ctx, app.ComputeListRequest{Cluster: dc.Cluster, Output: dc.Output})
 
 	res, err := app.Describe(ctx, app.DescribeRequest{
-		Cluster:        dc.Cluster,
+		Cluster: dc.Cluster, Output: dc.Output,
 		StorageNames:   cfg.StorageNames(),
 		ServiceSecrets: cfg.ServiceSecrets(),
 	})
@@ -35,8 +35,8 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		}
 		return nil, fmt.Errorf("servers exist but cluster state unreadable — cannot detect orphans: %w", err)
 	}
-	volumes, _ := app.VolumeList(ctx, app.VolumeListRequest{Cluster: dc.Cluster})
-	firewalls, _ := app.FirewallListAll(ctx, app.FirewallListAllRequest{Cluster: dc.Cluster})
+	volumes, _ := app.VolumeList(ctx, app.VolumeListRequest{Cluster: dc.Cluster, Output: dc.Output})
+	firewalls, _ := app.FirewallListAll(ctx, app.FirewallListAllRequest{Cluster: dc.Cluster, Output: dc.Output})
 
 	names, _ := dc.Cluster.Names()
 	prefix := names.Base() + "-"
@@ -107,7 +107,7 @@ func drainNode(ctx context.Context, dc *config.DeployContext, name string) error
 	if err != nil {
 		return fmt.Errorf("drain %s: %w", name, err)
 	}
-	dc.Cluster.Log().Command("node", "drain", names.Server(name))
+	dc.Log().Command("node", "drain", names.Server(name))
 	return dc.Cluster.Kube.DrainAndRemoveNode(ctx, names.Server(name))
 }
 
@@ -163,7 +163,7 @@ func ResolveServers(cfg *config.AppConfig, servers []string, server string, moun
 
 func resolveImageRef(ctx context.Context, dc *config.DeployContext, image, buildRef string) (string, error) {
 	if buildRef != "" {
-		ref, err := app.BuildLatest(ctx, app.BuildLatestRequest{Cluster: dc.Cluster, Name: buildRef})
+		ref, err := app.BuildLatest(ctx, app.BuildLatestRequest{Cluster: dc.Cluster, Output: dc.Output, Name: buildRef})
 		if err != nil {
 			return "", fmt.Errorf("resolve build %q: %w", buildRef, err)
 		}

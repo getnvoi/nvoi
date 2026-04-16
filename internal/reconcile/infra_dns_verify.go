@@ -19,7 +19,7 @@ var dnsGracePeriod = 3 * time.Second
 // warns the user but does NOT block the deploy — the ACME timeout is the
 // real safety net. This just gives the user a heads-up.
 func verifyDNSPropagation(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) {
-	out := dc.Cluster.Log()
+	out := dc.Log()
 
 	ssh := dc.Cluster.MasterSSH
 	if ssh == nil {

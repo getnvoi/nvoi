@@ -73,7 +73,6 @@ func computeSetCluster(sshErr error) Cluster {
 		Env:      "prod",
 		Provider: "cluster-test",
 		SSHKey:   sshKey,
-		Output:   &testutil.MockOutput{},
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			if sshErr != nil {
 				return nil, sshErr
@@ -148,10 +147,10 @@ func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
 		return mock
 	})
 
+	out := &testutil.MockOutput{}
 	cluster := Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: provName, SSHKey: sshKey,
-		Output: &testutil.MockOutput{},
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			ssh := &testutil.MockSSH{
 				Prefixes: []testutil.MockPrefix{
@@ -177,7 +176,7 @@ func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
 	}
 
 	_, _ = ComputeSet(context.Background(), ComputeSetRequest{
-		Cluster:    cluster,
+		Cluster: cluster, Output: out,
 		Name:       "master",
 		ServerType: "cx21",
 		Region:     "fsn1",
@@ -198,7 +197,6 @@ func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
 	// ClearKnownHost returns "no known host" on first deploy — must NOT
 	// produce a warning. Only real failures (corrupt file, permission denied)
 	// should warn.
-	out := cluster.Output.(*testutil.MockOutput)
 	for _, w := range out.Warnings {
 		if strings.Contains(w, "clear known host") {
 			t.Errorf("'no known host' error should be silenced, got warning: %s", w)
@@ -223,7 +221,6 @@ func TestMasterSSH_SetAfterComputeSet(t *testing.T) {
 	cluster := Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: provName, SSHKey: sshKey,
-		Output: &testutil.MockOutput{},
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			return &testutil.MockSSH{
 				Prefixes: []testutil.MockPrefix{
