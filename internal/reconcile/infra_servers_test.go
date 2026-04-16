@@ -8,7 +8,13 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/testutil"
+	kubepkg "github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestServersAdd_FreshDeploy(t *testing.T) {
@@ -295,35 +301,42 @@ func TestServerReplacement_AddBeforeRemove(t *testing.T) {
 }
 
 func TestServersRemoveOrphans_DrainFailOnReadyNode_BlocksDelete(t *testing.T) {
-	t.Skip("TODO: drain failure simulation requires fake clientset reactor — not SSH mock")
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "apply", Result: testutil.MockResult{}},
-			{Prefix: "replace", Result: testutil.MockResult{}},
-			// Node exists and is Ready
-			{Prefix: "get node", Result: testutil.MockResult{Output: []byte("nvoi-myapp-prod-old-worker   Ready")}},
-			// Drain fails
-			{Prefix: "drain", Result: testutil.MockResult{Err: fmt.Errorf("eviction timeout")}},
-			// Ready check returns True — node is alive
-			{Prefix: "jsonpath", Result: testutil.MockResult{Output: []byte("'True'")}},
-		},
-	}
+	ssh := convergeMock()
 	log := &opLog{}
 	dc := convergeDC(log, ssh)
 	n := testNames()
+	nodeName := n.Server("old-worker")
+
+	// Add the node and a pod to the fake clientset so drain has something to evict.
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-pod", Namespace: "nvoi-myapp-prod"},
+		Spec:       corev1.PodSpec{NodeName: nodeName},
+	}
+	fakeCS := fake.NewSimpleClientset(node, pod)
+	// Make pod deletion fail — simulates eviction timeout.
+	fakeCS.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("eviction timeout")
+	})
+	dc.Cluster.Kube = kubepkg.NewFromClientset(fakeCS)
+
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 	live := &config.LiveState{Servers: []string{"master", "old-worker"}}
-	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "2", Name: n.Server("old-worker"), IPv4: "5.6.7.8"})
+	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "2", Name: nodeName, IPv4: "5.6.7.8"})
 
 	err := ServersRemoveOrphans(context.Background(), dc, live, cfg)
 	if err == nil {
 		t.Fatal("expected error when drain fails on Ready node")
 	}
-	if log.has("delete-server:" + n.Server("old-worker")) {
+	if log.has("delete-server:" + nodeName) {
 		t.Error("server should NOT be deleted when drain fails on Ready node")
 	}
 }

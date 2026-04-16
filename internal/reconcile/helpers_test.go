@@ -371,6 +371,10 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 func testKube() *kubepkg.KubeClient {
 	cs := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod"}},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "nvoi-myapp-prod"},
+			Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+		},
 	)
 	// Pre-seed: add a reactor that auto-creates ready pods on List.
 	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {

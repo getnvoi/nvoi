@@ -11,12 +11,15 @@ import (
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-func ingressCluster(out *testutil.MockOutput, ssh utils.SSHClient, mock *testutil.MockCompute) Cluster {
+func ingressCluster(out *testutil.MockOutput, ssh utils.SSHClient, mock *testutil.MockCompute, objects ...runtime.Object) Cluster {
 	provName := fmt.Sprintf("ingress-test-%p", mock)
 	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
 		return mock
@@ -24,8 +27,17 @@ func ingressCluster(out *testutil.MockOutput, ssh utils.SSHClient, mock *testuti
 	return Cluster{
 		AppName: "test", Env: "prod",
 		Provider: provName, Output: out,
-		Kube:    kube.NewFromClientset(fake.NewSimpleClientset()),
+		Kube:    kube.NewFromClientset(fake.NewSimpleClientset(objects...)),
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) { return ssh, nil },
+	}
+}
+
+func webService() *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "nvoi-test-prod"},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 3000}},
+		},
 	}
 }
 
@@ -79,14 +91,13 @@ func TestParseIngressArgs_Invalid(t *testing.T) {
 // ── IngressSet ─────────────────────────────────────────────────────────────
 
 func TestIngressSet_ACME_HardErrorWhenUnreachable(t *testing.T) {
-	t.Skip("TODO: needs k8s Service + ACME state in fake clientset")
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 		ACME:    true,
 		Hooks: &IngressHooks{
@@ -105,13 +116,12 @@ func TestIngressSet_ACME_HardErrorWhenUnreachable(t *testing.T) {
 }
 
 func TestIngressSet_ACME_Success(t *testing.T) {
-	t.Skip("TODO: needs k8s Service + ACME state in fake clientset")
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 		ACME:    true,
 		Hooks: &IngressHooks{
@@ -125,14 +135,13 @@ func TestIngressSet_ACME_Success(t *testing.T) {
 }
 
 func TestIngressSet_ACME_VerifiesAllDomains(t *testing.T) {
-	t.Skip("TODO: needs k8s Service + ACME state in fake clientset")
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	var certChecked, httpsChecked []string
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
 		ACME:    true,
 		Hooks: &IngressHooks{
@@ -158,13 +167,12 @@ func TestIngressSet_ACME_VerifiesAllDomains(t *testing.T) {
 }
 
 func TestIngressSet_ACME_SecondDomainCertFails(t *testing.T) {
-	t.Skip("TODO: needs k8s Service + ACME state in fake clientset")
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
 		ACME:    true,
 		Hooks: &IngressHooks{
@@ -188,13 +196,12 @@ func TestIngressSet_ACME_SecondDomainCertFails(t *testing.T) {
 }
 
 func TestIngressSet_NoACME_SkipsHTTPSWait(t *testing.T) {
-	t.Skip("TODO: needs k8s Service + ACME state in fake clientset")
 	out := &testutil.MockOutput{}
 	mock := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com"}},
 		ACME:    false, // tunnel mode — no HTTPS wait
 		Hooks: &IngressHooks{
@@ -210,7 +217,6 @@ func TestIngressSet_NoACME_SkipsHTTPSWait(t *testing.T) {
 }
 
 func TestIngressSet_ACME_TimeoutWarnsInsteadOfFailing(t *testing.T) {
-	t.Skip("TODO: needs k8s Service + ACME state in fake clientset")
 	// Shrink the deadline so the test doesn't wait 10 minutes.
 	orig := acmeVerifyTimeout
 	acmeVerifyTimeout = 50 * time.Millisecond
@@ -221,7 +227,7 @@ func TestIngressSet_ACME_TimeoutWarnsInsteadOfFailing(t *testing.T) {
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
 	err := IngressSet(context.Background(), IngressSetRequest{
-		Cluster: ingressCluster(out, ingressSetSSH(), mock),
+		Cluster: ingressCluster(out, ingressSetSSH(), mock, webService()),
 		Route:   IngressRouteArg{Service: "web", Domains: []string{"example.com", "www.example.com"}},
 		ACME:    true,
 		Hooks: &IngressHooks{

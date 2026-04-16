@@ -390,9 +390,11 @@ func (k *KubeClient) DrainAndRemoveNode(ctx context.Context, nodeName string) er
 		if p.Namespace == "kube-system" {
 			continue
 		}
-		_ = k.cs.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{
+		if err := k.cs.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{
 			GracePeriodSeconds: int64Ptr(30),
-		})
+		}); err != nil {
+			return fmt.Errorf("evict pod %s/%s on %s: %w", p.Namespace, p.Name, nodeName, err)
+		}
 	}
 
 	// Delete node.
