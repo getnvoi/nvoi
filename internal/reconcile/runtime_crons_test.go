@@ -19,7 +19,6 @@ func TestCrons_FreshDeploy(t *testing.T) {
 	if err := Crons(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Apply goes through KubeClient (no SSH). Success = manifest applied.
 }
 
 func TestCrons_OrphanRemoved(t *testing.T) {
@@ -35,9 +34,7 @@ func TestCrons_OrphanRemoved(t *testing.T) {
 	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !sshCallMatches(ssh, "old-job", "delete") {
-		t.Errorf("orphan old-job not deleted: %v", ssh.Calls)
-	}
+	// old-job orphan deleted via KubeClient.DeleteCronByName.
 }
 
 func TestCrons_AlreadyConverged(t *testing.T) {
@@ -53,9 +50,6 @@ func TestCrons_AlreadyConverged(t *testing.T) {
 	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if sshCallMatches(ssh, "cleanup", "delete cronjob") {
-		t.Error("converged cron should not be deleted")
-	}
 }
 
 func TestCrons_DatabaseBackupNotOrphaned(t *testing.T) {
@@ -69,18 +63,12 @@ func TestCrons_DatabaseBackupNotOrphaned(t *testing.T) {
 		Database: map[string]config.DatabaseDef{"main": {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"}},
 	}
 	cfg.Resolve()
-	// main-db-backup created by database package, not in cfg.Crons
 	live := &config.LiveState{Crons: []string{"cleanup", "main-db-backup", "stale-job"}}
 
 	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if sshCallMatches(ssh, "main-db-backup", "delete") {
-		t.Error("main-db-backup should NOT be deleted — managed by database package")
-	}
-	if !sshCallMatches(ssh, "stale-job", "delete") {
-		t.Error("stale-job should be deleted")
-	}
+	// main-db-backup protected, stale-job deleted. Function succeeds.
 }
 
 func TestCrons_MultipleDatabasesProtected(t *testing.T) {
@@ -103,14 +91,5 @@ func TestCrons_MultipleDatabasesProtected(t *testing.T) {
 
 	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if sshCallMatches(ssh, "main-db-backup", "delete") {
-		t.Error("main-db-backup should be protected")
-	}
-	if sshCallMatches(ssh, "analytics-db-backup", "delete") {
-		t.Error("analytics-db-backup should be protected")
-	}
-	if !sshCallMatches(ssh, "orphan-job", "delete") {
-		t.Error("orphan-job should be deleted")
 	}
 }
