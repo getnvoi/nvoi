@@ -32,6 +32,7 @@ func CredentialSource(ctx context.Context, cfg *config.AppConfig) provider.Crede
 // BuildDeployContext resolves all credentials and builds a DeployContext.
 // SSH key and git auth come from AgentOpts (resolved at startup by cmd/).
 // Provider credentials come from CredentialSource (EnvSource or SecretsSource).
+// KubeClient comes from AgentOpts (created at agent startup, direct localhost:6443).
 // Called per command — provider credentials are resolved fresh each time.
 func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig, opts AgentOpts) *config.DeployContext {
 	source := CredentialSource(ctx, cfg)
@@ -59,6 +60,7 @@ func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 		GitToken:      opts.GitToken,
 		DatabaseCreds: dbCreds,
 		Creds:         source,
+		Kube:          opts.Kube,
 	}
 }
 

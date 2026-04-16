@@ -19,15 +19,17 @@ import (
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // AgentOpts holds values resolved at startup by cmd/ — the boundary
 // where os.Getenv is legal. The agent never reads env vars directly.
 type AgentOpts struct {
-	SSHKey      []byte // resolved SSH private key
-	GitUsername string // git auth username (e.g. "x-access-token")
-	GitToken    string // git auth token
+	SSHKey      []byte           // resolved SSH private key
+	GitUsername string           // git auth username (e.g. "x-access-token")
+	GitToken    string           // git auth token
+	Kube        *kube.KubeClient // k8s client — direct to localhost:6443 on the master
 }
 
 // Agent is the deploy runtime. One per master node.

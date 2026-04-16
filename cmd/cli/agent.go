@@ -9,6 +9,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/agent"
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/spf13/cobra"
 )
 
@@ -41,10 +42,17 @@ The CLI and API are clients — they send commands to the agent.`,
 			}
 			gitUsername, gitToken := resolveAgentGitAuth()
 
+			// Create k8s client — agent runs on master, direct to localhost:6443.
+			kubeClient, err := kube.NewLocal("")
+			if err != nil {
+				return fmt.Errorf("kube client: %w", err)
+			}
+
 			a := agent.New(cmd.Context(), cfg, agent.AgentOpts{
 				SSHKey:      sshKey,
 				GitUsername: gitUsername,
 				GitToken:    gitToken,
+				Kube:        kubeClient,
 			})
 
 			mux := http.NewServeMux()
