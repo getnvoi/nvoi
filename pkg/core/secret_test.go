@@ -7,8 +7,12 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func init() {
@@ -28,6 +32,7 @@ func testCluster(ssh *testutil.MockSSH) Cluster {
 		Provider: "test", Credentials: map[string]string{},
 		Output:    &testutil.MockOutput{},
 		MasterSSH: ssh,
+		Kube:      kube.NewFromClientset(fake.NewSimpleClientset()),
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			if ssh == nil {
 				return nil, fmt.Errorf("no SSH")
@@ -63,18 +68,19 @@ func TestSecretList_Empty(t *testing.T) {
 }
 
 func TestSecretReveal_FromPerServiceSecret(t *testing.T) {
-	encoded := base64.StdEncoding.EncodeToString([]byte("super-secret"))
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			// api-secrets has the key
-			{Prefix: "get secret api-secrets -o jsonpath='{.data.JWT_SECRET}'", Result: testutil.MockResult{
-				Output: []byte("'" + encoded + "'"),
-			}},
-		},
-	}
+	_ = base64.StdEncoding // keep import used by other tests
+	mock := &testutil.MockSSH{}
+
+	ns := "nvoi-myapp-prod"
+	cs := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-secrets", Namespace: ns},
+		Data:       map[string][]byte{"JWT_SECRET": []byte("super-secret")},
+	})
+	c := testCluster(mock)
+	c.Kube = kube.NewFromClientset(cs)
 
 	val, err := SecretReveal(context.Background(), SecretRevealRequest{
-		Cluster:      testCluster(mock),
+		Cluster:      c,
 		Key:          "JWT_SECRET",
 		ServiceNames: []string{"api"},
 	})
@@ -88,18 +94,17 @@ func TestSecretReveal_FromPerServiceSecret(t *testing.T) {
 
 func TestSecretReveal_FallbackToGlobalSecret(t *testing.T) {
 	// Per-service secret doesn't have it, global does (legacy cluster)
-	encoded := base64.StdEncoding.EncodeToString([]byte("legacy-value"))
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get secret api-secrets", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
-			{Prefix: "get secret secrets -o jsonpath='{.data.MY_KEY}'", Result: testutil.MockResult{
-				Output: []byte("'" + encoded + "'"),
-			}},
-		},
-	}
+	mock := &testutil.MockSSH{}
+	ns := "nvoi-myapp-prod"
+	cs := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "secrets", Namespace: ns},
+		Data:       map[string][]byte{"MY_KEY": []byte("legacy-value")},
+	})
+	c := testCluster(mock)
+	c.Kube = kube.NewFromClientset(cs)
 
 	val, err := SecretReveal(context.Background(), SecretRevealRequest{
-		Cluster:      testCluster(mock),
+		Cluster:      c,
 		Key:          "MY_KEY",
 		ServiceNames: []string{"api"},
 	})
@@ -112,14 +117,12 @@ func TestSecretReveal_FallbackToGlobalSecret(t *testing.T) {
 }
 
 func TestSecretReveal_NotFound(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get secret", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
-		},
-	}
+	mock := &testutil.MockSSH{}
+	c := testCluster(mock)
+	c.Kube = kube.NewFromClientset(fake.NewSimpleClientset()) // empty — no secrets
 
 	_, err := SecretReveal(context.Background(), SecretRevealRequest{
-		Cluster:      testCluster(mock),
+		Cluster:      c,
 		Key:          "NOPE",
 		ServiceNames: []string{"api"},
 	})
