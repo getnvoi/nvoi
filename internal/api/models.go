@@ -307,6 +307,30 @@ type CommandLog struct {
 	User User `gorm:"foreignKey:UserID" json:"-"`
 }
 
+// AgentEvent stores individual events reported by the agent.
+// One row per JSONL event. High volume — agents report every progress/success/error line.
+type AgentEvent struct {
+	ID        string    `gorm:"primaryKey" json:"id"`
+	App       string    `gorm:"not null;index:idx_agent_events_app_env" json:"app"`
+	Env       string    `gorm:"not null;index:idx_agent_events_app_env" json:"env"`
+	Type      string    `gorm:"not null" json:"type"`               // command, progress, success, warning, info, error, stream, data
+	Message   string    `gorm:"type:text" json:"message,omitempty"` // for message events
+	Command   string    `json:"command,omitempty"`                  // for command events
+	Action    string    `json:"action,omitempty"`                   // for command events
+	Name      string    `json:"name,omitempty"`                     // for command events
+	Payload   string    `gorm:"type:text" json:"payload,omitempty"` // for data events (JSON)
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+}
+
+func (AgentEvent) TableName() string { return "agent_events" }
+
+func (e *AgentEvent) BeforeCreate(tx *gorm.DB) error {
+	if e.ID == "" {
+		e.ID = newUUID()
+	}
+	return nil
+}
+
 func (CommandLog) TableName() string { return "command_logs" }
 
 func (cl *CommandLog) BeforeCreate(tx *gorm.DB) error {

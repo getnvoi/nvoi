@@ -32,6 +32,8 @@ type AgentOpts struct {
 	GitToken    string           // git auth token
 	Kube        *kube.KubeClient // k8s client — direct to localhost:6443 on the master
 	Token       string           // bearer token for agent auth — read from disk at startup
+	APIURL      string           // API base URL for event reporting (empty = standalone)
+	APIToken    string           // workspace-scoped token for API auth
 }
 
 // agentState is the cached, immutable state swapped atomically on config push.
@@ -46,16 +48,26 @@ type Agent struct {
 	state    atomic.Pointer[agentState] // lock-free reads, atomic swap on push
 	opts     AgentOpts
 	deployMu sync.Mutex // serializes deploy/teardown — reads don't block
+	reporter *Reporter  // nil = standalone (no API reporting)
 }
 
 // New creates an agent with the given config and pre-resolved options.
 // Resolves credentials at startup — fails if secrets provider is unreachable.
+// Starts the API reporter if APIURL is configured.
 func New(ctx context.Context, cfg *config.AppConfig, opts AgentOpts) (*Agent, error) {
 	a := &Agent{opts: opts}
 	if err := a.loadConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
+	a.reporter = NewReporter(opts.APIURL, opts.APIToken, cfg.App, cfg.Env)
 	return a, nil
+}
+
+// Close shuts down the agent, flushing any pending API events.
+func (a *Agent) Close() {
+	if a.reporter != nil {
+		a.reporter.Close()
+	}
 }
 
 // loadConfig builds a new agentState from config + credentials and swaps it in.
@@ -77,11 +89,13 @@ func (a *Agent) loadConfig(ctx context.Context, cfg *config.AppConfig) error {
 }
 
 // snapshot returns the current state and a per-request DeployContext with Output stamped.
+// If a reporter is active, Output is wrapped in teeOutput so events go to both
+// the CLI (JSONL stream) and the API (async POST).
 func (a *Agent) snapshot(out app.Output) (*config.AppConfig, *config.DeployContext) {
 	s := a.state.Load()
 	// Shallow copy DeployContext so Output is per-request, rest is shared.
 	dc := *s.dc
-	dc.Output = out
+	dc.Output = newTeeOutput(out, a.reporter)
 	return s.cfg, &dc
 }
 

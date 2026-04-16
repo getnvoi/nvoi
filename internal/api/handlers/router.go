@@ -29,6 +29,11 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 			c.Next()
 			return
 		}
+		// Agent events endpoint has its own auth (workspace token, not JWT).
+		if c.Request.URL.Path == "/agent/events" && c.Request.Method == "POST" {
+			c.Next()
+			return
+		}
 		api.AuthRequired(db)(c)
 	})
 
@@ -140,6 +145,13 @@ func NewRouter(db *gorm.DB, verify api.GitHubVerifier) *gin.Engine {
 		OperationID: "config-save", Method: http.MethodPut, Path: cfgPath,
 		Summary: "Save config", Tags: []string{"config"}, Security: security,
 	}, ConfigSave(db))
+
+	// ── Agent events ────────────────────────────────────────────────────────
+	// Ingests JSONL events from agents. Own auth (workspace token), not JWT.
+	huma.Register(humaAPI, huma.Operation{
+		OperationID: "agent-events", Method: http.MethodPost, Path: "/agent/events",
+		Summary: "Ingest agent events", Tags: []string{"agent"},
+	}, AgentEvents(db))
 
 	return r
 }

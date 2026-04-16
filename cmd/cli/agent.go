@@ -65,6 +65,8 @@ The CLI and API are clients — they send commands to the agent.`,
 				GitToken:    gitToken,
 				Kube:        kubeClient,
 				Token:       token,
+				APIURL:      os.Getenv("NVOI_API_URL"),
+				APIToken:    os.Getenv("NVOI_API_TOKEN"),
 			})
 			if err != nil {
 				return fmt.Errorf("agent init: %w", err)
@@ -83,10 +85,15 @@ The CLI and API are clients — they send commands to the agent.`,
 				srv.Shutdown(shutdownCtx)
 			}()
 
-			fmt.Fprintf(os.Stderr, "nvoi agent listening on %s (app=%s env=%s)\n", addr, cfg.App, cfg.Env)
+			if os.Getenv("NVOI_API_URL") != "" {
+				fmt.Fprintf(os.Stderr, "nvoi agent listening on %s (app=%s env=%s) reporting to %s\n", addr, cfg.App, cfg.Env, os.Getenv("NVOI_API_URL"))
+			} else {
+				fmt.Fprintf(os.Stderr, "nvoi agent listening on %s (app=%s env=%s)\n", addr, cfg.App, cfg.Env)
+			}
 			if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 				return fmt.Errorf("agent server: %w", err)
 			}
+			a.Close() // flush pending API events
 			return nil
 		},
 	}
