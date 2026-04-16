@@ -35,16 +35,18 @@ const (
 	EventInfo     = "info"
 	EventError    = "error"
 	EventStream   = "stream"
+	EventData     = "data" // structured payload — describe, resources, backup list
 )
 
 // Event is a structured output event. Serialized as one JSONL line.
 type Event struct {
-	Type    string         `json:"type"`
-	Message string         `json:"message,omitempty"`
-	Command string         `json:"command,omitempty"`
-	Action  string         `json:"action,omitempty"`
-	Name    string         `json:"name,omitempty"`
-	Extra   map[string]any `json:"extra,omitempty"`
+	Type    string          `json:"type"`
+	Message string          `json:"message,omitempty"`
+	Command string          `json:"command,omitempty"`
+	Action  string          `json:"action,omitempty"`
+	Name    string          `json:"name,omitempty"`
+	Extra   map[string]any  `json:"extra,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"` // structured data for EventData
 }
 
 // MarshalEvent serializes an event to a JSONL line (no trailing newline).
@@ -79,6 +81,13 @@ func NewMessageEvent(eventType, message string) Event {
 	return Event{Type: eventType, Message: message}
 }
 
+// NewDataEvent creates an event carrying a structured payload.
+// Used for describe, resources, backup list — any query that returns data.
+func NewDataEvent(payload any) Event {
+	b, _ := json.Marshal(payload)
+	return Event{Type: EventData, Payload: json.RawMessage(b)}
+}
+
 // ReplayEvent dispatches an event through an Output implementation.
 // Used by the CLI to render JSONL logs through TUI/Plain/JSON renderers.
 func ReplayEvent(ev Event, out Output) {
@@ -101,5 +110,8 @@ func ReplayEvent(ev Event, out Output) {
 		out.Error(fmt.Errorf("%s", ev.Message))
 	case EventStream:
 		out.Writer().Write([]byte(ev.Message + "\n"))
+	case EventData:
+		// Data events carry structured payloads. The caller handles rendering.
+		// ReplayEvent passes them through — they're not renderable as text.
 	}
 }

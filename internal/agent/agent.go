@@ -1,6 +1,9 @@
 // Package agent is the deploy runtime. It runs on the master node as a
 // long-running HTTP server. It holds credentials, executes all operations,
 // and streams JSONL results. The CLI and API are clients.
+//
+// Every endpoint returns JSONL. No JSON objects, no mixed formats.
+// Handlers receive app.Output — they cannot write to http.ResponseWriter directly.
 package agent
 
 import (
@@ -40,25 +43,48 @@ func New(ctx context.Context, cfg *config.AppConfig, opts AgentOpts) *Agent {
 	return &Agent{ctx: ctx, cfg: cfg, opts: opts}
 }
 
+// ── Handler type ────────────────────────────────────────────────────────────
+// Every command handler receives Output and returns error. It cannot access
+// http.ResponseWriter. JSONL is the only output path — enforced by the type.
+
+// CommandFunc is a handler that produces output events. It receives
+// *jsonlOutput — the agent's JSONL writer. It cannot access
+// http.ResponseWriter. JSONL is the only output path.
+type CommandFunc func(ctx context.Context, out *jsonlOutput, r *http.Request) error
+
+// handle wraps a CommandFunc into an http.HandlerFunc. It creates the JSONL
+// stream writer and calls the handler. The handler never sees w.
+func (a *Agent) handle(fn CommandFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		out := streamOutput(w)
+		if err := fn(r.Context(), out, r); err != nil {
+			out.Error(err)
+		}
+	}
+}
+
 // RegisterRoutes wires all agent endpoints onto the mux.
 func (a *Agent) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /deploy", a.handleDeploy)
-	mux.HandleFunc("POST /teardown", a.handleTeardown)
-	mux.HandleFunc("GET /describe", a.handleDescribe)
-	mux.HandleFunc("GET /resources", a.handleResources)
-	mux.HandleFunc("GET /logs/{service}", a.handleLogs)
-	mux.HandleFunc("POST /exec/{service}", a.handleExec)
-	mux.HandleFunc("POST /ssh", a.handleSSH)
-	mux.HandleFunc("POST /cron/{name}/run", a.handleCronRun)
-	mux.HandleFunc("GET /db/{name}/backups", a.handleDBBackupList)
+	mux.HandleFunc("POST /deploy", a.handle(a.cmdDeploy))
+	mux.HandleFunc("POST /teardown", a.handle(a.cmdTeardown))
+	mux.HandleFunc("GET /describe", a.handle(a.cmdDescribe))
+	mux.HandleFunc("GET /resources", a.handle(a.cmdResources))
+	mux.HandleFunc("GET /logs/{service}", a.handle(a.cmdLogs))
+	mux.HandleFunc("POST /exec/{service}", a.handle(a.cmdExec))
+	mux.HandleFunc("POST /ssh", a.handle(a.cmdSSH))
+	mux.HandleFunc("POST /cron/{name}/run", a.handle(a.cmdCronRun))
+	mux.HandleFunc("GET /db/{name}/backups", a.handle(a.cmdDBBackupList))
+	mux.HandleFunc("POST /db/{name}/sql", a.handle(a.cmdDBSQL))
+
+	// Data endpoints — raw binary, not JSONL.
 	mux.HandleFunc("GET /db/{name}/backups/{key...}", a.handleDBBackupDownload)
-	mux.HandleFunc("POST /db/{name}/sql", a.handleDBSQL)
+
+	// Control endpoints.
 	mux.HandleFunc("POST /config", a.handleConfigPush)
 	mux.HandleFunc("GET /health", a.handleHealth)
 }
 
-// ── Config push ─────────────────────────────────────────────────────────────
-// The CLI pushes nvoi.yaml before each deploy. The agent reloads.
+// ── Config push / Health ────────────────────────────────────────────────────
 
 func (a *Agent) handleConfigPush(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
@@ -88,21 +114,18 @@ func (a *Agent) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// ── Deploy / Teardown ───────────────────────────────────────────────────────
+// ── Command handlers ────────────────────────────────────────────────────────
+// Each handler receives Output only. JSONL is the only output path.
 
-func (a *Agent) handleDeploy(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdDeploy(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, a.cfg, a.opts)
-
-	if err := reconcile.Deploy(r.Context(), dc, a.cfg); err != nil {
-		out.Error(err)
-	}
+	dc := BuildDeployContext(ctx, out, a.cfg, a.opts)
+	return reconcile.Deploy(ctx, dc, a.cfg)
 }
 
-func (a *Agent) handleTeardown(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdTeardown(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -112,68 +135,55 @@ func (a *Agent) handleTeardown(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, a.cfg, a.opts)
-
-	if err := core.Teardown(r.Context(), dc, a.cfg, req.DeleteVolumes, req.DeleteStorage); err != nil {
-		out.Error(err)
-	}
+	dc := BuildDeployContext(ctx, out, a.cfg, a.opts)
+	return core.Teardown(ctx, dc, a.cfg, req.DeleteVolumes, req.DeleteStorage)
 }
 
-// ── Describe / Resources ────────────────────────────────────────────────────
-
-func (a *Agent) handleDescribe(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdDescribe(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	a.mu.Lock()
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
+	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
-	raw, err := app.DescribeJSON(r.Context(), app.DescribeRequest{
+	res, err := app.Describe(ctx, app.DescribeRequest{
 		Cluster:        dc.Cluster,
 		StorageNames:   cfg.StorageNames(),
 		ServiceSecrets: cfg.ServiceSecrets(),
 	})
 	if err != nil {
-		out.Error(err)
-		return
+		return err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(raw)
+	out.Data(app.NewDataEvent(res))
+	return nil
 }
 
-func (a *Agent) handleResources(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdResources(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	a.mu.Lock()
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
+	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
-	groups, err := app.Resources(r.Context(), app.ResourcesRequest{
+	groups, err := app.Resources(ctx, app.ResourcesRequest{
 		Compute: app.ProviderRef{Name: dc.Cluster.Provider, Creds: dc.Cluster.Credentials},
 		DNS:     dc.DNS,
 		Storage: dc.Storage,
 	})
 	if err != nil {
-		out.Error(err)
-		return
+		return err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(groups)
+	out.Data(app.NewDataEvent(groups))
+	return nil
 }
 
-// ── Logs / Exec / SSH ───────────────────────────────────────────────────────
-
-func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdLogs(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	service := r.PathValue("service")
 	a.mu.Lock()
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
+	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
 	follow := r.URL.Query().Get("follow") == "true"
 	since := r.URL.Query().Get("since")
@@ -184,16 +194,14 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(t, "%d", &tail)
 	}
 
-	if err := app.Logs(r.Context(), app.LogsRequest{
+	return app.Logs(ctx, app.LogsRequest{
 		Cluster: dc.Cluster, Service: service,
 		Follow: follow, Tail: tail, Since: since,
 		Previous: previous, Timestamps: timestamps,
-	}); err != nil {
-		out.Error(err)
-	}
+	})
 }
 
-func (a *Agent) handleExec(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdExec(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	service := r.PathValue("service")
 	var req struct {
 		Command []string `json:"command"`
@@ -204,17 +212,13 @@ func (a *Agent) handleExec(w http.ResponseWriter, r *http.Request) {
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
-
-	if err := app.Exec(r.Context(), app.ExecRequest{
+	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	return app.Exec(ctx, app.ExecRequest{
 		Cluster: dc.Cluster, Service: service, Command: req.Command,
-	}); err != nil {
-		out.Error(err)
-	}
+	})
 }
 
-func (a *Agent) handleSSH(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdSSH(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	var req struct {
 		Command []string `json:"command"`
 	}
@@ -224,61 +228,86 @@ func (a *Agent) handleSSH(w http.ResponseWriter, r *http.Request) {
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
-
-	if err := app.SSH(r.Context(), app.SSHRequest{
+	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	return app.SSH(ctx, app.SSHRequest{
 		Cluster: dc.Cluster, Command: req.Command,
-	}); err != nil {
-		out.Error(err)
-	}
+	})
 }
 
-// ── Crons ───────────────────────────────────────────────────────────────────
-
-func (a *Agent) handleCronRun(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdCronRun(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	name := r.PathValue("name")
 
 	a.mu.Lock()
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
-
-	if err := app.CronRun(r.Context(), app.CronRunRequest{
+	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+	return app.CronRun(ctx, app.CronRunRequest{
 		Cluster: dc.Cluster, Name: name,
-	}); err != nil {
-		out.Error(err)
-	}
+	})
 }
 
-// ── Database ────────────────────────────────────────────────────────────────
-
-func (a *Agent) handleDBBackupList(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) cmdDBBackupList(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	dbName := r.PathValue("name")
 	a.mu.Lock()
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
+	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
-		out.Error(err)
-		return
+		return err
 	}
-	entries, err := app.DatabaseBackupList(r.Context(), app.DatabaseBackupListRequest{
+	entries, err := app.DatabaseBackupList(ctx, app.DatabaseBackupListRequest{
 		Cluster: dc.Cluster, DBName: name,
 	})
 	if err != nil {
-		out.Error(err)
-		return
+		return err
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(entries)
+	out.Data(app.NewDataEvent(entries))
+	return nil
 }
+
+func (a *Agent) cmdDBSQL(ctx context.Context, out *jsonlOutput, r *http.Request) error {
+	dbName := r.PathValue("name")
+	var req struct {
+		Engine string `json:"engine"`
+		Query  string `json:"query"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	a.mu.Lock()
+	cfg := a.cfg
+	a.mu.Unlock()
+
+	dc := BuildDeployContext(ctx, out, cfg, a.opts)
+
+	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
+	if err != nil {
+		return err
+	}
+	engine := req.Engine
+	if engine == "" {
+		if db, ok := cfg.Database[name]; ok {
+			engine = db.Kind
+		}
+	}
+	if engine == "" {
+		return fmt.Errorf("engine is required (postgres or mysql)")
+	}
+	output, err := app.DatabaseSQL(ctx, app.DatabaseSQLRequest{
+		Cluster: dc.Cluster, DBName: name, Engine: engine, Query: req.Query,
+	})
+	if err != nil {
+		return err
+	}
+	out.Data(app.NewDataEvent(output))
+	return nil
+}
+
+// ── Binary data endpoint ────────────────────────────────────────────────────
+// Backup download is raw binary — not JSONL.
 
 func (a *Agent) handleDBBackupDownload(w http.ResponseWriter, r *http.Request) {
 	dbName := r.PathValue("name")
@@ -307,55 +336,46 @@ func (a *Agent) handleDBBackupDownload(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, body)
 }
 
-func (a *Agent) handleDBSQL(w http.ResponseWriter, r *http.Request) {
-	dbName := r.PathValue("name")
-	var req struct {
-		Engine string `json:"engine"`
-		Query  string `json:"query"`
-	}
-	json.NewDecoder(r.Body).Decode(&req)
-
-	a.mu.Lock()
-	cfg := a.cfg
-	a.mu.Unlock()
-
-	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
-
-	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
-	if err != nil {
-		out.Error(err)
-		return
-	}
-	engine := req.Engine
-	if engine == "" {
-		if db, ok := cfg.Database[name]; ok {
-			engine = db.Kind
-		}
-	}
-	if engine == "" {
-		out.Error(fmt.Errorf("engine is required (postgres or mysql)"))
-		return
-	}
-	output, err := app.DatabaseSQL(r.Context(), app.DatabaseSQLRequest{
-		Cluster: dc.Cluster, DBName: name, Engine: engine, Query: req.Query,
-	})
-	if err != nil {
-		out.Error(err)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, output)
-}
-
 // ── Streaming output ────────────────────────────────────────────────────────
 
 // streamOutput creates a JSONL output that writes directly to the HTTP
 // response with flushing. Each event is one JSONL line, delivered immediately.
-func streamOutput(w http.ResponseWriter) app.Output {
+func streamOutput(w http.ResponseWriter) *jsonlOutput {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	return render.NewJSONOutput(flushWriter{w})
+	return &jsonlOutput{enc: json.NewEncoder(flushWriter{w})}
+}
+
+// jsonlOutput implements app.Output by writing JSONL events.
+type jsonlOutput struct {
+	enc *json.Encoder
+}
+
+func (j *jsonlOutput) Command(command, action, name string, extra ...any) {
+	j.enc.Encode(app.NewCommandEvent(command, action, name, extra...))
+}
+func (j *jsonlOutput) Progress(msg string) { j.enc.Encode(app.NewMessageEvent(app.EventProgress, msg)) }
+func (j *jsonlOutput) Success(msg string)  { j.enc.Encode(app.NewMessageEvent(app.EventSuccess, msg)) }
+func (j *jsonlOutput) Warning(msg string)  { j.enc.Encode(app.NewMessageEvent(app.EventWarning, msg)) }
+func (j *jsonlOutput) Info(msg string)     { j.enc.Encode(app.NewMessageEvent(app.EventInfo, msg)) }
+func (j *jsonlOutput) Error(err error) {
+	j.enc.Encode(app.NewMessageEvent(app.EventError, err.Error()))
+}
+func (j *jsonlOutput) Writer() io.Writer {
+	return &streamWriter{enc: j.enc}
+}
+func (j *jsonlOutput) Data(ev app.Event) {
+	j.enc.Encode(ev)
+}
+
+// streamWriter wraps Output.Writer() to emit each line as a stream event.
+type streamWriter struct {
+	enc *json.Encoder
+}
+
+func (sw *streamWriter) Write(p []byte) (int, error) {
+	sw.enc.Encode(app.NewMessageEvent(app.EventStream, string(p)))
+	return len(p), nil
 }
 
 // flushWriter wraps an http.ResponseWriter to flush after every Write.

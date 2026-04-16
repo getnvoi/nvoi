@@ -13,7 +13,9 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/agent"
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 const agentPort = "9500"
@@ -133,25 +135,26 @@ func (b *agentBackend) pushConfig(ctx context.Context) error {
 }
 
 // streamCommand sends a request to the agent and streams JSONL events to the output.
-func (b *agentBackend) streamCommand(ctx context.Context, method, path string, body any) error {
+// Returns the payload from the last data event (if any) and the last error.
+func (b *agentBackend) streamCommand(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
 	var reqBody io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		reqBody = strings.NewReader(string(data))
 	}
 	req, err := http.NewRequestWithContext(ctx, method, b.baseURL+path, reqBody)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("agent: %w", err)
+		return nil, fmt.Errorf("agent: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -159,6 +162,7 @@ func (b *agentBackend) streamCommand(ctx context.Context, method, path string, b
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	var lastErr error
+	var dataPayload json.RawMessage
 	for scanner.Scan() {
 		ev, err := app.ParseEvent(scanner.Text())
 		if err != nil {
@@ -167,30 +171,13 @@ func (b *agentBackend) streamCommand(ctx context.Context, method, path string, b
 		if ev.Type == app.EventError {
 			lastErr = fmt.Errorf("%s", ev.Message)
 		}
+		if ev.Type == app.EventData {
+			dataPayload = ev.Payload
+			continue
+		}
 		app.ReplayEvent(ev, b.out)
 	}
-	return lastErr
-}
-
-// jsonCommand sends a request and returns the JSON response body.
-func (b *agentBackend) jsonCommand(ctx context.Context, method, path string, result any) error {
-	req, err := http.NewRequestWithContext(ctx, method, b.baseURL+path, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("agent: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agent %d: %s", resp.StatusCode, string(body))
-	}
-	if result != nil {
-		return json.NewDecoder(resp.Body).Decode(result)
-	}
-	return nil
+	return dataPayload, lastErr
 }
 
 // ── Backend interface implementation ────────────────────────────────────────
@@ -199,85 +186,96 @@ func (b *agentBackend) Deploy(ctx context.Context) error {
 	if err := b.pushConfig(ctx); err != nil {
 		return err
 	}
-	return b.streamCommand(ctx, "POST", "/deploy", nil)
+	_, err := b.streamCommand(ctx, "POST", "/deploy", nil)
+	return err
 }
 
 func (b *agentBackend) Teardown(ctx context.Context, deleteVolumes, deleteStorage bool) error {
 	if err := b.pushConfig(ctx); err != nil {
 		return err
 	}
-	return b.streamCommand(ctx, "POST", "/teardown", map[string]any{
+	_, err := b.streamCommand(ctx, "POST", "/teardown", map[string]any{
 		"delete_volumes": deleteVolumes,
 		"delete_storage": deleteStorage,
 	})
+	return err
 }
 
 func (b *agentBackend) Describe(ctx context.Context, jsonOutput bool) error {
+	data, err := b.streamCommand(ctx, "GET", "/describe", nil)
+	if err != nil {
+		return err
+	}
 	if jsonOutput {
-		var raw any
-		if err := b.jsonCommand(ctx, "GET", "/describe", &raw); err != nil {
-			return err
-		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(raw)
+		return enc.Encode(json.RawMessage(data))
 	}
-	// Describe streams JSONL for TUI rendering.
-	return b.streamCommand(ctx, "GET", "/describe", nil)
+	var res app.DescribeResult
+	if err := json.Unmarshal(data, &res); err != nil {
+		return fmt.Errorf("decode describe: %w", err)
+	}
+	render.RenderDescribe(&res)
+	return nil
 }
 
 func (b *agentBackend) Resources(ctx context.Context, jsonOutput bool) error {
+	data, err := b.streamCommand(ctx, "GET", "/resources", nil)
+	if err != nil {
+		return err
+	}
 	if jsonOutput {
-		var raw any
-		if err := b.jsonCommand(ctx, "GET", "/resources", &raw); err != nil {
-			return err
-		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(raw)
+		return enc.Encode(json.RawMessage(data))
 	}
-	return b.streamCommand(ctx, "GET", "/resources", nil)
+	var groups []provider.ResourceGroup
+	if err := json.Unmarshal(data, &groups); err != nil {
+		return fmt.Errorf("decode resources: %w", err)
+	}
+	render.RenderResources(groups)
+	return nil
 }
 
 func (b *agentBackend) Logs(ctx context.Context, opts LogsOpts) error {
 	path := fmt.Sprintf("/logs/%s?follow=%t&tail=%d&since=%s&previous=%t&timestamps=%t",
 		opts.Service, opts.Follow, opts.Tail, opts.Since, opts.Previous, opts.Timestamps)
-	return b.streamCommand(ctx, "GET", path, nil)
+	_, err := b.streamCommand(ctx, "GET", path, nil)
+	return err
 }
 
 func (b *agentBackend) Exec(ctx context.Context, service string, command []string) error {
-	return b.streamCommand(ctx, "POST", "/exec/"+service, map[string]any{
+	_, err := b.streamCommand(ctx, "POST", "/exec/"+service, map[string]any{
 		"command": command,
 	})
+	return err
 }
 
 func (b *agentBackend) SSH(ctx context.Context, command []string) error {
-	return b.streamCommand(ctx, "POST", "/ssh", map[string]any{
+	_, err := b.streamCommand(ctx, "POST", "/ssh", map[string]any{
 		"command": command,
 	})
+	return err
 }
 
 func (b *agentBackend) CronRun(ctx context.Context, name string) error {
-	return b.streamCommand(ctx, "POST", "/cron/"+name+"/run", nil)
+	_, err := b.streamCommand(ctx, "POST", "/cron/"+name+"/run", nil)
+	return err
 }
 
 func (b *agentBackend) DatabaseBackupList(ctx context.Context, dbName string) error {
-	path := "/db/" + dbName + "/backups"
-	var entries []any
-	if err := b.jsonCommand(ctx, "GET", path, &entries); err != nil {
+	data, err := b.streamCommand(ctx, "GET", "/db/"+dbName+"/backups", nil)
+	if err != nil {
 		return err
 	}
 	b.out.Command("database", "backup list", dbName)
-	if len(entries) == 0 {
-		b.out.Info("no backups found")
-		return nil
-	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(entries)
+	return enc.Encode(json.RawMessage(data))
 }
 
 func (b *agentBackend) DatabaseBackupDownload(ctx context.Context, dbName, key, outFile string) error {
+	// Backup download is raw binary — not JSONL. Direct HTTP.
 	path := "/db/" + dbName + "/backups/" + key
 	req, err := http.NewRequestWithContext(ctx, "GET", b.baseURL+path, nil)
 	if err != nil {
@@ -310,21 +308,17 @@ func (b *agentBackend) DatabaseBackupDownload(ctx context.Context, dbName, key, 
 }
 
 func (b *agentBackend) DatabaseSQL(ctx context.Context, dbName, engine, query string) error {
-	path := "/db/" + dbName + "/sql"
-	req, err := http.NewRequestWithContext(ctx, "POST", b.baseURL+path, strings.NewReader(
-		fmt.Sprintf(`{"engine":%q,"query":%q}`, engine, query),
-	))
+	data, err := b.streamCommand(ctx, "POST", "/db/"+dbName+"/sql", map[string]any{
+		"engine": engine,
+		"query":  query,
+	})
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("agent: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Print(string(body))
+	// SQL output is a string wrapped in a data event payload.
+	var output string
+	json.Unmarshal(data, &output)
+	fmt.Print(output)
 	return nil
 }
 
