@@ -1,8 +1,9 @@
 package core
 
 import (
-	"encoding/base64"
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,15 +21,10 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-// b64 encodes a string to base64, matching kubectl's secret output format.
-func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
-
-// kctlPrefix builds the command prefix that kube.kctl() generates.
 func kctlPrefix(ns string) string {
 	return fmt.Sprintf("KUBECONFIG=/home/%s/.kube/config kubectl -n %s ", utils.DefaultUser, ns)
 }
 
-// newDBTestContext builds a DeployContext with MockSSH for database tests.
 func newDBTestContext(ssh *testutil.MockSSH, objects ...runtime.Object) *config.DeployContext {
 	cs := fake.NewSimpleClientset(objects...)
 	return &config.DeployContext{
@@ -49,15 +45,7 @@ func newCmd() *cobra.Command {
 // ── DatabaseSQL ─────────────────────────────────────────────────────────────
 
 func TestDatabaseSQL_Postgres(t *testing.T) {
-	t.Skip("TODO: ExecInPod uses SPDY — needs real cluster or httptest SPDY server")
 	ns := "nvoi-myapp-prod"
-	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
-	ssh.Prefixes = []testutil.MockPrefix{
-		{
-			Prefix: kctlPrefix(ns) + "exec main-db-0 -- psql",
-			Result: testutil.MockResult{Output: []byte(" count\n-------\n     1\n(1 row)\n")},
-		},
-	}
 
 	dbSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "main-db-credentials", Namespace: ns},
@@ -67,35 +55,39 @@ func TestDatabaseSQL_Postgres(t *testing.T) {
 		},
 	}
 
-	dc := newDBTestContext(ssh, dbSecret)
+	var gotCommand []string
+	cs := fake.NewSimpleClientset(dbSecret)
+	kc := kube.NewFromClientset(cs)
+	kc.ExecHook = func(_ context.Context, _, _ string, command []string, stdout, _ io.Writer) error {
+		gotCommand = command
+		fmt.Fprint(stdout, " count\n-------\n     1\n(1 row)\n")
+		return nil
+	}
+
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Kube:   kc,
+			Output: silentOutput{},
+		},
+	}
+
 	err := DatabaseSQL(newCmd(), dc, "main", "postgres", "SELECT count(*) FROM users")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Verify the psql command was constructed correctly.
-	var found bool
-	for _, call := range ssh.Calls {
-		if strings.Contains(call, "psql -U pguser -d mydb") {
-			found = true
-			break
-		}
+	// Verify command was constructed correctly.
+	if len(gotCommand) == 0 {
+		t.Fatal("ExecHook not called")
 	}
-	if !found {
-		t.Fatalf("expected psql command with user/db, got calls: %v", ssh.Calls)
+	cmdStr := strings.Join(gotCommand, " ")
+	if !strings.Contains(cmdStr, "psql") || !strings.Contains(cmdStr, "pguser") || !strings.Contains(cmdStr, "mydb") {
+		t.Errorf("command = %v, want psql with pguser/mydb", gotCommand)
 	}
 }
 
 func TestDatabaseSQL_MySQL(t *testing.T) {
-	t.Skip("TODO: ExecInPod uses SPDY — needs real cluster or httptest SPDY server")
 	ns := "nvoi-myapp-prod"
-	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
-	ssh.Prefixes = []testutil.MockPrefix{
-		{
-			Prefix: kctlPrefix(ns) + "exec main-db-0 -- mysql",
-			Result: testutil.MockResult{Output: []byte("1 row in set")},
-		},
-	}
 
 	dbSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "main-db-credentials", Namespace: ns},
@@ -105,41 +97,48 @@ func TestDatabaseSQL_MySQL(t *testing.T) {
 		},
 	}
 
-	dc := newDBTestContext(ssh, dbSecret)
+	var gotCommand []string
+	cs := fake.NewSimpleClientset(dbSecret)
+	kc := kube.NewFromClientset(cs)
+	kc.ExecHook = func(_ context.Context, _, _ string, command []string, stdout, _ io.Writer) error {
+		gotCommand = command
+		fmt.Fprint(stdout, "1 row in set")
+		return nil
+	}
+
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Kube:   kc,
+			Output: silentOutput{},
+		},
+	}
+
 	err := DatabaseSQL(newCmd(), dc, "main", "mysql", "SELECT 1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Must hit mysql directly — no psql attempt.
-	for _, call := range ssh.Calls {
-		if strings.Contains(call, "psql") {
-			t.Fatalf("should not attempt psql for mysql engine, got call: %s", call)
-		}
+	cmdStr := strings.Join(gotCommand, " ")
+	if strings.Contains(cmdStr, "psql") {
+		t.Fatalf("should not attempt psql for mysql engine, got: %v", gotCommand)
 	}
-	var found bool
-	for _, call := range ssh.Calls {
-		if strings.Contains(call, "mysql -u root appdb") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected mysql command with user/db, got calls: %v", ssh.Calls)
+	if !strings.Contains(cmdStr, "mysql") || !strings.Contains(cmdStr, "root") || !strings.Contains(cmdStr, "appdb") {
+		t.Errorf("command = %v, want mysql with root/appdb", gotCommand)
 	}
 }
 
 func TestDatabaseSQL_NoCreds(t *testing.T) {
-	ns := "nvoi-myapp-prod"
-	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
-	ssh.Prefixes = []testutil.MockPrefix{
-		{
-			Prefix: kctlPrefix(ns) + "get secret",
-			Result: testutil.MockResult{Err: fmt.Errorf("not found")},
+	cs := fake.NewSimpleClientset() // no secrets
+	kc := kube.NewFromClientset(cs)
+
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Kube:   kc,
+			Output: silentOutput{},
 		},
 	}
 
-	dc := newDBTestContext(ssh)
 	err := DatabaseSQL(newCmd(), dc, "main", "postgres", "SELECT 1")
 	if err == nil {
 		t.Fatal("expected error")
@@ -152,7 +151,6 @@ func TestDatabaseSQL_NoCreds(t *testing.T) {
 // ── DatabaseBackupList ──────────────────────────────────────────────────────
 
 func TestDatabaseBackupList_Success(t *testing.T) {
-	// Start a minimal S3-compatible test server that returns XML list response.
 	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
@@ -187,16 +185,7 @@ func TestDatabaseBackupList_Success(t *testing.T) {
 }
 
 func TestDatabaseBackupList_NoBucketCreds(t *testing.T) {
-	ns := "nvoi-myapp-prod"
-	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
-	ssh.Prefixes = []testutil.MockPrefix{
-		{
-			Prefix: kctlPrefix(ns) + "get secret",
-			Result: testutil.MockResult{Err: fmt.Errorf("not found")},
-		},
-	}
-
-	dc := newDBTestContext(ssh)
+	dc := newDBTestContext(testutil.NewMockSSH(map[string]testutil.MockResult{}))
 	err := DatabaseBackupList(newCmd(), dc, "main")
 	if err == nil {
 		t.Fatal("expected error")
@@ -209,16 +198,7 @@ func TestDatabaseBackupList_NoBucketCreds(t *testing.T) {
 // ── DatabaseBackupDownload ──────────────────────────────────────────────────
 
 func TestDatabaseBackupDownload_NoBucketCreds(t *testing.T) {
-	ns := "nvoi-myapp-prod"
-	ssh := testutil.NewMockSSH(map[string]testutil.MockResult{})
-	ssh.Prefixes = []testutil.MockPrefix{
-		{
-			Prefix: kctlPrefix(ns) + "get secret",
-			Result: testutil.MockResult{Err: fmt.Errorf("not found")},
-		},
-	}
-
-	dc := newDBTestContext(ssh)
+	dc := newDBTestContext(testutil.NewMockSSH(map[string]testutil.MockResult{}))
 	err := DatabaseBackupDownload(newCmd(), dc, "main", "backup.sql.gz", "")
 	if err == nil {
 		t.Fatal("expected error")
@@ -229,7 +209,6 @@ func TestDatabaseBackupDownload_NoBucketCreds(t *testing.T) {
 }
 
 func TestDatabaseBackupDownload_Success(t *testing.T) {
-	// S3 server that serves a backup file.
 	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "11")
 		fmt.Fprint(w, "backup data")
@@ -250,8 +229,7 @@ func TestDatabaseBackupDownload_Success(t *testing.T) {
 	}
 
 	dc := newDBTestContext(ssh, backupSecret)
-	outFile := t.TempDir() + "/downloaded.sql.gz"
-	err := DatabaseBackupDownload(newCmd(), dc, "main", "backups/2025-01-01.sql.gz", outFile)
+	err := DatabaseBackupDownload(newCmd(), dc, "main", "backup.sql.gz", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

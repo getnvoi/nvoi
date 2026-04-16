@@ -42,6 +42,10 @@ type KubeClient struct {
 	dyn    dynamic.Interface
 	mapper meta.RESTMapper
 	config *rest.Config // needed for SPDY exec
+
+	// ExecHook overrides ExecInPod for testing. When set, ExecInPod calls this
+	// instead of SPDY. Production code never sets this.
+	ExecHook func(ctx context.Context, ns, pod string, command []string, stdout, stderr io.Writer) error
 }
 
 // NewLocal creates a client from a kubeconfig file on the master.
@@ -701,6 +705,9 @@ func marshalJSON(v interface{}) ([]byte, error) {
 // ExecInPod runs a command in a pod's first container and streams output.
 // Uses SPDY remotecommand — no kubectl binary, no SSH.
 func (k *KubeClient) ExecInPod(ctx context.Context, ns, podName string, command []string, stdout, stderr io.Writer) error {
+	if k.ExecHook != nil {
+		return k.ExecHook(ctx, ns, podName, command, stdout, stderr)
+	}
 	if k.config == nil {
 		return fmt.Errorf("exec requires a real cluster connection (not available in test mode)")
 	}
