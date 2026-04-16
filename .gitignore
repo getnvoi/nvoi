@@ -11,3 +11,6 @@
 tmp/
 node_modules/
 /cli
+
+# Wrangler local cache
+worker/.wrangler/

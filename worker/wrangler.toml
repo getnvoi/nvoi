@@ -1,0 +1,18 @@
+name = "nvoi-distribution"
+main = "index.js"
+compatibility_date = "2024-10-01"
+
+# Wrangler manages the route binding AND the proxied DNS record on deploy.
+# No separate CF API calls needed.
+route = { pattern = "get.nvoi.to/*", zone_name = "nvoi.to" }
+
+# Binaries live in R2, served by the Worker via the RELEASES binding.
+# Bucket is created once; deploy.sh upserts it idempotently.
+[[r2_buckets]]
+binding = "RELEASES"
+bucket_name = "nvoi-releases"
+
+# Latest release tag — rewritten on every release by `deploy.sh release <tag>`.
+# Default stays "unknown" so a fresh `wrangler deploy` without a release works.
+[vars]
+VERSION = "unknown"

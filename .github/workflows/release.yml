@@ -2,8 +2,7 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
 
 permissions:
   contents: write
@@ -13,11 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
+        with: { go-version-file: go.mod }
       - run: go vet ./...
       - run: go test ./...
 
@@ -27,33 +23,22 @@ jobs:
     strategy:
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build CLI
+        with: { go-version-file: go.mod }
+      - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          ext=""
-          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          ext=""; [ "$GOOS" = "windows" ] && ext=".exe"
           go build -ldflags="-s -w" -o "dist/nvoi-${GOOS}-${GOARCH}${ext}" ./cmd/cli
-
       - uses: actions/upload-artifact@v4
         with:
           name: nvoi-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -64,27 +49,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
-        with:
-          path: dist/
-          merge-multiple: true
-
-      - name: Create GitHub release
+        with: { path: dist/, merge-multiple: true }
+      - name: GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
           generate_release_notes: true
-
-  worker:
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy distribution worker
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Deploy distribution
         env:
-          CF_API_KEY: ${{ secrets.CF_API_KEY }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
-        run: ./.github/scripts/deploy-worker.sh
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: ./worker/deploy.sh release "${{ github.ref_name }}" dist
