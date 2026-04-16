@@ -58,10 +58,9 @@ func (b *localBackend) Deploy(ctx context.Context) error {
 		// uploading the full file. Minimizes credential exposure on the master.
 		envData, _ := os.ReadFile(".env")
 		if err := infra.InstallAgent(ctx, b.dc.Cluster.MasterSSH, b.cfg.App, b.cfg.Env, configData, envData); err != nil {
-			b.out.Warning(fmt.Sprintf("agent install: %v (deploy succeeded, agent can be installed manually)", err))
-		} else {
-			b.out.Success("agent installed — next deploy will go through the agent")
+			return fmt.Errorf("agent install failed: %w (infrastructure is deployed but the agent is required for subsequent deploys)", err)
 		}
+		b.out.Success("agent installed — next deploy will go through the agent")
 	}
 	return nil
 }
