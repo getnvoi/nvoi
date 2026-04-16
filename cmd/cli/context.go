@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,12 +16,14 @@ import (
 // ── Credential resolution ───────────────────────────────────────────────────
 // os.Getenv lives here — the cmd/ boundary. Everything below receives resolved values.
 
-func buildDeployContext(out app.Output, cfg *config.AppConfig) *config.DeployContext {
-	computeCreds, _ := resolveProviderCreds("compute", cfg.Providers.Compute)
+func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig) *config.DeployContext {
+	source := credentialSource(ctx, cfg)
+
+	computeCreds, _ := resolveProviderCreds(source, "compute", cfg.Providers.Compute)
 	sshKey, _ := resolveSSHKey()
-	dnsCreds, _ := resolveProviderCreds("dns", cfg.Providers.DNS)
-	storageCreds, _ := resolveProviderCreds("storage", cfg.Providers.Storage)
-	builderCreds, _ := resolveProviderCreds("build", cfg.Providers.Build)
+	dnsCreds, _ := resolveProviderCreds(source, "dns", cfg.Providers.DNS)
+	storageCreds, _ := resolveProviderCreds(source, "storage", cfg.Providers.Storage)
+	builderCreds, _ := resolveProviderCreds(source, "build", cfg.Providers.Build)
 	gitUsername, gitToken := resolveGitAuth()
 	dbCreds := resolveDatabaseCreds(cfg)
 
@@ -43,7 +46,25 @@ func buildDeployContext(out app.Output, cfg *config.AppConfig) *config.DeployCon
 	}
 }
 
-func resolveProviderCreds(kind, name string) (map[string]string, error) {
+// credentialSource returns the single CredentialSource for this deploy.
+// If a secrets provider is configured, its own credentials are bootstrapped
+// from env vars, then all other provider credentials are fetched through it.
+// If no secrets provider is configured, credentials come from env vars directly.
+func credentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
+	if sp := cfg.Providers.Secrets; sp != nil {
+		// Bootstrap: the secrets provider's own creds always come from env.
+		spCreds, err := resolveProviderCreds(provider.EnvSource{}, "secrets", sp.Kind)
+		if err == nil && len(spCreds) > 0 {
+			secretsProv, err := provider.ResolveSecrets(sp.Kind, spCreds)
+			if err == nil {
+				return provider.SecretsSource{Ctx: ctx, Provider: secretsProv}
+			}
+		}
+	}
+	return provider.EnvSource{}
+}
+
+func resolveProviderCreds(source provider.CredentialSource, kind, name string) (map[string]string, error) {
 	if name == "" {
 		return nil, nil
 	}
@@ -51,13 +72,7 @@ func resolveProviderCreds(kind, name string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	creds := make(map[string]string, len(schema.Fields))
-	for _, f := range schema.Fields {
-		if v := os.Getenv(f.EnvVar); v != "" {
-			creds[f.Key] = v
-		}
-	}
-	return creds, nil
+	return provider.ResolveFrom(schema, source)
 }
 
 func resolveSSHKey() ([]byte, error) {

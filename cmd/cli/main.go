@@ -33,6 +33,10 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/github"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
+	// Secrets
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/infisical"
 )
 
 func main() {
@@ -102,7 +106,7 @@ func initRuntime(cmd *cobra.Command, rt *runtime) error {
 	rt.cfg = cfg
 	rt.v = v
 	rt.out = out
-	rt.dc = buildDeployContext(out, cfg)
+	rt.dc = buildDeployContext(cmd.Context(), out, cfg)
 	return nil
 }
 
