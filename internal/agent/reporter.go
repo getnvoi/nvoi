@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -247,34 +246,4 @@ func (tw *teeWriter) Write(p []byte) (int, error) {
 	n, err := tw.primary.Write(p)
 	tw.r.Send(app.NewMessageEvent(app.EventStream, string(p)))
 	return n, err
-}
-
-// ── Standalone helper ──────────────────────────────────────────────────────
-
-// EventWithTimestamp adds a timestamp to an event for storage.
-type EventWithTimestamp struct {
-	app.Event
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// EventsPayload is the JSON body POSTed to the API.
-type EventsPayload struct {
-	App    string               `json:"app"`
-	Env    string               `json:"env"`
-	Events []EventWithTimestamp `json:"events"`
-}
-
-// WrapEvents converts plain events to timestamped events for the API.
-func WrapEvents(events []app.Event) []EventWithTimestamp {
-	now := time.Now()
-	wrapped := make([]EventWithTimestamp, len(events))
-	for i, ev := range events {
-		wrapped[i] = EventWithTimestamp{Event: ev, Timestamp: now}
-	}
-	return wrapped
-}
-
-// FormatError returns a user-friendly message for reporter failures.
-func FormatError(err error) string {
-	return fmt.Sprintf("api reporting: %v (deploy unaffected)", err)
 }
