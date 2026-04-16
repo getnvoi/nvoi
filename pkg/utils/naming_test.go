@@ -67,6 +67,48 @@ func TestSanitize(t *testing.T) {
 	}
 }
 
+func TestValidateName(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		// Valid DNS-1123 labels
+		{"simple", "myapp", false},
+		{"with hyphen", "my-app", false},
+		{"with digits", "app123", false},
+		{"single char", "a", false},
+		{"max length 63", strings.Repeat("a", 63), false},
+
+		// Invalid — would be shell injection vectors
+		{"semicolon injection", "test; rm -rf /", true},
+		{"pipe injection", "test|cat /etc/passwd", true},
+		{"backtick injection", "test`whoami`", true},
+		{"dollar injection", "test$(id)", true},
+		{"ampersand injection", "test&&echo pwned", true},
+		{"space", "my app", true},
+		{"quotes", `test"quoted"`, true},
+		{"newline", "test\ninjection", true},
+
+		// Invalid — structural
+		{"empty", "", true},
+		{"leading hyphen", "-leading", true},
+		{"trailing hyphen", "trailing-", true},
+		{"uppercase", "MyApp", true},
+		{"underscore", "my_app", true},
+		{"dots", "my.app", true},
+		{"too long", strings.Repeat("a", 64), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateName("test", tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateName(%q) error = %v, wantErr = %v", tt.value, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestNamesInfrastructure(t *testing.T) {
 	n, err := NewNames("dummy-rails", "production")
 	if err != nil {

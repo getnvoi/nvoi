@@ -13,6 +13,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 
 	_ "github.com/getnvoi/nvoi/internal/packages/database"
@@ -112,6 +113,16 @@ func initBackend(cmd *cobra.Command, m *mode) error {
 	if err != nil {
 		return err
 	}
+
+	// Validate app/env early — these are used in SSH paths and file lookups
+	// before full ValidateConfig runs inside Deploy().
+	if err := utils.ValidateName("app", cfg.App); err != nil {
+		return err
+	}
+	if err := utils.ValidateName("env", cfg.Env); err != nil {
+		return err
+	}
+
 	out := resolveOutput(cmd)
 
 	// Try connecting to the agent on the master.
