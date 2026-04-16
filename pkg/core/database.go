@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -91,20 +92,19 @@ type DatabaseSQLRequest struct {
 	Query  string
 }
 
-// TODO: migrate to client-go remotecommand — SQL exec requires SPDY, keeping SSH path for now.
 func DatabaseSQL(ctx context.Context, req DatabaseSQLRequest) (string, error) {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return "", err
 	}
-	defer ssh.Close()
 
 	ns := names.KubeNamespace()
 	pod := utils.DatabasePodName(req.DBName)
 	secretName := utils.DatabaseSecretName(req.DBName)
 	prefix := utils.ToUpperSnake(req.DBName)
 
-	var user, dbname, sqlCmd string
+	var user, dbname string
+	var command []string
 	switch req.Engine {
 	case "postgres":
 		user, _ = req.Kube.GetSecretValue(ctx, ns, secretName, prefix+"_POSTGRES_USER")
@@ -112,23 +112,23 @@ func DatabaseSQL(ctx context.Context, req DatabaseSQLRequest) (string, error) {
 		if user == "" {
 			return "", ErrNotReady(fmt.Sprintf("postgres credentials not found for %q — has the database been deployed?", req.DBName))
 		}
-		sqlCmd = fmt.Sprintf("exec %s -- psql -U %s -d %s -c %q", pod, user, dbname, req.Query)
+		command = []string{"psql", "-U", user, "-d", dbname, "-c", req.Query}
 	case "mysql":
 		user, _ = req.Kube.GetSecretValue(ctx, ns, secretName, prefix+"_MYSQL_USER")
 		dbname, _ = req.Kube.GetSecretValue(ctx, ns, secretName, prefix+"_MYSQL_DATABASE")
 		if user == "" {
 			return "", ErrNotReady(fmt.Sprintf("mysql credentials not found for %q — has the database been deployed?", req.DBName))
 		}
-		sqlCmd = fmt.Sprintf("exec %s -- mysql -u %s %s -e %q", pod, user, dbname, req.Query)
+		command = []string{"mysql", "-u", user, dbname, "-e", req.Query}
 	default:
 		return "", ErrInputf("unsupported database engine %q for %q", req.Engine, req.DBName)
 	}
 
-	out, err := kube.RunKubectl(ctx, ssh, ns, sqlCmd)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := req.Kube.ExecInPod(ctx, ns, pod, command, &buf, &buf); err != nil {
 		return "", fmt.Errorf("sql: %w", err)
 	}
-	return string(out), nil
+	return buf.String(), nil
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────

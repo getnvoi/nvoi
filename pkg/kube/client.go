@@ -27,9 +27,11 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -39,6 +41,7 @@ type KubeClient struct {
 	cs     kubernetes.Interface
 	dyn    dynamic.Interface
 	mapper meta.RESTMapper
+	config *rest.Config // needed for SPDY exec
 }
 
 // NewLocal creates a client from a kubeconfig file on the master.
@@ -100,7 +103,7 @@ func fromConfig(config *rest.Config) (*KubeClient, error) {
 		return nil, fmt.Errorf("kube api resources: %w", err)
 	}
 	mapper := restmapper.NewDiscoveryRESTMapper(groupResources)
-	return &KubeClient{cs: cs, dyn: dyn, mapper: mapper}, nil
+	return &KubeClient{cs: cs, dyn: dyn, mapper: mapper, config: config}, nil
 }
 
 // ── Namespace ───────────────────────────────────────────────────────────────
@@ -691,4 +694,33 @@ func (k *KubeClient) GetJSON(ctx context.Context, ns, resource, selector string)
 
 func marshalJSON(v interface{}) ([]byte, error) {
 	return json.Marshal(v)
+}
+
+// ── Exec ────────────────────────────────────────────────────────────────────
+
+// ExecInPod runs a command in a pod's first container and streams output.
+// Uses SPDY remotecommand — no kubectl binary, no SSH.
+func (k *KubeClient) ExecInPod(ctx context.Context, ns, podName string, command []string, stdout, stderr io.Writer) error {
+	if k.config == nil {
+		return fmt.Errorf("exec requires a real cluster connection (not available in test mode)")
+	}
+	req := k.cs.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(ns).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Command: command,
+			Stdout:  stdout != nil,
+			Stderr:  stderr != nil,
+		}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(k.config, "POST", req.URL())
+	if err != nil {
+		return fmt.Errorf("exec %s: %w", podName, err)
+	}
+	return exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: stdout,
+		Stderr: stderr,
+	})
 }
