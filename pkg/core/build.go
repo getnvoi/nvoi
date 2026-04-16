@@ -419,22 +419,6 @@ func parseSignedURL(source string) (string, string, string, bool) {
 	return u.String(), username, password, true
 }
 
-// ── Build prune ───────────────────────────────────────────────────────────────
-
-type BuildPruneRequest struct {
-	Cluster
-	Name string
-	Keep int
-}
-
-func BuildPrune(ctx context.Context, req BuildPruneRequest) error {
-	master, _, _, err := req.Cluster.Master(ctx)
-	if err != nil {
-		return err
-	}
-	return pruneRegistryTags(ctx, req.Cluster, master, req.Name, req.Keep)
-}
-
 // ── Build list ────────────────────────────────────────────────────────────────
 
 type RegistryImage struct {

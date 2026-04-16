@@ -111,12 +111,6 @@ func RegistryAddr(ip string) string {
 	return fmt.Sprintf("%s:%d", ip, RegistryPort)
 }
 
-// ── Remote file paths ──────────────────────────────────────────────────────────
-
-func KubeManifestPath() string { return fmt.Sprintf("/home/%s/nvoi-k8s.yaml", DefaultUser) }
-func EnvFilePath() string      { return fmt.Sprintf("/home/%s/.nvoi.env", DefaultUser) }
-func DeployKeyPath() string    { return fmt.Sprintf("/home/%s/.ssh/nvoi_deploy_key", DefaultUser) }
-
 // ── K8s label keys ─────────────────────────────────────────────────────────────
 
 const (

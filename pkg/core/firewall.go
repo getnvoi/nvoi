@@ -155,16 +155,3 @@ func FirewallRemoveOrphans(ctx context.Context, req FirewallRemoveOrphansRequest
 	}
 	return errs
 }
-
-type FirewallListRequest struct {
-	Cluster
-	Name string // firewall resource name
-}
-
-func FirewallList(ctx context.Context, req FirewallListRequest) (provider.PortAllowList, error) {
-	prov, err := req.Compute()
-	if err != nil {
-		return nil, err
-	}
-	return prov.GetFirewallRules(ctx, req.Name)
-}
