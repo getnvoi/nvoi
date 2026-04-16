@@ -12,7 +12,7 @@ import (
 
 // kubeGetJSON runs a KubeClient JSON query and unmarshals the result into dest.
 func kubeGetJSON(ctx context.Context, kc *kube.KubeClient, ns, resource string, dest any) error {
-	out, err := kc.GetJSON(ctx, ns, resource, kube.NvoiSelector)
+	out, err := kc.GetJSON(ctx, ns, resource, utils.NvoiSelector)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 
 	ns := names.KubeNamespace()
 	kc := req.Kube
-	sel := kube.NvoiSelector
+	sel := utils.NvoiSelector
 	result := map[string]json.RawMessage{}
 
 	type query struct {
@@ -192,7 +192,7 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 		{"services", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "services", sel) }},
 		{"cronjobs", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "cronjobs", sel) }},
 		// Global "secrets" k8s Secret no longer exists — secrets live in per-service secrets only.
-		{"ingresses", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "ingresses", kube.NvoiSelector) }},
+		{"ingresses", func() ([]byte, error) { return kc.GetJSON(ctx, ns, "ingresses", utils.NvoiSelector) }},
 	}
 
 	for _, q := range queries {

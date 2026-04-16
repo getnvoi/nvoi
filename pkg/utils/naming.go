@@ -93,6 +93,7 @@ func (n *Names) NamedVolumeHostPath(volume string) string {
 
 const (
 	KubeconfigPath      = "/etc/rancher/k3s/k3s.yaml"
+	UserKubeconfigPath  = "/home/" + DefaultUser + "/.kube/config"
 	K3sTokenPath        = "/var/lib/rancher/k3s/server/node-token"
 	K3sConfigDir        = "/etc/rancher/k3s"
 	K3sRegistriesConfig = "/etc/rancher/k3s/registries.yaml"
@@ -125,6 +126,7 @@ const (
 	LabelNvoiService    = "nvoi/service"
 	LabelNvoiStack      = "nvoi/stack"
 	LabelNvoiRole       = "nvoi-role"
+	NvoiSelector        = LabelAppManagedBy + "=" + LabelManagedBy
 	LabelConfigChecksum = "nvoi/config-checksum"
 	RoleMaster          = "master"
 )

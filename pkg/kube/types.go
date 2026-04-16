@@ -1,5 +1,12 @@
 package kube
 
+// PodInfo is a simplified pod status used by describe and rollout.
+type PodInfo struct {
+	Name   string
+	Ready  bool
+	Status string // "Running", "CrashLoopBackOff", "ContainerCreating", etc.
+}
+
 // WorkloadItem is the JSON shape for a Deployment or StatefulSet from kubectl get -o json.
 // Used by any code that queries workloads (describe, managed list, etc.).
 type WorkloadItem struct {

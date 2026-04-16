@@ -13,6 +13,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -43,7 +44,23 @@ func newLocalBackend(ctx context.Context, out app.Output, cfg *config.AppConfig)
 // ── Backend methods ─────────────────────────────────────────────────────────
 
 func (b *localBackend) Deploy(ctx context.Context) error {
-	return reconcile.Deploy(ctx, b.dc, b.cfg)
+	if err := reconcile.Deploy(ctx, b.dc, b.cfg); err != nil {
+		return err
+	}
+
+	// Bootstrap: install the agent on the master after successful first deploy.
+	// Subsequent deploys go through the agent — this runs once.
+	if b.dc.Cluster.MasterSSH != nil {
+		b.out.Command("agent", "install", b.cfg.App)
+		configData, _ := config.MarshalAppConfig(b.cfg)
+		envData, _ := os.ReadFile(".env")
+		if err := infra.InstallAgent(ctx, b.dc.Cluster.MasterSSH, b.cfg.App, b.cfg.Env, configData, envData); err != nil {
+			b.out.Warning(fmt.Sprintf("agent install: %v (deploy succeeded, agent can be installed manually)", err))
+		} else {
+			b.out.Success("agent installed — next deploy will go through the agent")
+		}
+	}
+	return nil
 }
 
 func (b *localBackend) Teardown(ctx context.Context, deleteVolumes, deleteStorage bool) error {

@@ -1,11 +1,7 @@
 package kube
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
 	"strings"
-	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -94,90 +90,4 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 		return "", err
 	}
 	return strings.TrimSpace(string(b)), nil
-}
-
-// CreateJobFromCronJob creates a one-off Job from an existing CronJob.
-// Uses kubectl create job --from=cronjob/<name>.
-func CreateJobFromCronJob(ctx context.Context, ssh utils.SSHClient, ns, cronName, jobName string) error {
-	cmd := kctl(ns, fmt.Sprintf("create job %s --from=cronjob/%s", jobName, cronName))
-	if _, err := ssh.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("create job from cronjob/%s: %w", cronName, err)
-	}
-	return nil
-}
-
-// WaitForJob polls a Job's pods until the job succeeds or fails.
-// Detects terminal failures (CrashLoopBackOff, BackOff, OOMKilled) immediately
-// and returns the container logs on failure. Same pattern as WaitRollout.
-func WaitForJob(ctx context.Context, ssh utils.SSHClient, ns, jobName string, emitter ProgressEmitter) error {
-	selector := fmt.Sprintf("job-name=%s", jobName)
-	lastStatus := ""
-
-	return utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
-		// Check job completion status first.
-		jobOut, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get job %s -o json", jobName)))
-		if err != nil {
-			return false, nil
-		}
-		var job struct {
-			Status struct {
-				Succeeded int `json:"succeeded"`
-				Failed    int `json:"failed"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(jobOut, &job) == nil {
-			if job.Status.Succeeded > 0 {
-				return true, nil
-			}
-			if job.Status.Failed > 0 {
-				logs := RecentLogs(ctx, ssh, ns, jobName, "", 30)
-				return false, fmt.Errorf("job %s failed\nlogs:\n%s", jobName, indent(logs, "  "))
-			}
-		}
-
-		// Poll pods for terminal container states.
-		cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
-		out, err := ssh.Run(ctx, cmd)
-		if err != nil {
-			return false, nil
-		}
-		var pods podList
-		if json.Unmarshal(out, &pods) != nil {
-			return false, nil
-		}
-
-		for _, pod := range pods.Items {
-			for _, cs := range pod.Status.ContainerStatuses {
-				if cs.State.Waiting != nil {
-					reason := cs.State.Waiting.Reason
-					switch reason {
-					case "CrashLoopBackOff", "BackOff":
-						logs := RecentLogs(ctx, ssh, ns, pod.Metadata.Name, "", 30)
-						return false, fmt.Errorf("job %s: %s\nlogs:\n%s", jobName, reason, indent(logs, "  "))
-					case "ImagePullBackOff", "ErrImagePull":
-						return false, fmt.Errorf("job %s: %s — %s", jobName, reason, cs.State.Waiting.Message)
-					case "CreateContainerConfigError":
-						return false, fmt.Errorf("job %s: %s — %s", jobName, reason, cs.State.Waiting.Message)
-					}
-				}
-				if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
-					return false, fmt.Errorf("job %s: OOMKilled", jobName)
-				}
-			}
-		}
-
-		status := fmt.Sprintf("job %s running", jobName)
-		if status != lastStatus {
-			emitter.Progress(status)
-			lastStatus = status
-		}
-		return false, nil
-	})
-}
-
-func DeleteCronByName(ctx context.Context, ssh utils.SSHClient, ns, name string) error {
-	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete cronjob/%s --ignore-not-found", name))); err != nil {
-		return fmt.Errorf("delete cronjob/%s: %w", name, err)
-	}
-	return nil
 }

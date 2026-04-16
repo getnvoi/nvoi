@@ -81,7 +81,8 @@ func NewTunneled(ctx context.Context, ssh utils.SSHClient) (*KubeClient, error) 
 	return fromConfig(config)
 }
 
-var kubeconfigPath_ = "/home/deploy/.kube/config"
+// kubeconfigPath_ is the deploy user's kubeconfig.
+var kubeconfigPath_ = utils.UserKubeconfigPath
 
 // NewFromClientset creates a KubeClient from an existing clientset.
 // Used when the caller manages client construction (tests, custom configs).
@@ -279,7 +280,7 @@ func (k *KubeClient) GetSecretValue(ctx context.Context, ns, name, key string) (
 
 func (k *KubeClient) GetAllPods(ctx context.Context, ns string) ([]PodInfo, error) {
 	pods, err := k.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: NvoiSelector,
+		LabelSelector: utils.NvoiSelector,
 	})
 	if err != nil {
 		return nil, err

@@ -1,11 +1,7 @@
 package kube
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
 	"strings"
-	"time"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,31 +20,10 @@ type IngressRoute struct {
 // KubeIngressName returns the deterministic Ingress resource name for a service.
 func KubeIngressName(service string) string { return "ingress-" + service }
 
-// ApplyIngress creates or updates a standard k8s Ingress resource for a service.
-// One Ingress per service — no shared state, no read-modify-write.
-func ApplyIngress(ctx context.Context, ssh utils.SSHClient, ns string, route IngressRoute, acme bool) error {
-	yaml, err := GenerateIngressYAML(route, ns, acme)
-	if err != nil {
-		return err
-	}
-	return Apply(ctx, ssh, ns, yaml)
-}
-
-// GenerateIngressYAML produces a standard networking.k8s.io/v1 Ingress resource.
+// GenerateIngressYAML produces a standard k8s Ingress resource.
 func GenerateIngressYAML(route IngressRoute, ns string, acme bool) (string, error) {
-	name := KubeIngressName(route.Service)
 	pathType := networkingv1.PathTypePrefix
-
-	annotations := map[string]string{
-		utils.LabelAppManagedBy:                            utils.LabelManagedBy,
-		"traefik.ingress.kubernetes.io/router.entrypoints": "web,websecure",
-	}
-	if acme {
-		annotations["traefik.ingress.kubernetes.io/router.tls.certresolver"] = "letsencrypt"
-	}
-
 	var rules []networkingv1.IngressRule
-	var tlsHosts []string
 	for _, domain := range route.Domains {
 		rules = append(rules, networkingv1.IngressRule{
 			Host: domain,
@@ -67,30 +42,25 @@ func GenerateIngressYAML(route IngressRoute, ns string, acme bool) (string, erro
 				},
 			},
 		})
-		tlsHosts = append(tlsHosts, domain)
+	}
+
+	annotations := map[string]string{}
+	if acme {
+		annotations["traefik.ingress.kubernetes.io/router.tls.certresolver"] = "letsencrypt"
 	}
 
 	ingress := networkingv1.Ingress{
 		TypeMeta: metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      KubeIngressName(route.Service),
 			Namespace: ns,
 			Labels: map[string]string{
-				utils.LabelAppName:      name,
+				utils.LabelAppName:      route.Service,
 				utils.LabelAppManagedBy: utils.LabelManagedBy,
 			},
 			Annotations: annotations,
 		},
-		Spec: networkingv1.IngressSpec{
-			Rules: rules,
-		},
-	}
-
-	if acme {
-		ingress.Spec.TLS = []networkingv1.IngressTLS{{
-			Hosts:      tlsHosts,
-			SecretName: "tls-" + route.Service,
-		}}
+		Spec: networkingv1.IngressSpec{Rules: rules},
 	}
 
 	b, err := sigsyaml.Marshal(ingress)
@@ -98,115 +68,4 @@ func GenerateIngressYAML(route IngressRoute, ns string, acme bool) (string, erro
 		return "", err
 	}
 	return strings.TrimSpace(string(b)), nil
-}
-
-// DeleteIngress removes the Ingress resource for a service.
-func DeleteIngress(ctx context.Context, ssh utils.SSHClient, ns, service string) error {
-	name := KubeIngressName(service)
-	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete ingress %s --ignore-not-found", name))); err != nil {
-		return fmt.Errorf("delete ingress %s: %w", name, err)
-	}
-	return nil
-}
-
-// GetIngressRoutes lists all nvoi-managed Ingress resources and parses them into routes.
-func GetIngressRoutes(ctx context.Context, ssh utils.SSHClient, ns string) ([]IngressRoute, error) {
-	out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get ingress -l %s=%s -o json 2>/dev/null", utils.LabelAppManagedBy, utils.LabelManagedBy)))
-	if err != nil {
-		return nil, nil // no ingress resources
-	}
-
-	var list networkingv1.IngressList
-	if err := json.Unmarshal(out, &list); err != nil {
-		return nil, nil
-	}
-
-	// Group by service name.
-	byService := map[string]*IngressRoute{}
-	for _, item := range list.Items {
-		for _, rule := range item.Spec.Rules {
-			if rule.HTTP == nil || len(rule.HTTP.Paths) == 0 {
-				continue
-			}
-			path := rule.HTTP.Paths[0]
-			if path.Backend.Service == nil {
-				continue
-			}
-			svc := path.Backend.Service.Name
-			port := int(path.Backend.Service.Port.Number)
-			if _, ok := byService[svc]; !ok {
-				byService[svc] = &IngressRoute{Service: svc, Port: port}
-			}
-			byService[svc].Domains = append(byService[svc].Domains, rule.Host)
-		}
-	}
-
-	var routes []IngressRoute
-	for _, r := range byService {
-		routes = append(routes, *r)
-	}
-	return routes, nil
-}
-
-// EnsureTraefikACME applies a HelmChartConfig to configure Traefik's Let's Encrypt resolver.
-// Idempotent — safe to call multiple times.
-// When acme is false, no ACME resolver is configured (HTTP-only mode for tunnel setups).
-//
-// After applying, waits for the Traefik deployment to be ready. The k3s Helm
-// controller picks up HelmChartConfig changes asynchronously — without this wait,
-// Ingress resources applied immediately after may land before Traefik has loaded
-// the ACME certresolver config, causing cert issuance to never start.
-func EnsureTraefikACME(ctx context.Context, ssh utils.SSHClient, email string, acme bool) error {
-	var valuesContent string
-	if acme {
-		valuesContent = fmt.Sprintf(`    additionalArguments:
-      - "--certificatesresolvers.letsencrypt.acme.email=%s"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"`, email)
-	} else {
-		valuesContent = `    ports:
-      websecure:
-        expose:
-          default: false`
-	}
-
-	yaml := fmt.Sprintf(`apiVersion: helm.cattle.io/v1
-kind: HelmChartConfig
-metadata:
-  name: traefik
-  namespace: kube-system
-spec:
-  valuesContent: |-
-%s`, valuesContent)
-
-	if err := ApplyGlobal(ctx, ssh, yaml); err != nil {
-		return err
-	}
-
-	// Wait for the Traefik deployment to be ready after the Helm controller
-	// reconciles the HelmChartConfig. On first deploy this may take 30-60s
-	// as the controller creates/updates the Traefik deployment.
-	return waitForTraefikReady(ctx, ssh)
-}
-
-// waitForTraefikReady polls until the Traefik deployment in kube-system has
-// all replicas available. Confirms the Helm controller has processed any
-// HelmChartConfig changes and Traefik is running with the updated config.
-func waitForTraefikReady(ctx context.Context, ssh utils.SSHClient) error {
-	cmd := kctl("kube-system", "get deploy traefik -o jsonpath='{.status.readyReplicas}/{.spec.replicas}' 2>/dev/null")
-
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
-		out, err := ssh.Run(ctx, cmd)
-		if err != nil {
-			return false, nil // deployment may not exist yet — retry
-		}
-		raw := strings.Trim(strings.TrimSpace(string(out)), "'")
-		// Expect "1/1" or "N/N" — ready replicas match desired.
-		parts := strings.SplitN(raw, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return false, nil
-		}
-		return parts[0] == parts[1] && parts[0] != "0", nil
-	})
 }
