@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
+	"github.com/getnvoi/nvoi/pkg/testutil"
 )
 
 func TestMountVolume_AlreadyMounted(t *testing.T) {

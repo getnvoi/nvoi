@@ -5,8 +5,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/testutil"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 

@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/testutil"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 

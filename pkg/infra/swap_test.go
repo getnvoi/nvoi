@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
+	"github.com/getnvoi/nvoi/pkg/testutil"
 )
 
 func TestEnsureSwap_AlreadyActive(t *testing.T) {

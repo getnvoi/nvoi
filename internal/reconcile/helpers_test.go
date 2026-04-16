@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	kubepkg "github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/testutil"
 	"github.com/getnvoi/nvoi/pkg/utils"
 
 	corev1 "k8s.io/api/core/v1"

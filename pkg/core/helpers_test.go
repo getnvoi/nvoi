@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/testutil"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"k8s.io/client-go/kubernetes/fake"
 )
