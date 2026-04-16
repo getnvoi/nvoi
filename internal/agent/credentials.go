@@ -2,9 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
@@ -15,7 +12,8 @@ import (
 
 // credentialSource returns the single CredentialSource for this agent.
 // If a secrets provider is configured, its own credentials are bootstrapped
-// from env vars, then all other credentials are fetched through it.
+// from env vars (via EnvSource — the designed abstraction), then all other
+// credentials are fetched through it.
 // If no secrets provider is configured, credentials come from env vars directly.
 func credentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
 	if sp := cfg.Providers.Secrets; sp != "" {
@@ -31,16 +29,16 @@ func credentialSource(ctx context.Context, cfg *config.AppConfig) provider.Crede
 }
 
 // BuildDeployContext resolves all credentials and builds a DeployContext.
-// Called per command — credentials are resolved fresh each time.
-func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig) *config.DeployContext {
+// SSH key and git auth come from AgentOpts (resolved at startup by cmd/).
+// Provider credentials come from CredentialSource (EnvSource or SecretsSource).
+// Called per command — provider credentials are resolved fresh each time.
+func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig, opts AgentOpts) *config.DeployContext {
 	source := credentialSource(ctx, cfg)
 
 	computeCreds, _ := resolveProviderCreds(source, "compute", cfg.Providers.Compute)
-	sshKey, _ := resolveSSHKey()
 	dnsCreds, _ := resolveProviderCreds(source, "dns", cfg.Providers.DNS)
 	storageCreds, _ := resolveProviderCreds(source, "storage", cfg.Providers.Storage)
 	builderCreds, _ := resolveProviderCreds(source, "build", cfg.Providers.Build)
-	gitUsername, gitToken := resolveGitAuth()
 	dbCreds := resolveDatabaseCreds(source, cfg)
 
 	return &config.DeployContext{
@@ -49,15 +47,15 @@ func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 			Env:         cfg.Env,
 			Provider:    cfg.Providers.Compute,
 			Credentials: computeCreds,
-			SSHKey:      sshKey,
+			SSHKey:      opts.SSHKey,
 			Output:      out,
 		},
 		DNS:           app.ProviderRef{Name: cfg.Providers.DNS, Creds: dnsCreds},
 		Storage:       app.ProviderRef{Name: cfg.Providers.Storage, Creds: storageCreds},
 		Builder:       cfg.Providers.Build,
 		BuildCreds:    builderCreds,
-		GitUsername:   gitUsername,
-		GitToken:      gitToken,
+		GitUsername:   opts.GitUsername,
+		GitToken:      opts.GitToken,
 		DatabaseCreds: dbCreds,
 		Creds:         source,
 	}
@@ -72,37 +70,6 @@ func resolveProviderCreds(source provider.CredentialSource, kind, name string) (
 		return nil, err
 	}
 	return provider.ResolveFrom(schema, source)
-}
-
-func resolveSSHKey() ([]byte, error) {
-	keyPath := os.Getenv("SSH_KEY_PATH")
-	if keyPath != "" {
-		if strings.HasPrefix(keyPath, "~/") {
-			if home := os.Getenv("HOME"); home != "" {
-				keyPath = home + keyPath[1:]
-			}
-		}
-		return os.ReadFile(keyPath)
-	}
-	home := os.Getenv("HOME")
-	for _, name := range []string{"id_ed25519", "id_rsa"} {
-		if key, err := os.ReadFile(home + "/.ssh/" + name); err == nil {
-			return key, nil
-		}
-	}
-	return nil, fmt.Errorf("no SSH key found — set SSH_KEY_PATH or ~/.ssh/id_ed25519")
-}
-
-func resolveGitAuth() (string, string) {
-	if out, err := exec.Command("gh", "auth", "token").Output(); err == nil {
-		if token := strings.TrimSpace(string(out)); token != "" {
-			return "x-access-token", token
-		}
-	}
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		return "x-access-token", token
-	}
-	return "", ""
 }
 
 func resolveDatabaseCreds(source provider.CredentialSource, cfg *config.AppConfig) map[string]*config.DatabaseCredentials {

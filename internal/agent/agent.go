@@ -19,16 +19,25 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// Agent is the deploy runtime. One per master node.
-type Agent struct {
-	ctx context.Context
-	cfg *config.AppConfig
-	mu  sync.Mutex // serialize deploys — one at a time
+// AgentOpts holds values resolved at startup by cmd/ — the boundary
+// where os.Getenv is legal. The agent never reads env vars directly.
+type AgentOpts struct {
+	SSHKey      []byte // resolved SSH private key
+	GitUsername string // git auth username (e.g. "x-access-token")
+	GitToken    string // git auth token
 }
 
-// New creates an agent with the given config.
-func New(ctx context.Context, cfg *config.AppConfig) *Agent {
-	return &Agent{ctx: ctx, cfg: cfg}
+// Agent is the deploy runtime. One per master node.
+type Agent struct {
+	ctx  context.Context
+	cfg  *config.AppConfig
+	opts AgentOpts
+	mu   sync.Mutex // serialize deploys — one at a time
+}
+
+// New creates an agent with the given config and pre-resolved options.
+func New(ctx context.Context, cfg *config.AppConfig, opts AgentOpts) *Agent {
+	return &Agent{ctx: ctx, cfg: cfg, opts: opts}
 }
 
 // RegisterRoutes wires all agent endpoints onto the mux.
@@ -86,7 +95,7 @@ func (a *Agent) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	defer a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, a.cfg)
+	dc := BuildDeployContext(r.Context(), out, a.cfg, a.opts)
 
 	if err := reconcile.Deploy(r.Context(), dc, a.cfg); err != nil {
 		out.Error(err)
@@ -104,7 +113,7 @@ func (a *Agent) handleTeardown(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&req)
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, a.cfg)
+	dc := BuildDeployContext(r.Context(), out, a.cfg, a.opts)
 
 	if err := core.Teardown(r.Context(), dc, a.cfg, req.DeleteVolumes, req.DeleteStorage); err != nil {
 		out.Error(err)
@@ -119,7 +128,7 @@ func (a *Agent) handleDescribe(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg)
+	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
 
 	raw, err := app.DescribeJSON(r.Context(), app.DescribeRequest{
 		Cluster:        dc.Cluster,
@@ -140,7 +149,7 @@ func (a *Agent) handleResources(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg)
+	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
 
 	groups, err := app.Resources(r.Context(), app.ResourcesRequest{
 		Compute: app.ProviderRef{Name: dc.Cluster.Provider, Creds: dc.Cluster.Credentials},
@@ -164,7 +173,7 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg)
+	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
 
 	follow := r.URL.Query().Get("follow") == "true"
 	since := r.URL.Query().Get("since")
@@ -196,7 +205,7 @@ func (a *Agent) handleExec(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg)
+	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
 
 	if err := app.Exec(r.Context(), app.ExecRequest{
 		Cluster: dc.Cluster, Service: service, Command: req.Command,
@@ -216,7 +225,7 @@ func (a *Agent) handleSSH(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg)
+	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
 
 	if err := app.SSH(r.Context(), app.SSHRequest{
 		Cluster: dc.Cluster, Command: req.Command,
@@ -235,7 +244,7 @@ func (a *Agent) handleCronRun(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg)
+	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
 
 	if err := app.CronRun(r.Context(), app.CronRunRequest{
 		Cluster: dc.Cluster, Name: name,
@@ -253,7 +262,7 @@ func (a *Agent) handleDBBackupList(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg)
+	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
@@ -279,7 +288,7 @@ func (a *Agent) handleDBBackupDownload(w http.ResponseWriter, r *http.Request) {
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	dc := BuildDeployContext(r.Context(), render.NewJSONOutput(w), cfg)
+	dc := BuildDeployContext(r.Context(), render.NewJSONOutput(w), cfg, a.opts)
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {
@@ -311,7 +320,7 @@ func (a *Agent) handleDBSQL(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 
 	out := streamOutput(w)
-	dc := BuildDeployContext(r.Context(), out, cfg)
+	dc := BuildDeployContext(r.Context(), out, cfg, a.opts)
 
 	name, err := utils.ResolveDBName(dbName, cfg.DatabaseNames())
 	if err != nil {

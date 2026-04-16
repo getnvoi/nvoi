@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/getnvoi/nvoi/internal/agent"
 	"github.com/getnvoi/nvoi/internal/config"
@@ -32,7 +34,18 @@ The CLI and API are clients — they send commands to the agent.`,
 				return fmt.Errorf("parse config: %v", err)
 			}
 
-			a := agent.New(cmd.Context(), cfg)
+			// Resolve env-dependent values here — cmd/ is the os.Getenv boundary.
+			sshKey, err := resolveAgentSSHKey()
+			if err != nil {
+				return err
+			}
+			gitUsername, gitToken := resolveAgentGitAuth()
+
+			a := agent.New(cmd.Context(), cfg, agent.AgentOpts{
+				SSHKey:      sshKey,
+				GitUsername: gitUsername,
+				GitToken:    gitToken,
+			})
 
 			mux := http.NewServeMux()
 			a.RegisterRoutes(mux)
@@ -56,4 +69,39 @@ The CLI and API are clients — they send commands to the agent.`,
 	cmd.Flags().String("config", "nvoi.yaml", "path to config YAML")
 
 	return cmd
+}
+
+// resolveAgentSSHKey reads the SSH private key from disk.
+// os.Getenv lives here — the cmd/ boundary.
+func resolveAgentSSHKey() ([]byte, error) {
+	keyPath := os.Getenv("SSH_KEY_PATH")
+	if keyPath != "" {
+		if strings.HasPrefix(keyPath, "~/") {
+			if home := os.Getenv("HOME"); home != "" {
+				keyPath = home + keyPath[1:]
+			}
+		}
+		return os.ReadFile(keyPath)
+	}
+	home := os.Getenv("HOME")
+	for _, name := range []string{"id_ed25519", "id_rsa"} {
+		if key, err := os.ReadFile(home + "/.ssh/" + name); err == nil {
+			return key, nil
+		}
+	}
+	return nil, fmt.Errorf("no SSH key found — set SSH_KEY_PATH or ~/.ssh/id_ed25519")
+}
+
+// resolveAgentGitAuth resolves git credentials from gh CLI or env.
+// os.Getenv lives here — the cmd/ boundary.
+func resolveAgentGitAuth() (string, string) {
+	if out, err := exec.Command("gh", "auth", "token").Output(); err == nil {
+		if token := strings.TrimSpace(string(out)); token != "" {
+			return "x-access-token", token
+		}
+	}
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		return "x-access-token", token
+	}
+	return "", ""
 }
