@@ -16,16 +16,23 @@ type WaitRolloutRequest struct {
 }
 
 // WaitRollout waits for a specific service's rollout to complete.
-// Uses kube.WaitRollout which polls pods by label, detects terminal failures,
-// and verifies stability for services without health checks.
 func WaitRollout(ctx context.Context, req WaitRolloutRequest) error {
 	out := req.Log()
-	ssh, names, err := req.Cluster.SSH(ctx)
+	names, err := req.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	ns := names.KubeNamespace()
+
+	if req.Kube != nil {
+		return req.Kube.WaitRolloutReady(ctx, ns, req.Service, req.WorkloadKind, req.HasHealthCheck, out)
+	}
+
+	// Fallback: SSH kubectl path (bootstrap).
+	ssh, _, err := req.Cluster.SSH(ctx)
 	if err != nil {
 		return err
 	}
 	defer ssh.Close()
-
-	ns := names.KubeNamespace()
 	return kube.WaitRollout(ctx, ssh, ns, req.Service, req.WorkloadKind, req.HasHealthCheck, out)
 }
