@@ -122,10 +122,14 @@ func (c *Client) Set(ctx context.Context, key, value string) error {
 	}
 	err = api.Do(ctx, "POST", "/v3/secrets/raw", body, nil)
 	if err != nil {
+		// Only retry as update if the create failed due to conflict (already exists).
+		// Auth errors, network errors, etc. should not be retried.
+		if !utils.IsConflict(err) {
+			return fmt.Errorf("infisical: set %q: %w", key, err)
+		}
 		path := fmt.Sprintf("/v3/secrets/raw/%s", key)
-		updateErr := api.Do(ctx, "PATCH", path, body, nil)
-		if updateErr != nil {
-			return fmt.Errorf("infisical: set %q: create failed: %w, update failed: %w", key, err, updateErr)
+		if updateErr := api.Do(ctx, "PATCH", path, body, nil); updateErr != nil {
+			return fmt.Errorf("infisical: set %q: create conflict, update failed: %w", key, updateErr)
 		}
 	}
 	return nil
