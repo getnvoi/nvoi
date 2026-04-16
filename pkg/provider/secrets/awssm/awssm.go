@@ -63,42 +63,6 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	return *out.SecretString, nil
 }
 
-func (c *Client) Set(ctx context.Context, key, value string) error {
-	if c.sm == nil {
-		return fmt.Errorf("awssm: client not initialized")
-	}
-	// Try update first, create if not found.
-	_, err := c.sm.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
-		SecretId:     aws.String(key),
-		SecretString: aws.String(value),
-	})
-	if err != nil {
-		// If the secret doesn't exist, create it.
-		_, createErr := c.sm.CreateSecret(ctx, &secretsmanager.CreateSecretInput{
-			Name:         aws.String(key),
-			SecretString: aws.String(value),
-		})
-		if createErr != nil {
-			return fmt.Errorf("awssm: set %q: put failed: %w, create failed: %w", key, err, createErr)
-		}
-	}
-	return nil
-}
-
-func (c *Client) Delete(ctx context.Context, key string) error {
-	if c.sm == nil {
-		return fmt.Errorf("awssm: client not initialized")
-	}
-	_, err := c.sm.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
-		SecretId:                   aws.String(key),
-		ForceDeleteWithoutRecovery: aws.Bool(true),
-	})
-	if err != nil {
-		return fmt.Errorf("awssm: delete %q: %w", key, err)
-	}
-	return nil
-}
-
 func (c *Client) List(ctx context.Context) ([]string, error) {
 	if c.sm == nil {
 		return nil, fmt.Errorf("awssm: client not initialized")

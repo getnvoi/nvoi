@@ -109,49 +109,6 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	return resp.Secret.SecretValue, nil
 }
 
-func (c *Client) Set(ctx context.Context, key, value string) error {
-	api, err := c.authedAPI(ctx)
-	if err != nil {
-		return err
-	}
-	body := map[string]any{
-		"workspaceSlug": c.projectSlug,
-		"environment":   c.environment,
-		"secretName":    key,
-		"secretValue":   value,
-	}
-	err = api.Do(ctx, "POST", "/v3/secrets/raw", body, nil)
-	if err != nil {
-		// Only retry as update if the create failed due to conflict (already exists).
-		// Auth errors, network errors, etc. should not be retried.
-		if !utils.IsConflict(err) {
-			return fmt.Errorf("infisical: set %q: %w", key, err)
-		}
-		path := fmt.Sprintf("/v3/secrets/raw/%s", key)
-		if updateErr := api.Do(ctx, "PATCH", path, body, nil); updateErr != nil {
-			return fmt.Errorf("infisical: set %q: create conflict, update failed: %w", key, updateErr)
-		}
-	}
-	return nil
-}
-
-func (c *Client) Delete(ctx context.Context, key string) error {
-	api, err := c.authedAPI(ctx)
-	if err != nil {
-		return err
-	}
-	body := map[string]any{
-		"workspaceSlug": c.projectSlug,
-		"environment":   c.environment,
-		"secretName":    key,
-	}
-	path := fmt.Sprintf("/v3/secrets/raw/%s", key)
-	if err := api.Do(ctx, "DELETE", path, body, nil); err != nil {
-		return fmt.Errorf("infisical: delete %q: %w", key, err)
-	}
-	return nil
-}
-
 func (c *Client) List(ctx context.Context) ([]string, error) {
 	api, err := c.authedAPI(ctx)
 	if err != nil {

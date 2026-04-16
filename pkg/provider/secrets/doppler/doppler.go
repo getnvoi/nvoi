@@ -65,30 +65,6 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	return resp.Value.Raw, nil
 }
 
-func (c *Client) Set(ctx context.Context, key, value string) error {
-	body := map[string]any{
-		"project": c.project,
-		"config":  c.config,
-		"secrets": map[string]string{key: value},
-	}
-	if err := c.api.Do(ctx, "POST", "/configs/config/secrets", body, nil); err != nil {
-		return fmt.Errorf("doppler: set %q: %w", key, err)
-	}
-	return nil
-}
-
-func (c *Client) Delete(ctx context.Context, key string) error {
-	body := map[string]any{
-		"project": c.project,
-		"config":  c.config,
-		"secrets": map[string]string{key: ""},
-	}
-	if err := c.api.Do(ctx, "POST", "/configs/config/secrets", body, nil); err != nil {
-		return fmt.Errorf("doppler: delete %q: %w", key, err)
-	}
-	return nil
-}
-
 func (c *Client) List(ctx context.Context) ([]string, error) {
 	var resp struct {
 		Secrets map[string]any `json:"secrets"`
