@@ -48,7 +48,7 @@ The CLI and API are clients — they send commands to the agent.`,
 				return fmt.Errorf("kube client: %w", err)
 			}
 
-			a := agent.New(cmd.Context(), cfg, agent.AgentOpts{
+			a := agent.New(cfg, agent.AgentOpts{
 				SSHKey:      sshKey,
 				GitUsername: gitUsername,
 				GitToken:    gitToken,

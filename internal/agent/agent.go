@@ -34,15 +34,14 @@ type AgentOpts struct {
 
 // Agent is the deploy runtime. One per master node.
 type Agent struct {
-	ctx  context.Context
 	cfg  *config.AppConfig
 	opts AgentOpts
 	mu   sync.RWMutex // write: deploy/teardown/config push. read: everything else.
 }
 
 // New creates an agent with the given config and pre-resolved options.
-func New(ctx context.Context, cfg *config.AppConfig, opts AgentOpts) *Agent {
-	return &Agent{ctx: ctx, cfg: cfg, opts: opts}
+func New(cfg *config.AppConfig, opts AgentOpts) *Agent {
+	return &Agent{cfg: cfg, opts: opts}
 }
 
 // ── Handler type ────────────────────────────────────────────────────────────
@@ -99,6 +98,10 @@ func (a *Agent) handleConfigPush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("parse config: %v", err), http.StatusBadRequest)
 		return
 	}
+	if err := cfg.Resolve(); err != nil {
+		http.Error(w, fmt.Sprintf("resolve config: %v", err), http.StatusBadRequest)
+		return
+	}
 	a.mu.Lock()
 	a.cfg = cfg
 	a.mu.Unlock()
@@ -138,7 +141,9 @@ func (a *Agent) cmdTeardown(ctx context.Context, out *jsonlOutput, r *http.Reque
 		DeleteVolumes bool `json:"delete_volumes"`
 		DeleteStorage bool `json:"delete_storage"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return fmt.Errorf("decode request: %w", err)
+	}
 
 	dc, err := BuildDeployContext(ctx, out, a.cfg, a.opts)
 	if err != nil {
@@ -223,7 +228,9 @@ func (a *Agent) cmdExec(ctx context.Context, out *jsonlOutput, r *http.Request) 
 	var req struct {
 		Command []string `json:"command"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return fmt.Errorf("decode request: %w", err)
+	}
 
 	a.mu.RLock()
 	cfg := a.cfg
@@ -242,7 +249,9 @@ func (a *Agent) cmdSSH(ctx context.Context, out *jsonlOutput, r *http.Request) e
 	var req struct {
 		Command []string `json:"command"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return fmt.Errorf("decode request: %w", err)
+	}
 
 	a.mu.RLock()
 	cfg := a.cfg
@@ -304,7 +313,9 @@ func (a *Agent) cmdDBSQL(ctx context.Context, out *jsonlOutput, r *http.Request)
 		Engine string `json:"engine"`
 		Query  string `json:"query"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return fmt.Errorf("decode request: %w", err)
+	}
 
 	a.mu.RLock()
 	cfg := a.cfg
