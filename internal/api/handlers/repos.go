@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/getnvoi/nvoi/internal/api"
@@ -41,12 +40,7 @@ type GetRepoOutput struct {
 type UpdateRepoInput struct {
 	RepoScopedInput
 	Body struct {
-		Name            string `json:"name,omitempty" doc:"New repo name"`
-		ComputeProvider string `json:"compute_provider,omitempty" doc:"Compute provider alias"`
-		DNSProvider     string `json:"dns_provider,omitempty" doc:"DNS provider alias"`
-		StorageProvider string `json:"storage_provider,omitempty" doc:"Storage provider alias"`
-		BuildProvider   string `json:"build_provider,omitempty" doc:"Build provider alias"`
-		SecretsProvider string `json:"secrets_provider,omitempty" doc:"Secrets provider alias"`
+		Name string `json:"name,omitempty" doc:"New repo name"`
 	}
 }
 
@@ -123,33 +117,6 @@ func UpdateRepo(db *gorm.DB) func(context.Context, *UpdateRepoInput) (*UpdateRep
 			db.Model(repo).Update("name", input.Body.Name)
 		}
 
-		// Link providers by alias — look up InfraProvider by alias, verify kind matches.
-		providerLinks := []struct {
-			alias string
-			kind  api.ProviderKind
-			field string
-		}{
-			{input.Body.ComputeProvider, api.ProviderKindCompute, "compute_provider_id"},
-			{input.Body.DNSProvider, api.ProviderKindDNS, "dns_provider_id"},
-			{input.Body.StorageProvider, api.ProviderKindStorage, "storage_provider_id"},
-			{input.Body.BuildProvider, api.ProviderKindBuild, "build_provider_id"},
-			{input.Body.SecretsProvider, api.ProviderKindSecrets, "secrets_provider_id"},
-		}
-		for _, link := range providerLinks {
-			if link.alias == "" {
-				continue
-			}
-			var prov api.InfraProvider
-			if err := db.Where("workspace_id = ? AND alias = ?", repo.WorkspaceID, link.alias).First(&prov).Error; err != nil {
-				return nil, huma.Error404NotFound(fmt.Sprintf("provider %q not found in workspace — run 'nvoi provider add' first", link.alias))
-			}
-			if prov.Kind != link.kind {
-				return nil, huma.Error400BadRequest(fmt.Sprintf("provider %q is %s, not %s", link.alias, prov.Kind, link.kind))
-			}
-			db.Model(repo).Update(link.field, prov.ID)
-		}
-
-		// Reload with preloaded providers.
 		repo, err = findRepo(db, user.ID, input.WorkspaceID, input.RepoID)
 		if err != nil {
 			return nil, err
@@ -182,13 +149,7 @@ func findRepo(db *gorm.DB, userID, workspaceID, repoID string) (*api.Repo, error
 	}
 
 	var repo api.Repo
-	q := db.Where("id = ? AND workspace_id = ?", repoID, ws.ID).
-		Preload("ComputeProvider").
-		Preload("DNSProvider").
-		Preload("StorageProvider").
-		Preload("BuildProvider").
-		Preload("SecretsProvider")
-	if err := q.First(&repo).Error; err != nil {
+	if err := db.Where("id = ? AND workspace_id = ?", repoID, ws.ID).First(&repo).Error; err != nil {
 		return nil, huma.Error404NotFound("repo not found")
 	}
 	return &repo, nil

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gopkg.in/yaml.v3"
 )
@@ -29,7 +30,7 @@ type DeployContext struct {
 	GitUsername   string
 	GitToken      string
 	DatabaseCreds map[string]*DatabaseCredentials
-	SecretsCreds  map[string]string // secrets provider's own credentials for ESO bootstrap (nil = no secrets provider)
+	Creds         provider.CredentialSource // single source for all credential resolution at runtime
 }
 
 // LiveState represents what's currently deployed.

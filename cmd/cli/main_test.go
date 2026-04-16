@@ -2,22 +2,19 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/getnvoi/nvoi/internal/cloud"
 )
 
-// ── Mode detection ──────────────────────────────────────────────────────────
+// ── Config loading ──────────────────────────────────────────────────────────
 
-func TestLocalFlagWithoutConfig(t *testing.T) {
+func TestDeployWithoutConfig(t *testing.T) {
 	cmd := rootCmd()
-	cmd.SetArgs([]string{"deploy", "--local", "--config", "/nonexistent/nvoi.yaml"})
+	cmd.SetArgs([]string{"deploy", "--config", "/nonexistent/nvoi.yaml"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error")
@@ -27,30 +24,22 @@ func TestLocalFlagWithoutConfig(t *testing.T) {
 	}
 }
 
-func TestCloudModeWithoutAuth(t *testing.T) {
-	cloud.ResetAuthCache()
-	t.Setenv("HOME", t.TempDir())
+// ── Bootstrap: no master, prompt declined ───────────────────────────────────
 
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"deploy", "--config", "/nonexistent/nvoi.yaml"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "nvoi login") {
-		t.Fatalf("error = %q, want login suggestion", err.Error())
-	}
-}
-
-func TestCloudModeWithoutAuthWithConfig(t *testing.T) {
-	cloud.ResetAuthCache()
+func TestDeploy_NoMaster_Declined(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
-	if err := os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\nproviders:\n  compute: hetzner\nservers:\n  master:\n    type: cx23\n    region: fsn1\n    role: master\nservices:\n  web:\n    image: nginx\n"), 0o644)
+
+	t.Setenv("HOME", dir) // no SSH key → ErrNoMaster
+
+	// Pipe "n" to stdin to decline the prompt.
+	r, w, _ := os.Pipe()
+	w.WriteString("n\n")
+	w.Close()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
 
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"deploy", "--config", cfgPath})
@@ -58,442 +47,116 @@ func TestCloudModeWithoutAuthWithConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "--local") {
-		t.Fatalf("error = %q, want --local suggestion", err.Error())
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("error = %q, want aborted", err.Error())
 	}
 }
 
-func TestCloudOnlyCommandsWithLocal(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{"login", []string{"login", "--local"}},
-		{"whoami", []string{"whoami", "--local"}},
-		{"workspaces", []string{"workspaces", "list", "--local"}},
-		{"repos", []string{"repos", "list", "--local"}},
-		{"provider", []string{"provider", "list", "--local"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmd := rootCmd()
-			cmd.SetArgs(tt.args)
-			err := cmd.Execute()
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if !strings.Contains(err.Error(), "not available in local mode") {
-				t.Fatalf("error = %q, want 'not available in local mode'", err.Error())
-			}
-		})
-	}
-}
+// ── Bootstrap: no master, -y flag → local deploy ────────────────────────────
 
-// ── Cloud-only auth enforcement ──────────────────────────────────────────────
-
-func TestCloudOnlyCommandsRequireAuth(t *testing.T) {
-	cloud.ResetAuthCache()
-	t.Setenv("HOME", t.TempDir()) // no auth.json
-
-	// These commands should fail at PersistentPreRunE with an auth error,
-	// NOT reach their RunE and fail with a different error.
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{"whoami", []string{"whoami"}},
-		{"workspaces", []string{"workspaces", "list"}},
-		{"repos", []string{"repos", "list"}},
-		{"provider", []string{"provider", "list"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmd := rootCmd()
-			cmd.SetArgs(tt.args)
-			err := cmd.Execute()
-			if err == nil {
-				t.Fatal("expected error")
-			}
-			if !strings.Contains(err.Error(), "nvoi login") {
-				t.Fatalf("error = %q, want auth error mentioning 'nvoi login'", err.Error())
-			}
-		})
-	}
-}
-
-func TestLoginDoesNotRequireAuth(t *testing.T) {
-	cloud.ResetAuthCache()
-	t.Setenv("HOME", t.TempDir()) // no auth.json
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"login"})
-	err := cmd.Execute()
-	// login will fail (no GitHub token), but NOT with "nvoi login" auth error.
-	// It should get past PersistentPreRunE and into its own RunE.
-	if err == nil {
-		t.Fatal("expected error (no GitHub token)")
-	}
-	if strings.Contains(err.Error(), "not logged in") {
-		t.Fatalf("login should not require auth, got: %q", err.Error())
-	}
-}
-
-// ── Dispatch: local mode ────────────────────────────────────────────────────
-
-func TestLocalDispatch_Deploy(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "nvoi.yaml")
-	// Config with app+env but no providers.compute — ValidateConfig rejects it.
-	// This error is unique to the local path: cloud mode sends YAML to the API
-	// without local validation.
-	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"deploy", "--local", "--config", cfgPath})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "providers.compute is required") {
-		t.Fatalf("error = %q, want validation error from local deploy path", err.Error())
-	}
-}
-
-func TestLocalDispatch_Teardown(t *testing.T) {
+func TestDeploy_NoMaster_AutoConfirm(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
 	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
 
-	// Teardown calls LoadConfig then core.Teardown. With an empty config,
-	// Teardown still calls FirewallDelete and NetworkDelete which need a provider.
-	// The error will be about provider resolution, not auth.
+	t.Setenv("HOME", dir) // no SSH key → ErrNoMaster
+
 	cmd := rootCmd()
-	cmd.SetArgs([]string{"teardown", "--local", "--config", cfgPath})
+	cmd.SetArgs([]string{"deploy", "--config", cfgPath, "-y"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error (no compute provider)")
 	}
-	if strings.Contains(err.Error(), "nvoi login") {
-		t.Fatalf("dispatch went to cloud path: %q", err.Error())
+	// Should reach the local bootstrap path → hits validation
+	if !strings.Contains(err.Error(), "providers.compute is required") {
+		t.Fatalf("error = %q, want validation error from local bootstrap", err.Error())
 	}
 }
 
-// ── Dispatch: cloud mode ────────────────────────────────────────────────────
+// ── Agent reachable → commands go through agent ─────────────────────────────
 
-func writeAuth(t *testing.T, apiBase string) string {
-	t.Helper()
-	cloud.ResetAuthCache()
-	t.Cleanup(cloud.ResetAuthCache)
+func TestDeploy_AgentReachable(t *testing.T) {
+	// Start a mock agent server.
+	var gotPath, gotMethod string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		// Simulate a deploy that fails validation (no real cluster).
+		json.NewEncoder(w).Encode(map[string]string{"type": "error", "message": "providers.compute is required"})
+	}))
+	defer agent.Close()
 
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	authDir := filepath.Join(dir, ".config", "nvoi")
-	if err := os.MkdirAll(authDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	auth := fmt.Sprintf(`{"api_base":%q,"token":"tok","workspace_id":"ws-1","repo_id":"repo-1"}`, apiBase)
-	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), []byte(auth), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-func TestCloudDispatch_Deploy(t *testing.T) {
-	var gotMethod, gotPath string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotPath = r.URL.Path
-		w.WriteHeader(200) // empty body — StreamRun finishes cleanly
-	}))
-	defer ts.Close()
-
-	dir := writeAuth(t, ts.URL)
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
 	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
 
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"deploy", "--config", cfgPath})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// Test agentBackend directly against the mock server.
+	ab := &agentBackend{
+		client:     &http.Client{},
+		baseURL:    agent.URL,
+		out:        resolveOutput(rootCmd()),
+		configPath: cfgPath,
+	}
+	err := ab.Deploy(t.Context())
+	// The mock returns an error event, which streamCommand surfaces.
+	if err == nil {
+		t.Fatal("expected error from agent")
 	}
 	if gotMethod != "POST" {
 		t.Fatalf("method = %q, want POST", gotMethod)
 	}
-	if gotPath != "/workspaces/ws-1/repos/repo-1/deploy" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/deploy", gotPath)
+	// Config push + deploy = two requests. gotPath is the last one.
+	if gotPath != "/deploy" {
+		t.Fatalf("path = %q, want /deploy", gotPath)
 	}
 }
 
-func TestCloudDispatch_Describe(t *testing.T) {
-	var gotMethod, gotPath string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotPath = r.URL.Path
+func TestDescribe_AgentReachable(t *testing.T) {
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"services": []any{}, "pods": []any{}})
 	}))
-	defer ts.Close()
+	defer agent.Close()
 
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"describe"})
-	cmd.Execute() // may error on decode, but API was hit
-	if gotMethod != "GET" {
-		t.Fatalf("method = %q, want GET", gotMethod)
-	}
-	if gotPath != "/workspaces/ws-1/repos/repo-1/describe" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/describe", gotPath)
-	}
-}
-
-func TestCloudDispatch_Teardown(t *testing.T) {
-	var gotPath string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.WriteHeader(200)
-	}))
-	defer ts.Close()
-
-	dir := writeAuth(t, ts.URL)
+	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
 	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
 
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"teardown", "--config", cfgPath})
-	cmd.Execute()
-	if gotPath != "/workspaces/ws-1/repos/repo-1/teardown" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/teardown", gotPath)
+	ab := &agentBackend{
+		client:     &http.Client{},
+		baseURL:    agent.URL,
+		out:        resolveOutput(rootCmd()),
+		configPath: cfgPath,
 	}
-}
-
-func TestCloudDispatch_Resources(t *testing.T) {
-	var gotPath string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]any{})
-	}))
-	defer ts.Close()
-
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"resources"})
-	cmd.Execute()
-	if gotPath != "/workspaces/ws-1/repos/repo-1/resources" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/resources", gotPath)
-	}
-}
-
-func TestCloudDispatch_Logs(t *testing.T) {
-	var gotPath string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.WriteHeader(200)
-	}))
-	defer ts.Close()
-
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"logs", "web"})
-	cmd.Execute()
-	if !strings.HasPrefix(gotPath, "/workspaces/ws-1/repos/repo-1/services/web/logs") {
-		t.Fatalf("path = %q, want prefix /workspaces/ws-1/repos/repo-1/services/web/logs", gotPath)
-	}
-}
-
-func TestCloudDispatch_LogsURLEncoding(t *testing.T) {
-	var gotRawQuery string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotRawQuery = r.URL.RawQuery
-		w.WriteHeader(200)
-	}))
-	defer ts.Close()
-
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"logs", "web", "--since", "5m&foo=bar"})
-	err := cmd.Execute()
-	t.Logf("Execute error: %v", err)
-	t.Logf("gotRawQuery: %q", gotRawQuery)
-	if strings.Contains(gotRawQuery, "foo=bar") {
-		t.Fatalf("since param not escaped — raw query %q contains injected param", gotRawQuery)
-	}
-	if !strings.Contains(gotRawQuery, "since=5m%26foo%3Dbar") {
-		t.Fatalf("raw query = %q, want since=5m%%26foo%%3Dbar (encoded)", gotRawQuery)
-	}
-}
-
-func TestCloudDispatch_Exec(t *testing.T) {
-	var gotPath, gotMethod string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotMethod = r.Method
-		w.WriteHeader(200)
-	}))
-	defer ts.Close()
-
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"exec", "web", "--", "sh"})
-	cmd.Execute()
-	if gotMethod != "POST" {
-		t.Fatalf("method = %q, want POST", gotMethod)
-	}
-	if gotPath != "/workspaces/ws-1/repos/repo-1/services/web/exec" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/services/web/exec", gotPath)
-	}
-}
-
-func TestCloudDispatch_SSH(t *testing.T) {
-	var gotPath, gotMethod string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotMethod = r.Method
-		w.WriteHeader(200)
-	}))
-	defer ts.Close()
-
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"ssh", "--", "kubectl", "get", "pods"})
-	cmd.Execute()
-	if gotMethod != "POST" {
-		t.Fatalf("method = %q, want POST", gotMethod)
-	}
-	if gotPath != "/workspaces/ws-1/repos/repo-1/ssh" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/ssh", gotPath)
-	}
-}
-
-func TestCloudDispatch_CronRun(t *testing.T) {
-	var gotPath string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.WriteHeader(200)
-	}))
-	defer ts.Close()
-
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"cron", "run", "cleanup"})
-	cmd.Execute()
-	if gotPath != "/workspaces/ws-1/repos/repo-1/cron/cleanup/run" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/cron/cleanup/run", gotPath)
-	}
-}
-
-func TestCloudDispatch_DatabaseSQL(t *testing.T) {
-	var gotPath, gotMethod string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotMethod = r.Method
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"output": "1 row"})
-	}))
-	defer ts.Close()
-
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"db", "sql", "SELECT 1", "--name", "main", "--kind", "postgres"})
-	cmd.Execute()
-	if gotMethod != "POST" {
-		t.Fatalf("method = %q, want POST", gotMethod)
-	}
-	if gotPath != "/workspaces/ws-1/repos/repo-1/database/sql" {
-		t.Fatalf("path = %q, want /workspaces/ws-1/repos/repo-1/database/sql", gotPath)
-	}
-}
-
-func TestCloudDispatch_DatabaseSQL_NoName(t *testing.T) {
-	writeAuth(t, "http://unused")
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"db", "sql", "SELECT 1"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected error without --name in cloud mode")
-	}
-	if !strings.Contains(err.Error(), "--name is required") {
-		t.Fatalf("error = %q, want --name required", err.Error())
-	}
-}
-
-func TestCloudDispatch_DatabaseSQL_NoKind(t *testing.T) {
-	writeAuth(t, "http://unused")
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"db", "sql", "SELECT 1", "--name", "main"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected error without --kind in cloud mode")
-	}
-	if !strings.Contains(err.Error(), "--kind is required") {
-		t.Fatalf("error = %q, want --kind required", err.Error())
-	}
-}
-
-func TestCloudDispatch_DatabaseBackupList(t *testing.T) {
-	var gotPath string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path + "?" + r.URL.RawQuery
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]any{})
-	}))
-	defer ts.Close()
-
-	writeAuth(t, ts.URL)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"db", "backup", "list", "--name", "main"})
-	cmd.Execute()
-	want := "/workspaces/ws-1/repos/repo-1/database/backups?name=main"
-	if gotPath != want {
-		t.Fatalf("path = %q, want %q", gotPath, want)
-	}
-}
-
-func TestCloudDispatch_DatabaseBackupList_NoName(t *testing.T) {
-	writeAuth(t, "http://unused")
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"db", "backup", "list"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected error without --name in cloud mode")
-	}
-	if !strings.Contains(err.Error(), "--name is required") {
-		t.Fatalf("error = %q, want --name required", err.Error())
-	}
-}
-
-// ── Teardown flags forwarded to API ──────────────────────────────────────────
-
-func TestCloudDispatch_TeardownForwardsDeleteFlags(t *testing.T) {
-	var gotBody map[string]any
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&gotBody)
-		w.WriteHeader(200)
-	}))
-	defer ts.Close()
-
-	dir := writeAuth(t, ts.URL)
-	cfgPath := filepath.Join(dir, "nvoi.yaml")
-	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"teardown", "--config", cfgPath, "--delete-volumes", "--delete-storage"})
-	if err := cmd.Execute(); err != nil {
+	err := ab.Describe(t.Context(), true)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestTeardown_AgentReachable(t *testing.T) {
+	var gotBody map[string]any
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/teardown" {
+			json.NewDecoder(r.Body).Decode(&gotBody)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(200)
+	}))
+	defer agent.Close()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "nvoi.yaml")
+	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
+
+	ab := &agentBackend{
+		client:     &http.Client{},
+		baseURL:    agent.URL,
+		out:        resolveOutput(rootCmd()),
+		configPath: cfgPath,
+	}
+	ab.Teardown(t.Context(), true, true)
 	if gotBody["delete_volumes"] != true {
 		t.Fatalf("delete_volumes = %v, want true", gotBody["delete_volumes"])
 	}
@@ -502,92 +165,120 @@ func TestCloudDispatch_TeardownForwardsDeleteFlags(t *testing.T) {
 	}
 }
 
-func TestCloudDispatch_TeardownOmitsFlagsWhenFalse(t *testing.T) {
-	var gotBody map[string]any
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&gotBody)
+func TestCronRun_AgentReachable(t *testing.T) {
+	var gotPath string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(200)
 	}))
-	defer ts.Close()
+	defer agent.Close()
 
-	dir := writeAuth(t, ts.URL)
-	cfgPath := filepath.Join(dir, "nvoi.yaml")
-	os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644)
-
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"teardown", "--config", cfgPath})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	ab := &agentBackend{
+		client:  &http.Client{},
+		baseURL: agent.URL,
+		out:     resolveOutput(rootCmd()),
 	}
-	if _, ok := gotBody["delete_volumes"]; ok {
-		t.Fatal("delete_volumes should not be present when flag is false")
-	}
-	if _, ok := gotBody["delete_storage"]; ok {
-		t.Fatal("delete_storage should not be present when flag is false")
+	ab.CronRun(t.Context(), "cleanup")
+	if gotPath != "/cron/cleanup/run" {
+		t.Fatalf("path = %q, want /cron/cleanup/run", gotPath)
 	}
 }
 
-// ── StreamRun ───────────────────────────────────────────────────────────────
-
-func TestStreamRun_ProcessesJSONL(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestExec_AgentReachable(t *testing.T) {
+	var gotPath, gotMethod string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(200)
-		fmt.Fprintln(w, `{"type":"success","message":"done"}`)
 	}))
-	defer ts.Close()
+	defer agent.Close()
 
-	client := cloud.NewAPIClient(&cloud.AuthConfig{APIBase: ts.URL, Token: "test"})
-	err := cloud.StreamRun(client, "/test", map[string]any{"key": "val"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	ab := &agentBackend{
+		client:  &http.Client{},
+		baseURL: agent.URL,
+		out:     resolveOutput(rootCmd()),
+	}
+	ab.Exec(t.Context(), "web", []string{"sh"})
+	if gotMethod != "POST" {
+		t.Fatalf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/exec/web" {
+		t.Fatalf("path = %q, want /exec/web", gotPath)
 	}
 }
 
-func TestStreamRun_ReturnsLastError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestSSH_AgentReachable(t *testing.T) {
+	var gotPath, gotMethod string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(200)
-		fmt.Fprintln(w, `{"type":"error","message":"deploy failed"}`)
 	}))
-	defer ts.Close()
+	defer agent.Close()
 
-	client := cloud.NewAPIClient(&cloud.AuthConfig{APIBase: ts.URL, Token: "test"})
-	err := cloud.StreamRun(client, "/test", nil)
-	if err == nil {
-		t.Fatal("expected error")
+	ab := &agentBackend{
+		client:  &http.Client{},
+		baseURL: agent.URL,
+		out:     resolveOutput(rootCmd()),
 	}
-	if !strings.Contains(err.Error(), "deploy failed") {
-		t.Fatalf("error = %q, want 'deploy failed'", err.Error())
+	ab.SSH(t.Context(), []string{"kubectl", "get", "pods"})
+	if gotMethod != "POST" {
+		t.Fatalf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/ssh" {
+		t.Fatalf("path = %q, want /ssh", gotPath)
 	}
 }
 
-func TestStreamRun_APIError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(500)
-		json.NewEncoder(w).Encode(map[string]string{"error": "internal"})
+func TestLogs_AgentReachable(t *testing.T) {
+	var gotPath string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path + "?" + r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(200)
 	}))
-	defer ts.Close()
+	defer agent.Close()
 
-	client := cloud.NewAPIClient(&cloud.AuthConfig{APIBase: ts.URL, Token: "test"})
-	err := cloud.StreamRun(client, "/test", nil)
-	if err == nil {
-		t.Fatal("expected error")
+	ab := &agentBackend{
+		client:  &http.Client{},
+		baseURL: agent.URL,
+		out:     resolveOutput(rootCmd()),
 	}
-	if !strings.Contains(err.Error(), "internal") {
-		t.Fatalf("error = %q, want 'internal'", err.Error())
+	ab.Logs(t.Context(), LogsOpts{Service: "web", Follow: true, Tail: 100})
+	if !strings.Contains(gotPath, "/logs/web") {
+		t.Fatalf("path = %q, want /logs/web", gotPath)
+	}
+	if !strings.Contains(gotPath, "follow=true") {
+		t.Fatalf("path = %q, want follow=true", gotPath)
+	}
+	if !strings.Contains(gotPath, "tail=100") {
+		t.Fatalf("path = %q, want tail=100", gotPath)
 	}
 }
 
-// ── Config loading via --local ───────────────────────────────────────────────
+func TestDatabaseSQL_AgentReachable(t *testing.T) {
+	var gotPath, gotMethod string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("1 row"))
+	}))
+	defer agent.Close()
 
-func TestLocalMissingConfig(t *testing.T) {
-	cmd := rootCmd()
-	cmd.SetArgs([]string{"deploy", "--local", "--config", "/nonexistent/nvoi.yaml"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected error")
+	ab := &agentBackend{
+		client:  &http.Client{},
+		baseURL: agent.URL,
+		out:     resolveOutput(rootCmd()),
 	}
-	if !strings.Contains(err.Error(), "no such file") {
-		t.Fatalf("error = %q, want file-not-found error", err.Error())
+	ab.DatabaseSQL(t.Context(), "main", "postgres", "SELECT 1")
+	if gotMethod != "POST" {
+		t.Fatalf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/db/main/sql" {
+		t.Fatalf("path = %q, want /db/main/sql", gotPath)
 	}
 }

@@ -7,13 +7,12 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/spf13/viper"
 )
 
-// collectSecretKeys gathers all secret keys that need to be read from viper.
+// collectSecretKeys gathers all secret keys that need to be resolved.
 // This includes:
-//   - Bare names (no "=") → the key itself is read from env
-//   - $VAR references on the right side of "=" → each referenced var is read from env
+//   - Bare names (no "=") → the key itself is read from the source
+//   - $VAR references on the right side of "=" → each referenced var is read from the source
 //
 // This ensures EMAIL_HOST_USER=$BUGSINK_EMAIL_HOST_USER works without
 // declaring BUGSINK_EMAIL_HOST_USER as a separate bare entry first.
@@ -48,28 +47,28 @@ func collectSecretKeys(cfg *config.AppConfig) []string {
 	return keys
 }
 
-// Secrets reads secret values from viper and returns them for downstream
+// Secrets resolves secret values from dc.Creds and returns them for downstream
 // $VAR resolution. No k8s writes — secrets reach the cluster only via
 // per-service k8s Secrets in the Services/Crons reconcilers.
-func Secrets(_ context.Context, _ *config.DeployContext, _ *config.LiveState, cfg *config.AppConfig, v *viper.Viper) (map[string]string, error) {
+func Secrets(_ context.Context, dc *config.DeployContext, _ *config.LiveState, cfg *config.AppConfig) (map[string]string, error) {
 	allKeys := collectSecretKeys(cfg)
 	secretValues := make(map[string]string, len(allKeys))
 
-	// Read available values from viper — skip missing (may come from packages/storage)
+	// Read available values from the source — skip missing (may come from packages/storage)
 	for _, key := range allKeys {
-		if val := v.GetString(key); val != "" {
+		val, err := dc.Creds.Get(key)
+		if err != nil {
+			return nil, fmt.Errorf("secret %q: %w", key, err)
+		}
+		if val != "" {
 			secretValues[key] = val
 		}
 	}
 
-	// Global secrets MUST be in viper — unless ESO is managing them.
-	// When a secrets provider is configured, ESO fetches app secrets
-	// inside the cluster. They won't be in the local environment.
-	if cfg.Providers.Secrets == "" {
-		for _, key := range cfg.Secrets {
-			if secretValues[key] == "" {
-				return nil, fmt.Errorf("secret %q listed in config but not found in environment", key)
-			}
+	// Global secrets MUST be present — they have no other source
+	for _, key := range cfg.Secrets {
+		if secretValues[key] == "" {
+			return nil, fmt.Errorf("secret %q listed in config but not found", key)
 		}
 	}
 

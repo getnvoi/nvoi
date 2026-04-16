@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -9,12 +10,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/getnvoi/nvoi/internal/cloud"
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 
 	_ "github.com/getnvoi/nvoi/internal/packages/database"
 
@@ -52,6 +51,7 @@ func main() {
 // mode holds the active backend, populated by PersistentPreRunE.
 type mode struct {
 	backend Backend
+	cleanup func() // SSH tunnel cleanup — called after command completes
 }
 
 func rootCmd() *cobra.Command {
@@ -61,22 +61,23 @@ func rootCmd() *cobra.Command {
 		Use:          "nvoi",
 		Short:        "Deploy containers to cloud servers",
 		SilenceUsage: true,
+		PersistentPostRun: func(_ *cobra.Command, _ []string) {
+			if m.cleanup != nil {
+				m.cleanup()
+			}
+		},
 	}
 
-	root.PersistentFlags().Bool("local", false, "direct mode — run against providers with local credentials")
 	root.PersistentFlags().String("config", "nvoi.yaml", "path to config YAML")
 	root.PersistentFlags().Bool("json", false, "output JSONL")
 	root.PersistentFlags().Bool("ci", false, "plain text output")
+	root.PersistentFlags().BoolP("yes", "y", false, "skip confirmation prompts")
 
 	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		local, _ := cmd.Flags().GetBool("local")
-		if local {
-			return initLocal(cmd, &m)
-		}
-		return initCloud(cmd, &m)
+		return initBackend(cmd, &m)
 	}
 
-	// Shared commands — dispatch to backend with no branching.
+	// Commands — all dispatch to backend (agent or local bootstrap).
 	root.AddCommand(newDeployCmd(&m))
 	root.AddCommand(newTeardownCmd(&m))
 	root.AddCommand(newDescribeCmd(&m))
@@ -87,13 +88,10 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(newCronCmd(&m))
 	root.AddCommand(newDatabaseCmd(&m))
 
-	// Cloud-only commands — hard error with --local.
-	addUnauthCloudOnly(root, cloud.NewLoginCmd())
-	addCloudOnly(root, cloud.NewWhoamiCmd())
-	addCloudOnly(root, cloud.NewWorkspacesCmd())
-	addCloudOnly(root, cloud.NewReposCmd())
-	addCloudOnly(root, cloud.NewProviderCmd())
-	addCloudOnly(root, cloud.NewConfigCmd())
+	// Agent command — standalone, no backend init.
+	agentCmd := newAgentCmd()
+	agentCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error { return nil }
+	root.AddCommand(agentCmd)
 
 	root.SetErr(newErrorWriter(root))
 	root.SetErrPrefix("")
@@ -101,9 +99,10 @@ func rootCmd() *cobra.Command {
 	return root
 }
 
-// ── Mode init ───────────────────────────────────────────────────────────────
+// ── Backend init ────────────────────────────────────────────────────────────
+// One path. Try agent first. If no master exists, bootstrap locally.
 
-func initLocal(cmd *cobra.Command, m *mode) error {
+func initBackend(cmd *cobra.Command, m *mode) error {
 	configPath, _ := cmd.Flags().GetString("config")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -113,68 +112,36 @@ func initLocal(cmd *cobra.Command, m *mode) error {
 	if err != nil {
 		return err
 	}
-	v := viper.New()
-	v.AutomaticEnv()
 	out := resolveOutput(cmd)
-	m.backend = &localBackend{
-		dc:  buildDeployContext(cmd.Context(), out, cfg),
-		cfg: cfg,
-		v:   v,
-		out: out,
-	}
-	return nil
-}
 
-func initCloud(cmd *cobra.Command, m *mode) error {
-	c, authCfg, err := cloud.AuthedClient()
-	if err != nil {
-		configPath, _ := cmd.Flags().GetString("config")
-		if _, statErr := os.Stat(configPath); statErr == nil {
-			return fmt.Errorf("not authenticated — run 'nvoi login' for cloud mode, or pass --local for direct mode")
-		}
-		return fmt.Errorf("not authenticated — run 'nvoi login'")
-	}
-	ws, repo, err := cloud.RequireRepo(authCfg)
-	if err != nil {
-		return err
-	}
-	configPath, _ := cmd.Flags().GetString("config")
-	m.backend = &cloudBackend{
-		client: c,
-		repoPath: func(suffix string) string {
-			return "/workspaces/" + ws + "/repos/" + repo + suffix
-		},
-		out:        resolveOutput(cmd),
-		configPath: configPath,
-	}
-	return nil
-}
-
-// ── Cloud-only gates ────────────────────────────────────────────────────────
-
-func addCloudOnly(root *cobra.Command, cmd *cobra.Command) {
-	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
-		local, _ := c.Flags().GetBool("local")
-		if local {
-			return fmt.Errorf("%s is not available in local mode", cmd.Name())
-		}
-		if _, err := cloud.LoadAuthConfig(); err != nil {
-			return err
-		}
+	// Try connecting to the agent on the master.
+	backend, cleanup, err := connectToAgent(cmd.Context(), out, cfg, configPath)
+	if err == nil {
+		m.backend = backend
+		m.cleanup = cleanup
 		return nil
 	}
-	root.AddCommand(cmd)
-}
 
-func addUnauthCloudOnly(root *cobra.Command, cmd *cobra.Command) {
-	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
-		local, _ := c.Flags().GetBool("local")
-		if local {
-			return fmt.Errorf("%s is not available in local mode", cmd.Name())
-		}
-		return nil
+	// Agent unreachable. If the master doesn't exist, bootstrap.
+	// If the master exists but agent is down, that's a real error.
+	if !errors.Is(err, ErrNoMaster) {
+		return fmt.Errorf("agent not reachable: %w", err)
 	}
-	root.AddCommand(cmd)
+
+	// No master — first deploy. Confirm with user unless -y.
+	yes, _ := cmd.Flags().GetBool("yes")
+	if !yes {
+		fmt.Fprintf(os.Stderr, "No existing cluster found. Create servers and deploy? [y/N] ")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		if answer := strings.TrimSpace(strings.ToLower(scanner.Text())); answer != "y" && answer != "yes" {
+			return fmt.Errorf("aborted")
+		}
+	}
+
+	// Bootstrap: run locally, install agent as part of provisioning.
+	m.backend = newLocalBackend(cmd.Context(), out, cfg)
+	return nil
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────────

@@ -86,6 +86,9 @@ func (c *Client) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
+// Get returns the value for a secret key. Returns ("", nil) if the key
+// does not exist — honoring the CredentialSource contract. Only real
+// failures (auth, network) are returned as errors.
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	api, err := c.authedAPI(ctx)
 	if err != nil {
@@ -98,6 +101,9 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	}
 	path := fmt.Sprintf("/v3/secrets/raw/%s?workspaceSlug=%s&environment=%s", key, c.projectSlug, c.environment)
 	if err := api.Do(ctx, "GET", path, nil, &resp); err != nil {
+		if utils.IsNotFound(err) {
+			return "", nil
+		}
 		return "", fmt.Errorf("infisical: get %q: %w", key, err)
 	}
 	return resp.Secret.SecretValue, nil

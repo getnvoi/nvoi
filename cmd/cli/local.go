@@ -6,156 +6,36 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"strings"
 
+	"github.com/getnvoi/nvoi/internal/agent"
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/core"
-	"github.com/getnvoi/nvoi/internal/packages/database"
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
-	"github.com/spf13/viper"
 )
 
-// localBackend dispatches commands directly to pkg/core with env var credentials.
+// localBackend runs commands directly — no agent. Used for first deploy
+// (bootstrap) before the agent is installed on the master.
 type localBackend struct {
 	dc  *config.DeployContext
 	cfg *config.AppConfig
-	v   *viper.Viper
 	out app.Output
 }
 
-// ── Credential resolution ───────────────────────────────────────────────────
-// os.Getenv lives here — the cmd/ boundary. Everything below receives resolved values.
-
-func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig) *config.DeployContext {
-	// Infra provider creds always come from env — they're nvoi operational credentials.
-	envSource := provider.EnvSource{}
-	computeCreds, _ := resolveProviderCreds(envSource, "compute", cfg.Providers.Compute)
-	sshKey, _ := resolveSSHKey()
-	dnsCreds, _ := resolveProviderCreds(envSource, "dns", cfg.Providers.DNS)
-	storageCreds, _ := resolveProviderCreds(envSource, "storage", cfg.Providers.Storage)
-	builderCreds, _ := resolveProviderCreds(envSource, "build", cfg.Providers.Build)
-	gitUsername, gitToken := resolveGitAuth()
-
-	// App secrets (database creds, service secrets) come from the secrets provider
-	// when configured, otherwise from env.
-	appSource := appCredentialSource(ctx, cfg)
-	dbCreds := resolveDatabaseCreds(appSource, cfg)
-
-	// Resolve secrets provider's own creds for ESO bootstrap.
-	var secretsCreds map[string]string
-	if sp := cfg.Providers.Secrets; sp != "" {
-		secretsCreds, _ = resolveProviderCreds(provider.EnvSource{}, "secrets", sp)
+func newLocalBackend(ctx context.Context, out app.Output, cfg *config.AppConfig) *localBackend {
+	return &localBackend{
+		dc:  agent.BuildDeployContext(ctx, out, cfg),
+		cfg: cfg,
+		out: out,
 	}
-
-	return &config.DeployContext{
-		Cluster: app.Cluster{
-			AppName:     cfg.App,
-			Env:         cfg.Env,
-			Provider:    cfg.Providers.Compute,
-			Credentials: computeCreds,
-			SSHKey:      sshKey,
-			Output:      out,
-		},
-		DNS:           app.ProviderRef{Name: cfg.Providers.DNS, Creds: dnsCreds},
-		Storage:       app.ProviderRef{Name: cfg.Providers.Storage, Creds: storageCreds},
-		Builder:       cfg.Providers.Build,
-		BuildCreds:    builderCreds,
-		GitUsername:   gitUsername,
-		GitToken:      gitToken,
-		DatabaseCreds: dbCreds,
-		SecretsCreds:  secretsCreds,
-	}
-}
-
-// appCredentialSource returns the CredentialSource for app secrets (database creds,
-// service secrets). If a secrets provider is configured, fetches from it.
-// If not, falls back to env vars. Infra provider creds are always from env — not this.
-func appCredentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
-	if sp := cfg.Providers.Secrets; sp != "" {
-		// Bootstrap: the secrets provider's own creds always come from env.
-		spCreds, err := resolveProviderCreds(provider.EnvSource{}, "secrets", sp)
-		if err == nil && len(spCreds) > 0 {
-			secretsProv, err := provider.ResolveSecrets(sp, spCreds)
-			if err == nil {
-				return provider.SecretsSource{Ctx: ctx, Provider: secretsProv}
-			}
-		}
-	}
-	return provider.EnvSource{}
-}
-
-func resolveProviderCreds(source provider.CredentialSource, kind, name string) (map[string]string, error) {
-	if name == "" {
-		return nil, nil
-	}
-	schema, err := provider.GetSchema(kind, name)
-	if err != nil {
-		return nil, err
-	}
-	return provider.ResolveFrom(schema, source)
-}
-
-func resolveSSHKey() ([]byte, error) {
-	keyPath := os.Getenv("SSH_KEY_PATH")
-	if keyPath != "" {
-		if strings.HasPrefix(keyPath, "~/") {
-			if home := os.Getenv("HOME"); home != "" {
-				keyPath = home + keyPath[1:]
-			}
-		}
-		return os.ReadFile(keyPath)
-	}
-	home := os.Getenv("HOME")
-	for _, name := range []string{"id_ed25519", "id_rsa"} {
-		if key, err := os.ReadFile(home + "/.ssh/" + name); err == nil {
-			return key, nil
-		}
-	}
-	return nil, fmt.Errorf("no SSH key found — set SSH_KEY_PATH or ~/.ssh/id_ed25519")
-}
-
-func resolveGitAuth() (string, string) {
-	if out, err := exec.Command("gh", "auth", "token").Output(); err == nil {
-		if token := strings.TrimSpace(string(out)); token != "" {
-			return "x-access-token", token
-		}
-	}
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		return "x-access-token", token
-	}
-	return "", ""
-}
-
-func resolveDatabaseCreds(source provider.CredentialSource, cfg *config.AppConfig) map[string]*config.DatabaseCredentials {
-	if len(cfg.Database) == 0 {
-		return nil
-	}
-	creds := make(map[string]*config.DatabaseCredentials, len(cfg.Database))
-	for name, db := range cfg.Database {
-		engine := database.EngineFor(db.Kind)
-		userEnv, passEnv, dbEnv := engine.EnvVarNames()
-		prefix := strings.ToUpper(name)
-		user, _ := source.Get(prefix + "_" + userEnv)
-		pass, _ := source.Get(prefix + "_" + passEnv)
-		dbName, _ := source.Get(prefix + "_" + dbEnv)
-		creds[name] = &config.DatabaseCredentials{
-			User:     user,
-			Password: pass,
-			DBName:   dbName,
-		}
-	}
-	return creds
 }
 
 // ── Backend methods ─────────────────────────────────────────────────────────
 
 func (b *localBackend) Deploy(ctx context.Context) error {
-	return reconcile.Deploy(ctx, b.dc, b.cfg, b.v)
+	return reconcile.Deploy(ctx, b.dc, b.cfg)
 }
 
 func (b *localBackend) Teardown(ctx context.Context, deleteVolumes, deleteStorage bool) error {

@@ -14,7 +14,6 @@ import (
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
-	"github.com/spf13/viper"
 )
 
 // ── Provider registration ─────────────────────────────────────────────────────
@@ -327,6 +326,7 @@ func testDC(ssh *testutil.MockSSH) *config.DeployContext {
 				return ssh, nil
 			},
 		},
+		Creds: provider.MapSource{M: map[string]string{}},
 	}
 }
 
@@ -350,15 +350,22 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 				return ssh, nil
 			},
 		},
+		Creds: provider.MapSource{M: map[string]string{}},
 	}
 }
 
-func testViper(kvs ...string) *viper.Viper {
-	v := viper.New()
+func testCreds(kvs ...string) provider.CredentialSource {
+	m := make(map[string]string, len(kvs)/2)
 	for i := 0; i+1 < len(kvs); i += 2 {
-		v.Set(kvs[i], kvs[i+1])
+		m[kvs[i]] = kvs[i+1]
 	}
-	return v
+	return provider.MapSource{M: m}
+}
+
+func testDCWithCreds(ssh *testutil.MockSSH, kvs ...string) *config.DeployContext {
+	dc := testDC(ssh)
+	dc.Creds = testCreds(kvs...)
+	return dc
 }
 
 func testNames() *utils.Names {

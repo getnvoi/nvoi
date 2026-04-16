@@ -74,8 +74,8 @@ if live state exists:
 
 ### Secrets
 
-- Values resolved from viper (environment variables) at deploy time.
-- Bare names (no `=`) resolved from env. `$VAR` references on the right side of `=` also resolved from env — no bare declaration required first.
+- Values resolved from `dc.Creds` (CredentialSource) at deploy time — env vars, secrets provider, or DB map depending on mode.
+- Bare names (no `=`) resolved from source. `$VAR` references on the right side of `=` also resolved — no bare declaration required first.
 - Missing secret in environment = hard error (fail-fast, not silent skip).
 - Global secrets (`cfg.Secrets`) stored in a single k8s Secret named `secrets` in the namespace.
 - Per-service/cron secrets stored in `{name}-secrets` k8s Secrets (see Services/Crons below).
