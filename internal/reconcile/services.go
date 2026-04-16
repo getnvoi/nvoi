@@ -37,24 +37,27 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			plainEnv = append(plainEnv, k+"="+v)
 		}
 
-		// Resolve secrets: entries — stored in per-service k8s Secret
-		svcSecretKVs, svcSecretRefs, err := resolveSecretEntries(name, svc.Secrets, sources)
-		if err != nil {
-			return err
-		}
-
-		// Expand storage: into per-service secret entries
-		expandStorageCreds(svc.Storage, sources, svcSecretKVs, &svcSecretRefs)
-
 		// Write secrets to cluster: ESO ExternalSecret or plaintext k8s Secret
-		esoKind := cfg.Providers.Secrets
-		if esoKind != "" && len(svcSecretRefs) > 0 {
-			// ESO path: create ExternalSecret CRD — ESO syncs values from external store
-			if err := upsertExternalSecret(ctx, dc, names, name, svcSecretRefs); err != nil {
-				return err
+		esoActive := cfg.Providers.Secrets != ""
+		var svcSecretRefs []string
+		if esoActive {
+			// ESO path: collect key names only — ESO fetches values inside the cluster.
+			svcSecretRefs = collectSecretKeyNames(svc.Secrets)
+			expandStorageKeyNames(svc.Storage, &svcSecretRefs)
+			if len(svcSecretRefs) > 0 {
+				if err := upsertExternalSecret(ctx, dc, names, name, svcSecretRefs); err != nil {
+					return err
+				}
 			}
 		} else {
-			// Baseline path: write plaintext k8s Secret directly
+			// Baseline path: resolve values from sources, write plaintext k8s Secret
+			var svcSecretKVs map[string]string
+			var err error
+			svcSecretKVs, svcSecretRefs, err = resolveSecretEntries(name, svc.Secrets, sources)
+			if err != nil {
+				return err
+			}
+			expandStorageCreds(svc.Storage, sources, svcSecretKVs, &svcSecretRefs)
 			if err := upsertServiceSecrets(ctx, dc, names, name, svcSecretKVs); err != nil {
 				return err
 			}
@@ -66,7 +69,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
 			Volumes:    svc.Volumes, HealthPath: svc.Health, Servers: servers,
-			ESOManaged: esoKind != "",
+			ESOManaged: esoActive,
 		}); err != nil {
 			return err
 		}
@@ -99,6 +102,25 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		}
 	}
 	return nil
+}
+
+// collectSecretKeyNames extracts the env var names from a secrets list
+// without resolving values. Used by the ESO path where values come from
+// the external store, not from local sources.
+func collectSecretKeyNames(secrets []string) []string {
+	refs := make([]string, 0, len(secrets))
+	for _, entry := range secrets {
+		envName, _ := kube.ParseSecretRef(entry)
+		refs = append(refs, envName)
+	}
+	return refs
+}
+
+// expandStorageKeyNames adds storage credential key names to the refs list.
+func expandStorageKeyNames(storageNames []string, refs *[]string) {
+	for _, storageName := range storageNames {
+		*refs = append(*refs, app.StorageSecretKeys(storageName)...)
+	}
 }
 
 // resolveSecretEntries processes a service/cron's secrets: field.

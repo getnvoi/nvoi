@@ -6,6 +6,7 @@ providers:
   dns: cloudflare
   storage: cloudflare
   build: local
+  secrets: infisical
 
 servers:
   master:
