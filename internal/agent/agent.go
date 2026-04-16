@@ -35,7 +35,7 @@ type Agent struct {
 	ctx  context.Context
 	cfg  *config.AppConfig
 	opts AgentOpts
-	mu   sync.Mutex // serialize deploys — one at a time
+	mu   sync.RWMutex // write: deploy/teardown/config push. read: everything else.
 }
 
 // New creates an agent with the given config and pre-resolved options.
@@ -104,9 +104,9 @@ func (a *Agent) handleConfigPush(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "ok",
 		"app":    cfg.App,
@@ -140,9 +140,9 @@ func (a *Agent) cmdTeardown(ctx context.Context, out *jsonlOutput, r *http.Reque
 }
 
 func (a *Agent) cmdDescribe(ctx context.Context, out *jsonlOutput, r *http.Request) error {
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
@@ -159,9 +159,9 @@ func (a *Agent) cmdDescribe(ctx context.Context, out *jsonlOutput, r *http.Reque
 }
 
 func (a *Agent) cmdResources(ctx context.Context, out *jsonlOutput, r *http.Request) error {
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
@@ -179,9 +179,9 @@ func (a *Agent) cmdResources(ctx context.Context, out *jsonlOutput, r *http.Requ
 
 func (a *Agent) cmdLogs(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	service := r.PathValue("service")
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
@@ -208,9 +208,9 @@ func (a *Agent) cmdExec(ctx context.Context, out *jsonlOutput, r *http.Request) 
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 	return app.Exec(ctx, app.ExecRequest{
@@ -224,9 +224,9 @@ func (a *Agent) cmdSSH(ctx context.Context, out *jsonlOutput, r *http.Request) e
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 	return app.SSH(ctx, app.SSHRequest{
@@ -237,9 +237,9 @@ func (a *Agent) cmdSSH(ctx context.Context, out *jsonlOutput, r *http.Request) e
 func (a *Agent) cmdCronRun(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	name := r.PathValue("name")
 
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 	return app.CronRun(ctx, app.CronRunRequest{
@@ -249,9 +249,9 @@ func (a *Agent) cmdCronRun(ctx context.Context, out *jsonlOutput, r *http.Reques
 
 func (a *Agent) cmdDBBackupList(ctx context.Context, out *jsonlOutput, r *http.Request) error {
 	dbName := r.PathValue("name")
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
@@ -277,9 +277,9 @@ func (a *Agent) cmdDBSQL(ctx context.Context, out *jsonlOutput, r *http.Request)
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(ctx, out, cfg, a.opts)
 
@@ -313,9 +313,9 @@ func (a *Agent) handleDBBackupDownload(w http.ResponseWriter, r *http.Request) {
 	dbName := r.PathValue("name")
 	key := r.PathValue("key")
 
-	a.mu.Lock()
+	a.mu.RLock()
 	cfg := a.cfg
-	a.mu.Unlock()
+	a.mu.RUnlock()
 
 	dc := BuildDeployContext(r.Context(), render.NewJSONOutput(w), cfg, a.opts)
 
