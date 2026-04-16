@@ -85,27 +85,42 @@ func (r *Reporter) loop() {
 
 	var batch []app.Event
 	backoff := reporterBackoffMin
+	var backoffTimer <-chan time.Time // nil until a send fails
 
 	for {
 		select {
 		case ev := <-r.ch:
 			batch = append(batch, ev)
-			if len(batch) >= reporterBatchSize {
+			if len(batch) >= reporterBatchSize && backoffTimer == nil {
 				if r.send(batch) {
 					backoff = reporterBackoffMin
 				} else {
 					backoff = nextBackoff(backoff)
-					time.Sleep(backoff)
+					backoffTimer = time.After(backoff)
 				}
 				batch = batch[:0]
 			}
 
 		case <-ticker.C:
+			if len(batch) > 0 && backoffTimer == nil {
+				if r.send(batch) {
+					backoff = reporterBackoffMin
+				} else {
+					backoff = nextBackoff(backoff)
+					backoffTimer = time.After(backoff)
+				}
+				batch = batch[:0]
+			}
+
+		case <-backoffTimer:
+			// Backoff elapsed — retry pending batch or resume normal flushing.
+			backoffTimer = nil
 			if len(batch) > 0 {
 				if r.send(batch) {
 					backoff = reporterBackoffMin
 				} else {
 					backoff = nextBackoff(backoff)
+					backoffTimer = time.After(backoff)
 				}
 				batch = batch[:0]
 			}
