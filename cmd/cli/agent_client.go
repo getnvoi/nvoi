@@ -11,9 +11,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/getnvoi/nvoi/internal/agent"
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 const agentPort = "9500"
@@ -36,12 +36,12 @@ type agentBackend struct {
 // stays open for the lifetime of the returned cleanup function.
 func connectToAgent(ctx context.Context, out app.Output, cfg *config.AppConfig, configPath string) (*agentBackend, func(), error) {
 	// Resolve master IP from provider API.
-	source := cliCredentialSource(ctx, cfg)
-	computeCreds, err := cliResolveProviderCreds(source, "compute", cfg.Providers.Compute)
+	source := agent.CredentialSource(ctx, cfg)
+	computeCreds, err := agent.ResolveProviderCreds(source, "compute", cfg.Providers.Compute)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)
 	}
-	sshKey, err := cliResolveSSHKey()
+	sshKey, err := resolveAgentSSHKey()
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)
 	}
@@ -328,49 +328,6 @@ func (b *agentBackend) DatabaseSQL(ctx context.Context, dbName, engine, query st
 	return nil
 }
 
-// ── CLI-side credential helpers ─────────────────────────────────────────────
-// The CLI only needs compute creds + SSH key to reach the master.
-// Everything else is on the agent.
-
-func cliCredentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
-	if sp := cfg.Providers.Secrets; sp != "" {
-		spCreds, err := cliResolveProviderCreds(provider.EnvSource{}, "secrets", sp)
-		if err == nil && len(spCreds) > 0 {
-			secretsProv, err := provider.ResolveSecrets(sp, spCreds)
-			if err == nil {
-				return provider.SecretsSource{Ctx: ctx, Provider: secretsProv}
-			}
-		}
-	}
-	return provider.EnvSource{}
-}
-
-func cliResolveProviderCreds(source provider.CredentialSource, kind, name string) (map[string]string, error) {
-	if name == "" {
-		return nil, nil
-	}
-	schema, err := provider.GetSchema(kind, name)
-	if err != nil {
-		return nil, err
-	}
-	return provider.ResolveFrom(schema, source)
-}
-
-func cliResolveSSHKey() ([]byte, error) {
-	keyPath := os.Getenv("SSH_KEY_PATH")
-	if keyPath != "" {
-		if strings.HasPrefix(keyPath, "~/") {
-			if home := os.Getenv("HOME"); home != "" {
-				keyPath = home + keyPath[1:]
-			}
-		}
-		return os.ReadFile(keyPath)
-	}
-	home := os.Getenv("HOME")
-	for _, name := range []string{"id_ed25519", "id_rsa"} {
-		if key, err := os.ReadFile(home + "/.ssh/" + name); err == nil {
-			return key, nil
-		}
-	}
-	return nil, fmt.Errorf("no SSH key found — set SSH_KEY_PATH or ~/.ssh/id_ed25519")
-}
+// CLI-side credential resolution delegates to internal/agent for the shared
+// logic. The CLI only needs compute creds + SSH key to reach the master.
+// resolveAgentSSHKey lives in cmd/cli/agent.go (the os.Getenv boundary).

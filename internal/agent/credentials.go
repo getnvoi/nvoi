@@ -10,14 +10,15 @@ import (
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
-// credentialSource returns the single CredentialSource for this agent.
+// CredentialSource returns the single CredentialSource for a config.
 // If a secrets provider is configured, its own credentials are bootstrapped
 // from env vars (via EnvSource — the designed abstraction), then all other
 // credentials are fetched through it.
 // If no secrets provider is configured, credentials come from env vars directly.
-func credentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
+// Exported — used by both the agent and the CLI client (to resolve compute creds for SSH).
+func CredentialSource(ctx context.Context, cfg *config.AppConfig) provider.CredentialSource {
 	if sp := cfg.Providers.Secrets; sp != "" {
-		spCreds, err := resolveProviderCreds(provider.EnvSource{}, "secrets", sp)
+		spCreds, err := ResolveProviderCreds(provider.EnvSource{}, "secrets", sp)
 		if err == nil && len(spCreds) > 0 {
 			secretsProv, err := provider.ResolveSecrets(sp, spCreds)
 			if err == nil {
@@ -33,12 +34,12 @@ func credentialSource(ctx context.Context, cfg *config.AppConfig) provider.Crede
 // Provider credentials come from CredentialSource (EnvSource or SecretsSource).
 // Called per command — provider credentials are resolved fresh each time.
 func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConfig, opts AgentOpts) *config.DeployContext {
-	source := credentialSource(ctx, cfg)
+	source := CredentialSource(ctx, cfg)
 
-	computeCreds, _ := resolveProviderCreds(source, "compute", cfg.Providers.Compute)
-	dnsCreds, _ := resolveProviderCreds(source, "dns", cfg.Providers.DNS)
-	storageCreds, _ := resolveProviderCreds(source, "storage", cfg.Providers.Storage)
-	builderCreds, _ := resolveProviderCreds(source, "build", cfg.Providers.Build)
+	computeCreds, _ := ResolveProviderCreds(source, "compute", cfg.Providers.Compute)
+	dnsCreds, _ := ResolveProviderCreds(source, "dns", cfg.Providers.DNS)
+	storageCreds, _ := ResolveProviderCreds(source, "storage", cfg.Providers.Storage)
+	builderCreds, _ := ResolveProviderCreds(source, "build", cfg.Providers.Build)
 	dbCreds := resolveDatabaseCreds(source, cfg)
 
 	return &config.DeployContext{
@@ -61,7 +62,9 @@ func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 	}
 }
 
-func resolveProviderCreds(source provider.CredentialSource, kind, name string) (map[string]string, error) {
+// ResolveProviderCreds resolves credentials for a provider kind+name from any source.
+// Exported — used by both the agent and the CLI client.
+func ResolveProviderCreds(source provider.CredentialSource, kind, name string) (map[string]string, error) {
 	if name == "" {
 		return nil, nil
 	}
