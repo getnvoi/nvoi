@@ -27,6 +27,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
@@ -36,7 +37,7 @@ import (
 
 // KubeClient talks to the k8s API directly via client-go.
 type KubeClient struct {
-	cs     *kubernetes.Clientset
+	cs     kubernetes.Interface
 	dyn    dynamic.Interface
 	mapper meta.RESTMapper
 }
@@ -75,6 +76,13 @@ func NewTunneled(ctx context.Context, ssh utils.SSHClient) (*KubeClient, error) 
 }
 
 var kubeconfigPath_ = "/home/deploy/.kube/config"
+
+// NewFake creates a KubeClient backed by an in-memory fake clientset.
+// For tests only — no real cluster, no network, instant responses.
+func NewFake() *KubeClient {
+	cs := fake.NewSimpleClientset()
+	return &KubeClient{cs: cs}
+}
 
 func fromConfig(config *rest.Config) (*KubeClient, error) {
 	cs, err := kubernetes.NewForConfig(config)

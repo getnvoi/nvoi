@@ -2,8 +2,6 @@ package core
 
 import (
 	"context"
-
-	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
 // WaitRolloutRequest asks the cluster to wait for a specific service's
@@ -22,17 +20,5 @@ func WaitRollout(ctx context.Context, req WaitRolloutRequest) error {
 	if err != nil {
 		return err
 	}
-	ns := names.KubeNamespace()
-
-	if req.Kube != nil {
-		return req.Kube.WaitRolloutReady(ctx, ns, req.Service, req.WorkloadKind, req.HasHealthCheck, out)
-	}
-
-	// Fallback: SSH kubectl path (bootstrap).
-	ssh, _, err := req.Cluster.SSH(ctx)
-	if err != nil {
-		return err
-	}
-	defer ssh.Close()
-	return kube.WaitRollout(ctx, ssh, ns, req.Service, req.WorkloadKind, req.HasHealthCheck, out)
+	return req.Kube.WaitRolloutReady(ctx, names.KubeNamespace(), req.Service, req.WorkloadKind, req.HasHealthCheck, out)
 }

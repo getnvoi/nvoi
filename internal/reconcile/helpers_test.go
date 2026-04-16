@@ -11,7 +11,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
+	kubepkg "github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -32,7 +32,7 @@ func init() {
 	provider.RegisterCompute("test-reconcile", provider.CredentialSchema{Name: "test-reconcile"}, func(creds map[string]string) provider.ComputeProvider {
 		return activeMock
 	})
-	kube.SetTestTiming(time.Millisecond, time.Millisecond)
+	kubepkg.SetTestTiming(time.Millisecond, time.Millisecond)
 	dnsGracePeriod = time.Millisecond
 }
 
@@ -322,6 +322,7 @@ func testDC(ssh *testutil.MockSSH) *config.DeployContext {
 			SSHKey:    sshKey,
 			Output:    &testutil.MockOutput{},
 			MasterSSH: ssh,
+			Kube:      kubepkg.NewFake(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
@@ -346,6 +347,7 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 			SSHKey:    sshKey,
 			Output:    &testutil.MockOutput{},
 			MasterSSH: ssh,
+			Kube:      kubepkg.NewFake(),
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
