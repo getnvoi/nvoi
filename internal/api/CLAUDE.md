@@ -1,39 +1,32 @@
 # CLAUDE.md — internal/api
 
-Thin relay between the cloud CLI and `pkg/core/`. Each command hits one API endpoint that calls one `pkg/core/` function.
+Control plane. Stores config, teams, audit data, and receives events from agents. Does NOT execute infrastructure operations — the agent on the master node does all execution.
 
 ## How it works
 
 ```
-CLI command (e.g. nvoi deploy)
-  → POST /repos/:rid/deploy {config: yamlString}
-    → Load repo + InfraProvider credentials
-    → Reconcile engine runs against the cluster
-    → Stream JSONL output back
-  → CLI renders JSONL through TUI
+Agent (on master) deploys infrastructure
+  → teeOutput sends events to Reporter
+  → Reporter POSTs batched JSONL to API
+  → API stores as AgentEvent rows
+  → Dashboard reads AgentEvent for audit/monitoring
+
+CLI commands:
+  → SSH tunnel to agent → agent executes → JSONL back to CLI
+  → API is not in the CLI→agent path (read-only dashboard)
 ```
 
-For operational commands:
+Config CRUD (future — currently via nvoi.yaml):
 ```
-CLI command (e.g. nvoi cron run db-backup)
-  → POST /repos/:rid/cron/db-backup/run
-    → pkg/core.CronRun()
-    → Stream JSONL output back
-```
-
-For config CRUD:
-```
-CLI command (e.g. nvoi config service set web --build web --port 3000)
-  → CLI: GET /repos/:rid/config → parse YAML → mutate → PUT /repos/:rid/config
-    → API: validate YAML parses → inject app+env from repo → ValidateConfig (warn) → save
-    → Returns: updated YAML + validation warnings
+CLI: GET /repos/:rid/config → parse YAML → mutate → PUT /repos/:rid/config
+  → API: validate YAML parses → inject app+env from repo → ValidateConfig (warn) → save
 ```
 
 ## Architecture
 
 ```
 internal/api/
-  models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo (with Config field), CommandLog
+  models.go              User, Workspace, WorkspaceUser, InfraProvider, Repo, CommandLog, AgentEvent
   db.go                  PostgreSQL + GORM + AutoMigrate (reads MAIN_DATABASE_URL)
   testdb.go              In-memory SQLite for tests
   encrypt.go             AES-256-GCM for secrets at rest
@@ -46,15 +39,10 @@ internal/api/
     humaerr.go           Custom error format ({"error":"..."})
     inputs.go            Shared input types (WorkspaceScopedInput, RepoScopedInput)
     config.go            GET /config (show) + PUT /config (save with validation warnings)
-    cron.go              POST /cron/{name}/run — trigger cron job, stream JSONL
-    stream.go            Shared JSONL streaming output (jsonlOutput, streamOperation)
     auth.go              POST /login
     workspaces.go        CRUD /workspaces
     repos.go             CRUD /repos — scoped through workspace + provider FK links
-    providers.go         Set/list/delete InfraProvider records (workspace-scoped)
-    describe.go          GET /describe + GET /resources + clusterFromRepo helper
-    query.go             Read-only endpoints (instances, volumes, dns, secrets, storage, builds, logs, exec)
-    ssh.go               POST /ssh — run command on master, stream output
+    agent_events.go      POST /agent/events — batched event ingestion from agents
 ```
 
 ## Deployment
@@ -77,12 +65,6 @@ domains:
   api: [api.nvoi.to]
 ```
 
-The database package auto-injects `MAIN_DATABASE_URL`, `MAIN_POSTGRES_HOST`, etc. into the API service. The API reads `MAIN_DATABASE_URL` from its environment to connect to postgres.
-
-Database credentials are user-owned — set in `.env` and GitHub secrets as `MAIN_POSTGRES_USER`, `MAIN_POSTGRES_PASSWORD`, `MAIN_POSTGRES_DB`. No auto-generation.
-
-Backups are managed by the database package — CronJob runs every 6 hours, uploads to R2 bucket. `nvoi db backup now` triggers immediately.
-
 ## Data model
 
 ```
@@ -91,28 +73,25 @@ User
         └── Workspace
               ├── InfraProvider (kind + name + encrypted credentials)
               └── Repo
-                    ├── Config (YAML blob — mutated by config CRUD, used by deploy)
-                    ├── ComputeProviderID → InfraProvider
-                    ├── DNSProviderID → InfraProvider
-                    ├── StorageProviderID → InfraProvider
-                    ├── BuildProviderID → InfraProvider
-                    └── CommandLog
+                    ├── Config (YAML blob)
+                    ├── AgentToken + AgentTokenHash (auto-generated, for agent auth)
+                    ├── SSHPrivateKey + SSHPublicKey (auto-generated)
+                    ├── Provider FKs (Compute, DNS, Storage, Build, Secrets)
+                    ├── CommandLog (per-command summary)
+                    └── AgentEvent (per-event detail, FK with cascade)
 ```
 
-## Config CRUD
+## Agent event ingestion
 
-Config is stored as a YAML blob on the Repo. CLI commands fetch, mutate, save:
+`POST /agent/events` — accepts batched JSONL events from agents. Own auth (agent token, not JWT). The agent sends its plaintext token (from `NVOI_API_TOKEN`), the API hashes it with SHA-256 and compares against `Repo.AgentTokenHash`.
 
-- `GET /config` — returns stored YAML + validation warnings
-- `PUT /config` — receives YAML, validates it parses, injects app+env from repo, runs `ValidateConfig` (warnings not rejections), saves
-
-The API is dumb storage. Surgical YAML manipulation happens in the CLI (`internal/cloud/config_*.go`). Save always succeeds (unless malformed YAML). Validation warnings are informational — deploy is the hard gate.
+Events are stored as `AgentEvent` rows with `RepoID` FK (indexed, cascades on delete). App/env denormalized for fast queries.
 
 ## Key rules
 
-1. **The API calls `pkg/core/` — it never reimplements infrastructure logic.**
-2. **Provider credentials come from InfraProvider records.** No env-based resolution. `CredentialsMap()` returns schema-mapped keys.
-3. **Repo SSH keys are auto-generated.** Ed25519 keypair created at repo creation, private key encrypted at rest.
+1. **The API is a control plane — it never executes infrastructure operations.** Agents execute. The API stores and serves data.
+2. **Provider credentials come from InfraProvider records.** Encrypted at rest via AES-256-GCM.
+3. **Repo SSH keys and agent tokens are auto-generated.** Ed25519 keypair + 32-byte agent token created at repo creation.
 4. **The API NEVER reads env vars for business logic.** `os.Getenv` is only for server startup config (`MAIN_DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`).
-5. **Config save always succeeds.** Validation warnings returned, not rejections. Deploy rejects invalid config.
-6. **Never fail silently.** Encryption errors, SSH key generation errors, DB errors — always return the error.
+5. **Agent auth is separate from user auth.** Agents use hashed bearer tokens. Users use JWT. The `/agent/events` endpoint bypasses the JWT middleware.
+6. **Never fail silently.** Encryption errors, token generation errors, DB errors — always return the error.

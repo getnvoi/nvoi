@@ -207,8 +207,9 @@ cmd/
 
 internal/
   agent/                   Agent — deploy runtime on the master node
-    agent.go               HTTP server, CommandFunc handlers, JSONL-only output
+    agent.go               HTTP server, CommandFunc handlers, JSONL-only output, state caching
     credentials.go         CredentialSource, BuildDeployContext, provider resolution
+    reporter.go            API event reporter (async POST, teeOutput, backoff)
   config/                  Shared types — no logic
     config.go              AppConfig, DeployContext, LiveState, all definition types
   reconcile/               Deploy orchestrator — YAML to infrastructure
@@ -290,7 +291,13 @@ pkg/
 
 The agent (`internal/agent/`) is the deploy runtime. It runs on the master node as a long-running HTTP server (localhost:9500). All k8s operations go through `client-go` — no kubectl binary, no SSH for k8s.
 
+**State caching.** `atomic.Pointer[agentState]` holds cfg + fully-resolved DeployContext (minus Output). Built once at startup via `loadConfig`, rebuilt on config push. Reads are lock-free via `snapshot(out)` — pointer load + shallow copy to stamp per-request Output. `sync.Mutex` serializes deploy/teardown only. Reads (describe, logs, exec) never block.
+
+**Output is per-request.** `Cluster` is pure identity (cacheable). `Output` lives on `DeployContext` (reconcile path) and on each `pkg/core/` request struct. Handlers stamp Output via `snapshot(out)`.
+
 **Agent handlers** receive `*jsonlOutput` (not `http.ResponseWriter`). They cannot write anything except JSONL events. This is enforced by the `CommandFunc` type signature. Every endpoint returns JSONL.
+
+**API reporting.** When `NVOI_API_URL` is set, the agent starts a Reporter goroutine that tees all Output events to the API via async batched POSTs. `teeOutput` wraps the per-request JSONL writer — transparent through the Output interface. Bounded buffer (4096 events), exponential backoff (1s → 30s). Deploys never stall on API latency. When not set, the agent runs standalone — zero API traffic.
 
 **KubeClient** (`pkg/kube/client.go`) wraps `client-go` clientset + dynamic client. Two constructors:
 - `NewLocal(path)` — agent on master, reads kubeconfig directly
