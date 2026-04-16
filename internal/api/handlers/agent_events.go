@@ -44,9 +44,8 @@ type AgentEventsOutput struct {
 // AgentEvents handles batched event ingestion from agents.
 func AgentEvents(db *gorm.DB) func(context.Context, *AgentEventsInput) (*AgentEventsOutput, error) {
 	return func(ctx context.Context, input *AgentEventsInput) (*AgentEventsOutput, error) {
-		// Agent auth: workspace-scoped token. Checked here because
-		// agent endpoints bypass the JWT middleware.
-		if !validateAgentToken(db, input.Header.Authorization, input.Body.App, input.Body.Env) {
+		repo, ok := authenticateAgent(db, input.Header.Authorization, input.Body.App, input.Body.Env)
+		if !ok {
 			return nil, huma.Error401Unauthorized("invalid agent token")
 		}
 
@@ -58,6 +57,7 @@ func AgentEvents(db *gorm.DB) func(context.Context, *AgentEventsInput) (*AgentEv
 				payload = string(ev.Payload)
 			}
 			events = append(events, api.AgentEvent{
+				RepoID:    repo.ID,
 				App:       input.Body.App,
 				Env:       input.Body.Env,
 				Type:      ev.Type,
@@ -82,26 +82,29 @@ func AgentEvents(db *gorm.DB) func(context.Context, *AgentEventsInput) (*AgentEv
 	}
 }
 
-// validateAgentToken checks the bearer token against the repo's stored hash.
+// authenticateAgent validates the bearer token and returns the matching repo.
 // The agent sends the plaintext token (from NVOI_API_TOKEN env var), the API
 // hashes it and compares against the stored AgentTokenHash on the repo.
-func validateAgentToken(db *gorm.DB, authHeader, app, env string) bool {
+func authenticateAgent(db *gorm.DB, authHeader, app, env string) (*api.Repo, bool) {
 	if authHeader == "" {
-		return false
+		return nil, false
 	}
 	const prefix = "Bearer "
 	if len(authHeader) <= len(prefix) {
-		return false
+		return nil, false
 	}
 	token := authHeader[len(prefix):]
 	if token == "" {
-		return false
+		return nil, false
 	}
 
 	var repo api.Repo
 	if err := db.Where("name = ? AND environment = ?", app, env).First(&repo).Error; err != nil {
-		return false
+		return nil, false
 	}
 
-	return api.ValidateAgentToken(token, repo.AgentTokenHash)
+	if !api.ValidateAgentToken(token, repo.AgentTokenHash) {
+		return nil, false
+	}
+	return &repo, true
 }

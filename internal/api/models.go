@@ -340,8 +340,9 @@ type CommandLog struct {
 // One row per JSONL event. High volume — agents report every progress/success/error line.
 type AgentEvent struct {
 	ID        string    `gorm:"primaryKey" json:"id"`
-	App       string    `gorm:"not null;index:idx_agent_events_app_env" json:"app"`
-	Env       string    `gorm:"not null;index:idx_agent_events_app_env" json:"env"`
+	RepoID    string    `gorm:"not null;index" json:"repo_id"`      // FK to Repo — scopes events, cascades on delete
+	App       string    `gorm:"not null" json:"app"`                // denormalized for fast queries without join
+	Env       string    `gorm:"not null" json:"env"`                // denormalized for fast queries without join
 	Type      string    `gorm:"not null" json:"type"`               // command, progress, success, warning, info, error, stream, data
 	Message   string    `gorm:"type:text" json:"message,omitempty"` // for message events
 	Command   string    `json:"command,omitempty"`                  // for command events
@@ -349,6 +350,8 @@ type AgentEvent struct {
 	Name      string    `json:"name,omitempty"`                     // for command events
 	Payload   string    `gorm:"type:text" json:"payload,omitempty"` // for data events (JSON)
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
+
+	Repo Repo `gorm:"foreignKey:RepoID" json:"-"`
 }
 
 func (AgentEvent) TableName() string { return "agent_events" }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -29,9 +30,11 @@ type Reporter struct {
 	env    string // env name for identification
 	client *http.Client
 
-	ch   chan app.Event
-	done chan struct{}
-	wg   sync.WaitGroup
+	ch     chan app.Event
+	done   chan struct{}
+	wg     sync.WaitGroup
+	closed atomic.Bool
+	once   sync.Once
 }
 
 // NewReporter starts a background goroutine that batches and sends events.
@@ -54,8 +57,12 @@ func NewReporter(url, token, appName, env string) *Reporter {
 	return r
 }
 
-// Send enqueues an event. Non-blocking — drops silently if buffer is full.
+// Send enqueues an event. Non-blocking — drops silently if buffer is full
+// or reporter is closed.
 func (r *Reporter) Send(ev app.Event) {
+	if r.closed.Load() {
+		return
+	}
 	select {
 	case r.ch <- ev:
 	default:
@@ -72,9 +79,13 @@ func (r *Reporter) Send(ev app.Event) {
 }
 
 // Close flushes remaining events and shuts down the reporter.
+// Safe to call multiple times.
 func (r *Reporter) Close() {
-	close(r.done)
-	r.wg.Wait()
+	r.once.Do(func() {
+		r.closed.Store(true)
+		close(r.done)
+		r.wg.Wait()
+	})
 }
 
 func (r *Reporter) loop() {
