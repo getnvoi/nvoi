@@ -60,14 +60,14 @@ func TestParseSignedURL(t *testing.T) {
 }
 
 func TestParseBuildTargets_Valid(t *testing.T) {
-	targets, err := ParseBuildTargets([]string{"web:./cmd/web", "api:./cmd/api"})
+	targets, err := ParseBuildTargets([]string{"api:./cmd/api", "distribution:./cmd/distribution"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(targets) != 2 {
 		t.Fatalf("got %d targets, want 2", len(targets))
 	}
-	if targets[0].Name != "web" || targets[0].Source != "./cmd/web" {
+	if targets[0].Name != "api" || targets[0].Source != "./cmd/api" {
 		t.Errorf("target[0] = %+v", targets[0])
 	}
 }
@@ -78,7 +78,7 @@ func TestParseBuildTargets_URLs(t *testing.T) {
 		wantName   string
 		wantSource string
 	}{
-		{"web:./cmd/web", "web", "./cmd/web"},
+		{"api:./cmd/api", "api", "./cmd/api"},
 		{"web:benbonnet/dummy-rails", "web", "benbonnet/dummy-rails"},
 		{"web:https://github.com/org/repo", "web", "https://github.com/org/repo"},
 		{"web:git@github.com:org/repo", "web", "git@github.com:org/repo"},

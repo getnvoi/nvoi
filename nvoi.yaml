@@ -41,7 +41,6 @@ storage:
   releases: {}
 
 build:
-  web: ./cmd/web
   api: ./cmd/api
   distribution: ./cmd/distribution
 
@@ -55,11 +54,6 @@ services:
       - JWT_SECRET
       - ENCRYPTION_KEY
       - MAIN_DATABASE_URL
-  web:
-    build: web
-    port: 3000
-    env:
-      - SENTRY_DSN=https://4af4869ae18342f0ad57818004c49f21@monit.nvoi.to/2
   distribution:
     build: distribution
     port: 3001
@@ -89,7 +83,6 @@ services:
       - EMAIL_HOST_PASSWORD=$BUGSINK_EMAIL_HOST_PASSWORD
 
 domains:
-  web: [nvoi.to, www.nvoi.to]
   api: [api.nvoi.to]
   distribution: [get.nvoi.to]
   bugsink: [monit.nvoi.to]
