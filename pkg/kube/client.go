@@ -609,24 +609,73 @@ func exitCode(cs corev1.ContainerStatus) int32 {
 
 // ── Traefik ACME ────────────────────────────────────────────────────────────
 
+// EnsureTraefikACME applies a HelmChartConfig to configure Traefik's Let's Encrypt resolver.
+// Idempotent — safe to call multiple times. After applying, waits for the k3s Helm
+// controller to reconcile and Traefik to be ready with the ACME args.
 func (k *KubeClient) EnsureTraefikACME(ctx context.Context, email string, acme bool) error {
-	// Traefik is managed by k3s via HelmChartConfig. Apply the config to enable ACME.
 	if !acme {
 		return nil
 	}
+
+	// Check if ACME is already configured — skip apply + wait.
+	if k.traefikHasACME(ctx) {
+		return nil
+	}
+
 	yamlDoc := fmt.Sprintf(`apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
   name: traefik
   namespace: kube-system
 spec:
-  valuesContent: |
-    certResolvers:
-      letsencrypt:
-        email: %s
-        tlsChallenge: true
-        storage: /data/acme.json`, email)
-	return k.Apply(ctx, "kube-system", yamlDoc)
+  valuesContent: |-
+    additionalArguments:
+      - "--certificatesresolvers.letsencrypt.acme.email=%s"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"`, email)
+
+	if err := k.Apply(ctx, "kube-system", yamlDoc); err != nil {
+		return err
+	}
+
+	// Wait for the k3s Helm controller to reconcile the HelmChartConfig
+	// and Traefik to restart with the ACME resolver args. On first deploy
+	// this takes 30-60s. Without this wait, ingress resources reference
+	// a resolver that doesn't exist yet.
+	return k.waitForTraefikACME(ctx)
+}
+
+// traefikHasACME checks if the running Traefik deployment has ACME resolver args.
+func (k *KubeClient) traefikHasACME(ctx context.Context) bool {
+	dep, err := k.cs.AppsV1().Deployments("kube-system").Get(ctx, "traefik", metav1.GetOptions{})
+	if err != nil || dep.Status.ReadyReplicas == 0 {
+		return false
+	}
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		for _, arg := range c.Args {
+			if strings.Contains(arg, "certificatesresolvers.letsencrypt.acme") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// waitForTraefikACME polls until Traefik is ready with ACME args present.
+func (k *KubeClient) waitForTraefikACME(ctx context.Context) error {
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		if k.traefikHasACME(ctx) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return fmt.Errorf("traefik ACME resolver not ready after 3 minutes — k3s Helm controller may not have reconciled the HelmChartConfig")
 }
 
 // WaitForTraefikReady polls until Traefik deployment is ready.

@@ -15,7 +15,7 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 	cronNames := utils.SortedKeys(cfg.Crons)
 	for _, name := range cronNames {
 		cron := cfg.Crons[name]
-		image, err := resolveImageRef(ctx, dc, cron.Image, cron.Build)
+		image, err := resolveImageRef(ctx, dc, cron.Image, cron.Build, dc.RunOnMaster)
 		if err != nil {
 			return err
 		}

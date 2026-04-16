@@ -8,7 +8,6 @@ import (
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/testutil"
-	"github.com/getnvoi/nvoi/pkg/utils"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,22 +31,18 @@ func init() {
 	})
 }
 
-func testCronCluster(ssh *testutil.MockSSH) Cluster {
+func testCronCluster() Cluster {
 	return Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: "cron-test", Credentials: map[string]string{},
-		Kube: kube.NewFromClientset(fake.NewSimpleClientset()),
-		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-			return ssh, nil
-		},
+		Kube:     kube.NewFromClientset(fake.NewSimpleClientset()),
+		MasterIP: "1.2.3.4",
 	}
 }
 
 func TestCronSet_SvcSecretsInManifest(t *testing.T) {
-	mock := &testutil.MockSSH{}
-
 	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:    testCronCluster(mock),
+		Cluster:    testCronCluster(),
 		Name:       "backup",
 		Image:      "busybox",
 		Schedule:   "0 1 * * *",
@@ -59,10 +54,8 @@ func TestCronSet_SvcSecretsInManifest(t *testing.T) {
 }
 
 func TestCronSet_ResolvesNamedManagedVolumes(t *testing.T) {
-	mock := &testutil.MockSSH{}
-
 	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:  testCronCluster(mock),
+		Cluster:  testCronCluster(),
 		Name:     "backup",
 		Image:    "busybox",
 		Schedule: "0 1 * * *",
@@ -104,9 +97,8 @@ func TestCronRun_Success(t *testing.T) {
 		return false, job, nil // false = let the fake store it too
 	})
 
-	c := testCronCluster(&testutil.MockSSH{})
+	c := testCronCluster()
 	c.Kube = kube.NewFromClientset(cs)
-	c.MasterSSH = &testutil.MockSSH{}
 
 	err := CronRun(context.Background(), CronRunRequest{Cluster: c, Name: "db-backup"})
 	if err != nil {
@@ -144,9 +136,8 @@ func TestCronRun_JobFailed(t *testing.T) {
 		return false, job, nil
 	})
 
-	c := testCronCluster(&testutil.MockSSH{})
+	c := testCronCluster()
 	c.Kube = kube.NewFromClientset(cs)
-	c.MasterSSH = &testutil.MockSSH{}
 
 	err := CronRun(context.Background(), CronRunRequest{Cluster: c, Name: "db-backup"})
 	if err == nil {
@@ -159,7 +150,7 @@ func TestCronRun_JobFailed(t *testing.T) {
 
 func TestCronDelete_IdempotentWhenMissing(t *testing.T) {
 	err := CronDelete(context.Background(), CronDeleteRequest{
-		Cluster: testCronCluster(&testutil.MockSSH{}),
+		Cluster: testCronCluster(),
 		Name:    "backup",
 	})
 	if err != nil {

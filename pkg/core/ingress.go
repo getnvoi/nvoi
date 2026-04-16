@@ -8,7 +8,6 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
-	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // acmeVerifyTimeout bounds the total time spent verifying certs + HTTPS
@@ -26,18 +25,18 @@ type IngressRouteArg struct {
 
 // IngressHooks holds injectable dependencies for testing.
 type IngressHooks struct {
-	WaitForCertificate func(ctx context.Context, ssh utils.SSHClient, domain string) error
-	WaitForHTTPS       func(ctx context.Context, ssh utils.SSHClient, domain, healthPath string) error
+	WaitForCertificate func(ctx context.Context, run infra.RunOnMaster, domain string) error
+	WaitForHTTPS       func(ctx context.Context, run infra.RunOnMaster, domain, healthPath string) error
 }
 
-func (h *IngressHooks) waitForCertificate() func(context.Context, utils.SSHClient, string) error {
+func (h *IngressHooks) waitForCertificate() func(context.Context, infra.RunOnMaster, string) error {
 	if h != nil && h.WaitForCertificate != nil {
 		return h.WaitForCertificate
 	}
 	return infra.WaitForCertificate
 }
 
-func (h *IngressHooks) waitForHTTPS() func(context.Context, utils.SSHClient, string, string) error {
+func (h *IngressHooks) waitForHTTPS() func(context.Context, infra.RunOnMaster, string, string) error {
 	if h != nil && h.WaitForHTTPS != nil {
 		return h.WaitForHTTPS
 	}
@@ -46,11 +45,12 @@ func (h *IngressHooks) waitForHTTPS() func(context.Context, utils.SSHClient, str
 
 type IngressSetRequest struct {
 	Cluster
-	Output     Output
-	Route      IngressRouteArg
-	HealthPath string        // if set, verify HTTPS responds on this path after cert
-	ACME       bool          // true = Traefik ACME (Let's Encrypt), false = HTTP only (tunnel)
-	Hooks      *IngressHooks // nil = production defaults
+	Output      Output
+	Route       IngressRouteArg
+	HealthPath  string            // if set, verify HTTPS responds on this path after cert
+	ACME        bool              // true = Traefik ACME (Let's Encrypt), false = HTTP only (tunnel)
+	RunOnMaster infra.RunOnMaster // for ACME verification — runs commands on master
+	Hooks       *IngressHooks     // nil = production defaults
 }
 
 type IngressDeleteRequest struct {
@@ -120,13 +120,6 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	out.Success("ingress ready")
 
 	if req.ACME {
-		// SSH is needed for ACME verification (cert check + HTTPS curl from server).
-		ssh, _, err := req.Cluster.SSH(ctx)
-		if err != nil {
-			return err
-		}
-		defer ssh.Close()
-
 		waitForCert := req.Hooks.waitForCertificate()
 		waitForHTTPS := req.Hooks.waitForHTTPS()
 		healthPath := req.HealthPath
@@ -143,7 +136,7 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 		for _, domain := range req.Route.Domains {
 			// Step 1: cert issued by ACME
 			out.Progress(fmt.Sprintf("waiting for certificate %s", domain))
-			if err := waitForCert(acmeCtx, ssh, domain); err != nil {
+			if err := waitForCert(acmeCtx, req.RunOnMaster, domain); err != nil {
 				if acmeCtx.Err() != nil {
 					out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
 					return nil
@@ -155,7 +148,7 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 			// Step 2: service reachable over HTTPS
 			url := fmt.Sprintf("https://%s%s", domain, healthPath)
 			out.Progress(fmt.Sprintf("waiting for %s", url))
-			if err := waitForHTTPS(acmeCtx, ssh, domain, healthPath); err != nil {
+			if err := waitForHTTPS(acmeCtx, req.RunOnMaster, domain, healthPath); err != nil {
 				if acmeCtx.Err() != nil {
 					out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
 					return nil

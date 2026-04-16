@@ -27,9 +27,10 @@ func Ingress(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 			}
 			if err := app.IngressSet(ctx, app.IngressSetRequest{
 				Cluster: dc.Cluster, Output: dc.Output,
-				Route:      app.IngressRouteArg{Service: svcName, Domains: cfg.Domains[svcName]},
-				HealthPath: healthPath,
-				ACME:       true, // direct mode — Traefik handles TLS via Let's Encrypt
+				Route:       app.IngressRouteArg{Service: svcName, Domains: cfg.Domains[svcName]},
+				HealthPath:  healthPath,
+				ACME:        true, // direct mode — Traefik handles TLS via Let's Encrypt
+				RunOnMaster: dc.RunOnMaster,
 			}); err != nil {
 				return err
 			}

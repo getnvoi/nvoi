@@ -17,13 +17,17 @@ import (
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 const agentPort = "9500"
 
-// ErrNoMaster indicates the agent is unreachable because no master server
-// exists or credentials are insufficient to reach it. Bootstrap is needed.
+// ErrNoMaster indicates no master server exists. Bootstrap with server creation needed.
 var ErrNoMaster = fmt.Errorf("no master")
+
+// ErrAgentDown indicates the master exists but the agent isn't running. Bootstrap
+// without the "create servers?" prompt — servers are already there.
+var ErrAgentDown = fmt.Errorf("agent down")
 
 // agentBackend talks to the agent over an SSH tunnel to localhost:{agentPort}.
 // The agent is the deploy runtime — it holds credentials and executes everything.
@@ -52,22 +56,23 @@ func connectToAgent(ctx context.Context, out app.Output, cfg *config.AppConfig, 
 		return nil, nil, err
 	}
 
-	cluster := app.Cluster{
-		AppName:     cfg.App,
-		Env:         cfg.Env,
-		Provider:    cfg.Providers.Compute,
-		Credentials: computeCreds,
-		SSHKey:      sshKey,
+	// Find the master server via provider API.
+	// This is the one call that determines "no master exists" — bootstrap is needed.
+	prov, err := provider.ResolveCompute(cfg.Providers.Compute, computeCreds)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	// Only this call determines "no master exists" — the one case where bootstrap is appropriate.
-	master, _, _, err := cluster.Master(ctx)
+	names, err := utils.NewNames(cfg.App, cfg.Env)
+	if err != nil {
+		return nil, nil, err
+	}
+	master, err := app.FindMaster(ctx, prov, names)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrNoMaster, err)
 	}
 
 	// SSH into master and port-forward to agent.
-	ssh, err := cluster.Connect(ctx, master.IPv4+":22")
+	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, sshKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("SSH to master %s: %w", master.IPv4, err)
 	}
@@ -106,6 +111,13 @@ func connectToAgent(ctx context.Context, out app.Output, cfg *config.AppConfig, 
 	cleanup := func() {
 		localListener.Close()
 		ssh.Close()
+	}
+
+	// Verify the agent is actually running. Without this, a dead/missing agent
+	// gives a confusing "connection reset" instead of falling through to bootstrap.
+	if _, err := ssh.Run(ctx, "curl -sf http://127.0.0.1:"+agentPort+"/health 2>/dev/null"); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("%w: agent is not running", ErrAgentDown)
 	}
 
 	// Read auth token from the agent's disk via the SSH connection.

@@ -13,7 +13,7 @@ import (
 
 func TestStorageList_FromConfig(t *testing.T) {
 	items, err := StorageList(context.Background(), StorageListRequest{
-		Cluster:      testCluster(nil),
+		Cluster:      testCluster(),
 		StorageNames: []string{"assets", "backups"},
 	})
 	if err != nil {
@@ -36,7 +36,7 @@ func TestStorageList_FromConfig(t *testing.T) {
 
 func TestStorageList_Empty(t *testing.T) {
 	items, err := StorageList(context.Background(), StorageListRequest{
-		Cluster: testCluster(nil),
+		Cluster: testCluster(),
 	})
 	if err != nil {
 		t.Fatalf("StorageList: %v", err)
@@ -91,10 +91,8 @@ func TestStorageDelete_StillRemovesSecretsWhenBucketAlreadyGone(t *testing.T) {
 		return bucket
 	})
 
-	ssh := &testutil.MockSSH{}
-
 	err := StorageDelete(context.Background(), StorageDeleteRequest{
-		Cluster: testCluster(ssh),
+		Cluster: testCluster(),
 		Storage: ProviderRef{Name: bucketProvider},
 		Name:    "assets",
 	})

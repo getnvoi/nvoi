@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
@@ -54,16 +55,24 @@ func BuildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 	builderCreds, _ := ResolveProviderCreds(source, "build", cfg.Providers.Build)
 	dbCreds := resolveDatabaseCreds(source, cfg)
 
+	// Agent IS the master — commands run locally via exec.Command.
+	localExec := func(ctx context.Context, cmd string) ([]byte, error) {
+		return exec.CommandContext(ctx, "sh", "-c", cmd).CombinedOutput()
+	}
+
 	return &config.DeployContext{
 		Cluster: app.Cluster{
-			AppName:     cfg.App,
-			Env:         cfg.Env,
-			Provider:    cfg.Providers.Compute,
-			Credentials: computeCreds,
-			SSHKey:      opts.SSHKey,
-			Kube:        opts.Kube,
+			AppName:         cfg.App,
+			Env:             cfg.Env,
+			Provider:        cfg.Providers.Compute,
+			Credentials:     computeCreds,
+			SSHKey:          opts.SSHKey,
+			Kube:            opts.Kube,
+			MasterIP:        opts.MasterIP,
+			MasterPrivateIP: opts.MasterPrivateIP,
 		},
 		Output:        out,
+		RunOnMaster:   localExec,
 		DNS:           app.ProviderRef{Name: cfg.Providers.DNS, Creds: dnsCreds},
 		Storage:       app.ProviderRef{Name: cfg.Providers.Storage, Creds: storageCreds},
 		Builder:       cfg.Providers.Build,

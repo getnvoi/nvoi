@@ -19,7 +19,7 @@ import (
 
 func TestServersAdd_FreshDeploy(t *testing.T) {
 	log := &opLog{}
-	dc := convergeDC(log, convergeMock())
+	dc := bootstrapDC(log, convergeMock())
 	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
@@ -38,7 +38,7 @@ func TestServersAdd_FreshDeploy(t *testing.T) {
 
 func TestServersAdd_AlreadyConverged(t *testing.T) {
 	log := &opLog{}
-	dc := convergeDC(log, convergeMock())
+	dc := bootstrapDC(log, convergeMock())
 	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
@@ -121,7 +121,7 @@ func TestServersAdd_ScaleUp(t *testing.T) {
 
 func TestServersAdd_DiskMismatch_Error(t *testing.T) {
 	log := &opLog{}
-	dc := convergeDC(log, convergeMock())
+	dc := bootstrapDC(log, convergeMock())
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{
@@ -144,7 +144,7 @@ func TestServersAdd_DiskMismatch_Error(t *testing.T) {
 
 func TestServersAdd_DiskMatchesLive_OK(t *testing.T) {
 	log := &opLog{}
-	dc := convergeDC(log, convergeMock())
+	dc := bootstrapDC(log, convergeMock())
 	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
@@ -167,7 +167,7 @@ func TestServersAdd_DiskMatchesLive_OK(t *testing.T) {
 
 func TestServersAdd_DiskOmittedOnExistingServer_OK(t *testing.T) {
 	log := &opLog{}
-	dc := convergeDC(log, convergeMock())
+	dc := bootstrapDC(log, convergeMock())
 	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
@@ -191,7 +191,7 @@ func TestServersAdd_DiskOmittedOnExistingServer_OK(t *testing.T) {
 
 func TestServersAdd_ProviderDidNotReportDisk_OK(t *testing.T) {
 	log := &opLog{}
-	dc := convergeDC(log, convergeMock())
+	dc := bootstrapDC(log, convergeMock())
 	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
@@ -215,7 +215,7 @@ func TestServersAdd_ProviderDidNotReportDisk_OK(t *testing.T) {
 
 func TestServersAdd_DiskOnNewServer_OK(t *testing.T) {
 	log := &opLog{}
-	dc := convergeDC(log, convergeMock())
+	dc := bootstrapDC(log, convergeMock())
 	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",

@@ -11,8 +11,11 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/agent"
 	"github.com/getnvoi/nvoi/internal/config"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -62,14 +65,22 @@ The CLI and API are clients — they send commands to the agent.`,
 			apiURL := os.Getenv("NVOI_API_URL")
 			apiToken := os.Getenv("NVOI_API_TOKEN")
 
+			// Resolve own IPs — the agent IS the master.
+			masterIP, masterPrivateIP, err := resolveOwnIPs(cmd.Context(), cfg)
+			if err != nil {
+				return fmt.Errorf("resolve master IPs: %w", err)
+			}
+
 			a, err := agent.New(cmd.Context(), cfg, agent.AgentOpts{
-				SSHKey:      sshKey,
-				GitUsername: gitUsername,
-				GitToken:    gitToken,
-				Kube:        kubeClient,
-				Token:       token,
-				APIURL:      apiURL,
-				APIToken:    apiToken,
+				SSHKey:          sshKey,
+				GitUsername:     gitUsername,
+				GitToken:        gitToken,
+				Kube:            kubeClient,
+				Token:           token,
+				APIURL:          apiURL,
+				APIToken:        apiToken,
+				MasterIP:        masterIP,
+				MasterPrivateIP: masterPrivateIP,
 			})
 			if err != nil {
 				return fmt.Errorf("agent init: %w", err)
@@ -105,6 +116,32 @@ The CLI and API are clients — they send commands to the agent.`,
 	cmd.Flags().String("config", "nvoi.yaml", "path to config YAML")
 
 	return cmd
+}
+
+// resolveOwnIPs discovers the master's public and private IPs via the provider API.
+// The agent IS the master — this is a self-discovery at startup.
+func resolveOwnIPs(ctx context.Context, cfg *config.AppConfig) (string, string, error) {
+	source, err := agent.CredentialSource(ctx, cfg)
+	if err != nil {
+		return "", "", err
+	}
+	computeCreds, err := agent.ResolveProviderCreds(source, "compute", cfg.Providers.Compute)
+	if err != nil {
+		return "", "", err
+	}
+	prov, err := provider.ResolveCompute(cfg.Providers.Compute, computeCreds)
+	if err != nil {
+		return "", "", err
+	}
+	names, err := utils.NewNames(cfg.App, cfg.Env)
+	if err != nil {
+		return "", "", err
+	}
+	master, err := app.FindMaster(ctx, prov, names)
+	if err != nil {
+		return "", "", err
+	}
+	return master.IPv4, master.PrivateIP, nil
 }
 
 // resolveAgentSSHKey reads the SSH private key from disk.

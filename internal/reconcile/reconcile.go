@@ -6,7 +6,6 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/packages"
-	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
 // ErrDeployInterrupted is returned when a deploy is cancelled mid-reconcile.
@@ -37,33 +36,13 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	// Create desired servers. Orphans are NOT removed yet — workloads
-	// must move to new nodes first (zero-downtime server replacement).
+	// ServersAdd: agent provisions workers. Bootstrap doesn't call Deploy() —
+	// it provisions the master directly, installs the agent, and delegates.
 	if err := ServersAdd(ctx, dc, live, cfg); err != nil {
 		return err
 	}
 	if err := checkCancel(ctx, "servers"); err != nil {
 		return err
-	}
-
-	// Bootstrap path: SSH + tunneled KubeClient. Agent path: Kube already set, no SSH.
-	if dc.Cluster.Kube == nil {
-		master, _, _, err := dc.Cluster.Master(ctx)
-		if err != nil {
-			return fmt.Errorf("resolve master after server setup: %w", err)
-		}
-		ssh, err := dc.Cluster.Connect(ctx, master.IPv4+":22")
-		if err != nil {
-			return fmt.Errorf("establish master SSH: %w", err)
-		}
-		defer ssh.Close()
-		dc.Cluster.MasterSSH = ssh
-
-		kubeClient, err := kube.NewTunneled(ctx, ssh)
-		if err != nil {
-			return fmt.Errorf("kube client via SSH tunnel: %w", err)
-		}
-		dc.Cluster.Kube = kubeClient
 	}
 
 	if err := Firewall(ctx, dc, live, cfg); err != nil {

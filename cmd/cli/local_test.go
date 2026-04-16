@@ -39,13 +39,14 @@ func testLocalBackend(t *testing.T) (*localBackend, *testutil.MockOutput) {
 			Provider:    "local-test",
 			Credentials: map[string]string{},
 			SSHKey:      sshKey,
-			MasterSSH:   ssh,
 			Kube:        kube.NewFromClientset(fake.NewSimpleClientset()),
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return ssh, nil
-			},
+			MasterIP:    "1.2.3.4",
 		},
-		Output: out,
+		Output:      out,
+		RunOnMaster: ssh.Run,
+		ConnectSSH: func(_ context.Context, _ string) (utils.SSHClient, error) {
+			return ssh, nil
+		},
 	}
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
@@ -62,7 +63,7 @@ func testLocalBackend(t *testing.T) (*localBackend, *testutil.MockOutput) {
 func TestLocalBackend_SSH_OutputPropagated(t *testing.T) {
 	lb, out := testLocalBackend(t)
 
-	// SSH runs a command via MasterSSH. If Output is nil, the Writer()
+	// SSH runs a command via RunStreamMaster. If Output is nil, the Writer()
 	// goes to io.Discard and we see nothing. With Output set, the mock
 	// captures the writer call.
 	_ = lb.SSH(context.Background(), []string{"echo", "hello"})

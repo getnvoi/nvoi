@@ -7,10 +7,9 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/testutil"
-	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func dnsDeleteCluster(ssh utils.SSHClient, mock *testutil.MockCompute) Cluster {
+func dnsDeleteCluster(mock *testutil.MockCompute) Cluster {
 	provName := fmt.Sprintf("dns-delete-test-%p", mock)
 	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
 		return mock
@@ -18,7 +17,7 @@ func dnsDeleteCluster(ssh utils.SSHClient, mock *testutil.MockCompute) Cluster {
 	return Cluster{
 		AppName: "test", Env: "prod",
 		Provider: provName,
-		SSHFunc:  func(ctx context.Context, addr string) (utils.SSHClient, error) { return ssh, nil },
+		MasterIP: "1.2.3.4",
 	}
 }
 
@@ -36,10 +35,9 @@ func TestDNSDelete_DeletesRecords(t *testing.T) {
 	mockCompute := &testutil.MockCompute{
 		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
 	}
-	ssh := &testutil.MockSSH{}
 
 	err := DNSDelete(context.Background(), DNSDeleteRequest{
-		Cluster: dnsDeleteCluster(ssh, mockCompute), Output: out,
+		Cluster: dnsDeleteCluster(mockCompute), Output: out,
 		DNS:     ProviderRef{Name: registerMockDNS(mockDNS)},
 		Service: "web",
 		Domains: []string{"example.com", "www.example.com"},

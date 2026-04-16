@@ -133,20 +133,26 @@ func initBackend(cmd *cobra.Command, m *mode) error {
 		return nil
 	}
 
-	// Agent unreachable. If the master doesn't exist, bootstrap.
-	// If the master exists but agent is down, that's a real error.
-	if !errors.Is(err, ErrNoMaster) {
+	// Agent unreachable — three cases:
+	// 1. No master exists → prompt to create servers, then bootstrap
+	// 2. Master exists but agent down → bootstrap directly (servers are there)
+	// 3. Real error (creds, network) → fail
+	agentDown := errors.Is(err, ErrAgentDown)
+	noMaster := errors.Is(err, ErrNoMaster)
+	if !agentDown && !noMaster {
 		return fmt.Errorf("agent not reachable: %w", err)
 	}
 
-	// No master — first deploy. Confirm with user unless -y.
-	yes, _ := cmd.Flags().GetBool("yes")
-	if !yes {
-		fmt.Fprintf(os.Stderr, "No existing cluster found. Create servers and deploy? [y/N] ")
-		scanner := bufio.NewScanner(os.Stdin)
-		scanner.Scan()
-		if answer := strings.TrimSpace(strings.ToLower(scanner.Text())); answer != "y" && answer != "yes" {
-			return fmt.Errorf("aborted")
+	if noMaster && !agentDown {
+		// No master — first deploy. Confirm with user unless -y.
+		yes, _ := cmd.Flags().GetBool("yes")
+		if !yes {
+			fmt.Fprintf(os.Stderr, "No existing cluster found. Create servers and deploy? [y/N] ")
+			scanner := bufio.NewScanner(os.Stdin)
+			scanner.Scan()
+			if answer := strings.TrimSpace(strings.ToLower(scanner.Text())); answer != "y" && answer != "yes" {
+				return fmt.Errorf("aborted")
+			}
 		}
 	}
 

@@ -241,8 +241,8 @@ internal/
 
 pkg/
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
-    cluster.go             Cluster struct (Kube *KubeClient, MasterSSH), ProviderRef
-    compute.go             ComputeSet (SSH connect, Docker, k3s, label), ComputeDelete
+    cluster.go             Cluster struct (pure identity: Kube, MasterIP, MasterPrivateIP), ProviderRef, ConnectSSH type
+    compute.go             ComputeSet (ConnectSSH, Docker, k3s, label), ComputeDelete
     service.go             ServiceSet, ServiceDelete — uses Kube for apply + secrets
     dns.go                 DNSSet, DNSDelete, DNSList
     ingress.go             IngressSet, IngressDelete — uses Kube for apply
@@ -257,7 +257,7 @@ pkg/
     firewall.go            FirewallSet, FirewallList
     wait.go                WaitRollout — uses Kube.WaitRolloutReady
     exec.go                Exec — uses Kube.ExecInPod (SPDY)
-    ssh.go                 SSH
+    ssh.go                 SSH (takes RunStreamMaster — no Cluster SSH method)
     logs.go                Logs — uses Kube.StreamLogs
   kube/                    K8s operations — client-go + YAML generation
     client.go              KubeClient: client-go native API (NewLocal, NewTunneled)
@@ -291,9 +291,18 @@ pkg/
 
 The agent (`internal/agent/`) is the deploy runtime. It runs on the master node as a long-running HTTP server (localhost:9500). All k8s operations go through `client-go` — no kubectl binary, no SSH for k8s.
 
-**State caching.** `atomic.Pointer[agentState]` holds cfg + fully-resolved DeployContext (minus Output). Built once at startup via `loadConfig`, rebuilt on config push. Reads are lock-free via `snapshot(out)` — pointer load + shallow copy to stamp per-request Output. `sync.Mutex` serializes deploy/teardown only. Reads (describe, logs, exec) never block.
+**State caching.** `atomic.Pointer[agentState]` holds cfg + fully-resolved DeployContext (minus Output). Built once at startup via `loadConfig`, rebuilt on config push. Reads are lock-free via `snapshot(out)` — pointer load + shallow copy to stamp per-request Output + ConnectSSH. `sync.Mutex` serializes deploy/teardown only. Reads (describe, logs, exec) never block.
 
 **Output is per-request.** `Cluster` is pure identity (cacheable). `Output` lives on `DeployContext` (reconcile path) and on each `pkg/core/` request struct. Handlers stamp Output via `snapshot(out)`.
+
+**Three SSH paths, no overlap.**
+1. **Laptop → master.** Real SSH from the laptop. Bootstrap path only — `connectToAgent` (tunnel) and `reconcile.Deploy` (first deploy). Direct `infra.ConnectSSH()` calls, local variables, passed explicitly. After the agent is installed, only the tunnel survives.
+2. **Agent on master.** `exec.Command` directly. No SSH, no abstraction, no interface. The agent IS the master. `DeployContext.RunOnMaster` wraps `exec.CommandContext` on the agent path. `cmdSSH` handler uses `exec.Command` inline.
+3. **Agent → worker.** `Agent.WorkerAccess(ctx, addr)` — real SSH from master to worker private IP. Wired into `dc.ConnectSSH` via `snapshot()`. Used by `ComputeSet`, `VolumeSet`, `VolumeDelete` during worker provisioning.
+
+`Cluster` has no SSH. No `MasterSSH`, no `SSHFunc`, no `SSH()` method, no `Connect()` method, no `Master()` method. Pure identity: `AppName, Env, Provider, Credentials, SSHKey, Kube, MasterIP, MasterPrivateIP`.
+
+**Worker provisioning is agent-only.** The laptop never SSHes into workers. `ServersAdd` in bootstrap mode (Kube nil) provisions masters only. `ServersAdd` in agent mode (Kube set) provisions workers only.
 
 **Agent handlers** receive `*jsonlOutput` (not `http.ResponseWriter`). They cannot write anything except JSONL events. This is enforced by the `CommandFunc` type signature. Every endpoint returns JSONL.
 
@@ -323,10 +332,10 @@ Deploy(ctx, dc, cfg)
   → ValidateConfig(cfg)
   → cfg.Resolve()
   → DescribeLive(ctx, dc, cfg) → LiveState
-  → ServersAdd(ctx, dc, cfg)           — INFRA: create desired servers
-  → establish MasterSSH + KubeClient   — bridge: SSH tunnel → client-go
+  → ServersAdd(ctx, dc, cfg)           — INFRA: bootstrap=masters, agent=workers
+  → [bootstrap only] find master → SSH → KubeClient via tunnel → set MasterIP + RunOnMaster
   → Firewall(ctx, dc, live, cfg)       — INFRA: provider API
-  → Volumes(ctx, dc, live, cfg)        — INFRA: provider API + SSH mount
+  → Volumes(ctx, dc, live, cfg)        — INFRA: provider API + ConnectSSH mount
   → Build(ctx, dc, cfg)                — INFRA: docker build
   → Secrets(ctx, dc, live, cfg)        — RUNTIME: CredentialSource → values
   → packages.ReconcileAll(ctx, dc, cfg) — RUNTIME: k8s via KubeClient
@@ -338,7 +347,7 @@ Deploy(ctx, dc, cfg)
   → Ingress(ctx, dc, live, cfg)        — RUNTIME: k8s via KubeClient
 ```
 
-Infra steps use SSH + provider APIs. Runtime steps use KubeClient. Files prefixed `infra_` / `runtime_` in `internal/reconcile/`.
+Infra steps use provider APIs + `ConnectSSH` (for volume mount, server provisioning). Runtime steps use KubeClient. Files prefixed `infra_` / `runtime_` in `internal/reconcile/`.
 
 ### Database package
 
@@ -355,17 +364,19 @@ Infra steps use SSH + provider APIs. Runtime steps use KubeClient. Files prefixe
 
 ### Server provisioning
 
-`ComputeSet` flow per server:
+`ComputeSet` flow per server (receives `ConnectSSH` from caller):
 1. `EnsureServer` at provider (create or return existing)
 2. Resolve private IP
 3. Clear stale known host (recycled IPs)
-4. Wait for SSH
+4. Wait for SSH via `ConnectSSH`
 5. `EnsureSwap`, `EnsureDocker`
-6. Master: `InstallK3sMaster` + `EnsureRegistry` + `InstallAgent`
-7. Worker: `JoinK3sWorker`
+6. Master: `InstallK3sMaster` + `EnsureRegistry`
+7. Worker: `JoinK3sWorker` (master side via `ConnectSSH` to master, worker side via same `ConnectSSH`)
 8. `LabelNode` (SSH kubectl — bootstrap only, before KubeClient exists)
 
-After first deploy: agent installed on master via systemd. Subsequent deploys go through agent.
+**Bootstrap (first deploy):** `ServersAdd` provisions master only. `localBackend.Deploy` then SSHes to master and runs `InstallAgent`. Subsequent deploys go through the agent.
+
+**Agent (subsequent deploys):** `ServersAdd` provisions workers only. The master already exists — that's axiomatic. `Agent.WorkerAccess` provides the SSH connection for worker provisioning.
 
 ## Providers
 

@@ -63,7 +63,7 @@ func TestWaitForCertificate_UsesKubeconfig(t *testing.T) {
 		},
 	}
 
-	err := WaitForCertificate(context.Background(), mock, "example.com")
+	err := WaitForCertificate(context.Background(), mock.Run, "example.com")
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestWaitForCertificate_TraefikNotFound_FailsFast(t *testing.T) {
 		},
 	}
 
-	err := WaitForCertificate(context.Background(), mock, "example.com")
+	err := WaitForCertificate(context.Background(), mock.Run, "example.com")
 	if err == nil {
 		t.Fatal("expected error when traefik deployment is missing")
 	}
@@ -111,7 +111,7 @@ func TestWaitForCertificate_TraefikNotFound_NoDeploys(t *testing.T) {
 		},
 	}
 
-	err := WaitForCertificate(context.Background(), mock, "example.com")
+	err := WaitForCertificate(context.Background(), mock.Run, "example.com")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -129,7 +129,7 @@ func TestWaitForCertificate_CertFound(t *testing.T) {
 		},
 	}
 
-	err := WaitForCertificate(context.Background(), mock, "example.com")
+	err := WaitForCertificate(context.Background(), mock.Run, "example.com")
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
 	}

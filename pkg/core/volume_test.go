@@ -10,7 +10,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func volumeCluster(mock *testutil.MockCompute, ssh *testutil.MockSSH) Cluster {
+func volumeCluster(mock *testutil.MockCompute) Cluster {
 	provName := fmt.Sprintf("volume-test-%p", mock)
 	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
 		return mock
@@ -18,9 +18,13 @@ func volumeCluster(mock *testutil.MockCompute, ssh *testutil.MockSSH) Cluster {
 	return Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: provName,
-		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-			return ssh, nil
-		},
+		MasterIP: "1.2.3.4",
+	}
+}
+
+func mockSSHConnect(ssh *testutil.MockSSH) ConnectSSH {
+	return func(ctx context.Context, addr string) (utils.SSHClient, error) {
+		return ssh, nil
 	}
 }
 
@@ -45,10 +49,11 @@ func TestVolumeSet_ListServersUsesLabels(t *testing.T) {
 	}
 
 	_, err := VolumeSet(context.Background(), VolumeSetRequest{
-		Cluster: volumeCluster(mock, ssh),
-		Name:    "pgdata",
-		Size:    20,
-		Server:  "master",
+		Cluster:    volumeCluster(mock),
+		ConnectSSH: mockSSHConnect(ssh),
+		Name:       "pgdata",
+		Size:       20,
+		Server:     "master",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -85,8 +90,9 @@ func TestVolumeDelete_ListServersUsesLabels(t *testing.T) {
 	}
 
 	err := VolumeDelete(context.Background(), VolumeDeleteRequest{
-		Cluster: volumeCluster(mock, ssh),
-		Name:    "pgdata",
+		Cluster:    volumeCluster(mock),
+		ConnectSSH: mockSSHConnect(ssh),
+		Name:       "pgdata",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

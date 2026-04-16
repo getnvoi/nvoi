@@ -16,7 +16,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 	svcNames := utils.SortedKeys(cfg.Services)
 	for _, name := range svcNames {
 		svc := cfg.Services[name]
-		image, err := resolveImageRef(ctx, dc, svc.Image, svc.Build)
+		image, err := resolveImageRef(ctx, dc, svc.Image, svc.Build, dc.RunOnMaster)
 		if err != nil {
 			return err
 		}

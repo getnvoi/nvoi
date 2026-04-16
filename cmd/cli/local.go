@@ -10,7 +10,6 @@ import (
 	"github.com/getnvoi/nvoi/internal/agent"
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/core"
-	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/infra"
@@ -44,25 +43,62 @@ func newLocalBackend(ctx context.Context, out app.Output, cfg *config.AppConfig)
 // ── Backend methods ─────────────────────────────────────────────────────────
 
 func (b *localBackend) Deploy(ctx context.Context) error {
-	if err := reconcile.Deploy(ctx, b.dc, b.cfg); err != nil {
-		return err
+	// Bootstrap: provision master, install agent, hand off.
+	// The laptop's only job is getting the agent running. The agent does the real deploy.
+
+	// 1. Provision master server.
+	b.out.Command("bootstrap", "provision", "master")
+	sshKey := b.dc.Cluster.SSHKey
+	connectSSH := func(ctx context.Context, addr string) (utils.SSHClient, error) {
+		return infra.ConnectSSH(ctx, addr, utils.DefaultUser, sshKey)
+	}
+	if _, err := app.ComputeSet(ctx, app.ComputeSetRequest{
+		Cluster: b.dc.Cluster, Output: b.out, ConnectSSH: connectSSH,
+		Name: "master", ServerType: b.cfg.Servers["master"].Type,
+		Region: b.cfg.Servers["master"].Region, Worker: false,
+		DiskGB: b.cfg.Servers["master"].Disk,
+	}); err != nil {
+		return fmt.Errorf("provision master: %w", err)
 	}
 
-	// Bootstrap: install the agent on the master after successful first deploy.
-	// Subsequent deploys go through the agent — this runs once.
-	if b.dc.Cluster.MasterSSH != nil {
-		b.out.Command("agent", "install", b.cfg.App)
-		configData, _ := config.MarshalAppConfig(b.cfg)
-		// TODO: when providers.secrets is configured, filter .env to bootstrap-only
-		// keys (secrets provider creds + SSH_KEY_PATH + GITHUB_TOKEN) instead of
-		// uploading the full file. Minimizes credential exposure on the master.
-		envData, _ := os.ReadFile(".env")
-		if err := infra.InstallAgent(ctx, b.dc.Cluster.MasterSSH, b.cfg.App, b.cfg.Env, configData, envData); err != nil {
-			return fmt.Errorf("agent install failed: %w (infrastructure is deployed but the agent is required for subsequent deploys)", err)
-		}
-		b.out.Success("agent installed — next deploy will go through the agent")
+	// 2. Find master IP, SSH in.
+	prov, err := b.dc.Cluster.Compute()
+	if err != nil {
+		return err
 	}
-	return nil
+	names, err := b.dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	master, err := app.FindMaster(ctx, prov, names)
+	if err != nil {
+		return fmt.Errorf("find master after provisioning: %w", err)
+	}
+
+	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, sshKey)
+	if err != nil {
+		return fmt.Errorf("SSH to master: %w", err)
+	}
+	defer ssh.Close()
+
+	// 3. Install agent.
+	b.out.Command("agent", "install", b.cfg.App)
+	configData, _ := config.MarshalAppConfig(b.cfg)
+	envData, _ := os.ReadFile(".env")
+	if err := infra.InstallAgent(ctx, ssh, b.cfg.App, b.cfg.Env, configData, envData); err != nil {
+		return fmt.Errorf("agent install: %w", err)
+	}
+	b.out.Success("agent installed")
+
+	// 4. Connect to agent and delegate the full deploy.
+	b.out.Command("bootstrap", "handoff", "agent")
+	ab, cleanup, err := connectToAgent(ctx, b.out, b.cfg, "nvoi.yaml")
+	if err != nil {
+		return fmt.Errorf("connect to agent after install: %w", err)
+	}
+	defer cleanup()
+
+	return ab.Deploy(ctx)
 }
 
 func (b *localBackend) Teardown(ctx context.Context, deleteVolumes, deleteStorage bool) error {
@@ -125,7 +161,21 @@ func (b *localBackend) Exec(ctx context.Context, service string, command []strin
 }
 
 func (b *localBackend) SSH(ctx context.Context, command []string) error {
-	return app.SSH(ctx, app.SSHRequest{Cluster: b.dc.Cluster, Output: b.out, Command: command})
+	connectFn := b.dc.ConnectSSH
+	if connectFn == nil {
+		connectFn = func(ctx context.Context, addr string) (utils.SSHClient, error) {
+			return infra.ConnectSSH(ctx, addr, utils.DefaultUser, b.dc.Cluster.SSHKey)
+		}
+	}
+	ssh, err := connectFn(ctx, b.dc.Cluster.MasterIP+":22")
+	if err != nil {
+		return err
+	}
+	defer ssh.Close()
+	return app.SSH(ctx, app.SSHRequest{
+		Cluster: b.dc.Cluster, Output: b.out, Command: command,
+		RunStreamMaster: ssh.RunStream,
+	})
 }
 
 func (b *localBackend) CronRun(ctx context.Context, name string) error {

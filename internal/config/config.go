@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"gopkg.in/yaml.v3"
@@ -24,7 +25,9 @@ type DatabaseCredentials struct {
 // Cluster is pure identity (cacheable). Output is per-request.
 type DeployContext struct {
 	Cluster       app.Cluster
-	Output        app.Output // per-request — reconcile/teardown/packages use this
+	Output        app.Output        // per-request — reconcile/teardown/packages use this
+	RunOnMaster   infra.RunOnMaster // run a shell command on the master — bootstrap: SSH, agent: exec.Command
+	ConnectSSH    app.ConnectSSH    // optional — overrides sshConnector(SSHKey) when set (tests)
 	DNS           app.ProviderRef
 	Storage       app.ProviderRef
 	Builder       string

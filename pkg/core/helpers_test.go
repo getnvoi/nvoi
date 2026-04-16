@@ -1,14 +1,11 @@
 package core
 
 import (
-	"context"
-	"fmt"
 	"io"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/testutil"
-	"github.com/getnvoi/nvoi/pkg/utils"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -23,18 +20,12 @@ func init() {
 	})
 }
 
-func testCluster(ssh *testutil.MockSSH) Cluster {
+func testCluster() Cluster {
 	return Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: "test", Credentials: map[string]string{},
-		MasterSSH: ssh,
-		Kube:      kube.NewFromClientset(fake.NewSimpleClientset()),
-		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-			if ssh == nil {
-				return nil, fmt.Errorf("no SSH")
-			}
-			return ssh, nil
-		},
+		Kube:     kube.NewFromClientset(fake.NewSimpleClientset()),
+		MasterIP: "1.2.3.4",
 	}
 }
 

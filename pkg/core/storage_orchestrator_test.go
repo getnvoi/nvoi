@@ -7,7 +7,7 @@ import (
 
 func TestStorageList_ConfigDriven(t *testing.T) {
 	items, err := StorageList(context.Background(), StorageListRequest{
-		Cluster:      testCluster(nil),
+		Cluster:      testCluster(),
 		StorageNames: []string{"releases", "uploads"},
 	})
 	if err != nil {
@@ -26,7 +26,7 @@ func TestStorageList_ConfigDriven(t *testing.T) {
 
 func TestStorageList_NoStorageNames(t *testing.T) {
 	items, err := StorageList(context.Background(), StorageListRequest{
-		Cluster: testCluster(nil),
+		Cluster: testCluster(),
 	})
 	if err != nil {
 		t.Fatalf("StorageList: unexpected error: %v", err)

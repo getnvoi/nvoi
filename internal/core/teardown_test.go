@@ -242,9 +242,9 @@ func setupTeardown(log *opLog) *config.DeployContext {
 			Env:      "prod",
 			Provider: "test-teardown",
 			SSHKey:   sshKey,
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return &testutil.MockSSH{}, nil
-			},
+		},
+		ConnectSSH: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+			return &testutil.MockSSH{}, nil
 		},
 		DNS:     app.ProviderRef{Name: "test-teardown-dns"},
 		Storage: app.ProviderRef{Name: "test-teardown-bucket"},

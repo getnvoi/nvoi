@@ -15,6 +15,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/testutil"
 	"github.com/getnvoi/nvoi/pkg/utils"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -155,10 +156,8 @@ func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey: sshKey,
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return nil, fmt.Errorf("no SSH")
-			},
+			SSHKey:   sshKey,
+			MasterIP: "1.2.3.4",
 		},
 	}
 
@@ -185,10 +184,8 @@ func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey: sshKey,
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return nil, fmt.Errorf("no master")
-			},
+			SSHKey:   sshKey,
+			MasterIP: "1.2.3.4",
 		},
 	}
 
@@ -218,13 +215,11 @@ func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey:    sshKey,
-			MasterSSH: ssh,
-			Kube:      testKube(),
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return ssh, nil
-			},
+			SSHKey:   sshKey,
+			Kube:     testKube(),
+			MasterIP: "1.2.3.4",
 		},
+		RunOnMaster: ssh.Run,
 	}
 
 	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
@@ -325,15 +320,24 @@ func testDC(ssh *testutil.MockSSH) *config.DeployContext {
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-compute", Credentials: map[string]string{},
-			SSHKey:    sshKey,
-			MasterSSH: ssh,
-			Kube:      testKube(),
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return ssh, nil
-			},
+			SSHKey:   sshKey,
+			Kube:     testKube(),
+			MasterIP: "1.2.3.4",
+		},
+		RunOnMaster: ssh.Run,
+		ConnectSSH: func(_ context.Context, _ string) (utils.SSHClient, error) {
+			return ssh, nil
 		},
 		Creds: provider.MapSource{M: map[string]string{}},
 	}
+}
+
+// bootstrapDC returns a DeployContext in bootstrap mode (Kube nil).
+// ServersAdd in bootstrap mode only provisions masters.
+func bootstrapDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
+	dc := convergeDC(log, ssh)
+	dc.Cluster.Kube = nil
+	return dc
 }
 
 func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
@@ -349,12 +353,13 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey:    sshKey,
-			MasterSSH: ssh,
-			Kube:      testKube(),
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return ssh, nil
-			},
+			SSHKey:   sshKey,
+			Kube:     testKube(),
+			MasterIP: "1.2.3.4",
+		},
+		RunOnMaster: ssh.Run,
+		ConnectSSH: func(_ context.Context, _ string) (utils.SSHClient, error) {
+			return ssh, nil
 		},
 		Creds: provider.MapSource{M: map[string]string{}},
 	}
@@ -369,6 +374,23 @@ func testKube() *kubepkg.KubeClient {
 		&corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "nvoi-myapp-prod"},
 			Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+		},
+		// Traefik deployment with ACME args — matches what k3s produces
+		// after HelmChartConfig reconciliation. Needed so EnsureTraefikACME
+		// doesn't block waiting for the Helm controller in tests.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "traefik", Namespace: "kube-system"},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "traefik"}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "traefik"}},
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "traefik",
+						Args: []string{"--certificatesresolvers.letsencrypt.acme.email=test@test.com"},
+					}}},
+				},
+			},
+			Status: appsv1.DeploymentStatus{ReadyReplicas: 1, Replicas: 1},
 		},
 	)
 	// Pre-seed: add a reactor that auto-creates ready pods on List.

@@ -23,17 +23,12 @@ type DNSSetRequest struct {
 func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	out := log(req.Output)
 
-	master, _, _, err := req.Cluster.Master(ctx)
-	if err != nil {
-		return err
-	}
-
 	dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)
 	if err != nil {
 		return err
 	}
 
-	ip := master.IPv4
+	ip := req.MasterIP
 	out.Command("dns", "set", req.Service, "ip", ip, "domains", req.Domains)
 
 	for _, domain := range req.Domains {

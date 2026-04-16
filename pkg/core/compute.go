@@ -16,6 +16,7 @@ import (
 type ComputeSetRequest struct {
 	Cluster
 	Output     Output
+	ConnectSSH ConnectSSH // SSH to the target server — caller provides
 	Name       string
 	ServerType string
 	Region     string
@@ -102,7 +103,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	sshCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	if err := utils.Poll(sshCtx, 2*time.Second, 5*time.Minute, func() (bool, error) {
-		conn, err := req.Connect(ctx, srv.IPv4+":22")
+		conn, err := req.ConnectSSH(ctx, srv.IPv4+":22")
 		if err != nil {
 			if errors.Is(err, infra.ErrHostKeyChanged) {
 				return false, err // hard error — server was recreated
@@ -135,7 +136,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 
 	// Reconnect SSH so the session picks up the docker group membership.
 	ssh.Close()
-	ssh, err = req.Connect(ctx, srv.IPv4+":22")
+	ssh, err = req.ConnectSSH(ctx, srv.IPv4+":22")
 	if err != nil {
 		return nil, fmt.Errorf("reconnect SSH after docker setup: %w", err)
 	}
@@ -151,7 +152,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		}
 		out.Progress(fmt.Sprintf("joining cluster via master %s", master.IPv4))
 
-		masterSSH, err = req.Connect(ctx, master.IPv4+":22")
+		masterSSH, err = req.ConnectSSH(ctx, master.IPv4+":22")
 		if err != nil {
 			return nil, fmt.Errorf("ssh master for worker join: %w", err)
 		}

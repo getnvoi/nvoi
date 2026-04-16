@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -27,13 +29,15 @@ import (
 // AgentOpts holds values resolved at startup by cmd/ — the boundary
 // where os.Getenv is legal. The agent never reads env vars directly.
 type AgentOpts struct {
-	SSHKey      []byte           // resolved SSH private key
-	GitUsername string           // git auth username (e.g. "x-access-token")
-	GitToken    string           // git auth token
-	Kube        *kube.KubeClient // k8s client — direct to localhost:6443 on the master
-	Token       string           // bearer token for agent auth — read from disk at startup
-	APIURL      string           // API base URL for event reporting (empty = standalone)
-	APIToken    string           // workspace-scoped token for API auth
+	SSHKey          []byte           // resolved SSH private key
+	GitUsername     string           // git auth username (e.g. "x-access-token")
+	GitToken        string           // git auth token
+	Kube            *kube.KubeClient // k8s client — direct to localhost:6443 on the master
+	Token           string           // bearer token for agent auth — read from disk at startup
+	APIURL          string           // API base URL for event reporting (empty = standalone)
+	APIToken        string           // workspace-scoped token for API auth
+	MasterIP        string           // master's public IPv4 — resolved at startup
+	MasterPrivateIP string           // master's private IP — resolved at startup
 }
 
 // agentState is the cached, immutable state swapped atomically on config push.
@@ -49,6 +53,12 @@ type Agent struct {
 	opts     AgentOpts
 	deployMu sync.Mutex // serializes deploy/teardown — reads don't block
 	reporter *Reporter  // nil = standalone (no API reporting)
+}
+
+// WorkerAccess opens an SSH connection to a worker node.
+// Agent-only — the agent SSHes from the master to workers over the private network.
+func (a *Agent) WorkerAccess(ctx context.Context, addr string) (utils.SSHClient, error) {
+	return infra.ConnectSSH(ctx, addr, utils.DefaultUser, a.opts.SSHKey)
 }
 
 // New creates an agent with the given config and pre-resolved options.
@@ -96,6 +106,7 @@ func (a *Agent) snapshot(out app.Output) (*config.AppConfig, *config.DeployConte
 	// Shallow copy DeployContext so Output is per-request, rest is shared.
 	dc := *s.dc
 	dc.Output = newTeeOutput(out, a.reporter)
+	dc.ConnectSSH = a.WorkerAccess // agent → worker SSH for provisioning
 	return s.cfg, &dc
 }
 
@@ -289,8 +300,16 @@ func (a *Agent) cmdSSH(ctx context.Context, out *jsonlOutput, r *http.Request) e
 	}
 
 	_, dc := a.snapshot(out)
+	// Agent IS the master — exec locally, no SSH.
+	localStream := func(ctx context.Context, cmd string, stdout, stderr io.Writer) error {
+		c := exec.CommandContext(ctx, "sh", "-c", cmd)
+		c.Stdout = stdout
+		c.Stderr = stderr
+		return c.Run()
+	}
 	return app.SSH(ctx, app.SSHRequest{
 		Cluster: dc.Cluster, Output: dc.Output, Command: req.Command,
+		RunStreamMaster: localStream,
 	})
 }
 

@@ -3,29 +3,30 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/testutil"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func dnsDC(ssh *testutil.MockSSH) *config.DeployContext {
 	sshKey, _, _ := utils.GenerateEd25519Key()
-	return &config.DeployContext{
+	dc := &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-compute", Credentials: map[string]string{},
-			SSHKey:    sshKey,
-			MasterSSH: ssh,
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return ssh, nil
-			},
+			SSHKey:   sshKey,
+			MasterIP: "1.2.3.4",
 		},
 		Output: &testutil.MockOutput{},
 	}
+	if ssh != nil {
+		dc.RunOnMaster = ssh.Run
+	}
+	return dc
 }
 
 func TestVerifyDNSPropagation_ResolvesViaSSH(t *testing.T) {
@@ -134,11 +135,13 @@ func TestVerifyDNSPropagation_MultipleDomains(t *testing.T) {
 	}
 }
 
-func TestVerifyDNSPropagation_NoMasterSSH_RunsLocally(t *testing.T) {
-	// Agent path: MasterSSH is nil, but the function should still run
-	// getent locally (agent IS the master). It won't silently skip.
+func TestVerifyDNSPropagation_AgentPath_RunsLocally(t *testing.T) {
+	// Agent path: RunOnMaster uses local exec (agent IS the master).
+	// It won't silently skip — getent runs locally.
 	dc := dnsDC(nil)
-	dc.Cluster.MasterSSH = nil
+	dc.RunOnMaster = func(ctx context.Context, cmd string) ([]byte, error) {
+		return exec.CommandContext(ctx, "sh", "-c", cmd).CombinedOutput()
+	}
 	out := dc.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
@@ -159,16 +162,12 @@ func TestVerifyDNSPropagation_NoMasterSSH_RunsLocally(t *testing.T) {
 func TestVerifyDNSPropagation_NoMasterServer_Noop(t *testing.T) {
 	ssh := &testutil.MockSSH{}
 	dc := dnsDC(ssh)
-	// Register a provider that returns no servers — Master() will fail.
-	provName := "test-dns-verify-empty"
-	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
-		return &testutil.MockCompute{Servers: nil}
-	})
-	dc.Cluster.Provider = provName
+	// MasterIP empty = no master found — verifyDNSPropagation returns early.
+	dc.Cluster.MasterIP = ""
 	out := dc.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: provName},
+		Providers: config.ProvidersDef{Compute: "test-compute"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains:   map[string][]string{"web": {"myapp.com"}},
 	}

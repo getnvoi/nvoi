@@ -65,9 +65,8 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 		return nil, ErrInput("git authentication required for remote source.\n  Use a signed URL:  --source https://user:TOKEN@github.com/org/repo\n  Or install gh CLI:  gh auth login\n  Or pass explicitly: --git-token TOKEN\n  Or set env var:     export GITHUB_TOKEN=...")
 	}
 
-	master, _, _, err := req.Cluster.Master(ctx)
-	if err != nil {
-		return nil, err
+	if req.MasterIP == "" {
+		return nil, ErrInput("MasterIP is required for build")
 	}
 
 	builder, err := provider.ResolveBuild(req.Builder, req.BuilderCredentials)
@@ -78,7 +77,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 	// Auto-detect platform from master architecture
 	platform := req.Platform
 	if platform == "" {
-		platform = detectPlatform(ctx, master.IPv4, req.SSHKey)
+		platform = detectPlatform(ctx, req.MasterIP, req.SSHKey)
 	}
 
 	// Validate architecture per builder
@@ -98,8 +97,8 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 		GitUsername: gitUsername,
 		GitToken:    gitToken,
 		RegistrySSH: provider.SSHAccess{
-			MasterIP:        master.IPv4,
-			MasterPrivateIP: master.PrivateIP,
+			MasterIP:        req.MasterIP,
+			MasterPrivateIP: req.MasterPrivateIP,
 			PrivKey:         req.SSHKey,
 		},
 		Stdout: out.Writer(),
@@ -113,7 +112,7 @@ func BuildRun(ctx context.Context, req BuildRunRequest) (*provider.BuildResult, 
 
 	// Prune old tags if --history is set
 	if req.History > 0 {
-		if err := pruneRegistryTags(ctx, req.Cluster, req.Output, master, req.Name, req.History); err != nil {
+		if err := pruneRegistryTags(ctx, req.Output, req.MasterIP, req.MasterPrivateIP, req.SSHKey, req.Name, req.History); err != nil {
 			out.Warning(fmt.Sprintf("failed to prune old tags: %v", err))
 		}
 	}
@@ -177,9 +176,8 @@ type BuildParallelRequest struct {
 func BuildParallel(ctx context.Context, req BuildParallelRequest) error {
 	out := log(req.Output)
 
-	master, _, _, err := req.Cluster.Master(ctx)
-	if err != nil {
-		return err
+	if req.MasterIP == "" {
+		return ErrInput("MasterIP is required for build")
 	}
 
 	builder, err := provider.ResolveBuild(req.Builder, req.BuilderCredentials)
@@ -190,7 +188,7 @@ func BuildParallel(ctx context.Context, req BuildParallelRequest) error {
 	// Auto-detect platform from master
 	platform := req.Platform
 	if platform == "" {
-		platform = detectPlatform(ctx, master.IPv4, req.SSHKey)
+		platform = detectPlatform(ctx, req.MasterIP, req.SSHKey)
 	}
 
 	// Resolve git auth
@@ -262,8 +260,8 @@ func BuildParallel(ctx context.Context, req BuildParallelRequest) error {
 				GitUsername: targetUsername,
 				GitToken:    targetToken,
 				RegistrySSH: provider.SSHAccess{
-					MasterIP:        master.IPv4,
-					MasterPrivateIP: master.PrivateIP,
+					MasterIP:        req.MasterIP,
+					MasterPrivateIP: req.MasterPrivateIP,
 					PrivKey:         req.SSHKey,
 				},
 				Stdout: pw,
@@ -338,15 +336,15 @@ func detectPlatform(ctx context.Context, masterIP string, sshKey []byte) string 
 	return "linux/amd64"
 }
 
-func pruneRegistryTags(ctx context.Context, c Cluster, o Output, master *provider.Server, imageName string, keep int) error {
+func pruneRegistryTags(ctx context.Context, o Output, masterIP, masterPrivateIP string, sshKey []byte, imageName string, keep int) error {
 	plog := log(o)
-	ssh, err := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, c.SSHKey)
+	ssh, err := infra.ConnectSSH(ctx, masterIP+":22", utils.DefaultUser, sshKey)
 	if err != nil {
 		return err
 	}
 	defer ssh.Close()
 
-	registryAddr := utils.RegistryAddr(master.PrivateIP)
+	registryAddr := utils.RegistryAddr(masterPrivateIP)
 
 	out, err := ssh.Run(ctx, fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list", registryAddr, imageName))
 	if err != nil {
@@ -430,23 +428,14 @@ type RegistryImage struct {
 
 type BuildListRequest struct {
 	Cluster
-	Output Output
+	Output      Output
+	RunOnMaster infra.RunOnMaster
 }
 
 func BuildList(ctx context.Context, req BuildListRequest) ([]RegistryImage, error) {
-	ssh, _, err := req.Cluster.SSH(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer ssh.Close()
+	registryAddr := utils.RegistryAddr(req.MasterPrivateIP)
 
-	master, _, _, err := req.Cluster.Master(ctx)
-	if err != nil {
-		return nil, err
-	}
-	registryAddr := utils.RegistryAddr(master.PrivateIP)
-
-	out, err := ssh.Run(ctx, fmt.Sprintf("curl -sf http://%s/v2/_catalog", registryAddr))
+	out, err := req.RunOnMaster(ctx, fmt.Sprintf("curl -sf http://%s/v2/_catalog", registryAddr))
 	if err != nil {
 		return nil, fmt.Errorf("registry catalog: %w", err)
 	}
@@ -460,7 +449,7 @@ func BuildList(ctx context.Context, req BuildListRequest) ([]RegistryImage, erro
 
 	var images []RegistryImage
 	for _, repo := range catalog.Repositories {
-		tagOut, err := ssh.Run(ctx, fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list", registryAddr, repo))
+		tagOut, err := req.RunOnMaster(ctx, fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list", registryAddr, repo))
 		if err != nil {
 			continue
 		}
@@ -481,24 +470,15 @@ func BuildList(ctx context.Context, req BuildListRequest) ([]RegistryImage, erro
 
 type BuildLatestRequest struct {
 	Cluster
-	Output Output
-	Name   string
+	Output      Output
+	Name        string
+	RunOnMaster infra.RunOnMaster
 }
 
 func BuildLatest(ctx context.Context, req BuildLatestRequest) (string, error) {
-	ssh, _, err := req.Cluster.SSH(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer ssh.Close()
+	registryAddr := utils.RegistryAddr(req.MasterPrivateIP)
 
-	master, _, _, err := req.Cluster.Master(ctx)
-	if err != nil {
-		return "", err
-	}
-	registryAddr := utils.RegistryAddr(master.PrivateIP)
-
-	out, err := ssh.Run(ctx, fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list", registryAddr, req.Name))
+	out, err := req.RunOnMaster(ctx, fmt.Sprintf("curl -sf http://%s/v2/%s/tags/list", registryAddr, req.Name))
 	if err != nil {
 		return "", ErrNotFound("image", req.Name)
 	}

@@ -8,6 +8,8 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/infra"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -26,12 +28,16 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	})
 	if err != nil {
 		if listErr != nil {
-			// Both calls failed — provider may be down or credentials wrong.
-			// Cannot distinguish "first deploy" from "API unreachable."
 			return nil, fmt.Errorf("cannot determine cluster state — provider list failed: %w", listErr)
 		}
 		if len(servers) == 0 {
 			return nil, nil // first deploy — nothing exists
+		}
+		// Servers exist but cluster state unreadable (e.g. bootstrap re-run,
+		// no KubeClient yet). Build partial LiveState from provider data only.
+		// The reconcile loop will establish KubeClient after ServersAdd.
+		if dc.Cluster.Kube == nil {
+			return buildProviderOnlyLiveState(servers, dc)
 		}
 		return nil, fmt.Errorf("servers exist but cluster state unreadable — cannot detect orphans: %w", err)
 	}
@@ -102,6 +108,29 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	return state, nil
 }
 
+// buildProviderOnlyLiveState builds a LiveState from provider data when
+// the cluster isn't reachable yet (bootstrap re-run, no KubeClient).
+func buildProviderOnlyLiveState(servers []*provider.Server, dc *config.DeployContext) (*config.LiveState, error) {
+	names, _ := dc.Cluster.Names()
+	prefix := names.Base() + "-"
+	strip := func(s string) string {
+		if len(s) > len(prefix) && s[:len(prefix)] == prefix {
+			return s[len(prefix):]
+		}
+		return s
+	}
+	state := &config.LiveState{Domains: map[string][]string{}, ServerDisk: map[string]int{}}
+	for _, s := range servers {
+		name := strip(s.Name)
+		state.Servers = append(state.Servers, name)
+		if s.DiskGB > 0 {
+			state.ServerDisk[name] = s.DiskGB
+		}
+	}
+	sort.Strings(state.Servers)
+	return state, nil
+}
+
 func drainNode(ctx context.Context, dc *config.DeployContext, name string) error {
 	names, err := dc.Cluster.Names()
 	if err != nil {
@@ -161,9 +190,12 @@ func ResolveServers(cfg *config.AppConfig, servers []string, server string, moun
 	return nil
 }
 
-func resolveImageRef(ctx context.Context, dc *config.DeployContext, image, buildRef string) (string, error) {
+func resolveImageRef(ctx context.Context, dc *config.DeployContext, image, buildRef string, run infra.RunOnMaster) (string, error) {
 	if buildRef != "" {
-		ref, err := app.BuildLatest(ctx, app.BuildLatestRequest{Cluster: dc.Cluster, Output: dc.Output, Name: buildRef})
+		ref, err := app.BuildLatest(ctx, app.BuildLatestRequest{
+			Cluster: dc.Cluster, Output: dc.Output, Name: buildRef,
+			RunOnMaster: run,
+		})
 		if err != nil {
 			return "", fmt.Errorf("resolve build %q: %w", buildRef, err)
 		}
@@ -178,6 +210,14 @@ func buildTargetStrings(build map[string]string) []string {
 		targets = append(targets, name+":"+build[name])
 	}
 	return targets
+}
+
+// sshConnector returns a ConnectSSH function that dials SSH with the given key.
+// Used by reconcile steps to pass into pkg/core/ request structs.
+func sshConnector(sshKey []byte) app.ConnectSSH {
+	return func(ctx context.Context, addr string) (utils.SSHClient, error) {
+		return infra.ConnectSSH(ctx, addr, utils.DefaultUser, sshKey)
+	}
 }
 
 func toSet(items []string) map[string]bool {

@@ -9,6 +9,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/packages"
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -53,8 +54,15 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 
 	// Volumes — external, preserved by default
 	if deleteVolumes {
+		connectSSH := dc.ConnectSSH
+		if connectSSH == nil {
+			connectSSH = sshConnector(dc.Cluster.SSHKey)
+		}
 		for _, name := range utils.SortedKeys(cfg.Volumes) {
-			collect(app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Output: out, Name: name}))
+			collect(app.VolumeDelete(ctx, app.VolumeDeleteRequest{
+				Cluster: dc.Cluster, Output: out,
+				ConnectSSH: connectSSH, Name: name,
+			}))
 		}
 	}
 
@@ -86,4 +94,10 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		return fmt.Errorf("teardown completed with %d error(s):\n  %s", len(errs), strings.Join(errs, "\n  "))
 	}
 	return nil
+}
+
+func sshConnector(sshKey []byte) app.ConnectSSH {
+	return func(ctx context.Context, addr string) (utils.SSHClient, error) {
+		return infra.ConnectSSH(ctx, addr, utils.DefaultUser, sshKey)
+	}
 }

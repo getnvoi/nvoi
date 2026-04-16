@@ -9,13 +9,22 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// ServersAdd creates desired servers. Masters first, then workers.
+// ServersAdd creates desired servers.
+// Bootstrap (Kube nil): masters only — the laptop never touches workers.
+// Agent (Kube set): workers only — the master already exists (axiomatic).
 // Does NOT remove orphans — that's deferred to ServersRemoveOrphans
 // after workloads have been moved to the new nodes.
 func ServersAdd(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) error {
 	masters, workers := SplitServers(cfg.Servers)
-	allServers := append(masters, workers...)
-	for _, s := range allServers {
+	var servers []config.NamedServer
+	if dc.Cluster.Kube == nil {
+		// Bootstrap: provision masters only. Workers come from the agent.
+		servers = masters
+	} else {
+		// Agent: provision workers only. Master exists — that's how the agent is running.
+		servers = workers
+	}
+	for _, s := range servers {
 		// Disk is creation-only. If the server already exists with a different
 		// disk size, fail fast — EnsureServer won't resize it.
 		if s.Disk > 0 && live != nil && live.ServerDisk != nil {
@@ -29,8 +38,13 @@ func ServersAdd(ctx context.Context, dc *config.DeployContext, live *config.Live
 			creds = copyMap(creds)
 			creds["region"] = s.Region
 		}
+		connectSSH := dc.ConnectSSH
+		if connectSSH == nil {
+			connectSSH = sshConnector(dc.Cluster.SSHKey)
+		}
 		if _, err := app.ComputeSet(ctx, app.ComputeSetRequest{
-			Cluster: clusterWith(dc, creds), Output: dc.Output, Name: s.Name,
+			Cluster: clusterWith(dc, creds), Output: dc.Output,
+			ConnectSSH: connectSSH, Name: s.Name,
 			ServerType: s.Type, Region: s.Region,
 			Worker: s.Role == "worker", DiskGB: s.Disk,
 		}); err != nil {

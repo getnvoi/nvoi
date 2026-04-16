@@ -4,13 +4,11 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/getnvoi/nvoi/pkg/testutil"
 )
 
 func TestServiceSet_MissingImage(t *testing.T) {
 	err := ServiceSet(context.Background(), ServiceSetRequest{
-		Cluster: testCluster(&testutil.MockSSH{}),
+		Cluster: testCluster(),
 		Name:    "web",
 		Image:   "",
 	})
@@ -23,16 +21,8 @@ func TestServiceSet_MissingImage(t *testing.T) {
 }
 
 func TestServiceDelete_Succeeds(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "delete deployment/", Result: testutil.MockResult{}},
-			{Prefix: "delete statefulset/", Result: testutil.MockResult{}},
-			{Prefix: "delete service/", Result: testutil.MockResult{}},
-		},
-	}
-
 	err := ServiceDelete(context.Background(), ServiceDeleteRequest{
-		Cluster: testCluster(mock),
+		Cluster: testCluster(),
 		Name:    "web",
 	})
 	if err != nil {

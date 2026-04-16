@@ -10,10 +10,11 @@ import (
 
 type VolumeSetRequest struct {
 	Cluster
-	Output Output
-	Name   string
-	Size   int
-	Server string
+	Output     Output
+	ConnectSSH ConnectSSH // SSH to the target server for mount
+	Name       string
+	Size       int
+	Server     string
 }
 
 type VolumeSetResult struct {
@@ -62,7 +63,7 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 		return nil, ErrNotFound("server", serverName)
 	}
 
-	ssh, err := req.Connect(ctx, serverIP+":22")
+	ssh, err := req.ConnectSSH(ctx, serverIP+":22")
 	if err != nil {
 		return nil, fmt.Errorf("ssh for volume mount: %w", err)
 	}
@@ -79,8 +80,9 @@ func VolumeSet(ctx context.Context, req VolumeSetRequest) (*VolumeSetResult, err
 
 type VolumeDeleteRequest struct {
 	Cluster
-	Output Output
-	Name   string
+	Output     Output
+	ConnectSSH ConnectSSH // SSH to servers for unmount
+	Name       string
 }
 
 func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
@@ -117,7 +119,7 @@ func VolumeDelete(ctx context.Context, req VolumeDeleteRequest) error {
 	appServers, err := prov.ListServers(ctx, names.Labels())
 	if err == nil {
 		for _, s := range appServers {
-			ssh, err := req.Connect(ctx, s.IPv4+":22")
+			ssh, err := req.ConnectSSH(ctx, s.IPv4+":22")
 			if err != nil {
 				out.Warning(fmt.Sprintf("ssh %s for unmount: %s", s.Name, err))
 				continue
