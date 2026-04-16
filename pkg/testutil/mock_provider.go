@@ -172,12 +172,13 @@ var _ provider.BucketProvider = (*MockBucket)(nil)
 
 // MockOutput implements app.Output for testing (captures events).
 type MockOutput struct {
-	Commands   []string
-	Progresses []string
-	Successes  []string
-	Warnings   []string
-	Infos      []string
-	Errors     []error
+	Commands     []string
+	Progresses   []string
+	Successes    []string
+	Warnings     []string
+	Infos        []string
+	Errors       []error
+	WriterCalled bool
 }
 
 func (m *MockOutput) Command(command, action, name string, extra ...any) {
@@ -188,4 +189,4 @@ func (m *MockOutput) Success(msg string)  { m.Successes = append(m.Successes, ms
 func (m *MockOutput) Warning(msg string)  { m.Warnings = append(m.Warnings, msg) }
 func (m *MockOutput) Info(msg string)     { m.Infos = append(m.Infos, msg) }
 func (m *MockOutput) Error(err error)     { m.Errors = append(m.Errors, err) }
-func (m *MockOutput) Writer() io.Writer   { return io.Discard }
+func (m *MockOutput) Writer() io.Writer   { m.WriterCalled = true; return io.Discard }
