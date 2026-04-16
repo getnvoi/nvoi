@@ -62,19 +62,19 @@ func log(o Output) Output {
 	if o != nil {
 		return o
 	}
-	return nopOutput{}
+	return NopOutput{}
 }
 
-// nopOutput silently discards all events.
-type nopOutput struct{}
+// NopOutput silently discards all events.
+type NopOutput struct{}
 
-func (nopOutput) Command(string, string, string, ...any) {}
-func (nopOutput) Progress(string)                        {}
-func (nopOutput) Success(string)                         {}
-func (nopOutput) Warning(string)                         {}
-func (nopOutput) Info(string)                            {}
-func (nopOutput) Error(error)                            {}
-func (nopOutput) Writer() io.Writer                      { return io.Discard }
+func (NopOutput) Command(string, string, string, ...any) {}
+func (NopOutput) Progress(string)                        {}
+func (NopOutput) Success(string)                         {}
+func (NopOutput) Warning(string)                         {}
+func (NopOutput) Info(string)                            {}
+func (NopOutput) Error(error)                            {}
+func (NopOutput) Writer() io.Writer                      { return io.Discard }
 
 // Names resolves the naming convention for this cluster.
 func (c *Cluster) Names() (*utils.Names, error) {

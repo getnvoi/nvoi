@@ -4,7 +4,6 @@ package config
 
 import (
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 
@@ -41,19 +40,8 @@ func (dc *DeployContext) Log() app.Output {
 	if dc.Output != nil {
 		return dc.Output
 	}
-	return nopOutput{}
+	return app.NopOutput{}
 }
-
-// nopOutput silently discards all events (same as pkg/core nopOutput).
-type nopOutput struct{}
-
-func (nopOutput) Command(string, string, string, ...any) {}
-func (nopOutput) Progress(string)                        {}
-func (nopOutput) Success(string)                         {}
-func (nopOutput) Warning(string)                         {}
-func (nopOutput) Info(string)                            {}
-func (nopOutput) Error(error)                            {}
-func (nopOutput) Writer() io.Writer                      { return io.Discard }
 
 // LiveState represents what's currently deployed.
 type LiveState struct {
