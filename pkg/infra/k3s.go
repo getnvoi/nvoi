@@ -35,12 +35,6 @@ func InstallK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.
 		return fmt.Errorf("discover private interface: %w", err)
 	}
 
-	// Configure registry mirrors
-	fmt.Fprintln(w, "configuring k3s registries...")
-	if err := configureK3sRegistry(ctx, ssh, node.PrivateIP); err != nil {
-		return err
-	}
-
 	// Install k3s server.
 	//
 	// We run k3s as a thin substrate: kube-apiserver + containerd + CoreDNS +
@@ -55,6 +49,12 @@ func InstallK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.
 	//   --disable servicelb  — k3s's built-in LoadBalancer (klipper-lb) is
 	//                          unused: Caddy binds hostPort directly, no
 	//                          Service of type LoadBalancer in our model.
+	//
+	// Registry credentials do NOT live on the host — they're a
+	// `kubernetes.io/dockerconfigjson` Secret in the app namespace,
+	// referenced via imagePullSecrets on every pod we build (see
+	// internal/reconcile/registries.go). k3s's bundled containerd needs
+	// no registries.yaml.
 	fmt.Fprintln(w, "installing k3s server...")
 	cmd := fmt.Sprintf(
 		`curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server --disable traefik --disable servicelb --write-kubeconfig-mode 644 --node-ip %s --advertise-address %s --tls-san %s --tls-san %s --cluster-cidr %s --service-cidr %s --flannel-backend vxlan --flannel-iface %s' sh -`,
@@ -90,41 +90,6 @@ func InstallK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.
 	return nil
 }
 
-// EnsureRegistry starts the Docker registry container on master.
-// Idempotent — skips if already running.
-func EnsureRegistry(ctx context.Context, ssh utils.SSHClient, node Node, w io.Writer) error {
-	registryAddr := utils.RegistryAddr(node.PrivateIP)
-
-	// Already running?
-	if _, err := ssh.Run(ctx, fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr)); err == nil {
-		fmt.Fprintf(w, "registry already running at %s\n", registryAddr)
-		return nil
-	}
-
-	fmt.Fprintln(w, "starting registry...")
-	ssh.Run(ctx, "sudo mkdir -p /var/lib/nvoi/registry")
-	ssh.Run(ctx, "docker rm -f nvoi-registry 2>/dev/null || true")
-
-	runCmd := fmt.Sprintf(
-		`docker run -d --name nvoi-registry --restart always -p %d:%d -v /var/lib/nvoi/registry:/var/lib/registry -e REGISTRY_STORAGE_DELETE_ENABLED=true %s`,
-		utils.RegistryPort, utils.RegistryPort, utils.RegistryImage,
-	)
-	if _, err := ssh.Run(ctx, runCmd); err != nil {
-		return fmt.Errorf("start registry: %w", err)
-	}
-
-	// Wait for ready
-	if err := utils.Poll(ctx, 2*time.Second, 30*time.Second, func() (bool, error) {
-		_, err := ssh.Run(ctx, fmt.Sprintf("curl -fs http://%s/v2/ >/dev/null 2>&1", registryAddr))
-		return err == nil, nil
-	}); err != nil {
-		return fmt.Errorf("registry not ready at %s: %w", registryAddr, err)
-	}
-
-	fmt.Fprintf(w, "registry at %s\n", registryAddr)
-	return nil
-}
-
 // JoinK3sWorker joins a worker to the cluster via the master.
 // Idempotent — skips if k3s-agent is already active.
 // masterSSH reads the join token and verifies the node. workerSSH installs the agent.
@@ -140,11 +105,6 @@ func JoinK3sWorker(ctx context.Context, masterSSH, workerSSH utils.SSHClient, wo
 	if _, err := workerSSH.Run(ctx, "systemctl is-active --quiet k3s-agent"); err == nil {
 		fmt.Fprintln(w, "worker already joined")
 		return nil
-	}
-
-	// Configure registry on worker
-	if err := configureK3sRegistry(ctx, workerSSH, master.PrivateIP); err != nil {
-		return err
 	}
 
 	workerPrivateIP := worker.PrivateIP
@@ -193,41 +153,6 @@ func JoinK3sWorker(ctx context.Context, masterSSH, workerSSH utils.SSHClient, wo
 }
 
 // --- helpers ---
-
-func configureK3sRegistry(ctx context.Context, ssh utils.SSHClient, registryHost string) error {
-	cmd := fmt.Sprintf(`sudo mkdir -p %s
-cat <<'EOF' | sudo tee %s >/dev/null
-mirrors:
-  "%s:%d":
-    endpoint:
-      - "http://%s:%d"
-EOF`, utils.K3sConfigDir, utils.K3sRegistriesConfig, registryHost, utils.RegistryPort, registryHost, utils.RegistryPort)
-	if _, err := ssh.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("configure k3s registry: %w", err)
-	}
-
-	// Restart whichever k3s service is active (server or agent), then wait for ready.
-	// On fresh install neither exists yet — skip restart, the install will pick up the config.
-	for _, svc := range []string{"k3s", "k3s-agent"} {
-		if _, err := ssh.Run(ctx, fmt.Sprintf("sudo systemctl is-active --quiet %s 2>/dev/null", svc)); err != nil {
-			continue // service not active — skip
-		}
-		if _, err := ssh.Run(ctx, fmt.Sprintf("sudo systemctl restart %s", svc)); err != nil {
-			return fmt.Errorf("restart %s after registry config: %w", svc, err)
-		}
-		// Wait for k3s to be ready after restart.
-		if err := utils.Poll(ctx, 2*time.Second, 60*time.Second, func() (bool, error) {
-			out, err := ssh.Run(ctx, `sudo k3s kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null`)
-			if err != nil {
-				return false, nil
-			}
-			return strings.Contains(string(out), "True"), nil
-		}); err != nil {
-			return fmt.Errorf("%s not ready after restart: %w", svc, err)
-		}
-	}
-	return nil
-}
 
 func discoverPrivateInterface(ctx context.Context, ssh utils.SSHClient, privateIP string) (string, error) {
 	cmd := fmt.Sprintf(`ip -o -4 addr show | awk '/%s/{print $2}' | head -1`, privateIP)

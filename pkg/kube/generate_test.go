@@ -346,3 +346,41 @@ func TestBuildService_LabelsIncludeManagedBy(t *testing.T) {
 		t.Error("pod template missing app.kubernetes.io/name")
 	}
 }
+
+// INVARIANT: imagePullSecrets is injected on the PodSpec iff
+// PullSecretName is non-empty. The Secret it references is expected to
+// live in the same namespace (the app ns) as the workload.
+func TestBuildService_ImagePullSecrets(t *testing.T) {
+	t.Run("injected when name set", func(t *testing.T) {
+		workload, _, _, err := BuildService(ServiceSpec{
+			Name:           "web",
+			Image:          "ghcr.io/org/web:v1",
+			Port:           80,
+			Replicas:       2,
+			PullSecretName: PullSecretName,
+		}, mustNames(t), nil)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		dep := asDeployment(t, workload)
+		ips := dep.Spec.Template.Spec.ImagePullSecrets
+		if len(ips) != 1 || ips[0].Name != PullSecretName {
+			t.Errorf("imagePullSecrets = %+v, want one entry named %q", ips, PullSecretName)
+		}
+	})
+	t.Run("absent when name empty", func(t *testing.T) {
+		workload, _, _, err := BuildService(ServiceSpec{
+			Name:  "web",
+			Image: "docker.io/library/nginx",
+			Port:  80,
+		}, mustNames(t), nil)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		dep := asDeployment(t, workload)
+		if len(dep.Spec.Template.Spec.ImagePullSecrets) != 0 {
+			t.Errorf("imagePullSecrets must be empty for public-registry pulls, got %+v",
+				dep.Spec.Template.Spec.ImagePullSecrets)
+		}
+	})
+}

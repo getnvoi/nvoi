@@ -58,18 +58,19 @@ func ParseSecretRef(ref string) (envName, secretKey string) {
 
 // ServiceSpec describes a service to deploy.
 type ServiceSpec struct {
-	Name          string
-	Image         string
-	Port          int
-	Command       string
-	Replicas      int
-	Env           []corev1.EnvVar
-	SvcSecrets    []string // per-service secret refs → env.valueFrom.secretKeyRef
-	SvcSecretName string   // per-service k8s Secret name ("{svc}-secrets")
-	Volumes       []string // "pgdata:/var/lib/postgresql/data"
-	HealthPath    string
-	Servers       []string // node placement (empty = master only)
-	Managed       bool     // true if any volume is provider-managed → StatefulSet
+	Name           string
+	Image          string
+	Port           int
+	Command        string
+	Replicas       int
+	Env            []corev1.EnvVar
+	SvcSecrets     []string // per-service secret refs → env.valueFrom.secretKeyRef
+	SvcSecretName  string   // per-service k8s Secret name ("{svc}-secrets")
+	Volumes        []string // "pgdata:/var/lib/postgresql/data"
+	HealthPath     string
+	Servers        []string // node placement (empty = master only)
+	Managed        bool     // true if any volume is provider-managed → StatefulSet
+	PullSecretName string   // optional imagePullSecrets reference (cluster-wide registry-auth Secret); empty = no pull auth
 }
 
 // BuildService produces typed Workload (Deployment or StatefulSet) and
@@ -150,6 +151,9 @@ func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 	podSpec := corev1.PodSpec{
 		Containers: []corev1.Container{container},
 		Volumes:    volumes,
+	}
+	if spec.PullSecretName != "" {
+		podSpec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: spec.PullSecretName}}
 	}
 	applyNodePlacement(&podSpec, spec.Name, spec.Servers)
 

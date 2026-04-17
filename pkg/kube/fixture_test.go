@@ -55,7 +55,11 @@ func fastTiming() func() {
 	origStability := stabilityDelay
 	origTimeout := rolloutTimeout
 	SetTestTiming(time.Millisecond, time.Millisecond)
-	rolloutTimeout = 100 * time.Millisecond
+	// 20ms is still 20× the 1ms poll interval — gives any "must time out"
+	// test enough room for a few polls before the outer deadline fires.
+	// Larger values (the previous 100ms) push pkg/kube over the 2s
+	// per-package budget when multiplied by the matrix tests below.
+	rolloutTimeout = 20 * time.Millisecond
 	return func() {
 		rolloutPollInterval = origPoll
 		stabilityDelay = origStability

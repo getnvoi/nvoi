@@ -15,14 +15,15 @@ import (
 
 type CronSetRequest struct {
 	Cluster
-	Name       string
-	Image      string
-	Command    string
-	EnvVars    []string
-	SvcSecrets []string // per-cron secret refs → "{cron}-secrets" k8s Secret
-	Volumes    []string
-	Schedule   string
-	Servers    []string
+	Name           string
+	Image          string
+	Command        string
+	EnvVars        []string
+	SvcSecrets     []string // per-cron secret refs → "{cron}-secrets" k8s Secret
+	Volumes        []string
+	Schedule       string
+	Servers        []string
+	PullSecretName string // optional imagePullSecrets target; empty = pull as anonymous
 }
 
 func CronSet(ctx context.Context, req CronSetRequest) error {
@@ -75,15 +76,16 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 
 	out.Command("cron", "set", req.Name)
 	cron, err := kube.BuildCronJob(kube.CronSpec{
-		Name:          req.Name,
-		Schedule:      req.Schedule,
-		Image:         req.Image,
-		Command:       req.Command,
-		Env:           env,
-		SvcSecrets:    req.SvcSecrets,
-		SvcSecretName: names.KubeServiceSecrets(req.Name),
-		Volumes:       req.Volumes,
-		Servers:       req.Servers,
+		Name:           req.Name,
+		Schedule:       req.Schedule,
+		Image:          req.Image,
+		Command:        req.Command,
+		Env:            env,
+		SvcSecrets:     req.SvcSecrets,
+		SvcSecretName:  names.KubeServiceSecrets(req.Name),
+		Volumes:        req.Volumes,
+		Servers:        req.Servers,
+		PullSecretName: req.PullSecretName,
 	}, names, managedVolPaths)
 	if err != nil {
 		return fmt.Errorf("build cronjob: %w", err)

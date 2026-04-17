@@ -13,16 +13,17 @@ import (
 
 type ServiceSetRequest struct {
 	Cluster
-	Name       string
-	Image      string
-	Port       int
-	Command    string
-	Replicas   int
-	EnvVars    []string // KEY=VALUE pairs (plain text in manifest)
-	SvcSecrets []string // per-service secret refs → "{svc}-secrets" k8s Secret
-	Volumes    []string // name:/path
-	HealthPath string
-	Servers    []string
+	Name           string
+	Image          string
+	Port           int
+	Command        string
+	Replicas       int
+	EnvVars        []string // KEY=VALUE pairs (plain text in manifest)
+	SvcSecrets     []string // per-service secret refs → "{svc}-secrets" k8s Secret
+	Volumes        []string // name:/path
+	HealthPath     string
+	Servers        []string
+	PullSecretName string // optional imagePullSecrets target; empty = pull as anonymous
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
@@ -82,18 +83,19 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 	}
 
 	spec := kube.ServiceSpec{
-		Name:          req.Name,
-		Image:         req.Image,
-		Port:          req.Port,
-		Command:       req.Command,
-		Replicas:      req.Replicas,
-		Env:           env,
-		SvcSecrets:    req.SvcSecrets,
-		SvcSecretName: names.KubeServiceSecrets(req.Name),
-		Volumes:       req.Volumes,
-		HealthPath:    req.HealthPath,
-		Servers:       req.Servers,
-		Managed:       managed,
+		Name:           req.Name,
+		Image:          req.Image,
+		Port:           req.Port,
+		Command:        req.Command,
+		Replicas:       req.Replicas,
+		Env:            env,
+		SvcSecrets:     req.SvcSecrets,
+		SvcSecretName:  names.KubeServiceSecrets(req.Name),
+		Volumes:        req.Volumes,
+		HealthPath:     req.HealthPath,
+		Servers:        req.Servers,
+		Managed:        managed,
+		PullSecretName: req.PullSecretName,
 	}
 
 	out.Command("service", "set", req.Name)

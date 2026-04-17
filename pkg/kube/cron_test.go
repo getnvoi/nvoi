@@ -156,3 +156,34 @@ func TestCreateJobFromCronJob_CopiesTemplate(t *testing.T) {
 		t.Error("template not copied from cronjob")
 	}
 }
+
+func TestBuildCronJob_ImagePullSecrets(t *testing.T) {
+	t.Run("injected when name set", func(t *testing.T) {
+		cron, err := BuildCronJob(CronSpec{
+			Name:           "cleanup",
+			Schedule:       "0 * * * *",
+			Image:          "ghcr.io/org/tools:v1",
+			PullSecretName: PullSecretName,
+		}, mustNames(t), nil)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		ips := cron.Spec.JobTemplate.Spec.Template.Spec.ImagePullSecrets
+		if len(ips) != 1 || ips[0].Name != PullSecretName {
+			t.Errorf("imagePullSecrets = %+v, want one entry named %q", ips, PullSecretName)
+		}
+	})
+	t.Run("absent when name empty", func(t *testing.T) {
+		cron, err := BuildCronJob(CronSpec{
+			Name:     "cleanup",
+			Schedule: "0 * * * *",
+			Image:    "busybox",
+		}, mustNames(t), nil)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		if len(cron.Spec.JobTemplate.Spec.Template.Spec.ImagePullSecrets) != 0 {
+			t.Error("imagePullSecrets must be empty for public pulls")
+		}
+	})
+}

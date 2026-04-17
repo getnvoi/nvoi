@@ -210,7 +210,72 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		}
 	}
 
+	// ── Registry ──────────────────────────────────────────────────────────
+	// Each key is a registry hostname (docker.io, ghcr.io, registry.example.com).
+	// username + password are required and may be `$VAR` references — value
+	// resolution and the missing-env-var error happens at deploy time, not here.
+	for host, def := range cfg.Registry {
+		if host == "" {
+			return fmt.Errorf("registry: empty hostname key")
+		}
+		if !validRegistryHost(host) {
+			return fmt.Errorf("registry.%s: invalid hostname (expected DNS host like docker.io, ghcr.io, or registry.example.com:5000)", host)
+		}
+		if strings.TrimSpace(def.Username) == "" {
+			return fmt.Errorf("registry.%s.username is required", host)
+		}
+		if strings.TrimSpace(def.Password) == "" {
+			return fmt.Errorf("registry.%s.password is required", host)
+		}
+	}
+
 	return nil
+}
+
+// validRegistryHost accepts DNS-style hostnames optionally followed by :port.
+// Examples that pass: docker.io, ghcr.io, gcr.io, registry.example.com,
+// 10.0.1.1:5000, registry.local:443.
+//
+// Looser than ValidateDomain because container registries commonly use
+// single-label hosts (docker.io was historically index.docker.io but the
+// short form is canonical now) and bare IP:port endpoints.
+func validRegistryHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	// Strip optional :port.
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		port := host[i+1:]
+		if port == "" {
+			return false
+		}
+		for _, c := range port {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		host = host[:i]
+	}
+	if host == "" {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" {
+			return false
+		}
+		for i, c := range label {
+			isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+			isDigit := c >= '0' && c <= '9'
+			isHyphen := c == '-'
+			if !(isAlpha || isDigit || isHyphen) {
+				return false
+			}
+			if isHyphen && (i == 0 || i == len(label)-1) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func hasNamedVolume(cfg *config.AppConfig, mounts []string) bool {

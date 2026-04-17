@@ -33,22 +33,38 @@ type LiveState struct {
 }
 
 type AppConfig struct {
-	App       string                `yaml:"app"`
-	Env       string                `yaml:"env"`
-	Providers ProvidersDef          `yaml:"providers"`
-	Servers   map[string]ServerDef  `yaml:"servers"`
-	Firewall  []string              `yaml:"-"`
-	Volumes   map[string]VolumeDef  `yaml:"volumes,omitempty"`
-	Secrets   []string              `yaml:"secrets,omitempty"`
-	Storage   map[string]StorageDef `yaml:"storage,omitempty"`
-	Services  map[string]ServiceDef `yaml:"services"`
-	Crons     map[string]CronDef    `yaml:"crons,omitempty"`
-	Domains   map[string][]string   `yaml:"domains,omitempty"`
-	ACMEEmail string                `yaml:"acme_email,omitempty"`
+	App       string                 `yaml:"app"`
+	Env       string                 `yaml:"env"`
+	Providers ProvidersDef           `yaml:"providers"`
+	Servers   map[string]ServerDef   `yaml:"servers"`
+	Firewall  []string               `yaml:"-"`
+	Volumes   map[string]VolumeDef   `yaml:"volumes,omitempty"`
+	Secrets   []string               `yaml:"secrets,omitempty"`
+	Storage   map[string]StorageDef  `yaml:"storage,omitempty"`
+	Registry  map[string]RegistryDef `yaml:"registry,omitempty"`
+	Services  map[string]ServiceDef  `yaml:"services"`
+	Crons     map[string]CronDef     `yaml:"crons,omitempty"`
+	Domains   map[string][]string    `yaml:"domains,omitempty"`
+	ACMEEmail string                 `yaml:"acme_email,omitempty"`
 
 	// Resolved firewall names — populated by Resolve()
 	MasterFirewall string `yaml:"-"`
 	WorkerFirewall string `yaml:"-"`
+}
+
+// RegistryDef holds credentials for a single private container registry.
+// Username and Password may be literal values or `$VAR` references resolved
+// at deploy time from the CredentialSource — same shape as `secrets:`.
+//
+// Example:
+//
+//	registry:
+//	  ghcr.io:
+//	    username: $GITHUB_USERNAME
+//	    password: $GITHUB_TOKEN
+type RegistryDef struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // StorageNames returns all user-declared storage bucket names.

@@ -81,14 +81,10 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "cat /etc/fstab", Result: testutil.MockResult{}},
 			{Prefix: "umount", Result: testutil.MockResult{}},
 			{Prefix: "sed", Result: testutil.MockResult{}},
-			// Docker (ComputeSet)
-			{Prefix: "sudo docker info", Result: testutil.MockResult{}},
-			{Prefix: "sudo usermod", Result: testutil.MockResult{}},
-			// k3s master install (ComputeSet)
+			// k3s master install (ComputeSet) — Docker is no longer
+			// installed on the host; the registry is now a k8s Deployment
+			// in kube-system applied by the reconcile step.
 			{Prefix: "command -v kubectl", Result: testutil.MockResult{Output: []byte("True")}},
-			{Prefix: "curl -fs http://", Result: testutil.MockResult{}},
-			{Prefix: "docker run -d --name nvoi-registry", Result: testutil.MockResult{}},
-			{Prefix: "docker rm -f", Result: testutil.MockResult{}},
 			// k3s jsonpath ready checks — KUBECONFIG must be before jsonpath (worker join needs IP)
 			{Prefix: "KUBECONFIG", Result: testutil.MockResult{Output: []byte("True,10.0.1.1")}},
 			{Prefix: "sudo k3s kubectl get nodes", Result: testutil.MockResult{Output: []byte("True")}},

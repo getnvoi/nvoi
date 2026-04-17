@@ -266,23 +266,3 @@ func TestStorageEnvPrefix(t *testing.T) {
 		})
 	}
 }
-
-func TestRegistryAddr(t *testing.T) {
-	tests := []struct {
-		name string
-		ip   string
-		want string
-	}{
-		{"ipv4", "10.0.1.1", "10.0.1.1:5000"},
-		{"localhost", "127.0.0.1", "127.0.0.1:5000"},
-		{"public ip", "91.98.91.222", "91.98.91.222:5000"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := RegistryAddr(tt.ip)
-			if got != tt.want {
-				t.Errorf("RegistryAddr(%q) = %q, want %q", tt.ip, got, tt.want)
-			}
-		})
-	}
-}
