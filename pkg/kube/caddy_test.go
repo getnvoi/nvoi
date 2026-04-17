@@ -211,6 +211,31 @@ func TestBuildCaddyDeployment_Shape(t *testing.T) {
 	}
 }
 
+// REGRESSION INVARIANT — pod template MUST be stamped with the seed
+// checksum so changing seed bytes forces a Deployment rollout.
+//
+// Why: ConfigMap volume updates eventually land on disk in the pod, but
+// the running Caddy process never re-reads its bootstrap config. Without
+// this annotation, an upgrade from a broken seed to a fixed one leaves
+// the existing pod stuck on the old seed in memory — readiness fails
+// forever and the next deploy hangs in EnsureCaddy.
+func TestBuildCaddyDeployment_PodTemplateStampedWithSeedChecksum(t *testing.T) {
+	dep := buildCaddyDeployment()
+	got := dep.Spec.Template.ObjectMeta.Annotations[utils.LabelConfigChecksum]
+	if got == "" {
+		t.Fatalf("pod template missing %s annotation — seed changes won't trigger rollout", utils.LabelConfigChecksum)
+	}
+	want := caddySeedChecksum()
+	if got != want {
+		t.Errorf("checksum annotation = %q, want %q", got, want)
+	}
+	// caddySeedChecksum hashes a constant — calling it twice must give the
+	// same bytes (sanity that the helper isn't time- or random-dependent).
+	if caddySeedChecksum() != want {
+		t.Error("caddySeedChecksum is non-deterministic")
+	}
+}
+
 func TestBuildCaddyService_AdminNotExposed(t *testing.T) {
 	svc := buildCaddyService()
 	for _, p := range svc.Spec.Ports {
@@ -220,7 +245,15 @@ func TestBuildCaddyService_AdminNotExposed(t *testing.T) {
 	}
 }
 
-func TestBuildCaddyConfigMap_SeedIsAdminOnly(t *testing.T) {
+// REGRESSION INVARIANT — the seed config MUST bind :80 with empty routes.
+//
+// Why: the pod's readiness probe is TCP on :80. If the seed binds nothing
+// there, the probe fails forever, the Deployment never reports Available,
+// and EnsureCaddy times out before the reconciler can POST the real config
+// via the admin API. Verified live on a Hetzner master — the original
+// admin-only seed wedged the deploy after 21 minutes of "Readiness probe
+// failed: dial tcp :80: connect: connection refused".
+func TestBuildCaddyConfigMap_SeedBinds80SoReadinessPasses(t *testing.T) {
 	cm := buildCaddyConfigMap()
 	data, ok := cm.Data[CaddyConfigKey]
 	if !ok {
@@ -230,8 +263,34 @@ func TestBuildCaddyConfigMap_SeedIsAdminOnly(t *testing.T) {
 	if err := json.Unmarshal([]byte(data), &seed); err != nil {
 		t.Fatalf("seed not valid JSON: %v", err)
 	}
-	if _, ok := seed["apps"]; ok {
-		t.Errorf("seed must NOT include apps — admin only on first boot, got: %s", data)
+	admin, _ := seed["admin"].(map[string]any)
+	if admin["listen"] != CaddyAdminListen {
+		t.Errorf("seed admin.listen = %v, want %s", admin["listen"], CaddyAdminListen)
+	}
+	apps, ok := seed["apps"].(map[string]any)
+	if !ok {
+		t.Fatalf("seed missing apps — readiness probe on :80 will never pass:\n%s", data)
+	}
+	httpApp, _ := apps["http"].(map[string]any)
+	servers, _ := httpApp["servers"].(map[string]any)
+	main, _ := servers["main"].(map[string]any)
+	listen, _ := main["listen"].([]any)
+	found80 := false
+	for _, l := range listen {
+		if l == ":80" {
+			found80 = true
+		}
+	}
+	if !found80 {
+		t.Errorf("seed must bind :80 so the TCP readiness probe passes, listen = %v", listen)
+	}
+	// Routes must be empty in the seed — real routes come via /load reload.
+	if routes, _ := main["routes"].([]any); len(routes) != 0 {
+		t.Errorf("seed routes must be empty, got %v", routes)
+	}
+	// No TLS automation in the seed — premature ACME would race the real config.
+	if _, has := apps["tls"]; has {
+		t.Errorf("seed must not include tls automation (deferred to reload), got: %s", data)
 	}
 }
 

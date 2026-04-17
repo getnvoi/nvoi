@@ -1,6 +1,9 @@
 package kube
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -9,6 +12,17 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// caddySeedChecksum hashes the seed config so we can stamp the pod template
+// with it. Whenever the seed bytes change between nvoi versions, the
+// checksum changes → the Deployment's pod template changes → kube triggers
+// a rolling restart and the new pod boots with the new seed. Without this
+// the existing pod stays wedged with the old in-memory seed forever
+// (ConfigMap volume updates land on disk but Caddy doesn't re-read them).
+func caddySeedChecksum() string {
+	sum := sha256.Sum256([]byte(caddySeedConfigJSON))
+	return hex.EncodeToString(sum[:])
+}
 
 // Caddy in-cluster constants. Single source of truth — every test, every
 // reconcile reads from here.
@@ -35,11 +49,17 @@ func caddyLabels() map[string]string {
 	}
 }
 
-// caddySeedConfigJSON is the minimal admin-only Caddy config baked into the
-// seed ConfigMap. The pod boots with admin listening on localhost:2019 and
-// no servers — the reconciler immediately POSTs the real config via the
-// admin API, swapping in routes + TLS automation atomically.
-const caddySeedConfigJSON = `{"admin":{"listen":"localhost:2019"}}`
+// caddySeedConfigJSON is the minimal config baked into the seed ConfigMap.
+// It binds the :80 listener (with zero routes — every request 404s) so the
+// pod's TCP readiness probe on :80 passes from boot. Without this, the
+// pod never goes Ready, the Deployment never reports Available, and the
+// reconciler times out in EnsureCaddy before it ever gets to POST the
+// real config via /load.
+//
+// Once Ready, the reconciler hot-reloads the real config (which adds
+// :443, routes, and TLS automation) atomically. No listener flap — Caddy's
+// reload preserves open listeners through the swap.
+const caddySeedConfigJSON = `{"admin":{"listen":"localhost:2019"},"apps":{"http":{"servers":{"main":{"listen":[":80"],"routes":[]}}}}}`
 
 // buildCaddyPVC returns a 1Gi PVC for /data (ACME certs + Caddy state).
 // Storage class left unset → k3s default (local-path) takes over.
@@ -128,7 +148,17 @@ func buildCaddyDeployment() *appsv1.Deployment {
 				MatchLabels: map[string]string{utils.LabelAppName: CaddyName},
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: caddyLabels()},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: caddyLabels(),
+					// Seed-config checksum stamped on the pod template so
+					// changing the seed bytes forces a Deployment rollout.
+					// Without this, ConfigMap updates land on disk but the
+					// running Caddy process never re-reads its bootstrap
+					// file, leaving an old pod wedged on the prior seed.
+					Annotations: map[string]string{
+						utils.LabelConfigChecksum: caddySeedChecksum(),
+					},
+				},
 				Spec: corev1.PodSpec{
 					NodeSelector: map[string]string{utils.LabelNvoiRole: utils.RoleMaster},
 					// Tolerate the standard control-plane taint so the pod
