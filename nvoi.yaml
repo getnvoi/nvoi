@@ -18,11 +18,6 @@ volumes:
     size: 20
     server: master
 
-secrets:
-  - POSTGRES_USER
-  - POSTGRES_PASSWORD
-  - POSTGRES_DB
-
 services:
   postgres:
     image: postgres:17
@@ -34,16 +29,16 @@ services:
     env:
       - PGDATA=/var/lib/postgresql/data/pgdata
     secrets:
-      - POSTGRES_USER
-      - POSTGRES_PASSWORD
-      - POSTGRES_DB
+      - POSTGRES_USER=$MAIN_POSTGRES_USER
+      - POSTGRES_PASSWORD=$MAIN_POSTGRES_PASSWORD
+      - POSTGRES_DB=$MAIN_POSTGRES_DB
 
   api:
     image: docker.io/deemx/nvoi-api:latest
     port: 8080
-    server: master
+    depends_on: [postgres]
     secrets:
-      - DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB?sslmode=disable
+      - DATABASE_URL=postgresql://$MAIN_POSTGRES_USER:$MAIN_POSTGRES_PASSWORD@postgres:5432/$MAIN_POSTGRES_DB?sslmode=disable
 
 domains:
   api: [api.nvoi.to]

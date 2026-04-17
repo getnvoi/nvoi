@@ -51,15 +51,13 @@ type HitOutput struct {
 func main() {
 	dsn := mustEnv("DATABASE_URL")
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	// Postgres may not exist yet when this pod starts (k8s schedules all
+	// workloads in parallel; DNS for the postgres Service may not resolve
+	// until its pod is registered; the DB itself may still be initializing
+	// volume/user/db). Retry both Open and AutoMigrate for up to 5 minutes.
+	db, err := waitForDB(dsn, 5*time.Minute)
 	if err != nil {
-		log.Fatalf("open db: %v", err)
-	}
-
-	// Postgres may not be ready when the pod starts (rolling deploy). Retry
-	// the first real query (AutoMigrate) for up to a minute before giving up.
-	if err := waitForDB(db, 60*time.Second); err != nil {
-		log.Fatalf("migrate: %v", err)
+		log.Fatalf("db not ready: %v", err)
 	}
 
 	gin.SetMode(gin.ReleaseMode)
@@ -103,18 +101,22 @@ func hit(db *gorm.DB) func(ctx context.Context, in *HitInput) (*HitOutput, error
 	}
 }
 
-// waitForDB retries AutoMigrate until it succeeds or timeout elapses.
-func waitForDB(db *gorm.DB, timeout time.Duration) error {
+// waitForDB retries Open+AutoMigrate until both succeed or the deadline
+// elapses. Covers: DNS-not-yet-resolvable, postgres-still-booting, user/db
+// not yet provisioned. Returns the connected *gorm.DB.
+func waitForDB(dsn string, timeout time.Duration) (*gorm.DB, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		err := db.AutoMigrate(&Log{})
+		db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		if err == nil {
-			return nil
+			if err = db.AutoMigrate(&Log{}); err == nil {
+				return db, nil
+			}
 		}
 		if time.Now().After(deadline) {
-			return err
+			return nil, err
 		}
-		log.Printf("db not ready (%v), retrying…", err)
+		log.Printf("db not ready (%v), retrying in 2s…", err)
 		time.Sleep(2 * time.Second)
 	}
 }
