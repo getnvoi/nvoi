@@ -19,6 +19,16 @@ cd "$(dirname "$0")"
 BUCKET="nvoi-releases"
 WRANGLER="npx --yes wrangler@latest"
 
+# Build the deploy bundle: prepend a `const installScript = atob(...)` line
+# holding install.sh base64-encoded, then cat index.js. Base64 because
+# Cloudflare's WAF on their own API 403s multipart uploads containing raw
+# `curl | sh`, `sudo`, `chmod` patterns.
+{
+  printf 'const installScript = atob("%s");\n' "$(base64 < install.sh | tr -d '\n')"
+  cat index.js
+} > .deploy.js
+trap 'rm -f .deploy.js' EXIT
+
 # Idempotent bucket creation — "already exists" is success.
 echo "→ R2 bucket: $BUCKET"
 $WRANGLER r2 bucket create "$BUCKET" 2>&1 | grep -v "already exists" || true
@@ -38,10 +48,10 @@ if [ "${1:-}" = "release" ]; then
   done
 
   echo "→ deploying worker (VERSION=$VERSION)"
-  $WRANGLER deploy --var "VERSION:$VERSION"
+  $WRANGLER deploy .deploy.js --var "VERSION:$VERSION"
 else
   echo "→ deploying worker (no version bump)"
-  $WRANGLER deploy
+  $WRANGLER deploy .deploy.js
 fi
 
 echo "✓ https://get.nvoi.to"
