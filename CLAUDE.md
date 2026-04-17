@@ -174,7 +174,7 @@ internal/
     validate.go            ValidateConfig() — fail-fast pre-flight checks
     helpers.go             DescribeLive(), SplitServers(), ResolveServers()
     servers.go             ServersAdd (create) + ServersRemoveOrphans (drain + delete after services move)
-    firewall.go            Firewall reconciliation
+    firewall.go            Firewall (desired per-role set) + FirewallRemoveOrphans (sweep, runs after ServersRemoveOrphans)
     volumes.go             Volume reconciliation
     secrets.go             Secret resolution — reads from CredentialSource
     storage.go             Storage reconciliation
@@ -274,7 +274,7 @@ Deploy(ctx, dc, cfg)
   → DescribeLive(ctx, dc, cfg) → LiveState
   → ServersAdd(ctx, dc, cfg)          — create desired, NO orphan removal yet
   → establish MasterSSH + MasterKube
-  → Firewall(ctx, dc, live, cfg)
+  → Firewall(ctx, dc, live, cfg)      — desired per-role set, NO orphan removal yet
   → Volumes(ctx, dc, live, cfg)
   → Secrets(ctx, dc, live, cfg) → secretValues
   → Storage(ctx, dc, live, cfg) → storageCreds
@@ -282,6 +282,7 @@ Deploy(ctx, dc, cfg)
   → Services(ctx, dc, live, cfg, sources)
   → Crons(ctx, dc, live, cfg, sources)
   → ServersRemoveOrphans(ctx, dc, live, cfg) — drain + delete AFTER workloads moved
+  → FirewallRemoveOrphans(ctx, dc, live, cfg) — sweep AFTER servers detach; Hetzner refuses delete while attached
   → DNS(ctx, dc, live, cfg)
   → Ingress(ctx, dc, live, cfg)
 ```
@@ -363,5 +364,6 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **HTTPS verification is two-step, both probes inside the Caddy pod.** Step 1: `WaitForCaddyCert` polls until `/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/<domain>/<domain>.crt` exists with non-zero size. Step 2: `WaitForCaddyHTTPS` curls `https://<domain><health>` and waits for any non-5xx, non-0 status. Both run via `Exec` so we don't depend on the operator's local DNS. Timeouts are `caddyCertTimeout` / `caddyHTTPSTimeout` — expiration warns and continues (Caddy keeps retrying ACME, next deploy re-verifies).
 - **SSH host key changed = hard error** with guidance to clear known hosts. Auto-cleared on server creation.
 - **Firewall never reset during server creation.** `ensureFirewall` only ensures existence.
+- **Firewall orphan sweep deferred until after `ServersRemoveOrphans`.** `Firewall()` reconciles the desired per-role set (master-fw, worker-fw) early so new servers get rules applied before workloads land. `FirewallRemoveOrphans()` runs later, after `ServersRemoveOrphans` has drained + deleted orphan servers (and `DeleteServer`'s contract has detached their firewalls). Running the sweep earlier — as the code used to — meant Hetzner correctly rejected `DeleteFirewall` with `resource_in_use` because the orphan server was still attached, and nothing retried. Same split pattern as `ServersAdd` / `ServersRemoveOrphans`. Firewall is the only reconcile-swept resource with a delete-time attachment lock against another reconcile-managed resource (servers); every other resource either has no lock or isn't swept in reconcile.
 - **Concurrency control on deploy workflows.** `concurrency: { group: deploy, cancel-in-progress: false }`.
 - **Root disk size is creation-only.** `disk` in server config applies at `EnsureServer` time. Changing it on an existing server has no effect — `EnsureServer` returns the existing server as-is. Resize requires server recreation. Hetzner doesn't support custom root disk sizes at all (fixed per server type) — validated at config time.

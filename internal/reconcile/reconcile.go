@@ -48,6 +48,18 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	defer kc.Close()
 	dc.Cluster.MasterKube = kc
 
+	// Ensure the app namespace exists exactly once, up front — every
+	// downstream k8s write (per-service secrets, workloads, ingress, crons)
+	// assumes it's there. Without this, the first writer races and fails
+	// with "namespaces not found".
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	if err := kc.EnsureNamespace(ctx, names.KubeNamespace()); err != nil {
+		return fmt.Errorf("ensure namespace: %w", err)
+	}
+
 	if err := Firewall(ctx, dc, live, cfg); err != nil {
 		return err
 	}
@@ -76,6 +88,16 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 
 	// Workloads have moved. Now safe to drain + delete orphan servers.
 	if err := ServersRemoveOrphans(ctx, dc, live, cfg); err != nil {
+		return err
+	}
+
+	// Orphan firewalls swept AFTER ServersRemoveOrphans: DeleteServer
+	// detached each firewall as part of its teardown contract, so by the
+	// time we reach here any firewall that fell out of the desired set has
+	// zero attached resources and DeleteFirewall succeeds. Running this
+	// earlier — the previous inline placement inside Firewall() — meant
+	// Hetzner correctly rejected delete with resource_in_use.
+	if err := FirewallRemoveOrphans(ctx, dc, live, cfg); err != nil {
 		return err
 	}
 
