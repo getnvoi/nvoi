@@ -384,3 +384,50 @@ func TestBuildService_ImagePullSecrets(t *testing.T) {
 		}
 	})
 }
+
+// INVARIANT: nvoi/deploy-hash label lands on the workload metadata AND
+// the pod-template metadata — so `kubectl get deploy -L nvoi/deploy-hash`
+// and `kubectl get pods -L nvoi/deploy-hash` both surface the deploy
+// that placed the resource. The label must NOT appear in the selector
+// (matchLabels) — that would orphan old pods on every deploy.
+func TestBuildService_DeployHashLabel(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:       "web",
+		Image:      "nginx:1.27",
+		Port:       80,
+		Replicas:   2,
+		DeployHash: "20260417-143022",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dep := asDeployment(t, workload)
+	if got := dep.ObjectMeta.Labels[utils.LabelNvoiDeployHash]; got != "20260417-143022" {
+		t.Errorf("workload label = %q, want 20260417-143022", got)
+	}
+	if got := dep.Spec.Template.ObjectMeta.Labels[utils.LabelNvoiDeployHash]; got != "20260417-143022" {
+		t.Errorf("pod template label = %q, want 20260417-143022", got)
+	}
+	// REGRESSION GUARD: the selector must NOT carry the hash. Including
+	// it would mean every new deploy (new hash) selects a fresh empty
+	// ReplicaSet and orphans the running pods.
+	if _, ok := dep.Spec.Selector.MatchLabels[utils.LabelNvoiDeployHash]; ok {
+		t.Errorf("selector must NOT include deploy-hash — would orphan pods every deploy: %v", dep.Spec.Selector.MatchLabels)
+	}
+}
+
+func TestBuildService_DeployHashAbsent_NoLabel(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:     "web",
+		Image:    "nginx:1.27",
+		Port:     80,
+		Replicas: 2,
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dep := asDeployment(t, workload)
+	if _, ok := dep.ObjectMeta.Labels[utils.LabelNvoiDeployHash]; ok {
+		t.Error("empty DeployHash must not write the label key")
+	}
+}

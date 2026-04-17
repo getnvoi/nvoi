@@ -58,8 +58,15 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			return err
 		}
 
+		// ResolveImage applies the Kamal-style convention: built services
+		// get their image rewritten to <host>/<repo>[:user-tag]-<hash>;
+		// pull-only services pass through unchanged.
+		resolvedImage, err := ResolveImage(cfg, name, dc.Cluster.DeployHash)
+		if err != nil {
+			return err
+		}
 		if err := app.ServiceSet(ctx, app.ServiceSetRequest{
-			Cluster: dc.Cluster, Name: name, Image: svc.Image,
+			Cluster: dc.Cluster, Name: name, Image: resolvedImage,
 			Port: svc.Port, Command: svc.Command, Replicas: replicas,
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,

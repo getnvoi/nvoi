@@ -113,3 +113,186 @@ func TestStorageNames_Empty(t *testing.T) {
 		t.Fatalf("got %d names, want 0", len(names))
 	}
 }
+
+// ── BuildSpec YAML shapes ──────────────────────────────────────────────────
+
+func TestBuildSpec_BoolTrue(t *testing.T) {
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+services:
+  api:
+    image: ghcr.io/org/api:v1
+    build: true
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	svc := cfg.Services["api"]
+	if svc.Build == nil {
+		t.Fatal("build: true should produce non-nil BuildSpec")
+	}
+	if svc.Build.Context != "./" {
+		t.Errorf("build: true context = %q, want %q", svc.Build.Context, "./")
+	}
+}
+
+func TestBuildSpec_BoolFalse(t *testing.T) {
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+services:
+  api:
+    image: ghcr.io/org/api:v1
+    build: false
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	svc := cfg.Services["api"]
+	// build: false → non-nil pointer but empty Context, downstream treats as "no build"
+	if svc.Build != nil && svc.Build.Context != "" {
+		t.Errorf("build: false should have empty Context, got %q", svc.Build.Context)
+	}
+}
+
+func TestBuildSpec_StringPath(t *testing.T) {
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+services:
+  api:
+    image: ghcr.io/org/api:v1
+    build: services/api
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	svc := cfg.Services["api"]
+	if svc.Build == nil || svc.Build.Context != "services/api" {
+		t.Errorf("build: services/api = %+v, want Context services/api", svc.Build)
+	}
+}
+
+func TestBuildSpec_MapFormWithContextAndDockerfile(t *testing.T) {
+	// Monorepo pattern: Dockerfile lives in a subdir but the build
+	// context needs the whole repo (e.g. Go builds that COPY go.mod
+	// from the root).
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+services:
+  api:
+    image: ghcr.io/org/api:v1
+    build:
+      context: ./
+      dockerfile: ./cmd/api/Dockerfile
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	b := cfg.Services["api"].Build
+	if b == nil {
+		t.Fatal("Build should be non-nil")
+	}
+	if b.Context != "./" {
+		t.Errorf("context = %q, want ./", b.Context)
+	}
+	if b.Dockerfile != "./cmd/api/Dockerfile" {
+		t.Errorf("dockerfile = %q, want ./cmd/api/Dockerfile", b.Dockerfile)
+	}
+}
+
+// INVARIANT: omitting `context:` from the struct form defaults it to
+// "./" so the common monorepo case stays concise.
+//
+//	build:
+//	  dockerfile: ./cmd/api/Dockerfile   # context implicitly "./"
+func TestBuildSpec_MapFormDefaultsContextToDot(t *testing.T) {
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+services:
+  api:
+    image: ghcr.io/org/api:v1
+    build:
+      dockerfile: ./cmd/api/Dockerfile
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	b := cfg.Services["api"].Build
+	if b == nil {
+		t.Fatal("Build should be non-nil")
+	}
+	if b.Context != "./" {
+		t.Errorf("implicit context = %q, want ./", b.Context)
+	}
+	if b.Dockerfile != "./cmd/api/Dockerfile" {
+		t.Errorf("dockerfile = %q", b.Dockerfile)
+	}
+}
+
+func TestBuildSpec_Absent(t *testing.T) {
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+services:
+  api:
+    image: docker.io/library/nginx
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Services["api"].Build != nil {
+		t.Error("absent build: should leave Build == nil")
+	}
+}

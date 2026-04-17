@@ -113,7 +113,10 @@ storage:
 
 services:
   api:
-    image: myorg/api:v1
+    image: ghcr.io/myorg/api:v1
+    build: ./services/api   # bool (true = "./") or string (context path). Requires `registry:` entry
+                            # for the image's host. Runs `docker login/build/push` locally before any infra
+                            # is touched. Omit to skip the build step (image pulled as-is from its registry).
     port: 8080
     secrets: [JWT_SECRET, ENCRYPTION_KEY]
     server: master          # single node — nodeSelector
@@ -141,6 +144,119 @@ domains:
 - Volume mounts: `name:/path` format, volume must be on same server as workload
 - `server` and `servers` mutually exclusive. Multiple servers + volume = error.
 - Web-facing services (with domains): replicas omitted → defaults to 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid — the rule ensures process-level redundancy, not node distribution.
+- `services.X.build:` set requires a `registry:` block AND the image's host must appear as a key in `registry:`. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag like `ghcr.io/org/app:v1`.
+
+## Private registries + local builds
+
+nvoi supports two independent registry concerns:
+
+- **Pull credentials** (`registry:` block) — how the cluster authenticates when kubelet pulls images.
+- **Local builds** (`services.X.build:`) — build an image locally from a Dockerfile and push it to the declared registry before the cluster pulls.
+
+They compose: `build:` without `registry:` is a validate error (nowhere to push); `registry:` without `build:` is fine (pull-only, pre-built images).
+
+### `registry:` — pull auth
+
+Top-level YAML block. Each key is a registry hostname (optionally `:port`); values are `{username, password}`. Values may be literal strings or `$VAR` references resolved at deploy time via the same `CredentialSource` path `secrets:` uses.
+
+```yaml
+registry:
+  docker.io:                       # Docker Hub
+    username: $DOCKER_USERNAME
+    password: $DOCKER_PASSWORD
+  ghcr.io:                         # GitHub Container Registry
+    username: $GITHUB_USER
+    password: $GITHUB_TOKEN
+  registry.example.com:5000:       # self-hosted registry on a non-standard port
+    username: $REG_USER
+    password: $REG_PASS
+```
+
+At deploy time nvoi:
+1. Resolves every `$VAR` against the CredentialSource (missing env var → hard error naming both registry and var).
+2. Renders a `kubernetes.io/dockerconfigjson` Secret named `registry-auth` in the app namespace.
+3. Injects `imagePullSecrets: [{name: registry-auth}]` into every Deployment/StatefulSet/CronJob PodSpec.
+4. Removing the block entirely → deletes the orphan Secret on the next deploy.
+
+### `services.X.build:` — local build + push
+
+Three YAML shapes, equivalent in expressiveness to docker-compose's `build:` field:
+
+```yaml
+# Shape 1: bool shorthand — context=./, dockerfile=./Dockerfile
+api:
+  build: true
+
+# Shape 2: string shorthand — context=<path>, dockerfile=<path>/Dockerfile
+api:
+  build: services/api
+
+# Shape 3: explicit struct — independent context and dockerfile knobs.
+# Use this when the Dockerfile lives inside a subdir but the build
+# context must cover a parent (monorepo Go/Node/Python builds that
+# COPY deps from above the Dockerfile's own directory).
+api:
+  build:
+    context: ./
+    dockerfile: ./cmd/api/Dockerfile
+```
+
+Omitting `context:` from the struct form defaults it to `./`.
+
+### `services.X.image:` under `build:` — Kamal-style resolution
+
+When `build:` is set, `image:` is resolved into a full registry reference at deploy time — like Kamal's convention, adapted to nvoi's multi-registry map.
+
+**Host resolution:**
+
+- `image: ghcr.io/org/api` → host explicit; must appear as a key in `registry:`.
+- `image: org/api` with ONE registry declared → host inferred (`<only-registry>/org/api`). Kamal-style.
+- `image: org/api` with MULTIPLE registries declared → **validate error** (ambiguous). Fix: write the host explicitly.
+- `image: nginx` (bare shortname, no slash) → **validate error** under `build:`. A bare name has no repo namespace, and pushing would land at `<host>/nginx` which is almost certainly unintended.
+
+**Tag resolution (per-deploy hash):**
+
+A `DeployHash` is generated once at the top of `Deploy()` — UTC timestamp `YYYYMMDD-HHMMSS`. Applied two ways:
+
+- **Image tag suffix.** If the user wrote no tag (`image: org/api`), the resolved image is `<host>/org/api:<hash>`. If they wrote a tag (`image: org/api:v2`), it becomes `<host>/org/api:v2-<hash>` — user-pinned version preserved AND uniqueness guaranteed. Either way, every `bin/deploy` run produces a new PodSpec.image string, so the rolling-update controller always triggers a restart even without a code change. No `:latest` foot-gun, no manual annotation dance.
+- **Cluster label.** Every nvoi-managed Deployment, StatefulSet, CronJob gets `nvoi/deploy-hash: <hash>` stamped on the workload metadata AND the pod-template metadata (but NOT the selector — that'd orphan pods on every deploy). `kubectl get deploy -L nvoi/deploy-hash` surfaces exactly which deploy placed each resource.
+
+**Digest-pinned references** (`repo@sha256:...`) pass through unmodified — user pinned content, we respect it.
+
+**Pull-only services** (no `build:`) — `image:` passes through verbatim. `image: postgres:17` ships as `postgres:17` to the PodSpec, kubelet pulls from Docker Hub.
+
+### Build invocation
+
+For every service with `build:` set, nvoi runs **locally, before touching any infrastructure**:
+
+1. `docker buildx version` — one-shot preflight at the top of the build pass. If buildx is missing, surfaces a readable install hint ("Install: brew install docker-buildx …") instead of letting per-service docker calls fail with opaque flag-parsing errors.
+2. `docker login <host> -u <user> --password-stdin` — password via stdin, never argv.
+3. `docker buildx build -t <resolved-image> -f <dockerfile> --progress=plain <context>` — streamed to deploy log. `docker buildx build` (not `docker build`) because modern Dockerfiles routinely use BuildKit-only syntax (`# syntax=...`, `RUN --mount=type=cache`, `COPY --chmod`); the legacy builder rejects those at argv parse time before even reading the file.
+4. `docker push <resolved-image>`.
+
+All invocations run against the operator's **real `~/.docker/config.json`** — no isolation. Same contract as Kamal: login writes an auth entry that stays across deploys (idempotent; each login overwrites the same host entry). An earlier attempt to isolate DOCKER_CONFIG to a per-deploy tempdir broke docker CLI plugin discovery ($DOCKER_CONFIG/cli-plugins is where docker looks for `buildx`, and an empty tempdir made the subcommand unrecognized) AND context resolution ($DOCKER_CONFIG/config.json stores `currentContext`, so overriding it made docker fall back to `/var/run/docker.sock` and miss OrbStack/colima/Docker Desktop). The tiny auth-hygiene win wasn't worth either cost.
+
+Build runs pre-infra: a build failure aborts the deploy before any server is provisioned. Re-running `bin/deploy` after fixing the Dockerfile converges from where it stopped.
+
+### Chmod / Dockerfile hygiene — user's responsibility
+
+nvoi does **not** mutate the build context. Executable bits (`bin/*`), file ownership, and line endings are the user's Dockerfile's problem. The idiomatic fix lives in the Dockerfile:
+
+```dockerfile
+# BuildKit — forces 0755 regardless of host filesystem perms
+COPY --chmod=0755 bin/ /app/bin/
+
+# Or old-school — works everywhere
+COPY bin/ /app/bin/
+RUN chmod +x /app/bin/*
+
+# Plus a non-root user owning runtime directories
+RUN groupadd -g 1000 app && useradd -u 1000 -g 1000 app \
+ && chown -R app:app /app/log /app/tmp
+USER 1000:1000
+```
+
+Same contract GitHub Actions, Fly.io, and Render use: honor whatever mode the Dockerfile writes into the image, don't silently rewrite source files at build time.
 
 ## Commands
 
@@ -184,6 +300,7 @@ internal/
     secrets.go             Secret resolution — reads from CredentialSource
     storage.go             Storage reconciliation
     registries.go          Pull-secret reconcile: resolve registry: creds, apply dockerconfigjson Secret (or orphan-clean)
+    build.go               Local docker build/push for services with `build:` set; runs pre-infra via app.BuildService
     services.go            Service reconciliation (defaults replicas for domains)
     crons.go               Cron reconciliation
     dns.go                 DNS reconciliation
@@ -212,9 +329,10 @@ pkg/
     exec.go                Exec
     ssh.go                 SSH
     logs.go                Logs
+    build.go               BuildService (local docker login/build/push) + BuildRunner interface for test injection
   kube/                    Typed Kubernetes client over SSH tunnel
     client.go              Client: typed clientset + SSH-tunneled rest.Config + ExecFunc hook; NewForTest(cs) for fakes
-    apply.go               Apply() — typed create/update only (no dynamic / SSA fallback); EnsureNamespace
+    apply.go               Apply() — typed create/update only (no dynamic / SSA fallback); every Get/Update wrapped in retry.RetryOnConflict; EnsureNamespace
     workloads.go           FirstPod, GetServicePort, DeleteByName
     secrets.go             EnsureSecret, UpsertSecretKey, DeleteSecretKey, DeleteSecret, ListSecretKeys, GetSecretValue
     nodes.go               LabelNode, DrainAndRemoveNode (Eviction API, force-remove on NotReady)
@@ -278,6 +396,7 @@ SSH errors: `ErrHostKeyChanged` and `ErrAuthFailed` surface immediately with gui
 Deploy(ctx, dc, cfg)
   → ValidateConfig(cfg)
   → cfg.Resolve()                    — populate VolumeDef.MountPath, firewall names
+  → Build(ctx, dc, cfg)              — LOCAL docker login/build/push for services with `build:` set; runs PRE-infra
   → DescribeLive(ctx, dc, cfg) → LiveState
   → ServersAdd(ctx, dc, cfg)          — create desired, NO orphan removal yet
   → establish MasterSSH + MasterKube
@@ -376,6 +495,8 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **Ingress is in-cluster Caddy.** k3s installed with `--disable traefik --disable servicelb`. A single `caddy:2.10-alpine` Deployment runs in `kube-system` with `nodeSelector: nvoi-role=master` and `hostPort: 80/443`. The reconciler talks to Caddy's admin API on `localhost:2019` *inside the pod* via `kube.Client.Exec` — admin is never exposed off-pod. Each reconcile builds Caddy's native JSON config from `cfg.Domains` + resolved Service ports (`pkg/kube/caddy_config.go`) and POSTs it to `/load`; Caddy validates first, then atomically swaps listeners with no connection drops. ACME state lives on a 1Gi PVC at `/data` (k3s `local-path`). Removed domains drop out of the next config; orphan ingress resources don't exist (no k8s `Ingress` objects).
 - **DNS and ingress are separate concerns.** DNS creates A records. Ingress is purely Caddy's loaded config.
 - **HTTPS verification is two-step, both probes inside the Caddy pod.** Step 1: `WaitForCaddyCert` polls until `/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/<domain>/<domain>.crt` exists with non-zero size. Step 2: `WaitForCaddyHTTPS` curls `https://<domain><health>` and waits for any non-5xx, non-0 status. Both run via `Exec` so we don't depend on the operator's local DNS. Timeouts are `caddyCertTimeout` / `caddyHTTPSTimeout` — expiration warns and continues (Caddy keeps retrying ACME, next deploy re-verifies).
+- **Local builds are optional and opt-in per service.** `services.X.build: true | <path> | {context, dockerfile}` triggers `docker buildx login/build/push` to the registry matching the image's host (which must be declared in the top-level `registry:` block). Runs PRE-infra via a `BuildRunner` interface — a build failure never leaves half-provisioned servers behind. `PreflightBuildx` fires once at the top of the pass so missing buildx surfaces with an actionable install hint instead of opaque per-service flag errors. Passwords flow via `--password-stdin`, never argv. Auth lives in the operator's real `~/.docker/config.json` (Kamal-style) — earlier `DOCKER_CONFIG=<tmpdir>` isolation killed plugin discovery and docker-context lookup, not worth it. Services with no `build:` set pull their image as-is from wherever `image:` points.
+- **Every typed Apply retries on conflict.** Kubernetes resources (Deployments, StatefulSets, CronJobs, etc.) have their `.status` updated asynchronously by their controllers. A plain Get-then-Update sequence races those status writes: between our Get and our Update, the controller bumps `ResourceVersion` for its own reasons, and our write fails with `Operation cannot be fulfilled on deployments.apps "X": the object has been modified`. `pkg/kube/apply.go` wraps every Get/Update pair in `k8s.io/client-go/util/retry.RetryOnConflict(retry.DefaultRetry, …)` — re-reads the fresh ResourceVersion and retries with backoff. Uniform across every kind (idempotent, cheap). Hit this live on a Caddy re-deploy; the fix is standard client-go hygiene and prevents every future variant.
 - **Private registry credentials are k8s `imagePullSecrets`, not containerd config.** Top-level `registry:` block in `nvoi.yaml` declares `<host>: {username, password}` (values may be `$VAR` references resolved via `CredentialSource`). The `Registries()` reconcile step renders a `kubernetes.io/dockerconfigjson` Secret named `registry-auth` in the app namespace; `BuildService`/`BuildCronJob` inject `imagePullSecrets: [{name: registry-auth}]` into every PodSpec when `len(cfg.Registry) > 0`. Missing env vars are a hard error at deploy time. Removing `registry:` from the YAML deletes the orphan Secret on the next deploy. No `registries.yaml` on the host, no Docker daemon, no containerd mirror gymnastics.
 - **SSH host key changed = hard error** with guidance to clear known hosts. Auto-cleared on server creation.
 - **Firewall never reset during server creation.** `ensureFirewall` only ensures existence.

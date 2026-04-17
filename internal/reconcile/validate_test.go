@@ -433,3 +433,118 @@ func assertValidationError(t *testing.T, cfg *config.AppConfig, substr string) {
 		t.Fatalf("expected error containing %q, got: %s", substr, err)
 	}
 }
+
+// ── Build validation ──────────────────────────────────────────────────────
+
+func TestValidateConfig_BuildWithoutRegistryBlock_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Services["web"] = config.ServiceDef{
+		Image: "ghcr.io/org/web:v1",
+		Build: &config.BuildSpec{Context: "./"},
+	}
+	assertValidationError(t, cfg, "registry:")
+}
+
+func TestValidateConfig_BuildBareImageName_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Registry = map[string]config.RegistryDef{
+		"ghcr.io": {Username: "u", Password: "p"},
+	}
+	cfg.Services["web"] = config.ServiceDef{
+		Image: "nginx", // bare shortname — no repo namespace (would push to <host>/nginx)
+		Build: &config.BuildSpec{Context: "./"},
+	}
+	assertValidationError(t, cfg, "no repo namespace")
+}
+
+// Kamal-style: repo-only image with exactly ONE registry declared is
+// valid — the host is inferred from the single registry entry.
+func TestValidateConfig_BuildRepoOnlyWithSingleRegistry_Valid(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Registry = map[string]config.RegistryDef{
+		"ghcr.io": {Username: "u", Password: "p"},
+	}
+	cfg.Services["web"] = config.ServiceDef{
+		Image: "org/web",
+		Build: &config.BuildSpec{Context: "./"},
+	}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("expected valid, got: %v", err)
+	}
+}
+
+// Two registries declared + no host prefix on image = ambiguous, must error.
+func TestValidateConfig_BuildRepoOnlyWithMultipleRegistries_Ambiguous(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Registry = map[string]config.RegistryDef{
+		"ghcr.io":   {Username: "u", Password: "p"},
+		"docker.io": {Username: "u", Password: "p"},
+	}
+	cfg.Services["web"] = config.ServiceDef{
+		Image: "org/web", // no host prefix → ambiguous with multiple registries
+		Build: &config.BuildSpec{Context: "./"},
+	}
+	assertValidationError(t, cfg, "multiple registries")
+}
+
+func TestValidateConfig_BuildHostNotInRegistry_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Registry = map[string]config.RegistryDef{
+		"docker.io": {Username: "u", Password: "p"},
+	}
+	cfg.Services["web"] = config.ServiceDef{
+		Image: "ghcr.io/org/web:v1", // ghcr.io NOT declared
+		Build: &config.BuildSpec{Context: "./"},
+	}
+	assertValidationError(t, cfg, "ghcr.io")
+}
+
+func TestValidateConfig_BuildValid(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Registry = map[string]config.RegistryDef{
+		"ghcr.io": {Username: "u", Password: "p"},
+	}
+	cfg.Services["web"] = config.ServiceDef{
+		Image: "ghcr.io/org/web:v1",
+		Build: &config.BuildSpec{Context: "./"},
+	}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("expected valid, got: %v", err)
+	}
+}
+
+// validCfgForTest is a minimal valid AppConfig that subsequent tests
+// mutate. Copied here because the existing helpers inline their own
+// fixtures.
+func validCfgForTest() *config.AppConfig {
+	return &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Compute: "hetzner"},
+		Servers: map[string]config.ServerDef{
+			"master": {Type: "cax11", Region: "nbg1", Role: "master"},
+		},
+		Services: map[string]config.ServiceDef{},
+	}
+}
+
+// ── imageRegistryHost unit coverage ───────────────────────────────────────
+
+func TestImageRegistryHost(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"ghcr.io/org/app:v1", "ghcr.io"},
+		{"docker.io/library/nginx", "docker.io"},
+		{"registry.example.com:5000/foo:v1", "registry.example.com:5000"},
+		{"localhost/foo:v1", "localhost"},
+		{"nginx", ""},
+		{"alpine:3.19", ""},
+		{"org/repo:tag", ""}, // org namespace, not a host
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := imageRegistryHost(tt.in); got != tt.want {
+			t.Errorf("imageRegistryHost(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -93,54 +94,77 @@ func (c *Client) Apply(ctx context.Context, ns string, obj runtime.Object) error
 
 // applyTyped dispatches to the typed clientset for known resource kinds.
 // Returns handled=true (with err==nil on success) when the GVK is recognized.
+//
+// Every Get/Update pair is wrapped in retry.RetryOnConflict. Controllers
+// (deployment/statefulset/cronjob/etc.) update resource status outside
+// our write path, bumping ResourceVersion mid-Apply. Without retry, the
+// apiserver rejects our Update with "object has been modified" and the
+// deploy aborts on a harmless race. client-go's RetryOnConflict re-reads
+// the fresh ResourceVersion on conflict and tries again — the canonical
+// fix and cheap enough to apply uniformly across every kind.
 func (c *Client) applyTyped(ctx context.Context, ns string, gvk schema.GroupVersionKind, name string, obj runtime.Object) (bool, error) {
 	switch typed := obj.(type) {
 	case *corev1.Namespace:
-		_, err := c.cs.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.CoreV1().Namespaces().Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		_, err = c.cs.CoreV1().Namespaces().Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.CoreV1().Namespaces().Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.CoreV1().Namespaces().Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	case *corev1.Service:
-		existing, err := c.cs.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.CoreV1().Services(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		// Preserve immutable fields (ClusterIP, ResourceVersion).
-		typed.Spec.ClusterIP = existing.Spec.ClusterIP
-		typed.ResourceVersion = existing.ResourceVersion
-		_, err = c.cs.CoreV1().Services(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.CoreV1().Services(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			// Preserve immutable fields (ClusterIP, ResourceVersion).
+			typed.Spec.ClusterIP = existing.Spec.ClusterIP
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.CoreV1().Services(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	case *corev1.Secret:
-		_, err := c.cs.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.CoreV1().Secrets(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		_, err = c.cs.CoreV1().Secrets(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.CoreV1().Secrets(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.CoreV1().Secrets(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	case *corev1.ConfigMap:
-		_, err := c.cs.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.CoreV1().ConfigMaps(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		_, err = c.cs.CoreV1().ConfigMaps(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.CoreV1().ConfigMaps(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.CoreV1().ConfigMaps(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	case *corev1.PersistentVolumeClaim:
 		existing, err := c.cs.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})
@@ -156,67 +180,85 @@ func (c *Client) applyTyped(ctx context.Context, ns string, gvk schema.GroupVers
 		_ = existing
 		return true, nil
 	case *appsv1.Deployment:
-		existing, err := c.cs.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.AppsV1().Deployments(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		// Real apiserver: Update ignores .status (status has its own
-		// subresource). The client-go fake doesn't model that, so mirror
-		// the behavior explicitly — otherwise re-applying a Ready
-		// Deployment in tests resets ReadyReplicas to 0.
-		typed.Status = existing.Status
-		typed.ResourceVersion = existing.ResourceVersion
-		_, err = c.cs.AppsV1().Deployments(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.AppsV1().Deployments(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			// Real apiserver: Update ignores .status (status has its own
+			// subresource). The client-go fake doesn't model that, so
+			// mirror the behavior explicitly — otherwise re-applying a
+			// Ready Deployment in tests resets ReadyReplicas to 0.
+			typed.Status = existing.Status
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.AppsV1().Deployments(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	case *appsv1.StatefulSet:
-		existing, err := c.cs.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.AppsV1().StatefulSets(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		typed.Status = existing.Status
-		typed.ResourceVersion = existing.ResourceVersion
-		_, err = c.cs.AppsV1().StatefulSets(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.AppsV1().StatefulSets(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			typed.Status = existing.Status
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.AppsV1().StatefulSets(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	case *batchv1.CronJob:
-		_, err := c.cs.BatchV1().CronJobs(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.BatchV1().CronJobs(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		_, err = c.cs.BatchV1().CronJobs(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.BatchV1().CronJobs(ns).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.BatchV1().CronJobs(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.BatchV1().CronJobs(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	case *batchv1.Job:
-		_, err := c.cs.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.BatchV1().Jobs(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		_, err = c.cs.BatchV1().Jobs(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.BatchV1().Jobs(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.BatchV1().Jobs(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	case *networkingv1.Ingress:
-		_, err := c.cs.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			_, err = c.cs.NetworkingV1().Ingresses(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
-			return true, wrapApply(gvk, name, err)
-		}
-		if err != nil {
-			return true, wrapApply(gvk, name, err)
-		}
-		_, err = c.cs.NetworkingV1().Ingresses(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.NetworkingV1().Ingresses(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.NetworkingV1().Ingresses(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
 		return true, wrapApply(gvk, name, err)
 	}
 	return false, nil
