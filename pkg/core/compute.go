@@ -119,14 +119,14 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	out.Success("SSH ready")
 
 	out.Progress("ensuring swap")
-	if err := infra.EnsureSwap(ctx, ssh); err != nil {
+	if err := infra.EnsureSwap(ctx, ssh, out.Writer()); err != nil {
 		out.Warning(fmt.Sprintf("swap: %s", err))
 	} else {
 		out.Success("swap ready")
 	}
 
 	out.Progress("ensuring Docker")
-	if err := infra.EnsureDocker(ctx, ssh); err != nil {
+	if err := infra.EnsureDocker(ctx, ssh, out.Writer()); err != nil {
 		ssh.Close()
 		return nil, fmt.Errorf("docker on %s: %w", srv.IPv4, err)
 	}
