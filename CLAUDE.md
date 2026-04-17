@@ -186,7 +186,7 @@ internal/
   core/                    Source-agnostic logic
     teardown.go            Teardown() — ordered resource deletion
   render/                  Output renderers — TUI, Plain, JSON
-  testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
+  testutil/                MockSSH, MockOutput, HetznerFake, CloudflareFake (see providermocks.go)
     kubefake/              KubeFake — *kube.Client over the typed fake clientset, with SetExec() for pod-shell mocking
 
 pkg/
@@ -367,3 +367,54 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **Firewall orphan sweep deferred until after `ServersRemoveOrphans`.** `Firewall()` reconciles the desired per-role set (master-fw, worker-fw) early so new servers get rules applied before workloads land. `FirewallRemoveOrphans()` runs later, after `ServersRemoveOrphans` has drained + deleted orphan servers (and `DeleteServer`'s contract has detached their firewalls). Running the sweep earlier — as the code used to — meant Hetzner correctly rejected `DeleteFirewall` with `resource_in_use` because the orphan server was still attached, and nothing retried. Same split pattern as `ServersAdd` / `ServersRemoveOrphans`. Firewall is the only reconcile-swept resource with a delete-time attachment lock against another reconcile-managed resource (servers); every other resource either has no lock or isn't swept in reconcile.
 - **Concurrency control on deploy workflows.** `concurrency: { group: deploy, cancel-in-progress: false }`.
 - **Root disk size is creation-only.** `disk` in server config applies at `EnsureServer` time. Changing it on an existing server has no effect — `EnsureServer` returns the existing server as-is. Resize requires server recreation. Hetzner doesn't support custom root disk sizes at all (fixed per server type) — validated at config time.
+
+## Testing — mock governance
+
+**One pattern. One file. No class-rewrite mocks.** Every test in this repo obeys the following rules. Violations are reverted in review.
+
+### The only boundaries we mock
+
+| Boundary | Mock | Rationale |
+|---|---|---|
+| HTTP to cloud provider APIs (Hetzner / Cloudflare / AWS / Scaleway) | `internal/testutil/providermocks.go` — `HetznerFake`, `CloudflareFake` | Real wire protocol + real provider client. No in-process reimplementation of provider semantics. |
+| SSH protocol to provisioned servers | `internal/testutil/mock_ssh.go` — `MockSSH` | Real SSH command/upload protocol, canned prefix responses. |
+| Kubernetes apiserver | `internal/testutil/kubefake/kubefake.go` — `KubeFake` | Wraps client-go's own fake clientset. |
+
+Nothing else is mocked. `MockOutput` in `mock_provider.go` is NOT a boundary mock — it's an internal UI-event capture for assertions.
+
+### Rules — hard
+
+1. **One file for provider mocks.** `internal/testutil/providermocks.go`. Anything provider-mock-shaped lives here. Violation = reverted in review.
+
+2. **No test declares a provider-interface type.** No test file contains `type myFooMock struct { ... }` that implements `provider.ComputeProvider` / `DNSProvider` / `BucketProvider`. Ever. The real provider clients are exercised end-to-end against the httptest-backed fakes.
+
+3. **Tests seed state, never stub behavior.** `fake.SeedServer(...)` / `SeedVolume` / `SeedFirewall` / `SeedNetwork` / `SeedDNSRecord` / `SeedBucket`. No `func(req) error` hooks on mocks.
+
+4. **The `OpLog` is the assertion surface.** Tests call `fake.Has("ensure-server:X")` / `Count("delete-server:")` / `IndexOf` / `All`. New ops = one handler edit in `providermocks.go`, nothing added test-side.
+
+5. **Error injection is explicit.** `fake.ErrorOn("delete-firewall:nvoi-myapp-prod-master-fw", err)`. The matching HTTP handler short-circuits to 500. No `if testMode then ...` inside production code.
+
+6. **Registration is per-test.** `fake := testutil.NewHetznerFake(t); fake.Register("test-name")`. Re-registration replaces the previous factory. No init-time globals except the shared "test-compute" / "cluster-test" / "cron-test" / "test" defaults that a fresh `convergeDC` re-registers under `test-reconcile` for each test.
+
+7. **`testutil.MockCompute`, `testutil.MockDNS`, `testutil.MockBucket` are gone.** Not deprecated, deleted. Any PR reintroducing a provider-interface-satisfying mock type — in any file — fails review. If you feel you need one, extend `providermocks.go`.
+
+8. **`MockSSH` and `KubeFake` stay as-is.** They're at correct boundaries.
+
+9. **`MockOutput` stays.** Not an external boundary — it's an internal contract. The capture-event pattern is legitimate.
+
+### What this buys
+
+- Adding a new test op (e.g. rate-limit path, 5xx retry) = one branch in one handler, not a new mock type.
+- Refactoring any provider interface = zero test-side work. Tests don't reference the interface.
+- Adding a new cloud provider for compute / DNS / storage = add new httptest handlers in `providermocks.go` + a `Register()` method. No `testutil.MockX` surface to maintain.
+- "Mock passes because mock matches itself" is structurally impossible — the fake speaks the real wire, and the real client decodes it.
+
+### If you're writing a new test
+
+1. Need compute? `fake := testutil.NewHetznerFake(t); fake.Register("my-test-provider")`. Seed via `fake.SeedServer(...)` / `SeedVolume` / etc. Point the `Cluster.Provider` at `"my-test-provider"`.
+2. Need DNS or R2? `cf := testutil.NewCloudflareFake(t, opts); cf.RegisterDNS("dns-name")` / `cf.RegisterBucket("bucket-name")`. Seed records and buckets as needed.
+3. Need SSH? Use `testutil.MockSSH` with `Prefixes`.
+4. Need kube? Use `kubefake.NewKubeFake()`.
+5. Need to assert ops? `fake.Has("ensure-server:X")`, `fake.Count("delete-...")`, `fake.IndexOf(...)` for ordering.
+
+Read the file-top comment in `providermocks.go` before extending it.

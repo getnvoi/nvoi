@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,289 +16,29 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// ── Provider registration ─────────────────────────────────────────────────────
+// activeHetzner is the per-test Hetzner fake. Tests that need seeded state
+// mutate this. It's rebound by convergeDC.
+var activeHetzner *testutil.HetznerFake
 
-var activeMock *trackingMock
+// opLog is a thin view into a HetznerFake's OpLog so existing test
+// assertions (log.has, log.count, log.all) keep working unchanged.
+type opLog struct{ *testutil.OpLog }
+
+func (l *opLog) has(op string) bool      { return l.OpLog.Has(op) }
+func (l *opLog) count(prefix string) int { return l.OpLog.Count(prefix) }
+func (l *opLog) all() []string           { return l.OpLog.All() }
 
 func init() {
-	provider.RegisterCompute("test-compute", provider.CredentialSchema{Name: "test-compute"}, func(creds map[string]string) provider.ComputeProvider {
-		return &testutil.MockCompute{
-			Servers: []*provider.Server{{
-				ID: "1", Name: "nvoi-myapp-prod-master", Status: "running",
-				IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
-			}},
-		}
-	})
-	provider.RegisterCompute("test-reconcile", provider.CredentialSchema{Name: "test-reconcile"}, func(creds map[string]string) provider.ComputeProvider {
-		return activeMock
-	})
 	kube.SetTestTiming(time.Millisecond, time.Millisecond)
 	dnsGracePeriod = time.Millisecond
-}
 
-// ── Operation log ─────────────────────────────────────────────────────────────
-
-type opLog struct {
-	mu  sync.Mutex
-	ops []string
-}
-
-func (l *opLog) record(op string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.ops = append(l.ops, op)
-}
-
-func (l *opLog) has(op string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, o := range l.ops {
-		if o == op {
-			return true
-		}
-	}
-	return false
-}
-
-func (l *opLog) count(prefix string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	n := 0
-	for _, o := range l.ops {
-		if strings.HasPrefix(o, prefix) {
-			n++
-		}
-	}
-	return n
-}
-
-func (l *opLog) all() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	cp := make([]string, len(l.ops))
-	copy(cp, l.ops)
-	return cp
-}
-
-// ── Tracking compute mock ─────────────────────────────────────────────────────
-
-// ──────────────────────────────────────────────────────────────────────────
-// ⚠️  TESTING STRATEGY — READ BEFORE EXTENDING trackingMock ⚠️
-//
-// The rule: **only mock external boundaries**. In this repo the external
-// boundaries are:
-//   - HTTP calls to cloud provider APIs (Hetzner / Cloudflare / AWS / Scaleway)
-//   - SSH calls to provisioned servers
-//   - the Kubernetes apiserver
-//
-// The current `trackingMock` breaks the rule: it satisfies the high-level
-// provider.ComputeProvider interface and reimplements Hetzner state
-// semantics in memory (firewall list/delete bookkeeping, server/volume
-// stores). Every new reconcile test tempts you to grow a little more fake
-// provider logic here — drift, bugs, and "tests that pass because the mock
-// matches itself" follow.
-//
-// TARGET STATE — `trackingMock` goes away. Replace with:
-//   - `httptest.NewServer` returning canned Hetzner JSON responses
-//     (the pattern already lives in pkg/provider/compute/hetzner/hetzner_test.go)
-//   - register the real hetzner.Client against the fake base URL via
-//     provider.RegisterCompute(...) in test init
-//   - reconcile tests exercise the full real stack (reconcile → pkg/core →
-//     pkg/provider/compute/hetzner → httptest)
-//
-// RULES for the next agent:
-//  1. **Do not write new methods on trackingMock.** If a test needs the
-//     mock to "know" something (e.g. that delete removes an item from a
-//     list), that's a signal to move the mock to the HTTP boundary.
-//  2. **Do not rewrite/wrap/shim the provider interface.** No new
-//     "simplified" ComputeProvider, no "better" testutil.MockX. The real
-//     interface + real provider code + fake wire responses is the one
-//     pattern.
-//  3. **Do not touch the SSH / Kube mocks in this pass** — MockSSH and
-//     kubefake.KubeFake already mock at correct boundaries (SSH protocol
-//     and client-go's fake clientset). Those stay.
-//  4. **Delete trackingMock when you're done.** The goal is that
-//     internal/reconcile/helpers_test.go has zero hand-rolled provider
-//     behavior.
-//
-// Scope: this is the reconcile-layer cleanup. pkg/core tests already use
-// interface mocks at their natural boundary and are fine as-is — the
-// double-layer concern only shows up here.
-// ──────────────────────────────────────────────────────────────────────────
-type trackingMock struct {
-	testutil.MockCompute
-	log       *opLog
-	ListErr   error                // if set, ListServers returns this error
-	firewalls []*provider.Firewall // ⚠️ smell — delete with trackingMock, see note above
-}
-
-func (m *trackingMock) EnsureServer(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error) {
-	m.log.record("ensure-server:" + req.Name)
-	return &provider.Server{
-		ID: "1", Name: req.Name, Status: "running",
-		IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
-	}, nil
-}
-
-func (m *trackingMock) DeleteServer(ctx context.Context, req provider.DeleteServerRequest) error {
-	m.log.record("delete-server:" + req.Name)
-	return nil
-}
-
-func (m *trackingMock) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {
-	if m.ListErr != nil {
-		return nil, m.ListErr
-	}
-	return m.Servers, nil
-}
-
-func (m *trackingMock) EnsureVolume(ctx context.Context, req provider.CreateVolumeRequest) (*provider.Volume, error) {
-	m.log.record("ensure-volume:" + req.Name)
-	return &provider.Volume{Name: req.Name, Size: req.Size, DevicePath: "/dev/sda"}, nil
-}
-
-func (m *trackingMock) DeleteVolume(ctx context.Context, name string) error {
-	m.log.record("delete-volume:" + name)
-	return nil
-}
-
-func (m *trackingMock) DetachVolume(ctx context.Context, name string) error { return nil }
-
-func (m *trackingMock) ListVolumes(ctx context.Context, labels map[string]string) ([]*provider.Volume, error) {
-	return m.Volumes, nil
-}
-
-func (m *trackingMock) ReconcileFirewallRules(ctx context.Context, name string, allowed provider.PortAllowList) error {
-	m.log.record("firewall:" + name)
-	return nil
-}
-
-func (m *trackingMock) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {
-	return m.firewalls, nil
-}
-
-func (m *trackingMock) DeleteFirewall(ctx context.Context, name string) error {
-	m.log.record("delete-firewall:" + name)
-	// Remove from in-memory store so a subsequent list reflects the delete.
-	out := m.firewalls[:0]
-	for _, fw := range m.firewalls {
-		if fw.Name != name {
-			out = append(out, fw)
-		}
-	}
-	m.firewalls = out
-	return nil
-}
-
-func (m *trackingMock) GetPrivateIP(ctx context.Context, serverID string) (string, error) {
-	return "10.0.1.1", nil
-}
-
-// ── DescribeLive tests ───────────────────────────────────────────────────────
-
-func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
-	// If ComputeList fails (provider API down, bad credentials), DescribeLive
-	// must NOT return (nil, nil) — that means "first deploy" and would cause
-	// duplicate server creation. It must return an error.
-	log := &opLog{}
-	mock := &trackingMock{log: log, ListErr: fmt.Errorf("API unreachable")}
-	activeMock = mock
-
-	sshKey, _, _ := utils.GenerateEd25519Key()
-	dc := &config.DeployContext{
-		Cluster: app.Cluster{
-			AppName: "myapp", Env: "prod",
-			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey: sshKey,
-			Output: &testutil.MockOutput{},
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return nil, fmt.Errorf("no SSH")
-			},
-		},
-	}
-
-	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
-	if err == nil {
-		t.Fatal("expected error when ComputeList fails, got nil — would be misinterpreted as first deploy")
-	}
-	if live != nil {
-		t.Error("live state should be nil on error")
-	}
-}
-
-func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
-	// When ComputeList succeeds with zero servers and Describe fails (no master),
-	// that's a genuine first deploy — (nil, nil) is correct.
-	log := &opLog{}
-	mock := &trackingMock{log: log}
-	mock.Servers = nil // no servers at provider
-	activeMock = mock
-
-	sshKey, _, _ := utils.GenerateEd25519Key()
-	dc := &config.DeployContext{
-		Cluster: app.Cluster{
-			AppName: "myapp", Env: "prod",
-			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey: sshKey,
-			Output: &testutil.MockOutput{},
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return nil, fmt.Errorf("no master")
-			},
-		},
-	}
-
-	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
-	if err != nil {
-		t.Fatalf("first deploy should return nil error, got: %v", err)
-	}
-	if live != nil {
-		t.Error("first deploy should return nil live state")
-	}
-}
-
-func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
-	log := &opLog{}
-	mock := &trackingMock{log: log}
-	// Provider returns servers in reverse alphabetical order.
-	mock.Servers = []*provider.Server{
-		{ID: "3", Name: "nvoi-myapp-prod-worker-2", Status: "running", IPv4: "1.2.3.6", PrivateIP: "10.0.1.3"},
-		{ID: "1", Name: "nvoi-myapp-prod-master", Status: "running", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"},
-		{ID: "2", Name: "nvoi-myapp-prod-worker-1", Status: "running", IPv4: "1.2.3.5", PrivateIP: "10.0.1.2"},
-	}
-	activeMock = mock
-
-	ssh := convergeMock()
-	kf := kubefake.NewKubeFake()
-	sshKey, _, _ := utils.GenerateEd25519Key()
-	dc := &config.DeployContext{
-		Cluster: app.Cluster{
-			AppName: "myapp", Env: "prod",
-			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey:     sshKey,
-			Output:     &testutil.MockOutput{},
-			MasterSSH:  ssh,
-			MasterKube: kf.Client,
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return ssh, nil
-			},
-		},
-	}
-
-	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
-	if err != nil {
-		t.Fatalf("DescribeLive: %v", err)
-	}
-	if live == nil {
-		t.Fatal("expected non-nil live state")
-	}
-
-	// Servers must be sorted regardless of provider return order.
-	for i := 1; i < len(live.Servers); i++ {
-		if live.Servers[i] < live.Servers[i-1] {
-			t.Errorf("servers not sorted: %v", live.Servers)
-			break
-		}
-	}
+	// Default "test-compute" provider: a pre-seeded Hetzner fake with one
+	// running master. Tests using testDC() / testDCWithKube() inherit this.
+	// Tests that need different seeded state call convergeDC (re-registers).
+	// nil cleanup = process lifetime, which is what we want for init-time.
+	f := testutil.NewHetznerFake(nil)
+	f.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	f.Register("test-compute")
 }
 
 // ── Shared test setup ─────────────────────────────────────────────────────────
@@ -323,6 +62,12 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "get service", Result: testutil.MockResult{Output: []byte("'80'")}},
 			// WaitRollout: get pods ... -o json → returns ready pod list
 			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(readyPodJSON)}},
+			// Ingress: ACME cert check (acme.json parsed in Go) + HTTPS wait
+			{Prefix: "kubectl -n kube-system exec", Result: testutil.MockResult{Output: []byte(`{"letsencrypt":{"Certificates":[{"domain":{"main":"myapp.com"},"certificate":"base64data"}]}}`)}},
+			{Prefix: "curl -s", Result: testutil.MockResult{Output: []byte("'200'")}},
+			{Prefix: "delete ingress", Result: testutil.MockResult{}},
+			// EnsureTraefikACME — waitForTraefikReady polls deploy/traefik
+			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
 			{Prefix: "get deploy", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get statefulset", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get configmap", Result: testutil.MockResult{Output: []byte(`{"data":{}}`)}},
@@ -407,13 +152,24 @@ func testDCWithKube(ssh *testutil.MockSSH, kf *kubefake.KubeFake) *config.Deploy
 	}
 }
 
+// convergeDC installs a per-test Hetzner fake (pre-seeded with one running
+// master) and returns a DeployContext wired to it. `log` receives a view into
+// the fake's OpLog — existing `log.has(...)` assertions work unchanged.
 func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
-	mock := &trackingMock{log: log}
-	mock.Servers = []*provider.Server{{
-		ID: "1", Name: "nvoi-myapp-prod-master", Status: "running",
-		IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
-	}}
-	activeMock = mock
+	// nil cleanup — convergeDC doesn't receive *testing.T. The fake lives for
+	// the test binary's lifetime (not per-test). Acceptable: only one active
+	// fake at a time, and re-registration replaces the previous factory.
+	fake := testutil.NewHetznerFake(nil)
+	// Simulate the state that exists after ServersAdd has provisioned the
+	// master: master server + per-role firewalls + network. Tests that need a
+	// truly empty provider call activeHetzner.Reset() after convergeDC.
+	fake.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	fake.SeedFirewall("nvoi-myapp-prod-master-fw")
+	fake.SeedFirewall("nvoi-myapp-prod-worker-fw")
+	fake.SeedNetwork("nvoi-myapp-prod-net")
+	fake.Register("test-reconcile")
+	activeHetzner = fake
+	*log = opLog{OpLog: fake.OpLog}
 
 	kf := kubefake.NewKubeFake()
 	kf.AutoReadyPods()
@@ -494,4 +250,106 @@ func uploadContains(ssh *testutil.MockSSH, substr string) bool {
 		}
 	}
 	return false
+}
+
+// ── DescribeLive tests ───────────────────────────────────────────────────────
+
+func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
+	// If ComputeList fails (provider API down, bad credentials), DescribeLive
+	// must NOT return (nil, nil) — that means "first deploy" and would cause
+	// duplicate server creation. It must return an error.
+	fake := testutil.NewHetznerFake(t)
+	fake.Register("test-reconcile-listerr")
+	fake.FailListServers(fmt.Errorf("API unreachable"))
+
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Provider: "test-reconcile-listerr", Credentials: map[string]string{},
+			SSHKey: sshKey,
+			Output: &testutil.MockOutput{},
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return nil, fmt.Errorf("no SSH")
+			},
+		},
+	}
+
+	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
+	if err == nil {
+		t.Fatal("expected error when ComputeList fails, got nil — would be misinterpreted as first deploy")
+	}
+	if live != nil {
+		t.Error("live state should be nil on error")
+	}
+}
+
+func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
+	// When ComputeList succeeds with zero servers and Describe fails (no master),
+	// that's a genuine first deploy — (nil, nil) is correct.
+	fake := testutil.NewHetznerFake(t)
+	fake.Register("test-reconcile-empty")
+
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Provider: "test-reconcile-empty", Credentials: map[string]string{},
+			SSHKey: sshKey,
+			Output: &testutil.MockOutput{},
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return nil, fmt.Errorf("no master")
+			},
+		},
+	}
+
+	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
+	if err != nil {
+		t.Fatalf("first deploy should return nil error, got: %v", err)
+	}
+	if live != nil {
+		t.Error("first deploy should return nil live state")
+	}
+}
+
+func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
+	fake := testutil.NewHetznerFake(t)
+	fake.Register("test-reconcile-sorted")
+	// Seed in reverse alphabetical order — DescribeLive must still return sorted.
+	fake.SeedServer("nvoi-myapp-prod-worker-2", "1.2.3.6", "10.0.1.3")
+	fake.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	fake.SeedServer("nvoi-myapp-prod-worker-1", "1.2.3.5", "10.0.1.2")
+
+	ssh := convergeMock()
+	kf := kubefake.NewKubeFake()
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	dc := &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName: "myapp", Env: "prod",
+			Provider: "test-reconcile-sorted", Credentials: map[string]string{},
+			SSHKey:     sshKey,
+			Output:     &testutil.MockOutput{},
+			MasterSSH:  ssh,
+			MasterKube: kf.Client,
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return ssh, nil
+			},
+		},
+	}
+
+	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
+	if err != nil {
+		t.Fatalf("DescribeLive: %v", err)
+	}
+	if live == nil {
+		t.Fatal("expected non-nil live state")
+	}
+
+	// Servers must be sorted regardless of provider return order.
+	for i := 1; i < len(live.Servers); i++ {
+		if live.Servers[i] < live.Servers[i-1] {
+			t.Errorf("servers not sorted: %v", live.Servers)
+			break
+		}
+	}
 }

@@ -23,6 +23,10 @@ func New(token string) *Client {
 	}
 }
 
+// APIClient returns the underlying HTTP client for tests to override BaseURL.
+// Production callers must not depend on this accessor.
+func (c *Client) APIClient() *utils.HTTPClient { return c.api }
+
 func (c *Client) ValidateCredentials(ctx context.Context) error {
 	if c.token == "" {
 		return fmt.Errorf("hetzner: HETZNER_TOKEN is required")

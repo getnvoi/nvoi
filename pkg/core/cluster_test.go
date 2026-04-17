@@ -6,20 +6,16 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func init() {
-	provider.RegisterCompute("cluster-test", provider.CredentialSchema{Name: "cluster-test"}, func(creds map[string]string) provider.ComputeProvider {
-		return &testutil.MockCompute{
-			Servers: []*provider.Server{{
-				ID: "1", Name: "nvoi-myapp-prod-master",
-				IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
-				Status: provider.ServerRunning,
-			}},
-		}
-	})
+	// Shared "cluster-test" provider: single pre-seeded master. Tests across
+	// the pkg/core suite inherit this via computeSetCluster / testCluster.
+	// nil cleanup = process lifetime.
+	hz := testutil.NewHetznerFake(nil)
+	hz.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	hz.Register("cluster-test")
 }
 
 func clusterWithSSHFunc(sshFn func(ctx context.Context, addr string) (utils.SSHClient, error)) Cluster {

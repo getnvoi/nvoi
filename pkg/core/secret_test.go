@@ -10,19 +10,13 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/testutil"
 	"github.com/getnvoi/nvoi/pkg/kube"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func init() {
-	provider.RegisterCompute("test", provider.CredentialSchema{Name: "test"}, func(creds map[string]string) provider.ComputeProvider {
-		return &testutil.MockCompute{
-			Servers: []*provider.Server{{
-				ID: "1", Name: "nvoi-myapp-prod-master", Status: "running",
-				IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
-			}},
-		}
-	})
+	hz := testutil.NewHetznerFake(nil)
+	hz.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	hz.Register("test")
 }
 
 // testCluster wires a cluster with a pre-built kube fake.

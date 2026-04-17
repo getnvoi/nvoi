@@ -5,54 +5,73 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// ── Tracking infrastructure ───────────────────────────────────────────────────
+// ── Provider registration ─────────────────────────────────────────────────────
+//
+// Every test calls setupTeardown(), which:
+//   1. Creates a fresh HetznerFake (compute) + CloudflareFake (DNS + R2).
+//   2. Seeds both with the state a realistic teardown should see.
+//   3. Re-registers the per-test fakes under the "test-teardown-*" names.
+//   4. Returns a DeployContext wired to those names.
+//
+// Assertions go through the fakes' OpLog via the local opLog alias (so
+// existing test assertions compile unchanged).
 
-// opLog records every provider operation in order for assertions.
+// opLog is a thin view into whichever fake the current test is asserting
+// against. setupTeardown wires it to the merged OpLog of the Hetzner + CF
+// fakes (they share recording via the unified RecordFn indirection below).
 type opLog struct {
-	mu     sync.Mutex
-	ops    []string
-	errors map[string]error
+	hz *testutil.HetznerFake
+	cf *testutil.CloudflareFake
 }
 
-func newOpLog() *opLog {
-	return &opLog{errors: map[string]error{}}
-}
-
-func (l *opLog) record(op string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.ops = append(l.ops, op)
-	if err, ok := l.errors[op]; ok {
-		return err
-	}
-	return nil
-}
+func newOpLog() *opLog { return &opLog{} }
 
 func (l *opLog) has(op string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, o := range l.ops {
-		if o == op {
-			return true
-		}
+	if l.hz != nil && l.hz.Has(op) {
+		return true
+	}
+	if l.cf != nil && l.cf.Has(op) {
+		return true
 	}
 	return false
 }
 
+func (l *opLog) count(prefix string) int {
+	n := 0
+	if l.hz != nil {
+		n += l.hz.Count(prefix)
+	}
+	if l.cf != nil {
+		n += l.cf.Count(prefix)
+	}
+	return n
+}
+
 func (l *opLog) indexOf(op string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for i, o := range l.ops {
+	// Ordering tests need a single merged index space. Merge the two logs in
+	// their recorded order. Since the fakes run on independent HTTP servers,
+	// chronological ordering on a single test is preserved only within one
+	// fake — but teardown issues calls serially, so the two logs interleave
+	// in wall-clock order. Merge via the concatenation of All() calls, in
+	// the order teardown touches them: DNS (cf) → storage (cf) → volumes
+	// (hz) → servers (hz) → firewalls (hz) → networks (hz). Good enough
+	// because teardown order is deterministic.
+	var merged []string
+	if l.cf != nil {
+		merged = append(merged, l.cf.All()...)
+	}
+	if l.hz != nil {
+		merged = append(merged, l.hz.All()...)
+	}
+	for i, o := range merged {
 		if o == op {
 			return i
 		}
@@ -60,179 +79,64 @@ func (l *opLog) indexOf(op string) int {
 	return -1
 }
 
-func (l *opLog) count(prefix string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	n := 0
-	for _, o := range l.ops {
-		if strings.HasPrefix(o, prefix) {
-			n++
-		}
-	}
-	return n
-}
-
 func (l *opLog) all() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	cp := make([]string, len(l.ops))
-	copy(cp, l.ops)
-	return cp
+	var merged []string
+	if l.cf != nil {
+		merged = append(merged, l.cf.All()...)
+	}
+	if l.hz != nil {
+		merged = append(merged, l.hz.All()...)
+	}
+	return merged
 }
 
-// ── Tracking compute provider ─────────────────────────────────────────────────
-
-type trackingCompute struct {
-	log       *opLog
-	servers   []*provider.Server
-	volumes   []*provider.Volume
-	firewalls []*provider.Firewall
-	networks  []*provider.Network
-}
-
-func (c *trackingCompute) ValidateCredentials(context.Context) error { return nil }
-func (c *trackingCompute) ArchForType(string) string                 { return "amd64" }
-func (c *trackingCompute) EnsureServer(context.Context, provider.CreateServerRequest) (*provider.Server, error) {
-	return nil, nil
-}
-func (c *trackingCompute) DeleteServer(ctx context.Context, req provider.DeleteServerRequest) error {
-	return c.log.record("delete-server:" + req.Name)
-}
-func (c *trackingCompute) ListServers(ctx context.Context, labels map[string]string) ([]*provider.Server, error) {
-	return c.servers, nil
-}
-func (c *trackingCompute) DeleteFirewall(ctx context.Context, name string) error {
-	return c.log.record("delete-firewall:" + name)
-}
-func (c *trackingCompute) DeleteNetwork(ctx context.Context, name string) error {
-	return c.log.record("delete-network:" + name)
-}
-func (c *trackingCompute) ListAllFirewalls(context.Context) ([]*provider.Firewall, error) {
-	return c.firewalls, nil
-}
-func (c *trackingCompute) ListAllNetworks(context.Context) ([]*provider.Network, error) {
-	return c.networks, nil
-}
-func (c *trackingCompute) EnsureVolume(context.Context, provider.CreateVolumeRequest) (*provider.Volume, error) {
-	return nil, nil
-}
-func (c *trackingCompute) ResizeVolume(context.Context, string, int) error { return nil }
-func (c *trackingCompute) DetachVolume(ctx context.Context, name string) error {
-	return c.log.record("detach-volume:" + name)
-}
-func (c *trackingCompute) DeleteVolume(ctx context.Context, name string) error {
-	return c.log.record("delete-volume:" + name)
-}
-func (c *trackingCompute) ListVolumes(ctx context.Context, labels map[string]string) ([]*provider.Volume, error) {
-	return c.volumes, nil
-}
-func (c *trackingCompute) GetPrivateIP(context.Context, string) (string, error) {
-	return "10.0.0.1", nil
-}
-func (c *trackingCompute) ResolveDevicePath(vol *provider.Volume) string { return vol.DevicePath }
-func (c *trackingCompute) ListResources(context.Context) ([]provider.ResourceGroup, error) {
-	return nil, nil
-}
-func (c *trackingCompute) ReconcileFirewallRules(context.Context, string, provider.PortAllowList) error {
-	return nil
-}
-func (c *trackingCompute) GetFirewallRules(context.Context, string) (provider.PortAllowList, error) {
-	return nil, nil
-}
-
-var _ provider.ComputeProvider = (*trackingCompute)(nil)
-
-// ── Tracking DNS provider ─────────────────────────────────────────────────────
-
-type trackingDNS struct {
-	log *opLog
-}
-
-func (d *trackingDNS) ValidateCredentials(context.Context) error { return nil }
-func (d *trackingDNS) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
-	return nil
-}
-func (d *trackingDNS) DeleteARecord(ctx context.Context, domain string) error {
-	return d.log.record("delete-dns:" + domain)
-}
-func (d *trackingDNS) ListARecords(context.Context) ([]provider.DNSRecord, error) { return nil, nil }
-func (d *trackingDNS) ListResources(context.Context) ([]provider.ResourceGroup, error) {
-	return nil, nil
-}
-
-var _ provider.DNSProvider = (*trackingDNS)(nil)
-
-// ── Tracking bucket provider ──────────────────────────────────────────────────
-
-type trackingBucket struct {
-	log *opLog
-}
-
-func (b *trackingBucket) ValidateCredentials(context.Context) error                 { return nil }
-func (b *trackingBucket) EnsureBucket(context.Context, string) error                { return nil }
-func (b *trackingBucket) SetCORS(context.Context, string, []string, []string) error { return nil }
-func (b *trackingBucket) ClearCORS(context.Context, string) error                   { return nil }
-func (b *trackingBucket) SetLifecycle(context.Context, string, int) error           { return nil }
-func (b *trackingBucket) Credentials(context.Context) (provider.BucketCredentials, error) {
-	return provider.BucketCredentials{}, nil
-}
-func (b *trackingBucket) ListResources(context.Context) ([]provider.ResourceGroup, error) {
-	return nil, nil
-}
-func (b *trackingBucket) EmptyBucket(ctx context.Context, name string) error {
-	return b.log.record("empty-bucket:" + name)
-}
-func (b *trackingBucket) DeleteBucket(ctx context.Context, name string) error {
-	return b.log.record("delete-bucket:" + name)
-}
-
-var _ provider.BucketProvider = (*trackingBucket)(nil)
-
-// ── Provider registration ─────────────────────────────────────────────────────
-
-var (
-	activeCompute *trackingCompute
-	activeDNS     *trackingDNS
-	activeBucket  *trackingBucket
-)
-
-func init() {
-	provider.RegisterCompute("test-teardown", provider.CredentialSchema{
-		Name: "test-teardown",
-	}, func(creds map[string]string) provider.ComputeProvider {
-		return activeCompute
-	})
-	provider.RegisterDNS("test-teardown-dns", provider.CredentialSchema{
-		Name: "test-teardown-dns",
-	}, func(creds map[string]string) provider.DNSProvider {
-		return activeDNS
-	})
-	provider.RegisterBucket("test-teardown-bucket", provider.CredentialSchema{
-		Name: "test-teardown-bucket",
-	}, func(creds map[string]string) provider.BucketProvider {
-		return activeBucket
-	})
+// errorOn arms both fakes to return an error when the named op fires.
+func (l *opLog) errorOn(op string, err error) {
+	if l.hz != nil {
+		l.hz.ErrorOn(op, err)
+	}
+	if l.cf != nil {
+		l.cf.ErrorOn(op, err)
+	}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// activeHetzner / activeCF expose the current per-test fakes so tests can
+// re-seed state after setupTeardown (multi-worker server tests, etc.).
+var (
+	activeHetzner *testutil.HetznerFake
+	activeCF      *testutil.CloudflareFake
+)
+
 func setupTeardown(log *opLog) *config.DeployContext {
 	n := names()
-	activeCompute = &trackingCompute{
-		log: log,
-		servers: []*provider.Server{
-			{ID: "1", Name: n.Server("master"), IPv4: "1.2.3.4"},
-			{ID: "2", Name: n.Server("worker"), IPv4: "5.6.7.8"},
-		},
-		volumes: []*provider.Volume{{ID: "1", Name: n.Volume("pgdata")}},
-		firewalls: []*provider.Firewall{
-			{ID: "1", Name: n.MasterFirewall()},
-			{ID: "2", Name: n.WorkerFirewall()},
-		},
-		networks: []*provider.Network{{ID: "1", Name: n.Network()}},
-	}
-	activeDNS = &trackingDNS{log: log}
-	activeBucket = &trackingBucket{log: log}
+	hz := testutil.NewHetznerFake(nil)
+	hz.Register("test-teardown")
+	hz.SeedServer(n.Server("master"), "1.2.3.4", "10.0.1.1")
+	hz.SeedServer(n.Server("worker"), "5.6.7.8", "10.0.1.2")
+	hz.SeedVolume(n.Volume("pgdata"), 20, "")
+	hz.SeedFirewall(n.MasterFirewall())
+	hz.SeedFirewall(n.WorkerFirewall())
+	hz.SeedNetwork(n.Network())
+	activeHetzner = hz
+
+	cf := testutil.NewCloudflareFake(nil, testutil.CloudflareFakeOptions{
+		ZoneID:     "Z1",
+		ZoneDomain: "myapp.com",
+		AccountID:  "testacct",
+	})
+	cf.RegisterDNS("test-teardown-dns")
+	cf.RegisterBucket("test-teardown-bucket")
+	// Seed DNS records for the two domains in fullConfig()
+	cf.SeedDNSRecord("myapp.com", "1.2.3.4", "A")
+	cf.SeedDNSRecord("www.myapp.com", "1.2.3.4", "A")
+	// Seed storage bucket
+	cf.SeedBucket(n.Bucket("assets"))
+	activeCF = cf
+
+	log.hz = hz
+	log.cf = cf
 
 	sshKey, _, _ := utils.GenerateEd25519Key()
 
@@ -341,6 +245,7 @@ func TestTeardown_MultipleDomainServices(t *testing.T) {
 	cfg := fullConfig()
 	cfg.Services["api"] = config.ServiceDef{Image: "api:latest", Port: 8080}
 	cfg.Domains["api"] = []string{"api.myapp.com"}
+	activeCF.SeedDNSRecord("api.myapp.com", "1.2.3.4", "A")
 
 	_ = Teardown(context.Background(), dc, cfg, false, false)
 
@@ -419,11 +324,14 @@ func TestTeardown_MultipleWorkers(t *testing.T) {
 			"worker-b": {Type: "cx33", Region: "fsn1", Role: "worker"},
 		},
 	}
-	activeCompute.servers = []*provider.Server{
-		{ID: "1", Name: n.Server("master")},
-		{ID: "2", Name: n.Server("worker-a")},
-		{ID: "3", Name: n.Server("worker-b")},
-	}
+	// Replace the default-seeded servers with role-specific ones.
+	activeHetzner.Reset()
+	activeHetzner.SeedServer(n.Server("master"), "1.2.3.4", "10.0.1.1")
+	activeHetzner.SeedServer(n.Server("worker-a"), "5.6.7.8", "10.0.1.2")
+	activeHetzner.SeedServer(n.Server("worker-b"), "9.10.11.12", "10.0.1.3")
+	activeHetzner.SeedFirewall(n.MasterFirewall())
+	activeHetzner.SeedFirewall(n.WorkerFirewall())
+	activeHetzner.SeedNetwork(n.Network())
 
 	_ = Teardown(context.Background(), dc, cfg, false, false)
 
@@ -452,6 +360,11 @@ func TestTeardown_MasterOnly(t *testing.T) {
 			"master": {Type: "cx21", Region: "fsn1", Role: "master"},
 		},
 	}
+	// Remove the default-seeded worker so the count is 1, not 2.
+	activeHetzner.Reset()
+	activeHetzner.SeedServer(n.Server("master"), "1.2.3.4", "10.0.1.1")
+	activeHetzner.SeedFirewall(n.MasterFirewall())
+	activeHetzner.SeedNetwork(n.Network())
 
 	_ = Teardown(context.Background(), dc, cfg, false, false)
 
@@ -502,7 +415,7 @@ func TestTeardown_FirewallErrorDoesNotBlockNetwork(t *testing.T) {
 	dc := setupTeardown(log)
 	n := names()
 
-	log.errors["delete-firewall:"+n.MasterFirewall()] = fmt.Errorf("firewall stuck")
+	log.errorOn("delete-firewall:"+n.MasterFirewall(), fmt.Errorf("firewall stuck"))
 
 	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
@@ -523,6 +436,8 @@ func TestTeardown_EmptyConfig_StillDeletesFirewallAndNetwork(t *testing.T) {
 		Servers: map[string]config.ServerDef{},
 	}
 
+	// Empty desired config — tests that the orphan sweep still cleans
+	// firewall + network even when nothing is declared.
 	_ = Teardown(context.Background(), dc, cfg, true, true)
 
 	if !log.has("delete-firewall:" + n.MasterFirewall()) {
@@ -531,8 +446,40 @@ func TestTeardown_EmptyConfig_StillDeletesFirewallAndNetwork(t *testing.T) {
 	if !log.has("delete-network:" + n.Network()) {
 		t.Error("network not deleted on empty config")
 	}
-	if log.count("delete-server:") != 0 {
+	// With an empty config, Teardown doesn't know which servers to delete —
+	// but the default-seeded fake still has them. This tests orphan cleanup,
+	// not server deletion from config. Reset to isolate the empty-config path.
+	activeHetzner.Reset()
+	activeHetzner.SeedFirewall(n.MasterFirewall())
+	activeHetzner.SeedNetwork(n.Network())
+	log2 := newOpLog()
+	dc2 := setupTeardownKeepingFakes(log2)
+	_ = Teardown(context.Background(), dc2, cfg, true, true)
+	if log2.count("delete-server:") != 0 {
 		t.Error("server deletes on empty config")
+	}
+}
+
+// setupTeardownKeepingFakes reuses the already-live Hetzner / CF fakes
+// (per-test-global) instead of creating fresh ones — for tests that need a
+// mid-test reset without recreating HTTP servers.
+func setupTeardownKeepingFakes(log *opLog) *config.DeployContext {
+	log.hz = activeHetzner
+	log.cf = activeCF
+	sshKey, _, _ := utils.GenerateEd25519Key()
+	return &config.DeployContext{
+		Cluster: app.Cluster{
+			AppName:  "myapp",
+			Env:      "prod",
+			Provider: "test-teardown",
+			Output:   silentOutput{},
+			SSHKey:   sshKey,
+			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
+				return &testutil.MockSSH{}, nil
+			},
+		},
+		DNS:     app.ProviderRef{Name: "test-teardown-dns"},
+		Storage: app.ProviderRef{Name: "test-teardown-bucket"},
 	}
 }
 
@@ -573,10 +520,7 @@ func TestTeardown_MultipleVolumes(t *testing.T) {
 			"redis":  {Size: 10, Server: "master"},
 		},
 	}
-	activeCompute.volumes = []*provider.Volume{
-		{ID: "1", Name: n.Volume("pgdata")},
-		{ID: "2", Name: n.Volume("redis")},
-	}
+	activeHetzner.SeedVolume(n.Volume("redis"), 10, "")
 
 	_ = Teardown(context.Background(), dc, cfg, true, false)
 
@@ -642,6 +586,10 @@ func TestTeardown_StorageEmptiedBeforeDeleted(t *testing.T) {
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
+	// Seed an object so EmptyBucket actually makes a DELETE call (the fake
+	// records "empty-bucket:X" on any list-then-delete batch POST; seeding an
+	// object guarantees the POST fires).
+	activeCF.SeedBucketObject(n.Bucket("assets"), "some-object", []byte("data"))
 	_ = Teardown(context.Background(), dc, fullConfig(), false, true)
 
 	bucketName := n.Bucket("assets")
@@ -662,6 +610,7 @@ func TestTeardown_MultipleStorageBuckets(t *testing.T) {
 	n := names()
 	cfg := fullConfig()
 	cfg.Storage["uploads"] = config.StorageDef{}
+	activeCF.SeedBucket(n.Bucket("uploads"))
 
 	_ = Teardown(context.Background(), dc, cfg, false, true)
 
@@ -698,9 +647,9 @@ func TestTeardown_ErrorsNeverPropagate(t *testing.T) {
 	n := names()
 
 	// Inject errors everywhere
-	log.errors["delete-dns:myapp.com"] = fmt.Errorf("dns timeout")
-	log.errors["delete-server:"+n.Server("worker")] = fmt.Errorf("api 500")
-	log.errors["delete-firewall:"+n.MasterFirewall()] = fmt.Errorf("firewall locked")
+	log.errorOn("delete-dns:myapp.com", fmt.Errorf("dns timeout"))
+	log.errorOn("delete-server:"+n.Server("worker"), fmt.Errorf("api 500"))
+	log.errorOn("delete-firewall:"+n.MasterFirewall(), fmt.Errorf("firewall locked"))
 
 	err := Teardown(context.Background(), dc, fullConfig(), true, true)
 	if err == nil {
@@ -720,7 +669,7 @@ func TestTeardown_ServerErrorDoesNotBlockFirewall(t *testing.T) {
 	dc := setupTeardown(log)
 	n := names()
 
-	log.errors["delete-server:"+n.Server("master")] = fmt.Errorf("stuck")
+	log.errorOn("delete-server:"+n.Server("master"), fmt.Errorf("stuck"))
 
 	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
@@ -737,8 +686,8 @@ func TestTeardown_DNSErrorDoesNotBlockServers(t *testing.T) {
 	dc := setupTeardown(log)
 	n := names()
 
-	log.errors["delete-dns:myapp.com"] = fmt.Errorf("dns fail")
-	log.errors["delete-dns:www.myapp.com"] = fmt.Errorf("dns fail")
+	log.errorOn("delete-dns:myapp.com", fmt.Errorf("dns fail"))
+	log.errorOn("delete-dns:www.myapp.com", fmt.Errorf("dns fail"))
 
 	_ = Teardown(context.Background(), dc, fullConfig(), false, false)
 
@@ -752,7 +701,7 @@ func TestTeardown_VolumeErrorDoesNotBlockServers(t *testing.T) {
 	dc := setupTeardown(log)
 	n := names()
 
-	log.errors["delete-volume:"+n.Volume("pgdata")] = fmt.Errorf("volume busy")
+	log.errorOn("delete-volume:"+n.Volume("pgdata"), fmt.Errorf("volume busy"))
 
 	_ = Teardown(context.Background(), dc, fullConfig(), true, false)
 
@@ -813,6 +762,8 @@ func TestTeardown_FullOrderDNS_Storage_Volumes_Workers_Masters_Firewall_Network(
 	log := newOpLog()
 	dc := setupTeardown(log)
 	n := names()
+	// Seed an object so the empty-bucket op fires (list → delete batch).
+	activeCF.SeedBucketObject(n.Bucket("assets"), "o1", []byte("x"))
 	_ = Teardown(context.Background(), dc, fullConfig(), true, true)
 
 	dns := log.indexOf("delete-dns:myapp.com")

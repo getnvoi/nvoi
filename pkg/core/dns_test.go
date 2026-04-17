@@ -6,41 +6,41 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func dnsDeleteCluster(out *testutil.MockOutput, ssh utils.SSHClient, mock *testutil.MockCompute) Cluster {
-	provName := fmt.Sprintf("dns-delete-test-%p", mock)
-	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
-		return mock
-	})
-	return Cluster{
+// dnsDeleteCluster wires a Hetzner fake (for compute lookups) and returns a
+// Cluster targeting it.
+func dnsDeleteCluster(t *testing.T, out *testutil.MockOutput, ssh utils.SSHClient) (*testutil.HetznerFake, Cluster) {
+	hz := testutil.NewHetznerFake(t)
+	hz.SeedServer("nvoi-test-prod-master", "1.2.3.4", "10.0.1.1")
+	provName := fmt.Sprintf("dns-delete-test-%p", hz)
+	hz.Register(provName)
+	cl := Cluster{
 		AppName: "test", Env: "prod",
 		Provider: provName, Output: out,
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) { return ssh, nil },
 	}
-}
-
-func registerMockDNS(mock *testutil.MockDNS) string {
-	name := fmt.Sprintf("dns-mock-%p", mock)
-	provider.RegisterDNS(name, provider.CredentialSchema{Name: name}, func(creds map[string]string) provider.DNSProvider {
-		return mock
-	})
-	return name
+	return hz, cl
 }
 
 func TestDNSDelete_DeletesRecords(t *testing.T) {
 	out := &testutil.MockOutput{}
-	mockDNS := &testutil.MockDNS{}
-	mockCompute := &testutil.MockCompute{
-		Servers: []*provider.Server{{ID: "1", Name: "nvoi-test-prod-master", IPv4: "1.2.3.4", PrivateIP: "10.0.1.1"}},
-	}
 	ssh := &testutil.MockSSH{}
+	_, cl := dnsDeleteCluster(t, out, ssh)
+
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{
+		ZoneID:     "Z1",
+		ZoneDomain: "example.com",
+	})
+	provName := fmt.Sprintf("dns-test-%p", cf)
+	cf.RegisterDNS(provName)
+	cf.SeedDNSRecord("example.com", "1.2.3.4", "A")
+	cf.SeedDNSRecord("www.example.com", "1.2.3.4", "A")
 
 	err := DNSDelete(context.Background(), DNSDeleteRequest{
-		Cluster: dnsDeleteCluster(out, ssh, mockCompute),
-		DNS:     ProviderRef{Name: registerMockDNS(mockDNS)},
+		Cluster: cl,
+		DNS:     ProviderRef{Name: provName},
 		Service: "web",
 		Domains: []string{"example.com", "www.example.com"},
 	})
@@ -48,7 +48,13 @@ func TestDNSDelete_DeletesRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dns delete should succeed: %v", err)
 	}
-	if len(mockDNS.DeletedA) != 2 {
-		t.Fatalf("deleted records = %v, want 2 domains", mockDNS.DeletedA)
+	if !cf.Has("delete-dns:example.com") {
+		t.Errorf("example.com not deleted: %v", cf.All())
+	}
+	if !cf.Has("delete-dns:www.example.com") {
+		t.Errorf("www.example.com not deleted: %v", cf.All())
+	}
+	if cf.Count("delete-dns:") != 2 {
+		t.Errorf("expected 2 deletes, got %d: %v", cf.Count("delete-dns:"), cf.All())
 	}
 }
