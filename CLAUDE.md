@@ -2,31 +2,28 @@
 
 ## What nvoi is
 
-The foundational engine for reconciling cloud infrastructure + Kubernetes workloads from a single YAML. `nvoi deploy` converges live state to match the config. `nvoi teardown` nukes the provider side. `nvoi describe` reads the cluster live. Packages, databases, build pipelines and anything product-shaped live in an upper layer that consumes this engine — they are explicitly not part of core.
+The foundational engine for reconciling cloud infrastructure + Kubernetes workloads from a single YAML. `nvoi deploy` converges live state to match the config. `nvoi teardown` nukes the provider side. `nvoi describe` reads the cluster live. Packages, databases, build pipelines and anything product-shaped live in an upper layer that consumes this engine — explicitly not part of core.
 
 ## Philosophy
 
-- **`app` + `env` is the namespace.** Defined in `nvoi.yaml`. `nvoi-{app}-{env}-*`. Different app or env = brand new infrastructure.
-- **No state files.** No manifest, no local cache. Infrastructure is the source of truth.
-- **Everything is idempotent.** `nvoi deploy` reconciles: adds desired resources, removes orphans. Run twice, same result.
-- **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs. The naming convention finds everything.
-- **Reconcile vs teardown.** Reconcile converges on a diff: queries live state, adds what's missing, removes what's orphaned. Teardown is a hard nuke: no diff, no live state query, wipes external provider resources. K8s resources die with the servers. Volumes and storage preserved by default — `--delete-volumes` / `--delete-storage` to nuke.
-- **Declarative config, imperative reconciliation.** `nvoi.yaml` declares desired state. The reconciler walks each resource type in order.
+- **`app` + `env` is the namespace.** `nvoi-{app}-{env}-*`. Different app or env = brand new infrastructure.
+- **No state files.** Infrastructure is the source of truth. No manifest, no local cache.
+- **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic, no UUIDs — the naming convention finds everything.
+- **Reconcile vs teardown.** Reconcile converges on a diff. Teardown is a hard nuke of external provider resources; k8s dies with the servers. Volumes and storage preserved by default (`--delete-volumes` / `--delete-storage` to nuke).
 - **Two-layer core.** Layer 1: provider infra (servers, firewall, volumes, DNS, buckets). Layer 2: k8s manifests (services, crons, ingress, secrets). Bound by deterministic naming. Nothing else.
-- **Provider interfaces scale.** Hetzner, Cloudflare, AWS, Scaleway. Interface-first. Add a provider = implement the interface. Organized by domain: `compute/`, `dns/`, `storage/`.
-- **SSH transport + typed kube client.** Single SSH connection per deploy (`MasterSSH`). A client-go `*kube.Client` tunnels through the same SSH to the apiserver (`MasterKube`), shared across all reconcile operations.
-- **Secrets are k8s secrets.** Values live in the cluster only. Resolved at deploy time via `CredentialSource`. Default `CredentialSource = EnvSource` (`os.Getenv`). When `providers.secrets` is set to `doppler | awssm | infisical`, the source switches to `SecretsSource` and every credential (compute / DNS / storage / SSH key / service `$VAR`) is fetched from the backend via its direct API (no shell-outs).
+- **SSH transport + typed kube client.** One SSH connection per deploy (`MasterSSH`), one `*kube.Client` tunneled through it (`MasterKube`), shared across every reconcile step.
+- **Credentials flow through one `CredentialSource`.** Default `EnvSource` reads `os.Getenv`. When `providers.secrets` is set to `doppler | awssm | infisical`, source switches to `SecretsSource` and every credential (compute, DNS, storage, SSH key, service `$VAR`) fetches from the backend's direct API — no shell-outs.
 
 ## Build & Test
 
 ```bash
-bin/test                   # enforced per-package timeout — MUST pass, no exceptions
+bin/test                   # enforced per-package timeout — MUST pass
 bin/test -v                # verbose
 go test ./... -cover       # coverage
 go build ./cmd/cli
 ```
 
-**Test suite MUST complete in under 2 seconds per package.** `bin/test` enforces this with `go test -timeout 2s`. Any test that exceeds this is broken — fix it by injecting mocks for I/O waits (SSH polls, HTTP retries, stability delays). Never sleep in tests. Override production timeouts with `kube.SetTestTiming(time.Millisecond, time.Millisecond)` in test `init()`. This is non-negotiable.
+**Test suite MUST complete in under 2 seconds per package.** `bin/test` enforces this with `go test -timeout 2s`. Any test exceeding it is broken — fix by mocking I/O waits (SSH polls, HTTP retries, stability delays). Never sleep in tests. Override production timeouts with `kube.SetTestTiming(time.Millisecond, time.Millisecond)` in test `init()`. Non-negotiable.
 
 ## CI
 
@@ -36,33 +33,23 @@ GitHub Actions workflows (`.github/workflows/`):
 - **deploy.yml** — production deploy on push to main (runs `bin/deploy`)
 - **release.yml** — cross-compile on git tags (`v*`), upload to R2
 
-**PR merges:** Never squash. Use `gh pr merge --merge --delete-branch`.
+**PR merges:** Never squash. `gh pr merge --merge --delete-branch`.
 
 ## Local development
 
-`bin/nvoi` is the universal entrypoint. Sources `.env`, builds the binary if needed, runs any command.
+`bin/nvoi` is the universal entrypoint — sources `.env`, builds the binary if needed, runs any command.
 
 ```bash
-# Deploy / teardown
-bin/nvoi deploy                # reconcile from nvoi.yaml
-bin/nvoi teardown              # nuke provider resources
+bin/nvoi deploy | teardown | describe | resources
+bin/nvoi logs <service> [-f]
+bin/nvoi exec <service> -- sh
+bin/nvoi ssh -- <cmd>
+bin/nvoi cron run <name>
 bin/deploy                     # shorthand for bin/nvoi deploy
 bin/destroy                    # shorthand for bin/nvoi teardown
-
-# Operate
-bin/nvoi describe              # live cluster state
-bin/nvoi logs web              # stream logs
-bin/nvoi logs api -f           # follow logs
-bin/nvoi exec web -- sh        # shell into service pod
-bin/nvoi ssh -- kubectl get pods  # run command on master
-
-# Cron (k8s sugar)
-bin/nvoi cron run cleanup      # trigger cron job immediately
-
-# Inspect
-bin/nvoi resources             # list all provider resources
-go test ./...                  # run tests
 ```
+
+Global flags: `--config` (default: `nvoi.yaml`), `--json` (JSONL output), `--ci` (plain text).
 
 ### Files
 
@@ -70,9 +57,11 @@ go test ./...                  # run tests
 |------|---------|
 | `nvoi.yaml` | Infrastructure config (tracked) |
 | `.env` | Provider credentials + app secrets (not tracked) |
-| `bin/nvoi` | Universal entrypoint — sources .env, builds `cmd/cli` |
+| `bin/nvoi` | Universal entrypoint — sources `.env`, builds `cmd/cli` |
 | `bin/deploy` | Shorthand for `bin/nvoi deploy` |
 | `bin/destroy` | Shorthand for `bin/nvoi teardown` |
+
+nvoi is a local-first engine. Credentials live in your environment (`.env` or exported vars) and never leave your machine. No server, no account, no custody.
 
 ## Config format
 
@@ -84,13 +73,14 @@ providers:
   compute: hetzner          # hetzner | aws | scaleway
   dns: cloudflare           # cloudflare | aws | scaleway
   storage: cloudflare       # cloudflare | aws | scaleway
+  secrets: infisical        # optional — doppler | awssm | infisical (see Credential resolution)
 
 servers:
   master:
     type: cax11
     region: nbg1
     role: master
-    disk: 50                # root disk GB (optional, AWS + Scaleway only)
+    disk: 50                # root disk GB — optional, AWS + Scaleway only (creation-time)
 
 firewall: default           # string or list of port:cidr rules
 
@@ -99,12 +89,12 @@ volumes:
     size: 20
     server: master
 
-secrets:                    # user secrets, resolved from env vars
+secrets:                    # resolved via CredentialSource (env or backend)
   - JWT_SECRET
   - ENCRYPTION_KEY
 
-registry:                   # private container-registry credentials (optional)
-  ghcr.io:                  # <host>[:port] — docker.io, ghcr.io, registry.example.com, 10.0.1.1:5000
+registry:                   # private container-registry pull creds (optional)
+  ghcr.io:                  # <host>[:port]
     username: $GITHUB_USER
     password: $GITHUB_TOKEN
 
@@ -114,13 +104,11 @@ storage:
 services:
   api:
     image: ghcr.io/myorg/api:v1
-    build: ./services/api   # bool (true = "./") or string (context path). Requires `registry:` entry
-                            # for the image's host. Runs `docker login/build/push` locally before any infra
-                            # is touched. Omit to skip the build step (image pulled as-is from its registry).
+    build: ./services/api   # bool | string | {context, dockerfile} — requires registry: entry for the image's host
     port: 8080
     secrets: [JWT_SECRET, ENCRYPTION_KEY]
-    server: master          # single node — nodeSelector
-    # servers: [worker-1, worker-2]  # multi-node — nodeAffinity + topologySpread
+    server: master          # nodeSelector
+    # servers: [worker-1, worker-2]  # nodeAffinity + topologySpread
 
 crons:
   cleanup:
@@ -136,146 +124,31 @@ domains:
 
 `ValidateConfig()` runs before touching infrastructure:
 
-- `app` and `env` required
-- `providers.compute` required
+- `app` and `env` required; `providers.compute` required.
 - At least one server, exactly one master, all have type/region/role. `disk` optional (creation-only, not resizable). Hetzner + `disk` = hard error (fixed per server type).
-- Volumes: size > 0, server exists
-- Services/crons: `image` required, referenced `storage`/`volumes` exist
-- Volume mounts: `name:/path` format, volume must be on same server as workload
-- `server` and `servers` mutually exclusive. Multiple servers + volume = error.
-- Web-facing services (with domains): replicas omitted → defaults to 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid — the rule ensures process-level redundancy, not node distribution.
-- `services.X.build:` set requires a `registry:` block AND the image's host must appear as a key in `registry:`. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag like `ghcr.io/org/app:v1`.
+- Volumes: size > 0, server exists. `server` / `servers` mutually exclusive. Multiple servers + volume = error.
+- Services/crons: `image` required (unless `build:`), referenced `storage`/`volumes` exist. Volume mounts `name:/path`, volume must be on the same server as the workload.
+- Web-facing services (with domains): replicas omitted → 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid.
+- `services.X.build:` requires a `registry:` block AND the image's host must appear as a key. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag.
 
 ## Private registries + local builds
 
-nvoi supports two independent registry concerns:
+Two independent concerns that compose:
 
-- **Pull credentials** (`registry:` block) — how the cluster authenticates when kubelet pulls images.
-- **Local builds** (`services.X.build:`) — build an image locally from a Dockerfile and push it to the declared registry before the cluster pulls.
+- **Pull credentials** (`registry:` block) — how kubelet authenticates when pulling images. Rendered to a `kubernetes.io/dockerconfigjson` Secret named `registry-auth`; `imagePullSecrets: [{name: registry-auth}]` injected into every PodSpec when `len(cfg.Registry) > 0`. `$VAR` values resolved via `CredentialSource`. Removing the block deletes the orphan Secret on the next deploy.
+- **Local builds** (`services.X.build:`) — `true` (`./`) | `"path"` | `{context, dockerfile}`. Runs PRE-infra via `pkg/core/build.go::BuildService` — build failure aborts before any server is provisioned. Passwords via `--password-stdin`, never argv. Runs against the operator's real `~/.docker/config.json` (Kamal-style; DOCKER_CONFIG isolation breaks plugin discovery and docker-context lookup).
 
-They compose: `build:` without `registry:` is a validate error (nowhere to push); `registry:` without `build:` is fine (pull-only, pre-built images).
+**Image resolution (Kamal-style, multi-registry-aware):**
 
-### `registry:` — pull auth
+- `image: ghcr.io/org/api` — host explicit, must appear as a key in `registry:`.
+- `image: org/api` with exactly ONE `registry:` entry — host inferred.
+- `image: org/api` with multiple registries — validate error (ambiguous). Write the host explicitly.
+- `image: nginx` (bare shortname) under `build:` — validate error.
+- `image: repo@sha256:...` — passes through unmodified.
 
-Top-level YAML block. Each key is a registry hostname (optionally `:port`); values are `{username, password}`. Values may be literal strings or `$VAR` references resolved at deploy time via the same `CredentialSource` path `secrets:` uses.
+**Deploy hash tag + label:** `dc.Cluster.DeployHash = YYYYMMDD-HHMMSS` (UTC). User tag preserved and suffixed with the hash (`:v2` → `:v2-<hash>`); no user tag → `:<hash>`. Same hash stamped as `nvoi/deploy-hash: <hash>` on workload metadata AND pod-template metadata (NEVER selectors). Every deploy produces a new `image:` string so rolling updates always trigger without a `:latest` foot-gun.
 
-```yaml
-registry:
-  docker.io:                       # Docker Hub
-    username: $DOCKER_USERNAME
-    password: $DOCKER_PASSWORD
-  ghcr.io:                         # GitHub Container Registry
-    username: $GITHUB_USER
-    password: $GITHUB_TOKEN
-  registry.example.com:5000:       # self-hosted registry on a non-standard port
-    username: $REG_USER
-    password: $REG_PASS
-```
-
-At deploy time nvoi:
-1. Resolves every `$VAR` against the CredentialSource (missing env var → hard error naming both registry and var).
-2. Renders a `kubernetes.io/dockerconfigjson` Secret named `registry-auth` in the app namespace.
-3. Injects `imagePullSecrets: [{name: registry-auth}]` into every Deployment/StatefulSet/CronJob PodSpec.
-4. Removing the block entirely → deletes the orphan Secret on the next deploy.
-
-### `services.X.build:` — local build + push
-
-Three YAML shapes, equivalent in expressiveness to docker-compose's `build:` field:
-
-```yaml
-# Shape 1: bool shorthand — context=./, dockerfile=./Dockerfile
-api:
-  build: true
-
-# Shape 2: string shorthand — context=<path>, dockerfile=<path>/Dockerfile
-api:
-  build: services/api
-
-# Shape 3: explicit struct — independent context and dockerfile knobs.
-# Use this when the Dockerfile lives inside a subdir but the build
-# context must cover a parent (monorepo Go/Node/Python builds that
-# COPY deps from above the Dockerfile's own directory).
-api:
-  build:
-    context: ./
-    dockerfile: ./cmd/api/Dockerfile
-```
-
-Omitting `context:` from the struct form defaults it to `./`.
-
-### `services.X.image:` under `build:` — Kamal-style resolution
-
-When `build:` is set, `image:` is resolved into a full registry reference at deploy time — like Kamal's convention, adapted to nvoi's multi-registry map.
-
-**Host resolution:**
-
-- `image: ghcr.io/org/api` → host explicit; must appear as a key in `registry:`.
-- `image: org/api` with ONE registry declared → host inferred (`<only-registry>/org/api`). Kamal-style.
-- `image: org/api` with MULTIPLE registries declared → **validate error** (ambiguous). Fix: write the host explicitly.
-- `image: nginx` (bare shortname, no slash) → **validate error** under `build:`. A bare name has no repo namespace, and pushing would land at `<host>/nginx` which is almost certainly unintended.
-
-**Tag resolution (per-deploy hash):**
-
-A `DeployHash` is generated once at the top of `Deploy()` — UTC timestamp `YYYYMMDD-HHMMSS`. Applied two ways:
-
-- **Image tag suffix.** If the user wrote no tag (`image: org/api`), the resolved image is `<host>/org/api:<hash>`. If they wrote a tag (`image: org/api:v2`), it becomes `<host>/org/api:v2-<hash>` — user-pinned version preserved AND uniqueness guaranteed. Either way, every `bin/deploy` run produces a new PodSpec.image string, so the rolling-update controller always triggers a restart even without a code change. No `:latest` foot-gun, no manual annotation dance.
-- **Cluster label.** Every nvoi-managed Deployment, StatefulSet, CronJob gets `nvoi/deploy-hash: <hash>` stamped on the workload metadata AND the pod-template metadata (but NOT the selector — that'd orphan pods on every deploy). `kubectl get deploy -L nvoi/deploy-hash` surfaces exactly which deploy placed each resource.
-
-**Digest-pinned references** (`repo@sha256:...`) pass through unmodified — user pinned content, we respect it.
-
-**Pull-only services** (no `build:`) — `image:` passes through verbatim. `image: postgres:17` ships as `postgres:17` to the PodSpec, kubelet pulls from Docker Hub.
-
-### Build invocation
-
-For every service with `build:` set, nvoi runs **locally, before touching any infrastructure**:
-
-1. `docker buildx version` — one-shot preflight at the top of the build pass. If buildx is missing, surfaces a readable install hint ("Install: brew install docker-buildx …") instead of letting per-service docker calls fail with opaque flag-parsing errors.
-2. `docker login <host> -u <user> --password-stdin` — password via stdin, never argv.
-3. `docker buildx build -t <resolved-image> -f <dockerfile> --progress=plain <context>` — streamed to deploy log. `docker buildx build` (not `docker build`) because modern Dockerfiles routinely use BuildKit-only syntax (`# syntax=...`, `RUN --mount=type=cache`, `COPY --chmod`); the legacy builder rejects those at argv parse time before even reading the file.
-4. `docker push <resolved-image>`.
-
-All invocations run against the operator's **real `~/.docker/config.json`** — no isolation. Same contract as Kamal: login writes an auth entry that stays across deploys (idempotent; each login overwrites the same host entry). An earlier attempt to isolate DOCKER_CONFIG to a per-deploy tempdir broke docker CLI plugin discovery ($DOCKER_CONFIG/cli-plugins is where docker looks for `buildx`, and an empty tempdir made the subcommand unrecognized) AND context resolution ($DOCKER_CONFIG/config.json stores `currentContext`, so overriding it made docker fall back to `/var/run/docker.sock` and miss OrbStack/colima/Docker Desktop). The tiny auth-hygiene win wasn't worth either cost.
-
-Build runs pre-infra: a build failure aborts the deploy before any server is provisioned. Re-running `bin/deploy` after fixing the Dockerfile converges from where it stopped.
-
-### Chmod / Dockerfile hygiene — user's responsibility
-
-nvoi does **not** mutate the build context. Executable bits (`bin/*`), file ownership, and line endings are the user's Dockerfile's problem. The idiomatic fix lives in the Dockerfile:
-
-```dockerfile
-# BuildKit — forces 0755 regardless of host filesystem perms
-COPY --chmod=0755 bin/ /app/bin/
-
-# Or old-school — works everywhere
-COPY bin/ /app/bin/
-RUN chmod +x /app/bin/*
-
-# Plus a non-root user owning runtime directories
-RUN groupadd -g 1000 app && useradd -u 1000 -g 1000 app \
- && chown -R app:app /app/log /app/tmp
-USER 1000:1000
-```
-
-Same contract GitHub Actions, Fly.io, and Render use: honor whatever mode the Dockerfile writes into the image, don't silently rewrite source files at build time.
-
-## Commands
-
-```bash
-nvoi deploy                              # reconcile to match config
-nvoi teardown                            # nuke external provider resources
-nvoi teardown --delete-volumes --delete-storage
-nvoi describe                            # live cluster state
-nvoi resources                           # list all provider resources
-nvoi logs <service>                      # stream service logs
-nvoi logs <service> -f                   # follow logs
-nvoi exec <service> -- cmd               # run command in service pod
-nvoi ssh -- cmd                          # run command on master node
-nvoi cron run <name>                     # trigger cron job immediately
-```
-
-Global flags: `--config` (default: `nvoi.yaml`), `--json` (JSONL output), `--ci` (plain text).
-
-nvoi is a local-first engine. Credentials live in your environment (`.env` or exported vars) and never leave your machine. There is no server, no account, no custody.
+Chmod / Dockerfile hygiene is the user's responsibility — nvoi does not mutate the build context. Use BuildKit `COPY --chmod=0755` or `RUN chmod +x` inside the Dockerfile.
 
 ## Architecture
 
@@ -283,289 +156,160 @@ nvoi is a local-first engine. Credentials live in your environment (`.env` or ex
 cmd/
   cli/                     CLI entrypoint — one file per command
     main.go                rootCmd, runtime wiring, PersistentPreRunE
-    context.go             Env-source credential resolution (cmd/ boundary for os.Getenv)
+    context.go             Credential source resolution — boundary for os.Getenv
     deploy.go..ssh.go      One file per command, dispatch to pkg/core / internal/*
   distribution/main.go     Binary distribution server (R2-backed)
 
 internal/
-  config/                  Shared types — no logic
-    config.go              AppConfig, DeployContext, LiveState, definition types
-  reconcile/               Deploy orchestrator — YAML to infrastructure
-    reconcile.go           Deploy() — ordered reconciliation
-    validate.go            ValidateConfig() — fail-fast pre-flight checks
-    helpers.go             DescribeLive(), SplitServers(), ResolveServers()
-    servers.go             ServersAdd (create) + ServersRemoveOrphans (drain + delete after services move)
-    firewall.go            Firewall (desired per-role set) + FirewallRemoveOrphans (sweep, runs after ServersRemoveOrphans)
-    volumes.go             Volume reconciliation
-    secrets.go             Secret resolution — reads from CredentialSource
-    storage.go             Storage reconciliation
-    registries.go          Pull-secret reconcile: resolve registry: creds, apply dockerconfigjson Secret (or orphan-clean)
-    build.go               Local docker build/push for services with `build:` set; runs pre-infra via app.BuildService
-    services.go            Service reconciliation (defaults replicas for domains)
-    crons.go               Cron reconciliation
-    dns.go                 DNS reconciliation
-    ingress.go             Caddy reconcile (EnsureCaddy + admin-API hot-reload + per-domain cert/HTTPS waits)
-    envvars.go             $VAR resolution
-  core/                    Source-agnostic logic
-    teardown.go            Teardown() — ordered resource deletion
-  render/                  Output renderers — TUI, Plain, JSON
+  config/                  Shared types — AppConfig, DeployContext, LiveState (no logic)
+  reconcile/               Deploy orchestrator — see internal/reconcile/CLAUDE.md
+  core/teardown.go         Teardown() — ordered resource deletion
+  render/                  Output renderers — see internal/render/CLAUDE.md
   testutil/                MockSSH, MockOutput, HetznerFake, CloudflareFake (see providermocks.go)
-    kubefake/              KubeFake — *kube.Client over the typed fake clientset, with SetExec() for pod-shell mocking
+    kubefake/              KubeFake — *kube.Client over typed fake clientset, with SetExec()
 
 pkg/
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
-    cluster.go             Cluster struct (MasterSSH + MasterKube), ProviderRef, Connect(), SSH(), Kube()
-    compute.go             ComputeSet (SSH connect, EnsureSwap, Docker, k3s, label), ComputeDelete, ComputeList
-    service.go             ServiceSet, ServiceDelete
-    dns.go                 DNSSet, DNSDelete, DNSList
-    storage.go             StorageSet, StorageDelete, StorageEmpty, StorageList
-    secret.go              SecretList, SecretReveal
-    volume.go              VolumeSet, VolumeDelete, VolumeList
-    cron.go                CronSet, CronDelete, CronRun
-    describe.go            Describe, DescribeJSON (ingress sourced from Caddy admin API via GetCaddyRoutes)
-    resources.go           Resources
-    firewall.go            FirewallSet, FirewallList
-    wait.go                WaitRollout
-    exec.go                Exec
-    ssh.go                 SSH
-    logs.go                Logs
-    build.go               BuildService (local docker login/build/push) + BuildRunner interface for test injection
+    cluster.go             Cluster (MasterSSH, MasterKube, DeployHash), ProviderRef, Connect(), SSH(), Kube()
+    compute.go service.go dns.go storage.go secret.go volume.go cron.go
+    firewall.go ingress.go (trivial; Ingress lives in internal/reconcile)
+    describe.go resources.go logs.go exec.go ssh.go wait.go
+    build.go               BuildService + BuildRunner interface (DockerRunner in prod, fake in tests)
   kube/                    Typed Kubernetes client over SSH tunnel
-    client.go              Client: typed clientset + SSH-tunneled rest.Config + ExecFunc hook; NewForTest(cs) for fakes
-    apply.go               Apply() — typed create/update only (no dynamic / SSA fallback); every Get/Update wrapped in retry.RetryOnConflict; EnsureNamespace
-    workloads.go           FirstPod, GetServicePort, DeleteByName
-    secrets.go             EnsureSecret, UpsertSecretKey, DeleteSecretKey, DeleteSecret, ListSecretKeys, GetSecretValue
-    nodes.go               LabelNode, DrainAndRemoveNode (Eviction API, force-remove on NotReady)
-    pods.go                GetAllPods
-    cron.go                BuildCronJob, CreateJobFromCronJob, WaitForJob, DeleteCronByName
+    client.go              Client: typed clientset + SSH-tunneled rest.Config + ExecFunc hook; NewForTest(cs)
+    apply.go               Apply() — typed create/update only; every Get/Update wrapped in retry.RetryOnConflict
+    workloads.go secrets.go nodes.go pods.go cron.go
     caddy.go               EnsureCaddy, ReloadCaddyConfig, WaitForCaddyCert, WaitForCaddyHTTPS, GetCaddyRoutes
-    registry.go            BuildDockerConfigJSON + BuildPullSecret for imagePullSecrets (type kubernetes.io/dockerconfigjson)
     caddy_config.go        BuildCaddyConfig — pure JSON renderer (deterministic, sorted by Service)
     caddy_manifests.go     buildCaddyDeployment / Service / ConfigMap / PVC + constants
+    registry.go            BuildDockerConfigJSON + BuildPullSecret for imagePullSecrets
     generate.go            BuildService (Deployment/StatefulSet + Service), ParseSecretRef
-    rollout.go             WaitRollout (poll-based with terminal failure detection), RecentLogs
-    diagnostics.go         timeoutDiagnostics, recentEvents (for rollout timeout error messages)
-    streaming.go           StreamLogs, Exec (SPDY) — overridable via Client.ExecFunc for tests
-  infra/                   SSH, server bootstrap, k3s, Docker, swap, volume mounting
-  provider/                Provider interfaces + per-domain implementations
-    compute.go             ComputeProvider interface
-    dns.go                 DNSProvider interface
-    bucket.go              BucketProvider interface
-    resolve.go             CredentialSource, EnvSource, MapSource, registration, credential schemas
-    s3ops/                 Shared S3 operations (CORS, lifecycle, empty)
-    compute/               See pkg/provider/compute/CLAUDE.md for DeleteServer contract
-      hetzner/             Hetzner Cloud (compute + volumes)
-      aws/                 AWS (EC2 + VPC)
-      scaleway/            Scaleway (compute)
-    dns/
-      cloudflare/          Cloudflare DNS
-      aws/                 AWS Route53
-      scaleway/            Scaleway DNS
-    storage/
-      cloudflare/          Cloudflare R2
-      aws/                 AWS S3
-      scaleway/            Scaleway Object Storage
-    hetznerbase/           Shared Hetzner HTTP client
-    awsbase/               Shared AWS SDK config
-    cfbase/                Shared Cloudflare HTTP client
-    scwbase/               Shared Scaleway HTTP client
+    rollout.go diagnostics.go streaming.go
+  infra/                   SSH (golang.org/x/crypto/ssh + SFTP), k3s, swap, volume mounting
+  provider/                Provider interfaces + per-domain implementations — see pkg/provider/CLAUDE.md
+    compute.go dns.go bucket.go secrets.go resolve.go
+    s3ops/ hetznerbase/ awsbase/ cfbase/ scwbase/
+    compute/{hetzner,aws,scaleway}/    — see pkg/provider/compute/CLAUDE.md
+    dns/{cloudflare,aws,scaleway}/
+    storage/{cloudflare,aws,scaleway}/
+    secrets/{doppler,awssm,infisical}/ — direct-API credential backends
   utils/                   Pure utilities: naming, poll, httpclient, ssh keys, format, maps, params
-    s3/                    S3-compatible operations with AWS Signature V4
+    s3/                    S3-compatible ops with AWS Signature V4
 ```
+
+**Sub-CLAUDE.md references:**
+
+- `internal/reconcile/CLAUDE.md` — reconcile flow, step notes, edge cases
+- `internal/render/CLAUDE.md` — renderers (TUI / Plain / JSON)
+- `pkg/provider/CLAUDE.md` — provider interface + registration pattern, credential resolution
+- `pkg/provider/compute/CLAUDE.md` — DeleteServer contract shared across compute providers
 
 ### SSH + Kube model
 
 **Interface → implementation → mock:**
-- `utils.SSHClient` (`pkg/utils/ssh.go`) — the SSH interface. Every SSH consumer takes this.
-- `infra.SSHClient` (`pkg/infra/ssh.go`) — the real implementation. Wraps `golang.org/x/crypto/ssh` with SFTP upload, TCP dial, persistent connection.
-- `testutil.MockSSH` (`internal/testutil/mock_ssh.go`) — test mock. Canned responses by exact command or prefix match. Records all calls for assertions.
-- `*kube.Client` (`pkg/kube/client.go`) — typed Kubernetes client. In production it tunnels to the apiserver over `utils.SSHClient`. `kube.NewForTest(cs)` wraps a client-go fake typed clientset for tests. `Client.ExecFunc` is an injectable hook so tests can capture pod-shell calls (Caddy admin API, cert/HTTPS waits) without an SPDY connection.
-- `kubefake.KubeFake` (`internal/testutil/kubefake/kubefake.go`) — Client + the underlying typed fake clientset for reconcile-level assertions. `kf.SetExec(fn)` overrides the Exec hook.
+- `utils.SSHClient` (`pkg/utils/ssh.go`) — the SSH interface. Every consumer takes this.
+- `infra.SSHClient` (`pkg/infra/ssh.go`) — real implementation. SFTP upload, TCP dial, persistent connection.
+- `testutil.MockSSH` — canned prefix responses, records every call.
+- `*kube.Client` (`pkg/kube/client.go`) — typed Kubernetes client. Tunnels through `utils.SSHClient` to the apiserver. `NewForTest(cs)` wraps client-go's typed fake clientset. `Client.ExecFunc` is an injectable hook so tests capture pod-shell calls (Caddy admin API, cert/HTTPS waits) without an SPDY connection.
+- `kubefake.KubeFake` — Client + the typed fake for reconcile-level assertions. `kf.SetExec(fn)` overrides the Exec hook.
 
-**Connection lifecycle:** One SSH connection per deploy, one kube client per deploy. `Cluster.MasterSSH` + `Cluster.MasterKube` are set once after `ServersAdd()`, shared across all subsequent operations via `borrowedSSH`/no-op cleanup. CLI dispatch path connects on-demand (no MasterSSH/MasterKube) and closes after.
+**Connection lifecycle:** One SSH + one kube client per deploy. Set once after `ServersAdd()` (see `internal/reconcile/CLAUDE.md`), shared via `borrowedSSH` / no-op cleanup. `ComputeSet` uses separate per-server connections for provisioning (swap, k3s install/join). CLI dispatch path connects on-demand and closes after.
 
-**Testing:** Set `Cluster.MasterKube = kf.Client` to inject a fake kube client. For reconcile tests use `convergeDC(log, convergeMock())` — it wires both a MockSSH and a KubeFake and registers the fake in `kubeFakes` so tests can assert via `kfFor(dc)`. See `internal/reconcile/helpers_test.go` and `internal/reconcile/services_test.go` for patterns.
-
-`ComputeSet` connects to individual servers via `Cluster.Connect()` for provisioning (Docker, k3s, swap). Those are separate connections — not the master.
-
-SSH errors: `ErrHostKeyChanged` and `ErrAuthFailed` surface immediately with guidance. Stale known hosts auto-cleared on server creation.
-
-### Reconcile flow
-
-```
-Deploy(ctx, dc, cfg)
-  → ValidateConfig(cfg)
-  → cfg.Resolve()                    — populate VolumeDef.MountPath, firewall names
-  → Build(ctx, dc, cfg)              — LOCAL docker login/build/push for services with `build:` set; runs PRE-infra
-  → DescribeLive(ctx, dc, cfg) → LiveState
-  → ServersAdd(ctx, dc, cfg)          — create desired, NO orphan removal yet
-  → establish MasterSSH + MasterKube
-  → EnsureNamespace(app ns)
-  → Registries(ctx, dc, live, cfg)    — resolve `registry:` creds → dockerconfigjson Secret (or orphan-delete if empty)
-  → Firewall(ctx, dc, live, cfg)      — desired per-role set, NO orphan removal yet
-  → Volumes(ctx, dc, live, cfg)
-  → Secrets(ctx, dc, live, cfg) → secretValues
-  → Storage(ctx, dc, live, cfg) → storageCreds
-  → mergeSources(secretValues, storageCreds) → sources
-  → Services(ctx, dc, live, cfg, sources)
-  → Crons(ctx, dc, live, cfg, sources)
-  → ServersRemoveOrphans(ctx, dc, live, cfg) — drain + delete AFTER workloads moved
-  → FirewallRemoveOrphans(ctx, dc, live, cfg) — sweep AFTER servers detach; Hetzner refuses delete while attached
-  → DNS(ctx, dc, live, cfg)
-  → Ingress(ctx, dc, live, cfg)
-```
-
-### Server provisioning
-
-`ComputeSet` flow per server:
-1. `EnsureServer` at provider (create or return existing)
-2. Resolve private IP
-3. Clear stale known host (recycled IPs)
-4. Wait for SSH (poll `Connect`, hard error on host key changed / auth failed)
-5. `EnsureSwap` — reads actual disk size via `df`, proportional swap (5%, 512MB–2GB)
-6. Master: `InstallK3sMaster` (k3s ships its own containerd — no Docker daemon installed on the host)
-7. Worker: `JoinK3sWorker` (reads token from master, installs agent)
-8. `LabelNode` via kube client
-
-The in-cluster Docker registry runs as a regular k8s Deployment in
-`kube-system` — applied by the reconcile step (`kc.EnsureRegistry`, see
-`pkg/kube/registry.go`), not by per-server provisioning. The pod uses
-`hostPort: 5000` on master so containerd reaches it at the same address
-its `registries.yaml` mirror points at.
-
-Zero-downtime server replacement: `ServersAdd` creates new servers first, `Services`/`Crons` move workloads, `ServersRemoveOrphans` drains and deletes old servers after.
+SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guidance. Stale known hosts auto-cleared on server creation.
 
 ## Providers
-
-Organized by domain with shared base clients:
 
 | Kind | YAML key | Interface | Implementations |
 |------|----------|-----------|----------------|
 | Compute | `providers.compute` | `ComputeProvider` | hetzner, aws, scaleway |
 | DNS | `providers.dns` | `DNSProvider` | cloudflare, aws, scaleway |
 | Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
-
-`ensureFirewall` only ensures the resource exists — never resets rules. Rules managed exclusively by `ReconcileFirewallRules` in the Firewall reconcile step.
+| Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
 
 ## Credential resolution
 
-Every credential — provider tokens, SSH key, secret values referenced via `$VAR` — goes through a single `provider.CredentialSource` built at the `cmd/` boundary in `cmd/cli/context.go::credentialSource(ctx, cfg)`.
-
-**Two modes, chosen by `providers.secrets` in `nvoi.yaml`:**
+Every credential — provider tokens, SSH key, service `$VAR` — goes through `provider.CredentialSource`, built once at `cmd/cli/context.go::credentialSource(ctx, cfg)`.
 
 | `providers.secrets` | Source | How it reads |
 |---|---|---|
-| unset | `EnvSource{}` | `os.Getenv(k)` — values come from shell / `.env` |
-| `doppler` \| `awssm` \| `infisical` (scalar, matches other providers) | `SecretsSource{ctx, provider}` | fetched through the backend's direct API at deploy time — no env fallback |
+| unset | `EnvSource{}` | `os.Getenv(k)` — values from shell / `.env` |
+| `doppler` \| `awssm` \| `infisical` | `SecretsSource{ctx, provider}` | backend's direct API at deploy time — no env fallback |
 
-Struct form `secrets: {kind: <name>}` is also accepted — identical semantics, reserved for future per-backend knobs (TTL, scopes, …) without a breaking change.
+Scalar (`secrets: infisical`) matches the other provider keys; struct form (`secrets: {kind: ...}`) also accepted for future per-backend knobs.
 
-**Strict mode when a backend is declared:** the backend IS the source. There's exactly one escape hatch — the backend's own bootstrap credentials (e.g. `DOPPLER_TOKEN`, `AWS_ACCESS_KEY_ID`+`AWS_SECRET_ACCESS_KEY`+`AWS_REGION`, `INFISICAL_CLIENT_ID`+`INFISICAL_CLIENT_SECRET`+`INFISICAL_PROJECT_SLUG`) must be in env. Everything else — compute tokens, DNS keys, storage creds, SSH private key, service `$VAR` secrets — resolves through the backend. Misconfigured backend → hard error at startup via `ValidateCredentials`, not deferred mid-deploy.
+**Strict mode when a backend is declared:** the backend IS the source. The only escape hatch is the backend's own bootstrap creds (e.g. `INFISICAL_CLIENT_ID`+`INFISICAL_CLIENT_SECRET`+`INFISICAL_PROJECT_SLUG`) read from env. Everything else — compute / DNS / storage creds, SSH private key, service `$VAR` — resolves through the backend. Misconfigured backend → hard error at startup via `ValidateCredentials`.
 
-**Adapter implementations are direct-API, never shell-outs** (Kamal shells out to vendor CLIs; nvoi calls the vendor REST/SDK directly):
-- `pkg/provider/secrets/doppler` — Doppler REST API, Bearer token
-- `pkg/provider/secrets/awssm` — AWS SDK v2 `service/secretsmanager`
-- `pkg/provider/secrets/infisical` — Infisical REST API, Universal Auth (cloud + self-hosted)
+**Adapters are direct-API, never shell-outs** (Kamal shells out to vendor CLIs; nvoi calls the REST/SDK directly). See `pkg/provider/CLAUDE.md` for the registration pattern.
 
 | Credential | Env mode | Backend mode |
 |---|---|---|
-| Compute / DNS / Storage creds | env (schema `EnvVar` field) | backend.Get(`EnvVar`) |
+| Compute / DNS / Storage | env (schema `EnvVar`) | backend.Get(`EnvVar`) |
 | Service `$VAR` in `secrets:` | env | backend.Get(`VAR`) |
-| SSH private key | `SSH_PRIVATE_KEY` → `SSH_KEY_PATH` → `~/.ssh/id_ed25519` → `~/.ssh/id_rsa` | `source.Get("SSH_PRIVATE_KEY")` → `SSH_KEY_PATH` → disk fallback (backends don't store files) |
+| SSH private key | `SSH_PRIVATE_KEY` → `SSH_KEY_PATH` → `~/.ssh/id_ed25519` → `~/.ssh/id_rsa` | `source.Get("SSH_PRIVATE_KEY")` → `SSH_KEY_PATH` → disk fallback |
 | Backend's own creds | — | env (bootstrap) |
-
-Adding a new backend: drop a package under `pkg/provider/secrets/<name>/` with a `CredentialSchema` + `init()` call to `provider.RegisterSecrets`, blank-import it in `cmd/cli/main.go`, add the name to the `ValidateConfig` case list. No other changes.
 
 ## Working tree
 
-The working tree frequently has uncommitted changes — that's normal. The on-disk file is always the intended version. When reviewing, never flag a mismatch between a prior commit and the working tree as a bug. The working tree is the source of truth. Commits happen when the user asks.
+The working tree frequently has uncommitted changes — that's normal. The on-disk file is always the intended version. Never flag a mismatch between a prior commit and the working tree as a bug. Commits happen when the user asks.
 
 ## Key rules
 
-1. `app` + `env` in `nvoi.yaml` are required. They're the namespace for everything.
-2. No state files. Infrastructure is the truth.
-3. `deploy` is idempotent. Run twice, same result.
-4. `teardown` nukes external provider resources. Volumes and storage preserved by default.
-5. Provider interfaces scale. Add a provider = implement the interface.
-6. Naming: `nvoi-{app}-{env}-{resource}`. Deterministic. No UUIDs.
-7. SSH keys injected via cloud-init only. Single SSH connection per deploy (`MasterSSH`), single kube client (`MasterKube`).
-8. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/context.go` builds an `EnvSource` at the boundary. Everything downstream calls `source.Get(key)`; nothing else touches env.
-9. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface.
-10. **`pkg/core/` never writes to stdout.** All output through `Output` interface.
-11. **Every provider operation goes through `pkg/core/`.** No caller invokes a provider method directly. `pkg/core/` wraps every operation with output, error handling, and naming resolution.
-12. **`pkg/core/` never imports `net/http`.** HTTP calls belong in `infra/` or `provider/`.
-13. **Errors flow up, render once.** `pkg/core/` returns errors. Cobra renders via `Output.Error()`.
-14. **No shell injection.** Secrets flow through the typed kube client — no shell interpolation of user data.
-15. **Web-facing services require replicas >= 2.** Omitted defaults to 2, explicit 1 is a hard error.
-16. **Input validated once at the boundary.** Config parse (`ValidateConfig`) is the only place that validates user input. Internal code trusts validated input — no defensive escaping, no silent sanitization. Validators: `ValidateName` (DNS-1123) for resource names, `ValidateEnvVarName` (POSIX) for secret keys, `ValidateDomain` for domains. All in `pkg/utils/naming.go`.
-17. **Single binary, one mode.** `cmd/cli` reads `nvoi.yaml`, resolves credentials from env vars, and calls `internal/reconcile` / `pkg/core/` directly. No server, no relay, no custody.
-18. **Every kube op goes through `*kube.Client`.** Exported methods on `Client` are the only way `internal/reconcile` or `pkg/core/` talk to the apiserver. No inline kubectl strings, no direct client-go usage outside `pkg/kube/`.
-19. **Async provider actions polled to completion.** Every action that returns an ID must be polled via `waitForAction` before proceeding. Fire-and-forget = production race condition.
-20. **`DeleteServer` detaches firewall before termination.** Every provider. Hetzner: `detachFirewall` + poll. AWS: move to VPC default SG. Scaleway: reassign to project default SG. `DeleteFirewall` retries "still in use."
+1. **No state files.** Infrastructure is the truth. `deploy` is idempotent; run twice, same result.
+2. **`app` + `env` in `nvoi.yaml` are the namespace.** Naming: `nvoi-{app}-{env}-{resource}`. Deterministic, no UUIDs.
+3. **`os.Getenv` lives exclusively in `cmd/`.** `internal/`, `pkg/` never read env vars. `cmd/cli/context.go` builds the `CredentialSource`; everything downstream calls `source.Get(k)`.
+4. **Providers are silent.** Never print or narrate. Output via `pkg/core/` → `Output` interface. `pkg/core/` itself never writes to stdout.
+5. **Every provider operation goes through `pkg/core/`.** No caller invokes a provider method directly. `pkg/core/` wraps every op with output, error handling, naming.
+6. **Every kube op goes through `*kube.Client`.** Exported methods on `Client` are the only way `internal/reconcile` or `pkg/core/` talk to the apiserver. No inline kubectl strings, no direct client-go usage outside `pkg/kube/`.
+7. **`pkg/core/` never imports `net/http`.** HTTP belongs in `infra/` or `provider/`.
+8. **Errors flow up, render once.** `pkg/core/` returns errors; Cobra renders via `Output.Error()`.
+9. **Input validated once at the boundary.** `ValidateConfig` is the only place that validates user input. Internal code trusts validated input — no defensive escaping. Validators in `pkg/utils/naming.go`: `ValidateName` (DNS-1123), `ValidateEnvVarName` (POSIX), `ValidateDomain`.
+10. **Async provider actions polled to completion.** Every action that returns an ID must be polled via `waitForAction` before proceeding. Fire-and-forget = production race condition.
+11. **`DeleteServer` detaches firewall before termination.** Every provider. Hetzner: `detachFirewall` + poll. AWS: move to VPC default SG. Scaleway: reassign to project default SG. `DeleteFirewall` retries "still in use."
+12. **Single binary, one mode.** `cmd/cli` reads `nvoi.yaml`, resolves credentials via `CredentialSource`, calls `internal/reconcile` / `pkg/core/` directly. No server, no relay, no custody. SSH keys injected via cloud-init only.
 
 ## Production hardening notes
 
 - **`~` doesn't expand in Go.** `resolveSSHKey()` handles tilde expansion against `$HOME`.
-- **`Client.Apply` is typed-only.** Every kind we ship is dispatched through the typed clientset (Get → Create-if-missing → Update-otherwise) with `FieldManager: "nvoi"`. There is no dynamic / SSA fallback — unknown kinds error out. Add a case to `applyTyped` if you need a new resource type. For Deployment/StatefulSet, `Apply` preserves `.status` from the existing object so re-running a Ready workload doesn't reset its readiness in tests (mirrors real apiserver semantics where status has its own subresource).
-- **Ingress is in-cluster Caddy.** k3s installed with `--disable traefik --disable servicelb`. A single `caddy:2.10-alpine` Deployment runs in `kube-system` with `nodeSelector: nvoi-role=master` and `hostPort: 80/443`. The reconciler talks to Caddy's admin API on `localhost:2019` *inside the pod* via `kube.Client.Exec` — admin is never exposed off-pod. Each reconcile builds Caddy's native JSON config from `cfg.Domains` + resolved Service ports (`pkg/kube/caddy_config.go`) and POSTs it to `/load`; Caddy validates first, then atomically swaps listeners with no connection drops. ACME state lives on a 1Gi PVC at `/data` (k3s `local-path`). Removed domains drop out of the next config; orphan ingress resources don't exist (no k8s `Ingress` objects).
-- **DNS and ingress are separate concerns.** DNS creates A records. Ingress is purely Caddy's loaded config.
-- **HTTPS verification is two-step, both probes inside the Caddy pod.** Step 1: `WaitForCaddyCert` polls until `/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/<domain>/<domain>.crt` exists with non-zero size. Step 2: `WaitForCaddyHTTPS` curls `https://<domain><health>` and waits for any non-5xx, non-0 status. Both run via `Exec` so we don't depend on the operator's local DNS. Timeouts are `caddyCertTimeout` / `caddyHTTPSTimeout` — expiration warns and continues (Caddy keeps retrying ACME, next deploy re-verifies).
-- **Local builds are optional and opt-in per service.** `services.X.build: true | <path> | {context, dockerfile}` triggers `docker buildx login/build/push` to the registry matching the image's host (which must be declared in the top-level `registry:` block). Runs PRE-infra via a `BuildRunner` interface — a build failure never leaves half-provisioned servers behind. `PreflightBuildx` fires once at the top of the pass so missing buildx surfaces with an actionable install hint instead of opaque per-service flag errors. Passwords flow via `--password-stdin`, never argv. Auth lives in the operator's real `~/.docker/config.json` (Kamal-style) — earlier `DOCKER_CONFIG=<tmpdir>` isolation killed plugin discovery and docker-context lookup, not worth it. Services with no `build:` set pull their image as-is from wherever `image:` points.
-- **Every typed Apply retries on conflict.** Kubernetes resources (Deployments, StatefulSets, CronJobs, etc.) have their `.status` updated asynchronously by their controllers. A plain Get-then-Update sequence races those status writes: between our Get and our Update, the controller bumps `ResourceVersion` for its own reasons, and our write fails with `Operation cannot be fulfilled on deployments.apps "X": the object has been modified`. `pkg/kube/apply.go` wraps every Get/Update pair in `k8s.io/client-go/util/retry.RetryOnConflict(retry.DefaultRetry, …)` — re-reads the fresh ResourceVersion and retries with backoff. Uniform across every kind (idempotent, cheap). Hit this live on a Caddy re-deploy; the fix is standard client-go hygiene and prevents every future variant.
-- **Private registry credentials are k8s `imagePullSecrets`, not containerd config.** Top-level `registry:` block in `nvoi.yaml` declares `<host>: {username, password}` (values may be `$VAR` references resolved via `CredentialSource`). The `Registries()` reconcile step renders a `kubernetes.io/dockerconfigjson` Secret named `registry-auth` in the app namespace; `BuildService`/`BuildCronJob` inject `imagePullSecrets: [{name: registry-auth}]` into every PodSpec when `len(cfg.Registry) > 0`. Missing env vars are a hard error at deploy time. Removing `registry:` from the YAML deletes the orphan Secret on the next deploy. No `registries.yaml` on the host, no Docker daemon, no containerd mirror gymnastics.
-- **SSH host key changed = hard error** with guidance to clear known hosts. Auto-cleared on server creation.
-- **Firewall never reset during server creation.** `ensureFirewall` only ensures existence.
-- **Firewall orphan sweep deferred until after `ServersRemoveOrphans`.** `Firewall()` reconciles the desired per-role set (master-fw, worker-fw) early so new servers get rules applied before workloads land. `FirewallRemoveOrphans()` runs later, after `ServersRemoveOrphans` has drained + deleted orphan servers (and `DeleteServer`'s contract has detached their firewalls). Running the sweep earlier — as the code used to — meant Hetzner correctly rejected `DeleteFirewall` with `resource_in_use` because the orphan server was still attached, and nothing retried. Same split pattern as `ServersAdd` / `ServersRemoveOrphans`. Firewall is the only reconcile-swept resource with a delete-time attachment lock against another reconcile-managed resource (servers); every other resource either has no lock or isn't swept in reconcile.
-- **Concurrency control on deploy workflows.** `concurrency: { group: deploy, cancel-in-progress: false }`.
-- **Root disk size is creation-only.** `disk` in server config applies at `EnsureServer` time. Changing it on an existing server has no effect — `EnsureServer` returns the existing server as-is. Resize requires server recreation. Hetzner doesn't support custom root disk sizes at all (fixed per server type) — validated at config time.
+- **`Client.Apply` is typed-only.** Every kind we ship is dispatched through the typed clientset (Get → Create-if-missing → Update-otherwise) with `FieldManager: "nvoi"`. There is no dynamic / SSA fallback — unknown kinds error. For Deployment/StatefulSet, `Apply` preserves `.status` from the existing object so re-running a Ready workload doesn't reset readiness in tests (mirrors apiserver status-subresource semantics).
+- **Every typed Apply retries on conflict.** Controllers bump `ResourceVersion` asynchronously between our Get and Update. `pkg/kube/apply.go` wraps every Get/Update pair in `retry.RetryOnConflict(retry.DefaultRetry, …)`. Hit this live on a Caddy re-deploy — standard client-go hygiene, prevents every future variant.
+- **Ingress is in-cluster Caddy (not Traefik).** k3s `--disable traefik --disable servicelb`. A `caddy:2.10-alpine` Deployment in `kube-system` with `nodeSelector: nvoi-role=master` and `hostPort: 80/443`. Config built from `cfg.Domains` + resolved Service ports, POSTed to Caddy's admin API on `localhost:2019` *inside the pod* via `kube.Client.Exec` — admin never exposed off-pod. Atomic listener swap, no connection drops. ACME state on a 1Gi PVC at `/data`. Details in `internal/reconcile/CLAUDE.md`.
+- **HTTPS verification is two-step, both probes inside the Caddy pod.** `WaitForCaddyCert` polls for the cert on `/data`; `WaitForCaddyHTTPS` curls the service. No dependency on the operator's local DNS. Timeouts warn-and-continue.
+- **Private registry credentials are k8s `imagePullSecrets`, not containerd config.** `registry:` block → `kubernetes.io/dockerconfigjson` Secret `registry-auth`; `BuildService`/`BuildCronJob` inject `imagePullSecrets` when `len(cfg.Registry) > 0`. No `registries.yaml` on the host, no Docker daemon.
+- **Local builds are optional and opt-in per service.** `PreflightBuildx` fires once so missing buildx surfaces with an actionable hint. Kamal-style auth via the real `~/.docker/config.json`. Runs PRE-infra via `BuildRunner`.
+- **Firewall orphan sweep deferred until after `ServersRemoveOrphans`.** `Firewall()` reconciles the desired per-role set early so new servers get rules before workloads land. `FirewallRemoveOrphans()` runs later because Hetzner rejects `DeleteFirewall` while a server is still attached — `DeleteServer`'s contract detaches first. `ensureFirewall` never resets rules.
+- **Root disk size is creation-only.** `disk` applies at `EnsureServer`. Changing it on an existing server has no effect — resize requires recreation. Hetzner rejects `disk` at config time (fixed per server type).
 
 ## Testing — mock governance
 
-**One pattern. One file. No class-rewrite mocks.** Every test in this repo obeys the following rules. Violations are reverted in review.
+**One pattern. One file. No class-rewrite mocks.** Violations are reverted in review.
 
-### The only boundaries we mock
+Only three boundaries are mocked:
 
 | Boundary | Mock | Rationale |
 |---|---|---|
-| HTTP to cloud provider APIs (Hetzner / Cloudflare / AWS / Scaleway) | `internal/testutil/providermocks.go` — `HetznerFake`, `CloudflareFake` | Real wire protocol + real provider client. No in-process reimplementation of provider semantics. |
+| HTTP to cloud provider APIs (Hetzner / Cloudflare / AWS / Scaleway) | `internal/testutil/providermocks.go` — `HetznerFake`, `CloudflareFake` | Real wire protocol + real provider client — no in-process reimplementation of provider semantics. |
 | SSH protocol to provisioned servers | `internal/testutil/mock_ssh.go` — `MockSSH` | Real SSH command/upload protocol, canned prefix responses. |
-| Kubernetes apiserver | `internal/testutil/kubefake/kubefake.go` — `KubeFake` | Wraps client-go's own fake clientset. |
+| Kubernetes apiserver | `internal/testutil/kubefake/kubefake.go` — `KubeFake` | Wraps client-go's own fake typed clientset. |
 
-Nothing else is mocked. `MockOutput` in `mock_provider.go` is NOT a boundary mock — it's an internal UI-event capture for assertions.
+Nothing else. `MockOutput` is an internal UI-event capture, not a boundary mock.
 
-### Rules — hard
+**Hard rules:**
 
-1. **One file for provider mocks.** `internal/testutil/providermocks.go`. Anything provider-mock-shaped lives here. Violation = reverted in review.
+1. **One file for provider mocks.** `internal/testutil/providermocks.go`.
+2. **No test declares a provider-interface type.** No `type myFooMock struct{...}` implementing `ComputeProvider` / `DNSProvider` / `BucketProvider`. Real provider clients are exercised end-to-end against httptest-backed fakes.
+3. **Tests seed state, never stub behavior.** `fake.SeedServer(...)` / `SeedVolume` / `SeedFirewall` / `SeedNetwork` / `SeedDNSRecord` / `SeedBucket`. No `func(req) error` hooks.
+4. **The `OpLog` is the assertion surface.** `fake.Has("ensure-server:X")` / `Count("delete-server:")` / `IndexOf` / `All`. New ops = one handler edit in `providermocks.go`.
+5. **Error injection is explicit.** `fake.ErrorOn("delete-firewall:...", err)`. The matching HTTP handler short-circuits to 500. No `if testMode then ...` in production code.
+6. **Registration is per-test.** `fake := testutil.NewHetznerFake(t); fake.Register("test-name")`. Re-registration replaces. A fresh `convergeDC` re-registers the shared defaults under `test-reconcile` for each test.
+7. **`testutil.MockCompute` / `MockDNS` / `MockBucket` are deleted.** Any PR reintroducing a provider-interface-satisfying mock type in any file fails review — extend `providermocks.go` instead.
+8. **No shell injection.** Secrets flow through the typed kube client — no shell interpolation of user data.
 
-2. **No test declares a provider-interface type.** No test file contains `type myFooMock struct { ... }` that implements `provider.ComputeProvider` / `DNSProvider` / `BucketProvider`. Ever. The real provider clients are exercised end-to-end against the httptest-backed fakes.
+**Writing a new test:**
 
-3. **Tests seed state, never stub behavior.** `fake.SeedServer(...)` / `SeedVolume` / `SeedFirewall` / `SeedNetwork` / `SeedDNSRecord` / `SeedBucket`. No `func(req) error` hooks on mocks.
-
-4. **The `OpLog` is the assertion surface.** Tests call `fake.Has("ensure-server:X")` / `Count("delete-server:")` / `IndexOf` / `All`. New ops = one handler edit in `providermocks.go`, nothing added test-side.
-
-5. **Error injection is explicit.** `fake.ErrorOn("delete-firewall:nvoi-myapp-prod-master-fw", err)`. The matching HTTP handler short-circuits to 500. No `if testMode then ...` inside production code.
-
-6. **Registration is per-test.** `fake := testutil.NewHetznerFake(t); fake.Register("test-name")`. Re-registration replaces the previous factory. No init-time globals except the shared "test-compute" / "cluster-test" / "cron-test" / "test" defaults that a fresh `convergeDC` re-registers under `test-reconcile` for each test.
-
-7. **`testutil.MockCompute`, `testutil.MockDNS`, `testutil.MockBucket` are gone.** Not deprecated, deleted. Any PR reintroducing a provider-interface-satisfying mock type — in any file — fails review. If you feel you need one, extend `providermocks.go`.
-
-8. **`MockSSH` and `KubeFake` stay as-is.** They're at correct boundaries.
-
-9. **`MockOutput` stays.** Not an external boundary — it's an internal contract. The capture-event pattern is legitimate.
-
-### What this buys
-
-- Adding a new test op (e.g. rate-limit path, 5xx retry) = one branch in one handler, not a new mock type.
-- Refactoring any provider interface = zero test-side work. Tests don't reference the interface.
-- Adding a new cloud provider for compute / DNS / storage = add new httptest handlers in `providermocks.go` + a `Register()` method. No `testutil.MockX` surface to maintain.
-- "Mock passes because mock matches itself" is structurally impossible — the fake speaks the real wire, and the real client decodes it.
-
-### If you're writing a new test
-
-1. Need compute? `fake := testutil.NewHetznerFake(t); fake.Register("my-test-provider")`. Seed via `fake.SeedServer(...)` / `SeedVolume` / etc. Point the `Cluster.Provider` at `"my-test-provider"`.
-2. Need DNS or R2? `cf := testutil.NewCloudflareFake(t, opts); cf.RegisterDNS("dns-name")` / `cf.RegisterBucket("bucket-name")`. Seed records and buckets as needed.
-3. Need SSH? Use `testutil.MockSSH` with `Prefixes`.
-4. Need kube? Use `kubefake.NewKubeFake()`.
-5. Need to assert ops? `fake.Has("ensure-server:X")`, `fake.Count("delete-...")`, `fake.IndexOf(...)` for ordering.
+- Compute? `fake := testutil.NewHetznerFake(t); fake.Register("provider-name")`. Seed via `fake.SeedServer(...)` etc.
+- DNS or R2? `cf := testutil.NewCloudflareFake(t, opts); cf.RegisterDNS(...)` / `cf.RegisterBucket(...)`.
+- SSH? `testutil.MockSSH` with `Prefixes`.
+- Kube? `kubefake.NewKubeFake()`; set `Cluster.MasterKube = kf.Client`.
+- Reconcile end-to-end? `convergeDC(log, convergeMock())` — wires MockSSH + KubeFake + provider fakes; assert via `kfFor(dc)`.
 
 Read the file-top comment in `providermocks.go` before extending it.
