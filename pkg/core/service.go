@@ -44,9 +44,6 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 	defer cleanup()
 
 	ns := names.KubeNamespace()
-	if err := kc.EnsureNamespace(ctx, ns); err != nil {
-		return err
-	}
 
 	// Resolve volumes — named volumes must exist as provider volumes
 	managedVolPaths := map[string]string{}

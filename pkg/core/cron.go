@@ -40,9 +40,6 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 	defer cleanup()
 
 	ns := names.KubeNamespace()
-	if err := kc.EnsureNamespace(ctx, ns); err != nil {
-		return err
-	}
 
 	managedVolPaths := map[string]string{}
 	vols, _ := prov.ListVolumes(ctx, names.Labels())

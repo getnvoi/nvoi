@@ -11,6 +11,19 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// isKubeconfigMissing returns true when err originates from kube.Client
+// failing to fetch /home/deploy/.kube/config. This means k3s hasn't
+// finished installing yet — we're mid-first-deploy, not an active cluster
+// with a corrupt kubeconfig.
+func isKubeconfigMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, ".kube/config") &&
+		strings.Contains(msg, "No such file or directory")
+}
+
 // DescribeLive queries the cluster and provider for current state.
 // Returns (nil, nil) on first deploy (no servers exist).
 // Returns error if servers exist but cluster state can't be read — prevents
@@ -32,6 +45,13 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		}
 		if len(servers) == 0 {
 			return nil, nil // first deploy — nothing exists
+		}
+		if isKubeconfigMissing(err) {
+			// Servers exist at the provider but k3s hasn't been installed
+			// yet (prior deploy aborted mid-provisioning). No cluster
+			// state to describe — return an empty live state so
+			// ServersAdd can resume provisioning on the existing server.
+			return &config.LiveState{Domains: map[string][]string{}, ServerDisk: map[string]int{}}, nil
 		}
 		return nil, fmt.Errorf("servers exist but cluster state unreadable — cannot detect orphans: %w", err)
 	}
