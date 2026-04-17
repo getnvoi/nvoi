@@ -35,15 +35,52 @@ func SetTestTiming(poll, stability time.Duration) {
 	stabilityDelay = stability
 }
 
-// WaitRollout polls pods by label until all are Ready, printing state changes.
-// Terminal failures (bad image, config error, crash loop) exit immediately.
-// Transient states (scheduling, pulling, creating) keep polling with feedback.
+// hardFailReason returns a non-empty reason when a container state is
+// genuinely unrecoverable and further polling is pointless. Covers the
+// exhaustive set: image can't be fetched, config is malformed, scheduler
+// can't place the pod, container keeps being OOM-killed. Every other
+// state (CrashLoopBackOff, plain Error exit, probe failing, etc.) is
+// treated as transient — the outer rolloutTimeout is the only bailout.
+func hardFailReason(pod *corev1.Pod) string {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse && cond.Reason == "Unschedulable" {
+			return fmt.Sprintf("pod %s unschedulable — %s", pod.Name, cond.Message)
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil {
+			switch cs.State.Waiting.Reason {
+			case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ErrImageNeverPull":
+				return fmt.Sprintf("%s — %s", cs.State.Waiting.Reason, cs.State.Waiting.Message)
+			case "CreateContainerConfigError":
+				return fmt.Sprintf("%s — %s", cs.State.Waiting.Reason, cs.State.Waiting.Message)
+			}
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+			return "OOMKilled — container ran out of memory"
+		}
+	}
+	return ""
+}
+
+// WaitRollout polls pods by label until all are Ready. Philosophy matches
+// kubectl rollout status: wait patiently until the rollout converges OR a
+// genuinely unrecoverable state is observed.
+//
+// Unrecoverable (bail immediately): Unschedulable, ImagePullBackOff family,
+// CreateContainerConfigError, OOMKilled. Nothing kubelet does will ever
+// make these work without the operator intervening.
+//
+// Everything else — CrashLoopBackOff with any restart count, plain Error
+// exits, probe failing, Scheduling, ContainerCreating — is transient. Keep
+// polling; kubelet + the controller will converge or the outer
+// rolloutTimeout will bail us out with diagnostics.
 func (c *Client) WaitRollout(ctx context.Context, ns, name, kind string, hasHealthCheck bool, emitter ProgressEmitter) error {
 	selector := PodSelector(name)
 	lastStatus := ""
 
 	// Track the initial restart count for each pod so we can detect crashes
-	// that happen after the pod briefly reaches Ready.
+	// that happen after the pod briefly reaches Ready (verifyStability).
 	initialRestarts := map[string]int{}
 
 	err := utils.Poll(ctx, rolloutPollInterval, rolloutTimeout, func() (bool, error) {
@@ -73,11 +110,14 @@ func (c *Client) WaitRollout(ctx context.Context, ns, name, kind string, hasHeal
 
 		for i := range pods.Items {
 			pod := &pods.Items[i]
-			// Check for unschedulable — terminal
-			for _, cond := range pod.Status.Conditions {
-				if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse && cond.Reason == "Unschedulable" {
-					return false, fmt.Errorf("%s: pod %s unschedulable — %s", name, pod.Name, cond.Message)
+
+			// Unrecoverable state → bail. No retries help.
+			if reason := hardFailReason(pod); reason != "" {
+				logs := c.RecentLogs(ctx, ns, name, kind, 30)
+				if logs != "" {
+					return false, fmt.Errorf("%s: %s\nlogs:\n%s", name, reason, indent(logs, "  "))
 				}
+				return false, fmt.Errorf("%s: %s", name, reason)
 			}
 
 			if pod.Status.Phase == corev1.PodSucceeded {
@@ -85,44 +125,24 @@ func (c *Client) WaitRollout(ctx context.Context, ns, name, kind string, hasHeal
 				continue
 			}
 
+			// Observe state for progress reporting; don't fail on transient.
 			for _, cs := range pod.Status.ContainerStatuses {
 				if cs.Ready {
 					continue
 				}
-
-				if cs.State.Waiting != nil {
-					reason := cs.State.Waiting.Reason
-					switch reason {
-					case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
-						return false, fmt.Errorf("%s: %s — %s", name, reason, cs.State.Waiting.Message)
-					case "CreateContainerConfigError":
-						return false, fmt.Errorf("%s: %s — %s", name, reason, cs.State.Waiting.Message)
-					case "CrashLoopBackOff":
-						logs := c.RecentLogs(ctx, ns, name, kind, 20)
-						return false, fmt.Errorf("%s: CrashLoopBackOff (restarts: %d)\nlogs:\n%s", name, cs.RestartCount, indent(logs, "  "))
-					}
-					if reason != "" {
-						states = append(states, reason)
+				if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+					if cs.State.Waiting.Reason == "CrashLoopBackOff" && cs.RestartCount > 0 {
+						states = append(states, fmt.Sprintf("CrashLoopBackOff (restarts: %d)", cs.RestartCount))
+					} else {
+						states = append(states, cs.State.Waiting.Reason)
 					}
 				}
 				if cs.State.Terminated != nil {
 					reason := cs.State.Terminated.Reason
-					exitCode := cs.State.Terminated.ExitCode
-					switch reason {
-					case "OOMKilled":
-						return false, fmt.Errorf("%s: OOMKilled — container ran out of memory", name)
-					case "Error", "":
-						if cs.RestartCount > 0 {
-							logs := c.RecentLogs(ctx, ns, name, kind, 30)
-							return false, fmt.Errorf("%s: container exited with code %d (restarts: %d)\nlogs:\n%s",
-								name, exitCode, cs.RestartCount, indent(logs, "  "))
-						}
-						states = append(states, fmt.Sprintf("Error (exit %d)", exitCode))
-					default:
-						if reason != "" {
-							states = append(states, reason)
-						}
+					if reason == "" {
+						reason = "Error"
 					}
+					states = append(states, fmt.Sprintf("%s exit=%d", reason, cs.State.Terminated.ExitCode))
 				}
 				if cs.State.Running != nil {
 					if probeFailPod == "" {
@@ -211,24 +231,12 @@ func (c *Client) verifyStability(ctx context.Context, ns, name, kind, selector s
 			return fmt.Errorf("%s: pod crashed after becoming ready (restarts: %d)\nlogs:\n%s", name, currentTotal, indent(logs, "  "))
 		}
 
-		for _, cs := range pod.Status.ContainerStatuses {
-			if cs.Ready {
-				continue
+		if reason := hardFailReason(pod); reason != "" {
+			logs := c.RecentLogs(ctx, ns, name, kind, 20)
+			if logs != "" {
+				return fmt.Errorf("%s: %s\nlogs:\n%s", name, reason, indent(logs, "  "))
 			}
-			if cs.State.Waiting != nil {
-				reason := cs.State.Waiting.Reason
-				switch reason {
-				case "CrashLoopBackOff":
-					logs := c.RecentLogs(ctx, ns, name, kind, 20)
-					return fmt.Errorf("%s: CrashLoopBackOff (restarts: %d)\nlogs:\n%s", name, cs.RestartCount, indent(logs, "  "))
-				case "ImagePullBackOff", "ErrImagePull", "InvalidImageName",
-					"CreateContainerConfigError":
-					return fmt.Errorf("%s: %s — %s", name, reason, cs.State.Waiting.Message)
-				}
-			}
-			if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
-				return fmt.Errorf("%s: OOMKilled — container ran out of memory", name)
-			}
+			return fmt.Errorf("%s: %s", name, reason)
 		}
 	}
 
@@ -236,8 +244,9 @@ func (c *Client) verifyStability(ctx context.Context, ns, name, kind, selector s
 }
 
 // RecentLogs fetches the last lines from a pod or workload via the streaming
-// log endpoint. For bare pods (kind=="") tries --previous first to capture
-// crashed-container logs.
+// log endpoint. Tries --previous first — on CrashLoopBackOff the current
+// container just started and has no logs yet; the useful logs (the actual
+// crash) live in the previous container instance.
 func (c *Client) RecentLogs(ctx context.Context, ns, name, kind string, tail int) string {
 	if tail == 0 {
 		tail = 20
@@ -253,14 +262,14 @@ func (c *Client) RecentLogs(ctx context.Context, ns, name, kind string, tail int
 		podName = got
 	}
 
-	// For bare pods, try previous-container logs first (catches crashes).
-	if kind == "" {
-		if prev := c.podLogs(ctx, ns, podName, &corev1.PodLogOptions{
-			Previous:  true,
-			TailLines: int64Ptr(int64(tail)),
-		}); prev != "" {
-			return prev
-		}
+	// Previous-container logs first — on a crash loop these are what the
+	// operator needs. Fall through to current if previous is empty (no
+	// prior restart yet, or kubelet hasn't persisted them).
+	if prev := c.podLogs(ctx, ns, podName, &corev1.PodLogOptions{
+		Previous:  true,
+		TailLines: int64Ptr(int64(tail)),
+	}); prev != "" {
+		return prev
 	}
 
 	return c.podLogs(ctx, ns, podName, &corev1.PodLogOptions{

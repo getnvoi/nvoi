@@ -118,6 +118,64 @@ func TestBuildService_CommandWrapping(t *testing.T) {
 	}
 }
 
+func TestBuildService_TCPProbeByDefault(t *testing.T) {
+	// Port set, no HealthPath → readiness probe is TCP connect on the port.
+	// This makes Ready mean "accepting connections", not just "container
+	// Running" — critical for depends_on ordering.
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:  "db",
+		Image: "postgres:17",
+		Port:  5432,
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	probe := asDeployment(t, workload).Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil {
+		t.Fatal("expected default TCP probe when port is set")
+	}
+	if probe.TCPSocket == nil {
+		t.Errorf("expected TCPSocket probe, got %+v", probe)
+	}
+	if probe.TCPSocket.Port.IntValue() != 5432 {
+		t.Errorf("probe port = %v, want 5432", probe.TCPSocket.Port)
+	}
+	if probe.HTTPGet != nil {
+		t.Error("HTTPGet should be nil when no HealthPath")
+	}
+}
+
+func TestBuildService_HTTPProbeOverridesTCP(t *testing.T) {
+	// Explicit HealthPath → HTTP GET probe, not TCP.
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name: "web", Image: "nginx", Port: 80, HealthPath: "/healthz",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	probe := asDeployment(t, workload).Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe.HTTPGet == nil {
+		t.Fatal("HealthPath should yield HTTP probe")
+	}
+	if probe.TCPSocket != nil {
+		t.Error("TCP probe must not coexist with HTTP probe")
+	}
+}
+
+func TestBuildService_NoProbeWithoutPort(t *testing.T) {
+	// No port → no probe at all (headless service, nothing to check).
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name: "worker", Image: "worker:v1",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	probe := asDeployment(t, workload).Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe != nil {
+		t.Errorf("no port, expected no probe, got %+v", probe)
+	}
+}
+
 func TestBuildService_HealthCheckProbe(t *testing.T) {
 	workload, _, _, err := BuildService(ServiceSpec{
 		Name:       "web",

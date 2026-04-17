@@ -108,19 +108,36 @@ func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 	}
 	if spec.Port > 0 {
 		container.Ports = []corev1.ContainerPort{{ContainerPort: int32(spec.Port)}}
+		// Readiness probe:
+		//   - user declared a health path → HTTP GET on that path
+		//   - otherwise → TCP connect on the port
+		//
+		// Default TCP probe matters for depends_on ordering: without it,
+		// "Ready" collapses to "container is Running", which for a DB
+		// means "still initializing, not yet accepting connections". TCP
+		// probe ensures Ready == "accepting traffic" so dependents see a
+		// truly reachable dep.
+		probe := &corev1.Probe{
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       5,
+			TimeoutSeconds:      3,
+		}
 		if spec.HealthPath != "" {
-			container.ReadinessProbe = &corev1.Probe{
-				ProbeHandler: corev1.ProbeHandler{
-					HTTPGet: &corev1.HTTPGetAction{
-						Path: spec.HealthPath,
-						Port: intstr.FromInt32(int32(spec.Port)),
-					},
+			probe.ProbeHandler = corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: spec.HealthPath,
+					Port: intstr.FromInt32(int32(spec.Port)),
 				},
-				InitialDelaySeconds: 10,
-				PeriodSeconds:       5,
-				TimeoutSeconds:      3,
+			}
+			probe.InitialDelaySeconds = 10
+		} else {
+			probe.ProbeHandler = corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt32(int32(spec.Port)),
+				},
 			}
 		}
+		container.ReadinessProbe = probe
 	}
 
 	// Volumes
