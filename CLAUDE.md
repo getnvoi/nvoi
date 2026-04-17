@@ -181,13 +181,13 @@ internal/
     services.go            Service reconciliation (defaults replicas for domains)
     crons.go               Cron reconciliation
     dns.go                 DNS reconciliation
-    ingress.go             Ingress reconciliation
+    ingress.go             Caddy reconcile (EnsureCaddy + admin-API hot-reload + per-domain cert/HTTPS waits)
     envvars.go             $VAR resolution
   core/                    Source-agnostic logic
     teardown.go            Teardown() — ordered resource deletion
   render/                  Output renderers — TUI, Plain, JSON
   testutil/                MockSSH, MockCompute, MockDNS, MockBucket, MockOutput
-    kubefake/              KubeFake — *kube.Client over fake clientsets (separate to avoid import cycle with pkg/kube tests)
+    kubefake/              KubeFake — *kube.Client over the typed fake clientset, with SetExec() for pod-shell mocking
 
 pkg/
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
@@ -195,12 +195,11 @@ pkg/
     compute.go             ComputeSet (SSH connect, EnsureSwap, Docker, k3s, label), ComputeDelete, ComputeList
     service.go             ServiceSet, ServiceDelete
     dns.go                 DNSSet, DNSDelete, DNSList
-    ingress.go             IngressSet, IngressDelete (ACME verify with tunable timeout)
     storage.go             StorageSet, StorageDelete, StorageEmpty, StorageList
     secret.go              SecretList, SecretReveal
     volume.go              VolumeSet, VolumeDelete, VolumeList
     cron.go                CronSet, CronDelete, CronRun
-    describe.go            Describe, DescribeJSON
+    describe.go            Describe, DescribeJSON (ingress sourced from Caddy admin API via GetCaddyRoutes)
     resources.go           Resources
     firewall.go            FirewallSet, FirewallList
     wait.go                WaitRollout
@@ -208,18 +207,20 @@ pkg/
     ssh.go                 SSH
     logs.go                Logs
   kube/                    Typed Kubernetes client over SSH tunnel
-    client.go              Client: typed + dynamic clientset + SSH-tunneled rest.Config; NewForTest() for fakes
-    apply.go               Apply() — typed create/update + SSA fallback for CRDs; EnsureNamespace
+    client.go              Client: typed clientset + SSH-tunneled rest.Config + ExecFunc hook; NewForTest(cs) for fakes
+    apply.go               Apply() — typed create/update only (no dynamic / SSA fallback); EnsureNamespace
     workloads.go           FirstPod, GetServicePort, DeleteByName
     secrets.go             EnsureSecret, UpsertSecretKey, DeleteSecretKey, DeleteSecret, ListSecretKeys, GetSecretValue
     nodes.go               LabelNode, DrainAndRemoveNode (Eviction API, force-remove on NotReady)
     pods.go                GetAllPods
     cron.go                BuildCronJob, CreateJobFromCronJob, WaitForJob, DeleteCronByName
-    ingress.go             BuildIngress, ApplyIngress, DeleteIngress, GetIngressRoutes, EnsureTraefikACME
+    caddy.go               EnsureCaddy, ReloadCaddyConfig, WaitForCaddyCert, WaitForCaddyHTTPS, GetCaddyRoutes
+    caddy_config.go        BuildCaddyConfig — pure JSON renderer (deterministic, sorted by Service)
+    caddy_manifests.go     buildCaddyDeployment / Service / ConfigMap / PVC + constants
     generate.go            BuildService (Deployment/StatefulSet + Service), ParseSecretRef
     rollout.go             WaitRollout (poll-based with terminal failure detection), RecentLogs
     diagnostics.go         timeoutDiagnostics, recentEvents (for rollout timeout error messages)
-    streaming.go           StreamLogs, Exec (SPDY)
+    streaming.go           StreamLogs, Exec (SPDY) — overridable via Client.ExecFunc for tests
   infra/                   SSH, server bootstrap, k3s, Docker, swap, volume mounting
   provider/                Provider interfaces + per-domain implementations
     compute.go             ComputeProvider interface
@@ -253,8 +254,8 @@ pkg/
 - `utils.SSHClient` (`pkg/utils/ssh.go`) — the SSH interface. Every SSH consumer takes this.
 - `infra.SSHClient` (`pkg/infra/ssh.go`) — the real implementation. Wraps `golang.org/x/crypto/ssh` with SFTP upload, TCP dial, persistent connection.
 - `testutil.MockSSH` (`internal/testutil/mock_ssh.go`) — test mock. Canned responses by exact command or prefix match. Records all calls for assertions.
-- `*kube.Client` (`pkg/kube/client.go`) — typed Kubernetes client. In production it tunnels to the apiserver over `utils.SSHClient`. `kube.NewForTest(cs, dyn)` wraps client-go fake clientsets for tests.
-- `kubefake.KubeFake` (`internal/testutil/kubefake/kubefake.go`) — Client + the underlying fake clientsets for reconcile-level assertions.
+- `*kube.Client` (`pkg/kube/client.go`) — typed Kubernetes client. In production it tunnels to the apiserver over `utils.SSHClient`. `kube.NewForTest(cs)` wraps a client-go fake typed clientset for tests. `Client.ExecFunc` is an injectable hook so tests can capture pod-shell calls (Caddy admin API, cert/HTTPS waits) without an SPDY connection.
+- `kubefake.KubeFake` (`internal/testutil/kubefake/kubefake.go`) — Client + the underlying typed fake clientset for reconcile-level assertions. `kf.SetExec(fn)` overrides the Exec hook.
 
 **Connection lifecycle:** One SSH connection per deploy, one kube client per deploy. `Cluster.MasterSSH` + `Cluster.MasterKube` are set once after `ServersAdd()`, shared across all subsequent operations via `borrowedSSH`/no-op cleanup. CLI dispatch path connects on-demand (no MasterSSH/MasterKube) and closes after.
 
@@ -356,10 +357,10 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 ## Production hardening notes
 
 - **`~` doesn't expand in Go.** `resolveSSHKey()` handles tilde expansion against `$HOME`.
-- **`Client.Apply` is typed, not server-side-apply everywhere.** For every built-in kind we dispatch to the typed clientset (Get → Create-if-missing → Update-otherwise) with `FieldManager: "nvoi"`. Unknown kinds (CRDs like HelmChartConfig) fall through to dynamic SSA patch.
-- **Ingress uses k3s built-in Traefik.** Standard k8s Ingress resources, one per service. No custom ingress controller deployment.
-- **DNS and ingress are separate concerns.** DNS creates A records. Ingress creates k8s Ingress resources.
-- **HTTPS verification is two-step.** Step 1: check ACME cert exists in Traefik's acme.json. Step 2: curl from server verifies service responds (any non-5xx). Both run via SSH — no DNS propagation dependency. Timeout is bounded by `acmeVerifyTimeout`; expiration warns instead of failing.
+- **`Client.Apply` is typed-only.** Every kind we ship is dispatched through the typed clientset (Get → Create-if-missing → Update-otherwise) with `FieldManager: "nvoi"`. There is no dynamic / SSA fallback — unknown kinds error out. Add a case to `applyTyped` if you need a new resource type. For Deployment/StatefulSet, `Apply` preserves `.status` from the existing object so re-running a Ready workload doesn't reset its readiness in tests (mirrors real apiserver semantics where status has its own subresource).
+- **Ingress is in-cluster Caddy.** k3s installed with `--disable traefik --disable servicelb`. A single `caddy:2.10-alpine` Deployment runs in `kube-system` with `nodeSelector: nvoi-role=master` and `hostPort: 80/443`. The reconciler talks to Caddy's admin API on `localhost:2019` *inside the pod* via `kube.Client.Exec` — admin is never exposed off-pod. Each reconcile builds Caddy's native JSON config from `cfg.Domains` + resolved Service ports (`pkg/kube/caddy_config.go`) and POSTs it to `/load`; Caddy validates first, then atomically swaps listeners with no connection drops. ACME state lives on a 1Gi PVC at `/data` (k3s `local-path`). Removed domains drop out of the next config; orphan ingress resources don't exist (no k8s `Ingress` objects).
+- **DNS and ingress are separate concerns.** DNS creates A records. Ingress is purely Caddy's loaded config.
+- **HTTPS verification is two-step, both probes inside the Caddy pod.** Step 1: `WaitForCaddyCert` polls until `/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/<domain>/<domain>.crt` exists with non-zero size. Step 2: `WaitForCaddyHTTPS` curls `https://<domain><health>` and waits for any non-5xx, non-0 status. Both run via `Exec` so we don't depend on the operator's local DNS. Timeouts are `caddyCertTimeout` / `caddyHTTPSTimeout` — expiration warns and continues (Caddy keeps retrying ACME, next deploy re-verifies).
 - **SSH host key changed = hard error** with guidance to clear known hosts. Auto-cleared on server creation.
 - **Firewall never reset during server creation.** `ensureFirewall` only ensures existence.
 - **Concurrency control on deploy workflows.** `concurrency: { group: deploy, cancel-in-progress: false }`.

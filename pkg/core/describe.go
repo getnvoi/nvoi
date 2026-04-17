@@ -116,7 +116,10 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		return result, ctx.Err()
 	}
 
-	routes, err := kc.GetIngressRoutes(ctx, ns)
+	// Ingress routes are sourced from Caddy's live admin API config.
+	// Caddy might not be running yet (first deploy in progress) — that's
+	// not an error for describe; the routes list just stays empty.
+	routes, err := kc.GetCaddyRoutes(ctx)
 	if err != nil {
 		return result, fmt.Errorf("describe ingress: %w", err)
 	}

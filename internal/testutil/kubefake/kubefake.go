@@ -1,8 +1,8 @@
 // Package kubefake provides a test double for pkg/kube.Client backed by
-// client-go fake clientsets. Lives outside internal/testutil to avoid an
-// import cycle — testutil is imported by pkg/kube's own tests, and
-// anything that imports pkg/kube (as this does) can't also be imported
-// from tests within pkg/kube.
+// the client-go fake typed clientset. Lives outside internal/testutil to
+// avoid an import cycle — testutil is imported by pkg/kube's own tests, and
+// anything that imports pkg/kube (as this does) can't also be imported from
+// tests within pkg/kube.
 package kubefake
 
 import (
@@ -15,50 +15,40 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/kubernetes/scheme"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
-// KubeFake bundles a *kube.Client with handles to its underlying typed and
-// dynamic fake clientsets. Tests can mutate the fake clientsets directly to
-// pre-populate state, and assert via the typed clientset's tracker.
+// KubeFake bundles a *kube.Client with a handle to its underlying typed fake
+// clientset. Tests can mutate the fake clientset directly to pre-populate
+// state, and assert via the typed clientset's tracker.
+//
+// Pod-level Exec defaults to a "no-op success" responder so reconcilers that
+// shell into pods (Caddy admin API, cert wait, HTTPS wait) succeed without
+// further wiring. Tests that need to capture stdin or fail Exec can override
+// kf.SetExec(fn).
 type KubeFake struct {
 	*kube.Client
-	Typed   *k8sfake.Clientset
-	Dynamic *fake.FakeDynamicClient
+	Typed *k8sfake.Clientset
 }
 
 // NewKubeFake returns a KubeFake pre-populated with the given typed objects.
-//
-// By default the fake includes a ready Traefik Deployment so reconcilers
-// that wait for ACME setup don't poll until timeout. Tests that need a
-// different traefik state can prepend their own.
 func NewKubeFake(objs ...runtime.Object) *KubeFake {
-	all := append([]runtime.Object{readyTraefik()}, objs...)
-	cs := k8sfake.NewSimpleClientset(all...)
-	dyn := fake.NewSimpleDynamicClient(scheme.Scheme, all...)
+	cs := k8sfake.NewSimpleClientset(objs...)
+	c := kube.NewForTest(cs)
+	c.ExecFunc = func(_ context.Context, _ kube.ExecRequest) error { return nil }
 	return &KubeFake{
-		Client:  kube.NewForTest(cs, dyn),
-		Typed:   cs,
-		Dynamic: dyn,
+		Client: c,
+		Typed:  cs,
 	}
 }
 
-// readyTraefik returns a Deployment in kube-system with ReadyReplicas=1.
-// Reconciler's waitForTraefikReady polls until ready==desired; without this,
-// tests time out after 2 minutes.
-func readyTraefik() *appsv1.Deployment {
-	one := int32(1)
-	return &appsv1.Deployment{
-		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
-		ObjectMeta: metav1.ObjectMeta{Name: "traefik", Namespace: "kube-system"},
-		Spec:       appsv1.DeploymentSpec{Replicas: &one},
-		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
-	}
+// SetExec replaces the Exec hook on the underlying *kube.Client. Tests use
+// this to capture stdin or return canned errors for cert/HTTPS wait paths.
+func (k *KubeFake) SetExec(fn func(ctx context.Context, req kube.ExecRequest) error) {
+	k.Client.ExecFunc = fn
 }
 
 // SeedReadyPod pre-populates the typed fake with a single Ready Pod for the
@@ -152,8 +142,8 @@ func (k *KubeFake) HasResource(gvr schema.GroupVersionResource, ns, name string)
 }
 
 // HasNamespace, HasService, HasDeployment, HasStatefulSet, HasIngress,
-// HasCronJob, HasSecret are typed shorthands over HasResource for the
-// resources nvoi reconciles.
+// HasCronJob, HasSecret, HasConfigMap, HasPVC are typed shorthands over
+// HasResource for the resources nvoi reconciles.
 func (k *KubeFake) HasNamespace(name string) bool {
 	return k.HasResource(corev1.SchemeGroupVersion.WithResource("namespaces"), "", name)
 }
@@ -162,6 +152,12 @@ func (k *KubeFake) HasService(ns, name string) bool {
 }
 func (k *KubeFake) HasSecret(ns, name string) bool {
 	return k.HasResource(corev1.SchemeGroupVersion.WithResource("secrets"), ns, name)
+}
+func (k *KubeFake) HasConfigMap(ns, name string) bool {
+	return k.HasResource(corev1.SchemeGroupVersion.WithResource("configmaps"), ns, name)
+}
+func (k *KubeFake) HasPVC(ns, name string) bool {
+	return k.HasResource(corev1.SchemeGroupVersion.WithResource("persistentvolumeclaims"), ns, name)
 }
 func (k *KubeFake) HasDeployment(ns, name string) bool {
 	return k.HasResource(appsv1.SchemeGroupVersion.WithResource("deployments"), ns, name)

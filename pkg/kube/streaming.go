@@ -97,7 +97,13 @@ type ExecRequest struct {
 
 // Exec runs a command in a pod via the apiserver's exec subresource.
 // Streams over the same SSH tunnel — no shell quoting, no kubectl wrapper.
+//
+// When c.ExecFunc is set, it is called instead of the SPDY path. Tests use
+// this to capture stdin and return canned results without a real apiserver.
 func (c *Client) Exec(ctx context.Context, req ExecRequest) error {
+	if c.ExecFunc != nil {
+		return c.ExecFunc(ctx, req)
+	}
 	if c.cfg == nil {
 		return fmt.Errorf("kube client missing rest.Config — Exec requires real apiserver connection")
 	}

@@ -14,10 +14,11 @@ import (
 var dnsGracePeriod = 3 * time.Second
 
 // verifyDNSPropagation checks that domains resolve to the expected server IP.
-// Runs the lookup from the master server via SSH — same resolver that curl will
-// use during WaitForHTTPS. If DNS hasn't propagated from the server's perspective,
-// warns the user but does NOT block the deploy — the ACME timeout is the
-// real safety net. This just gives the user a heads-up.
+// Runs the lookup from the master server via SSH — same resolver Caddy will
+// use when it runs the ACME HTTP-01 challenge. If DNS hasn't propagated from
+// the server's perspective, warns the user but does NOT block the deploy —
+// Caddy keeps retrying ACME for the full caddyCertTimeout. This just gives
+// the user an early heads-up so they don't blame nvoi for the slow path.
 func verifyDNSPropagation(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) {
 	out := dc.Cluster.Log()
 

@@ -10,19 +10,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/kubernetes/scheme"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// newKC builds a *kube.Client backed by fake clientsets pre-populated with objs.
+// newKC builds a *kube.Client backed by the client-go fake typed clientset,
+// pre-populated with objs.
 func newKC(objs ...runtime.Object) *kube.Client {
 	cs := k8sfake.NewSimpleClientset(objs...)
-	dyn := fake.NewSimpleDynamicClient(scheme.Scheme, objs...)
-	return kube.NewForTest(cs, dyn)
+	return kube.NewForTest(cs)
 }
 
 // managedLabels annotates an object as nvoi-managed so the NvoiSelector label

@@ -83,10 +83,54 @@ func (l *opLog) all() []string {
 
 // ── Tracking compute mock ─────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────────────────
+// ⚠️  TESTING STRATEGY — READ BEFORE EXTENDING trackingMock ⚠️
+//
+// The rule: **only mock external boundaries**. In this repo the external
+// boundaries are:
+//   - HTTP calls to cloud provider APIs (Hetzner / Cloudflare / AWS / Scaleway)
+//   - SSH calls to provisioned servers
+//   - the Kubernetes apiserver
+//
+// The current `trackingMock` breaks the rule: it satisfies the high-level
+// provider.ComputeProvider interface and reimplements Hetzner state
+// semantics in memory (firewall list/delete bookkeeping, server/volume
+// stores). Every new reconcile test tempts you to grow a little more fake
+// provider logic here — drift, bugs, and "tests that pass because the mock
+// matches itself" follow.
+//
+// TARGET STATE — `trackingMock` goes away. Replace with:
+//   - `httptest.NewServer` returning canned Hetzner JSON responses
+//     (the pattern already lives in pkg/provider/compute/hetzner/hetzner_test.go)
+//   - register the real hetzner.Client against the fake base URL via
+//     provider.RegisterCompute(...) in test init
+//   - reconcile tests exercise the full real stack (reconcile → pkg/core →
+//     pkg/provider/compute/hetzner → httptest)
+//
+// RULES for the next agent:
+//  1. **Do not write new methods on trackingMock.** If a test needs the
+//     mock to "know" something (e.g. that delete removes an item from a
+//     list), that's a signal to move the mock to the HTTP boundary.
+//  2. **Do not rewrite/wrap/shim the provider interface.** No new
+//     "simplified" ComputeProvider, no "better" testutil.MockX. The real
+//     interface + real provider code + fake wire responses is the one
+//     pattern.
+//  3. **Do not touch the SSH / Kube mocks in this pass** — MockSSH and
+//     kubefake.KubeFake already mock at correct boundaries (SSH protocol
+//     and client-go's fake clientset). Those stay.
+//  4. **Delete trackingMock when you're done.** The goal is that
+//     internal/reconcile/helpers_test.go has zero hand-rolled provider
+//     behavior.
+//
+// Scope: this is the reconcile-layer cleanup. pkg/core tests already use
+// interface mocks at their natural boundary and are fine as-is — the
+// double-layer concern only shows up here.
+// ──────────────────────────────────────────────────────────────────────────
 type trackingMock struct {
 	testutil.MockCompute
-	log     *opLog
-	ListErr error // if set, ListServers returns this error
+	log       *opLog
+	ListErr   error                // if set, ListServers returns this error
+	firewalls []*provider.Firewall // ⚠️ smell — delete with trackingMock, see note above
 }
 
 func (m *trackingMock) EnsureServer(ctx context.Context, req provider.CreateServerRequest) (*provider.Server, error) {
@@ -127,6 +171,23 @@ func (m *trackingMock) ListVolumes(ctx context.Context, labels map[string]string
 
 func (m *trackingMock) ReconcileFirewallRules(ctx context.Context, name string, allowed provider.PortAllowList) error {
 	m.log.record("firewall:" + name)
+	return nil
+}
+
+func (m *trackingMock) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {
+	return m.firewalls, nil
+}
+
+func (m *trackingMock) DeleteFirewall(ctx context.Context, name string) error {
+	m.log.record("delete-firewall:" + name)
+	// Remove from in-memory store so a subsequent list reflects the delete.
+	out := m.firewalls[:0]
+	for _, fw := range m.firewalls {
+		if fw.Name != name {
+			out = append(out, fw)
+		}
+	}
+	m.firewalls = out
 	return nil
 }
 
@@ -262,12 +323,6 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "get service", Result: testutil.MockResult{Output: []byte("'80'")}},
 			// WaitRollout: get pods ... -o json → returns ready pod list
 			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(readyPodJSON)}},
-			// Ingress: ACME cert check (acme.json parsed in Go) + HTTPS wait
-			{Prefix: "kubectl -n kube-system exec", Result: testutil.MockResult{Output: []byte(`{"letsencrypt":{"Certificates":[{"domain":{"main":"myapp.com"},"certificate":"base64data"}]}}`)}},
-			{Prefix: "curl -s", Result: testutil.MockResult{Output: []byte("'200'")}},
-			{Prefix: "delete ingress", Result: testutil.MockResult{}},
-			// EnsureTraefikACME — waitForTraefikReady polls deploy/traefik
-			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
 			{Prefix: "get deploy", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get statefulset", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
 			{Prefix: "get configmap", Result: testutil.MockResult{Output: []byte(`{"data":{}}`)}},

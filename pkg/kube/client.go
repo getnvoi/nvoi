@@ -13,7 +13,6 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -24,14 +23,12 @@ import (
 // touches the cluster. It owns:
 //
 //   - a kubernetes.Interface for typed CRUD on standard resources,
-//   - a dynamic.Interface for unstructured resources (HelmChartConfig etc.),
 //   - a *rest.Config wired to dial the apiserver over an SSH tunnel.
 //
 // New() establishes the tunnel; Close() tears it down. The client is safe to
 // share across goroutines — client-go itself is concurrency-safe.
 type Client struct {
 	cs       kubernetes.Interface
-	dyn      dynamic.Interface
 	cfg      *rest.Config
 	cleanup  func()
 	closeMu  sync.Mutex
@@ -39,20 +36,22 @@ type Client struct {
 	apiHost  string // apiserver address as it appears in kubeconfig (ip:port), used for ServerName
 	tunnel   string // local tunnel addr (host:port) actually dialed by transport
 	masterIP string // apiserver private IP (informational, used for diagnostics)
+
+	// ExecFunc, when non-nil, replaces the default SPDY exec implementation.
+	// Tests set this to capture stdin / canned-respond without a real
+	// apiserver. Production leaves it nil.
+	ExecFunc func(ctx context.Context, req ExecRequest) error
 }
 
-// NewForTest builds a Client around pre-built typed and dynamic clientsets.
-// Used by tests to inject fake.NewSimpleClientset / dynamicfake.NewSimpleDynamicClient.
-// The resulting client has no tunnel; Close() is a no-op.
-func NewForTest(cs kubernetes.Interface, dyn dynamic.Interface) *Client {
-	return &Client{cs: cs, dyn: dyn}
+// NewForTest builds a Client around a typed clientset (typically the
+// client-go fake). The resulting client has no SSH tunnel and no rest.Config
+// — Close() is a no-op. Exec() returns an error unless ExecFunc is set.
+func NewForTest(cs kubernetes.Interface) *Client {
+	return &Client{cs: cs}
 }
 
 // Clientset returns the typed kubernetes clientset.
 func (c *Client) Clientset() kubernetes.Interface { return c.cs }
-
-// Dynamic returns the dynamic (unstructured) client.
-func (c *Client) Dynamic() dynamic.Interface { return c.dyn }
 
 // RESTConfig returns the underlying REST config, useful for sub-clients
 // such as remotecommand for exec.
@@ -78,7 +77,7 @@ func (c *Client) Close() error {
 //  3. Rewriting kubeconfig.server to point at the tunnel,
 //  4. Setting TLSClientConfig.ServerName to the original apiserver host so
 //     cert validation still works against the SAN list,
-//  5. Building the typed and dynamic clientsets.
+//  5. Building the typed clientset.
 //
 // Caller must call Close() when done with the client.
 func New(ctx context.Context, ssh utils.SSHClient) (*Client, error) {
@@ -109,15 +108,9 @@ func New(ctx context.Context, ssh utils.SSHClient) (*Client, error) {
 		cleanup()
 		return nil, fmt.Errorf("kubernetes clientset: %w", err)
 	}
-	dyn, err := dynamic.NewForConfig(cfg)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("dynamic client: %w", err)
-	}
 
 	c := &Client{
 		cs:       cs,
-		dyn:      dyn,
 		cfg:      cfg,
 		cleanup:  cleanup,
 		apiHost:  apiHost,
@@ -195,30 +188,25 @@ func currentCluster(cfg *clientcmdapi.Config) (string, error) {
 
 // buildRESTConfig produces a *rest.Config that:
 //   - dials the local tunnel address,
-//   - validates TLS using the embedded CA, with ServerName pinned to the
-//     apiserver's real host so cert SANs match.
+//   - validates TLS using the CA embedded in the fetched kubeconfig, with
+//     ServerName pinned to the apiserver's real host so cert SANs match.
+//
+// We always parse the raw bytes we fetched from the master. Going through
+// clientcmd's deferred-loading path would silently pick up the operator's
+// local ~/.kube/config and validate the apiserver cert against the wrong
+// CA, producing "x509: certificate signed by unknown authority".
 func buildRESTConfig(raw []byte, tunnelAddr, apiHost string) (*rest.Config, error) {
+	apiCfg, err := clientcmd.Load(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse kubeconfig: %w", err)
+	}
 	overrides := &clientcmd.ConfigOverrides{
 		ClusterInfo: clientcmdapi.Cluster{
 			Server:        "https://" + tunnelAddr,
 			TLSServerName: hostOnly(apiHost),
 		},
 	}
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: ""},
-		overrides,
-	).ClientConfig()
-	if err == nil {
-		return cfg, nil
-	}
-	// Fallback path: load from raw bytes when no kubeconfig file is present
-	// (which is always the case here — we only have the bytes).
-	apiCfg, err := clientcmd.Load(raw)
-	if err != nil {
-		return nil, fmt.Errorf("parse kubeconfig: %w", err)
-	}
-	clientCfg := clientcmd.NewDefaultClientConfig(*apiCfg, overrides)
-	cfg, err = clientCfg.ClientConfig()
+	cfg, err := clientcmd.NewDefaultClientConfig(*apiCfg, overrides).ClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("build rest config: %w", err)
 	}

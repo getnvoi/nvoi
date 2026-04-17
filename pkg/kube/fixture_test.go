@@ -6,19 +6,17 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/kubernetes/scheme"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// newTestClient returns a Client backed by client-go fake clientsets,
-// pre-populated with objs. No SSH tunnel — Close() is a no-op.
+// newTestClient returns a Client backed by a client-go fake clientset,
+// pre-populated with objs. No SSH tunnel — Close() is a no-op. Exec must be
+// wired by the test via c.ExecFunc.
 func newTestClient(objs ...runtime.Object) *Client {
 	cs := k8sfake.NewSimpleClientset(objs...)
-	dyn := fake.NewSimpleDynamicClient(scheme.Scheme, objs...)
-	return NewForTest(cs, dyn)
+	return NewForTest(cs)
 }
 
 func mustNames(t *testing.T) *utils.Names {

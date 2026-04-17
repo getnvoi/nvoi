@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -84,21 +83,6 @@ func TestApply_MissingName(t *testing.T) {
 	err := c.Apply(context.Background(), "ns", dep)
 	if err == nil || !contains(err.Error(), "missing metadata.name") {
 		t.Fatalf("expected missing-name error, got: %v", err)
-	}
-}
-
-func TestApply_UnstructuredCRD(t *testing.T) {
-	// Unstructured HelmChartConfig — exercises the dynamic-client path.
-	c := newTestClient()
-	hcc := &unstructured.Unstructured{}
-	hcc.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "helm.cattle.io", Version: "v1", Kind: "HelmChartConfig",
-	})
-	hcc.SetName("traefik")
-	hcc.SetNamespace("kube-system")
-
-	if err := c.Apply(context.Background(), "kube-system", hcc); err != nil {
-		t.Fatalf("apply CRD: %v", err)
 	}
 }
 
