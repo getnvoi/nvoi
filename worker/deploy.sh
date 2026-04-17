@@ -42,8 +42,11 @@ WRANGLER="npx --yes wrangler@latest"
 trap 'rm -f .deploy.js' EXIT
 
 # Idempotent bucket creation — "already exists" is success.
+# --remote is mandatory from wrangler 4.x onward. Without it r2 commands
+# default to a local-only simulated bucket under .wrangler/ that nobody
+# ever reads — the binaries silently evaporate at job end.
 echo "→ R2 bucket: $BUCKET"
-$WRANGLER r2 bucket create "$BUCKET" 2>&1 | grep -v "already exists" || true
+$WRANGLER r2 bucket create "$BUCKET" --remote 2>&1 | grep -v "already exists" || true
 
 if [ "${1:-}" = "release" ]; then
   VERSION="${2:?version required}"
@@ -56,7 +59,8 @@ if [ "${1:-}" = "release" ]; then
     echo "  $name"
     $WRANGLER r2 object put "$BUCKET/$VERSION/$name" \
       --file "$f" \
-      --content-type "application/octet-stream"
+      --content-type "application/octet-stream" \
+      --remote
   done
 
   echo "→ deploying worker (VERSION=$VERSION)"
