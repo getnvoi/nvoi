@@ -116,6 +116,7 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	}); err != nil {
 		return nil, fmt.Errorf("SSH not reachable on %s: %w", srv.IPv4, err)
 	}
+	defer ssh.Close()
 	out.Success("SSH ready")
 
 	out.Progress("ensuring swap")
@@ -124,21 +125,6 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 	} else {
 		out.Success("swap ready")
 	}
-
-	out.Progress("ensuring Docker")
-	if err := infra.EnsureDocker(ctx, ssh, out.Writer()); err != nil {
-		ssh.Close()
-		return nil, fmt.Errorf("docker on %s: %w", srv.IPv4, err)
-	}
-	out.Success("Docker ready")
-
-	// Reconnect SSH so the session picks up the docker group membership.
-	ssh.Close()
-	ssh, err = req.Connect(ctx, srv.IPv4+":22")
-	if err != nil {
-		return nil, fmt.Errorf("reconnect SSH after docker setup: %w", err)
-	}
-	defer ssh.Close()
 
 	srvNode := infra.Node{PublicIP: srv.IPv4, PrivateIP: srv.PrivateIP}
 	var masterSSH utils.SSHClient
@@ -174,9 +160,11 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		}
 		out.Success("k3s master ready")
 
-		if err := infra.EnsureRegistry(ctx, ssh, srvNode, out.Writer()); err != nil {
-			return nil, fmt.Errorf("registry: %w", err)
-		}
+		// The in-cluster Docker registry used to run here as a Docker
+		// container on the host (infra.EnsureRegistry). It now runs as a
+		// regular k8s Deployment in kube-system applied by the reconcile
+		// step — see internal/reconcile/reconcile.go → kc.EnsureRegistry.
+		// That lets us drop the whole Docker-on-master dependency.
 
 		// Label this master via its own apiserver.
 		if err := labelNodeOverTunnel(ctx, &req.Cluster, ssh, names.Server(req.Name), req.Name); err != nil {

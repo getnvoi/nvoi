@@ -142,27 +142,27 @@ if live state exists:
 Every `pkg/core/` function that touches the cluster does so via SSH. The full command chains for each function:
 
 ### ComputeSet (master path)
-1. `sudo docker info >/dev/null 2>&1` — check Docker installed
-2. `sudo usermod -aG docker deploy` — ensure user in docker group (if Docker exists)
-3. `command -v kubectl ... && sudo k3s kubectl get nodes ... | grep -q ' Ready '` — check k3s installed
-4. `ip -o -4 addr show | awk '/{privateIP}/{print $2}' | head -1` — discover private interface
-5. `sudo mkdir -p /etc/rancher/k3s` + `sudo tee /etc/rancher/k3s/registries.yaml` — configure registry mirrors
-6. `curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server ...' sh -` — install k3s (RunStream)
-7. `mkdir -p /home/deploy/.kube && sudo cp ... && sudo sed ...` — setup kubeconfig
-8. `KUBECONFIG=... kubectl get nodes` — verify k3s ready (poll)
-9. `curl -fs http://{privateIP}:5000/v2/` — check registry running
-10. `docker run -d --name nvoi-registry ...` — start registry (if not running)
-11. `KUBECONFIG=... kubectl label node {name} nvoi.io/role={role} --overwrite` — label node
+1. `command -v kubectl ... && sudo k3s kubectl get nodes ... | grep -q ' Ready '` — check k3s installed
+2. `ip -o -4 addr show | awk '/{privateIP}/{print $2}' | head -1` — discover private interface
+3. `sudo mkdir -p /etc/rancher/k3s` + `sudo tee /etc/rancher/k3s/registries.yaml` — configure registry mirrors (containerd hint that the registry is plaintext HTTP)
+4. `curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server ...' sh -` — install k3s (RunStream)
+5. `mkdir -p /home/deploy/.kube && sudo cp ... && sudo sed ...` — setup kubeconfig
+6. `KUBECONFIG=... kubectl get nodes` — verify k3s ready (poll)
+7. (k8s) Label node via apiserver — `kc.LabelNode`
+
+The in-cluster Docker registry is no longer started here; it's a regular
+k8s Deployment in `kube-system` applied later by the reconcile step
+(`kc.EnsureRegistry` — see `pkg/kube/registry.go`). k3s ships its own
+containerd; the host has no Docker daemon.
 
 ### ComputeSet (worker path)
-1-2. Docker (same as master)
-3. `sudo cat /var/lib/rancher/k3s/server/node-token` — read join token (on master SSH)
-4. `systemctl is-active --quiet k3s-agent` — check if already joined
-5. Registry config + k3s restart (on worker SSH)
-6. `ip -o -4 addr show ...` — discover private interface
-7. `curl -sfL https://get.k3s.io | K3S_URL=... K3S_TOKEN=... sh -` — install k3s agent (RunStream)
-8. `KUBECONFIG=... kubectl get nodes -o wide` — verify worker ready (on master SSH, poll)
-9. `KUBECONFIG=... kubectl label node ...` — label node (on master SSH)
+1. `sudo cat /var/lib/rancher/k3s/server/node-token` — read join token (on master SSH)
+2. `systemctl is-active --quiet k3s-agent` — check if already joined
+3. Registry config + k3s restart (on worker SSH)
+4. `ip -o -4 addr show ...` — discover private interface
+5. `curl -sfL https://get.k3s.io | K3S_URL=... K3S_TOKEN=... sh -` — install k3s agent (RunStream)
+6. `KUBECONFIG=... kubectl get nodes -o wide` — verify worker ready (on master SSH, poll)
+7. (k8s) Label node via apiserver — `kc.LabelNode`
 
 ### VolumeSet
 1. `mountpoint -q {path} && echo mounted || echo not` — check mounted

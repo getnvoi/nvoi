@@ -103,6 +103,11 @@ secrets:                    # user secrets, resolved from env vars
   - JWT_SECRET
   - ENCRYPTION_KEY
 
+registry:                   # private container-registry credentials (optional)
+  ghcr.io:                  # <host>[:port] — docker.io, ghcr.io, registry.example.com, 10.0.1.1:5000
+    username: $GITHUB_USER
+    password: $GITHUB_TOKEN
+
 storage:
   assets: {}
 
@@ -178,6 +183,7 @@ internal/
     volumes.go             Volume reconciliation
     secrets.go             Secret resolution — reads from CredentialSource
     storage.go             Storage reconciliation
+    registries.go          Pull-secret reconcile: resolve registry: creds, apply dockerconfigjson Secret (or orphan-clean)
     services.go            Service reconciliation (defaults replicas for domains)
     crons.go               Cron reconciliation
     dns.go                 DNS reconciliation
@@ -215,6 +221,7 @@ pkg/
     pods.go                GetAllPods
     cron.go                BuildCronJob, CreateJobFromCronJob, WaitForJob, DeleteCronByName
     caddy.go               EnsureCaddy, ReloadCaddyConfig, WaitForCaddyCert, WaitForCaddyHTTPS, GetCaddyRoutes
+    registry.go            BuildDockerConfigJSON + BuildPullSecret for imagePullSecrets (type kubernetes.io/dockerconfigjson)
     caddy_config.go        BuildCaddyConfig — pure JSON renderer (deterministic, sorted by Service)
     caddy_manifests.go     buildCaddyDeployment / Service / ConfigMap / PVC + constants
     generate.go            BuildService (Deployment/StatefulSet + Service), ParseSecretRef
@@ -274,6 +281,8 @@ Deploy(ctx, dc, cfg)
   → DescribeLive(ctx, dc, cfg) → LiveState
   → ServersAdd(ctx, dc, cfg)          — create desired, NO orphan removal yet
   → establish MasterSSH + MasterKube
+  → EnsureNamespace(app ns)
+  → Registries(ctx, dc, live, cfg)    — resolve `registry:` creds → dockerconfigjson Secret (or orphan-delete if empty)
   → Firewall(ctx, dc, live, cfg)      — desired per-role set, NO orphan removal yet
   → Volumes(ctx, dc, live, cfg)
   → Secrets(ctx, dc, live, cfg) → secretValues
@@ -295,10 +304,15 @@ Deploy(ctx, dc, cfg)
 3. Clear stale known host (recycled IPs)
 4. Wait for SSH (poll `Connect`, hard error on host key changed / auth failed)
 5. `EnsureSwap` — reads actual disk size via `df`, proportional swap (5%, 512MB–2GB)
-6. `EnsureDocker`
-7. Master: `InstallK3sMaster` + `EnsureRegistry`
-8. Worker: `JoinK3sWorker` (reads token from master, installs agent)
-9. `LabelNode` via kube client
+6. Master: `InstallK3sMaster` (k3s ships its own containerd — no Docker daemon installed on the host)
+7. Worker: `JoinK3sWorker` (reads token from master, installs agent)
+8. `LabelNode` via kube client
+
+The in-cluster Docker registry runs as a regular k8s Deployment in
+`kube-system` — applied by the reconcile step (`kc.EnsureRegistry`, see
+`pkg/kube/registry.go`), not by per-server provisioning. The pod uses
+`hostPort: 5000` on master so containerd reaches it at the same address
+its `registries.yaml` mirror points at.
 
 Zero-downtime server replacement: `ServersAdd` creates new servers first, `Services`/`Crons` move workloads, `ServersRemoveOrphans` drains and deletes old servers after.
 
@@ -362,6 +376,7 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **Ingress is in-cluster Caddy.** k3s installed with `--disable traefik --disable servicelb`. A single `caddy:2.10-alpine` Deployment runs in `kube-system` with `nodeSelector: nvoi-role=master` and `hostPort: 80/443`. The reconciler talks to Caddy's admin API on `localhost:2019` *inside the pod* via `kube.Client.Exec` — admin is never exposed off-pod. Each reconcile builds Caddy's native JSON config from `cfg.Domains` + resolved Service ports (`pkg/kube/caddy_config.go`) and POSTs it to `/load`; Caddy validates first, then atomically swaps listeners with no connection drops. ACME state lives on a 1Gi PVC at `/data` (k3s `local-path`). Removed domains drop out of the next config; orphan ingress resources don't exist (no k8s `Ingress` objects).
 - **DNS and ingress are separate concerns.** DNS creates A records. Ingress is purely Caddy's loaded config.
 - **HTTPS verification is two-step, both probes inside the Caddy pod.** Step 1: `WaitForCaddyCert` polls until `/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/<domain>/<domain>.crt` exists with non-zero size. Step 2: `WaitForCaddyHTTPS` curls `https://<domain><health>` and waits for any non-5xx, non-0 status. Both run via `Exec` so we don't depend on the operator's local DNS. Timeouts are `caddyCertTimeout` / `caddyHTTPSTimeout` — expiration warns and continues (Caddy keeps retrying ACME, next deploy re-verifies).
+- **Private registry credentials are k8s `imagePullSecrets`, not containerd config.** Top-level `registry:` block in `nvoi.yaml` declares `<host>: {username, password}` (values may be `$VAR` references resolved via `CredentialSource`). The `Registries()` reconcile step renders a `kubernetes.io/dockerconfigjson` Secret named `registry-auth` in the app namespace; `BuildService`/`BuildCronJob` inject `imagePullSecrets: [{name: registry-auth}]` into every PodSpec when `len(cfg.Registry) > 0`. Missing env vars are a hard error at deploy time. Removing `registry:` from the YAML deletes the orphan Secret on the next deploy. No `registries.yaml` on the host, no Docker daemon, no containerd mirror gymnastics.
 - **SSH host key changed = hard error** with guidance to clear known hosts. Auto-cleared on server creation.
 - **Firewall never reset during server creation.** `ensureFirewall` only ensures existence.
 - **Firewall orphan sweep deferred until after `ServersRemoveOrphans`.** `Firewall()` reconciles the desired per-role set (master-fw, worker-fw) early so new servers get rules applied before workloads land. `FirewallRemoveOrphans()` runs later, after `ServersRemoveOrphans` has drained + deleted orphan servers (and `DeleteServer`'s contract has detached their firewalls). Running the sweep earlier — as the code used to — meant Hetzner correctly rejected `DeleteFirewall` with `resource_in_use` because the orphan server was still attached, and nothing retried. Same split pattern as `ServersAdd` / `ServersRemoveOrphans`. Firewall is the only reconcile-swept resource with a delete-time attachment lock against another reconcile-managed resource (servers); every other resource either has no lock or isn't swept in reconcile.

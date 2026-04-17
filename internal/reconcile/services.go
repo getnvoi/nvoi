@@ -7,11 +7,20 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, sources map[string]string) error {
 	names, _ := dc.Cluster.Names()
+
+	// Pull-secret name only when the user declared private registries.
+	// Empty string → BuildService skips imagePullSecrets entirely; pods
+	// pull anonymously (works for public images on Docker Hub/ghcr/etc.).
+	pullSecret := ""
+	if len(cfg.Registry) > 0 {
+		pullSecret = kube.PullSecretName
+	}
 
 	// Services are applied + waited in dependency order: any service listed
 	// in another's depends_on is fully Ready before its dependents are
@@ -55,6 +64,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
 			Volumes:    svc.Volumes, HealthPath: svc.Health, Servers: servers,
+			PullSecretName: pullSecret,
 		}); err != nil {
 			return err
 		}

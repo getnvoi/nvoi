@@ -60,6 +60,12 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return fmt.Errorf("ensure namespace: %w", err)
 	}
 
+	// Registry pull credentials must land before Services/Crons — kubelet
+	// reads imagePullSecrets from the pod's namespace at first image pull.
+	if err := Registries(ctx, dc, live, cfg); err != nil {
+		return fmt.Errorf("registries: %w", err)
+	}
+
 	if err := Firewall(ctx, dc, live, cfg); err != nil {
 		return err
 	}

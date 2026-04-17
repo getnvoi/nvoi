@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -306,25 +307,28 @@ func TestBuildCaddyPVC_AccessMode(t *testing.T) {
 
 // ─── EnsureCaddy ─────────────────────────────────────────────────────────────
 
+// seedReadyDeployment pre-creates a Deployment with ReadyReplicas=1 in the
+// fake clientset. The typed Apply preserves .status from the existing
+// object (mirrors real apiserver where Update doesn't touch /status), so
+// the readiness wait returns on the first poll — no goroutines, no slop.
+func seedReadyDeployment(t *testing.T, c *Client, ns, name string) {
+	t.Helper()
+	one := int32(1)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       appsv1.DeploymentSpec{Replicas: &one},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
+	}
+	if _, err := c.cs.AppsV1().Deployments(ns).Create(context.Background(), dep, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed deployment %s/%s: %v", ns, name, err)
+	}
+}
+
 func TestEnsureCaddy_AppliesAllFour(t *testing.T) {
 	c := newTestClient()
-	cleanup := SetCaddyTimingForTest(time.Millisecond, 200*time.Millisecond)
+	cleanup := SetCaddyTimingForTest(time.Millisecond, 100*time.Millisecond)
 	defer cleanup()
-	// Pre-seed a Ready Deployment so waitForCaddyReady doesn't poll-timeout —
-	// we still want the Apply path to update the status to readyReplicas == 1.
-	go func() {
-		// Background Updater: once Apply creates the Deployment, mutate its
-		// status to make it Ready. We poll until it appears.
-		for i := 0; i < 200; i++ {
-			dep, err := c.cs.AppsV1().Deployments(CaddyNamespace).Get(context.Background(), CaddyName, metav1.GetOptions{})
-			if err == nil {
-				dep.Status.ReadyReplicas = 1
-				_, _ = c.cs.AppsV1().Deployments(CaddyNamespace).UpdateStatus(context.Background(), dep, metav1.UpdateOptions{})
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
+	seedReadyDeployment(t, c, CaddyNamespace, CaddyName)
 
 	if err := c.EnsureCaddy(context.Background()); err != nil {
 		t.Fatalf("EnsureCaddy: %v", err)
@@ -358,27 +362,14 @@ func TestEnsureCaddy_AppliesAllFour(t *testing.T) {
 
 func TestEnsureCaddy_Idempotent(t *testing.T) {
 	c := newTestClient()
-	cleanup := SetCaddyTimingForTest(time.Millisecond, 200*time.Millisecond)
+	cleanup := SetCaddyTimingForTest(time.Millisecond, 100*time.Millisecond)
 	defer cleanup()
-	go updateCaddyDeploymentReady(c)
+	seedReadyDeployment(t, c, CaddyNamespace, CaddyName)
 	if err := c.EnsureCaddy(context.Background()); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	go updateCaddyDeploymentReady(c)
 	if err := c.EnsureCaddy(context.Background()); err != nil {
 		t.Fatalf("second: %v", err)
-	}
-}
-
-func updateCaddyDeploymentReady(c *Client) {
-	for i := 0; i < 200; i++ {
-		dep, err := c.cs.AppsV1().Deployments(CaddyNamespace).Get(context.Background(), CaddyName, metav1.GetOptions{})
-		if err == nil {
-			dep.Status.ReadyReplicas = 1
-			_, _ = c.cs.AppsV1().Deployments(CaddyNamespace).UpdateStatus(context.Background(), dep, metav1.UpdateOptions{})
-			return
-		}
-		time.Sleep(time.Millisecond)
 	}
 }
 

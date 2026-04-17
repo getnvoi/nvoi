@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
@@ -131,13 +130,17 @@ func TestComputeSet_AuthFailed_HardError(t *testing.T) {
 	}
 }
 
-func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
-	// Track SSH connections to verify reconnect after EnsureDocker.
-	var connections []*testutil.MockSSH
-	var mu sync.Mutex
-
+// TestComputeSet_SilencesNoKnownHost verifies the "no known host" path
+// from ClearKnownHost on a first deploy does NOT produce a warning. Only
+// real failures (corrupt file, permission denied) should warn.
+//
+// Used to also verify the EnsureDocker SSH-reconnect dance, but Docker is
+// no longer installed on the host (k3s ships its own containerd; the
+// registry is a k8s Deployment in kube-system, see pkg/kube/registry.go).
+// A single SSH session covers the whole ComputeSet now.
+func TestComputeSet_SilencesNoKnownHostOnFirstDeploy(t *testing.T) {
 	sshKey, _, _ := utils.GenerateEd25519Key()
-	provName := "reconnect-test"
+	provName := "silences-no-known-host"
 	hz := testutil.NewHetznerFake(t)
 	hz.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
 	hz.SeedFirewall("nvoi-myapp-prod-master-fw")
@@ -149,9 +152,8 @@ func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
 		Provider: provName, SSHKey: sshKey,
 		Output: &testutil.MockOutput{},
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-			ssh := &testutil.MockSSH{
+			return &testutil.MockSSH{
 				Prefixes: []testutil.MockPrefix{
-					{Prefix: "docker info", Result: testutil.MockResult{}},
 					{Prefix: "sudo", Result: testutil.MockResult{}},
 					{Prefix: "curl", Result: testutil.MockResult{}},
 					{Prefix: "command -v", Result: testutil.MockResult{}},
@@ -164,11 +166,7 @@ func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
 					{Prefix: "install", Result: testutil.MockResult{}},
 					{Prefix: "systemctl", Result: testutil.MockResult{}},
 				},
-			}
-			mu.Lock()
-			connections = append(connections, ssh)
-			mu.Unlock()
-			return ssh, nil
+			}, nil
 		},
 	}
 
@@ -179,21 +177,6 @@ func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
 		Region:     "fsn1",
 	})
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(connections) < 2 {
-		t.Fatalf("expected at least 2 SSH connections (initial + reconnect after docker), got %d", len(connections))
-	}
-
-	// First connection should be closed (pre-docker session).
-	if !connections[0].Closed {
-		t.Error("first SSH connection should be closed after EnsureDocker")
-	}
-
-	// ClearKnownHost returns "no known host" on first deploy — must NOT
-	// produce a warning. Only real failures (corrupt file, permission denied)
-	// should warn.
 	out := cluster.Output.(*testutil.MockOutput)
 	for _, w := range out.Warnings {
 		if strings.Contains(w, "clear known host") {
@@ -219,7 +202,6 @@ func TestMasterSSH_SetAfterComputeSet(t *testing.T) {
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 			return &testutil.MockSSH{
 				Prefixes: []testutil.MockPrefix{
-					{Prefix: "docker info", Result: testutil.MockResult{}},
 					{Prefix: "sudo", Result: testutil.MockResult{}},
 					{Prefix: "curl", Result: testutil.MockResult{}},
 					{Prefix: "command -v", Result: testutil.MockResult{}},

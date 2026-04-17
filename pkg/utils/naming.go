@@ -91,23 +91,9 @@ func (n *Names) NamedVolumeHostPath(volume string) string {
 // ── K3s paths ──────────────────────────────────────────────────────────────────
 
 const (
-	KubeconfigPath      = "/etc/rancher/k3s/k3s.yaml"
-	K3sTokenPath        = "/var/lib/rancher/k3s/server/node-token"
-	K3sConfigDir        = "/etc/rancher/k3s"
-	K3sRegistriesConfig = "/etc/rancher/k3s/registries.yaml"
+	KubeconfigPath = "/etc/rancher/k3s/k3s.yaml"
+	K3sTokenPath   = "/var/lib/rancher/k3s/server/node-token"
 )
-
-// ── Docker ─────────────────────────────────────────────────────────────────────
-
-const (
-	RegistryImage      = "registry:2"
-	RegistryPort       = 5000
-	DockerDaemonConfig = "/etc/docker/daemon.json"
-)
-
-func RegistryAddr(ip string) string {
-	return fmt.Sprintf("%s:%d", ip, RegistryPort)
-}
 
 // ── Remote file paths ──────────────────────────────────────────────────────────
 

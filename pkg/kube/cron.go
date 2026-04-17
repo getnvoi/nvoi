@@ -15,15 +15,16 @@ import (
 )
 
 type CronSpec struct {
-	Name          string
-	Schedule      string
-	Image         string
-	Command       string
-	Env           []corev1.EnvVar
-	SvcSecrets    []string // per-cron secret refs
-	SvcSecretName string   // per-cron k8s Secret name ("{cron}-secrets")
-	Volumes       []string
-	Servers       []string
+	Name           string
+	Schedule       string
+	Image          string
+	Command        string
+	Env            []corev1.EnvVar
+	SvcSecrets     []string // per-cron secret refs
+	SvcSecretName  string   // per-cron k8s Secret name ("{cron}-secrets")
+	Volumes        []string
+	Servers        []string
+	PullSecretName string // optional imagePullSecrets reference; empty = no pull auth
 }
 
 // BuildCronJob constructs a typed batchv1.CronJob from a CronSpec.
@@ -70,6 +71,9 @@ func BuildCronJob(spec CronSpec, names *utils.Names, managedVolPaths map[string]
 		RestartPolicy: corev1.RestartPolicyOnFailure,
 		Containers:    []corev1.Container{container},
 		Volumes:       volumes,
+	}
+	if spec.PullSecretName != "" {
+		podSpec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: spec.PullSecretName}}
 	}
 	applyNodePlacement(&podSpec, spec.Name, spec.Servers)
 

@@ -6,11 +6,17 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, sources map[string]string) error {
 	names, _ := dc.Cluster.Names()
+
+	pullSecret := ""
+	if len(cfg.Registry) > 0 {
+		pullSecret = kube.PullSecretName
+	}
 
 	cronNames := utils.SortedKeys(cfg.Crons)
 	for _, name := range cronNames {
@@ -47,6 +53,7 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 			SvcSecrets: svcSecretRefs,
 			Volumes:    cron.Volumes,
 			Schedule:   cron.Schedule, Servers: servers,
+			PullSecretName: pullSecret,
 		}); err != nil {
 			return err
 		}
