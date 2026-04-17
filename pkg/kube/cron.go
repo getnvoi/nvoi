@@ -2,15 +2,14 @@ package kube
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -27,7 +26,9 @@ type CronSpec struct {
 	Servers       []string
 }
 
-func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[string]string) (string, error) {
+// BuildCronJob constructs a typed batchv1.CronJob from a CronSpec.
+// The returned object is ready to pass to Client.Apply.
+func BuildCronJob(spec CronSpec, names *utils.Names, managedVolPaths map[string]string) (*batchv1.CronJob, error) {
 	ns := names.KubeNamespace()
 	labels := map[string]string{
 		utils.LabelAppName:      spec.Name,
@@ -61,9 +62,8 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 
 	volumes, mounts, err := buildVolumes(spec.Volumes, names, managedVolPaths)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
 	container.VolumeMounts = mounts
 
 	podSpec := corev1.PodSpec{
@@ -73,7 +73,7 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 	}
 	applyNodePlacement(&podSpec, spec.Name, spec.Servers)
 
-	job := batchv1.CronJob{
+	return &batchv1.CronJob{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "batch/v1", Kind: "CronJob"},
 		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
 		Spec: batchv1.CronJobSpec{
@@ -87,62 +87,64 @@ func GenerateCronYAML(spec CronSpec, names *utils.Names, managedVolPaths map[str
 				},
 			},
 		},
-	}
-
-	b, err := sigsyaml.Marshal(job)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
+	}, nil
 }
 
-// CreateJobFromCronJob creates a one-off Job from an existing CronJob.
-// Uses kubectl create job --from=cronjob/<name>.
-func CreateJobFromCronJob(ctx context.Context, ssh utils.SSHClient, ns, cronName, jobName string) error {
-	cmd := kctl(ns, fmt.Sprintf("create job %s --from=cronjob/%s", jobName, cronName))
-	if _, err := ssh.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("create job from cronjob/%s: %w", cronName, err)
+// CreateJobFromCronJob creates a one-off Job from an existing CronJob's
+// template. Equivalent to `kubectl create job --from=cronjob/<name>` but
+// without shelling out.
+func (c *Client) CreateJobFromCronJob(ctx context.Context, ns, cronName, jobName string) error {
+	cron, err := c.cs.BatchV1().CronJobs(ns).Get(ctx, cronName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get cronjob/%s: %w", cronName, err)
+	}
+	annotations := map[string]string{"cronjob.kubernetes.io/instantiate": "manual"}
+	job := &batchv1.Job{
+		TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "Job"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        jobName,
+			Namespace:   ns,
+			Labels:      cron.Spec.JobTemplate.Labels,
+			Annotations: annotations,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "batch/v1",
+				Kind:       "CronJob",
+				Name:       cron.Name,
+				UID:        cron.UID,
+			}},
+		},
+		Spec: cron.Spec.JobTemplate.Spec,
+	}
+	if _, err := c.cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{FieldManager: FieldManager}); err != nil {
+		return fmt.Errorf("create job/%s from cronjob/%s: %w", jobName, cronName, err)
 	}
 	return nil
 }
 
-// WaitForJob polls a Job's pods until the job succeeds or fails.
-// Detects terminal failures (CrashLoopBackOff, BackOff, OOMKilled) immediately
-// and returns the container logs on failure. Same pattern as WaitRollout.
-func WaitForJob(ctx context.Context, ssh utils.SSHClient, ns, jobName string, emitter ProgressEmitter) error {
+// WaitForJob polls a Job's pods until the job succeeds or fails. Detects
+// terminal failures (CrashLoopBackOff, BackOff, OOMKilled) immediately and
+// returns the container logs on failure. Same shape as WaitRollout.
+func (c *Client) WaitForJob(ctx context.Context, ns, jobName string, emitter ProgressEmitter) error {
 	selector := fmt.Sprintf("job-name=%s", jobName)
 	lastStatus := ""
 
-	return utils.Poll(ctx, 3*time.Second, 5*time.Minute, func() (bool, error) {
-		// Check job completion status first.
-		jobOut, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get job %s -o json", jobName)))
-		if err != nil {
+	return utils.Poll(ctx, rolloutPollInterval, 5*time.Minute, func() (bool, error) {
+		job, err := c.cs.BatchV1().Jobs(ns).Get(ctx, jobName, metav1.GetOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
 			return false, nil
 		}
-		var job struct {
-			Status struct {
-				Succeeded int `json:"succeeded"`
-				Failed    int `json:"failed"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(jobOut, &job) == nil {
+		if job != nil {
 			if job.Status.Succeeded > 0 {
 				return true, nil
 			}
 			if job.Status.Failed > 0 {
-				logs := RecentLogs(ctx, ssh, ns, jobName, "", 30)
+				logs := c.RecentLogs(ctx, ns, jobName, "", 30)
 				return false, fmt.Errorf("job %s failed\nlogs:\n%s", jobName, indent(logs, "  "))
 			}
 		}
 
-		// Poll pods for terminal container states.
-		cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
-		out, err := ssh.Run(ctx, cmd)
+		pods, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 		if err != nil {
-			return false, nil
-		}
-		var pods podList
-		if json.Unmarshal(out, &pods) != nil {
 			return false, nil
 		}
 
@@ -152,7 +154,7 @@ func WaitForJob(ctx context.Context, ssh utils.SSHClient, ns, jobName string, em
 					reason := cs.State.Waiting.Reason
 					switch reason {
 					case "CrashLoopBackOff", "BackOff":
-						logs := RecentLogs(ctx, ssh, ns, pod.Metadata.Name, "", 30)
+						logs := c.RecentLogs(ctx, ns, pod.Name, "", 30)
 						return false, fmt.Errorf("job %s: %s\nlogs:\n%s", jobName, reason, indent(logs, "  "))
 					case "ImagePullBackOff", "ErrImagePull":
 						return false, fmt.Errorf("job %s: %s — %s", jobName, reason, cs.State.Waiting.Message)
@@ -175,8 +177,13 @@ func WaitForJob(ctx context.Context, ssh utils.SSHClient, ns, jobName string, em
 	})
 }
 
-func DeleteCronByName(ctx context.Context, ssh utils.SSHClient, ns, name string) error {
-	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete cronjob/%s --ignore-not-found", name))); err != nil {
+// DeleteCronByName removes a CronJob by name. Idempotent.
+func (c *Client) DeleteCronByName(ctx context.Context, ns, name string) error {
+	err := c.cs.BatchV1().CronJobs(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	if errors.Is(err, apierrors.NewNotFound(batchv1.Resource("cronjobs"), name)) || apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
 		return fmt.Errorf("delete cronjob/%s: %w", name, err)
 	}
 	return nil

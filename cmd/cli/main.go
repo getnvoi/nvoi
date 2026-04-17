@@ -14,8 +14,6 @@ import (
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 
-	_ "github.com/getnvoi/nvoi/internal/packages/database"
-
 	// Compute
 	_ "github.com/getnvoi/nvoi/pkg/provider/compute/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/compute/hetzner"
@@ -28,14 +26,6 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/scaleway"
-	// Build
-	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
-	_ "github.com/getnvoi/nvoi/pkg/provider/build/github"
-	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
-	// Secrets
-	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
-	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"
-	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/infisical"
 )
 
 func main() {
@@ -59,7 +49,7 @@ func rootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:          "nvoi",
-		Short:        "Deploy containers to cloud servers",
+		Short:        "Reconcile cloud infrastructure and Kubernetes workloads from one YAML",
 		SilenceUsage: true,
 	}
 
@@ -79,7 +69,6 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(newExecCmd(&rt))
 	root.AddCommand(newSSHCmd(&rt))
 	root.AddCommand(newCronCmd(&rt))
-	root.AddCommand(newDatabaseCmd(&rt))
 
 	root.SetErr(newErrorWriter(root))
 	root.SetErrPrefix("")
@@ -99,7 +88,7 @@ func initRuntime(cmd *cobra.Command, rt *runtime) error {
 		return err
 	}
 	out := resolveOutput(cmd)
-	dc, err := buildDeployContext(cmd.Context(), out, cfg)
+	dc, err := buildDeployContext(out, cfg)
 	if err != nil {
 		return err
 	}

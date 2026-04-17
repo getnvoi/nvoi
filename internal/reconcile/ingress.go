@@ -6,22 +6,21 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func Ingress(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) error {
 	if len(cfg.Domains) > 0 {
 		// Ensure Traefik ACME is configured before applying any ingress.
-		ssh := dc.Cluster.MasterSSH
-		if ssh == nil {
-			return fmt.Errorf("no master SSH connection for traefik ACME setup")
+		kc := dc.Cluster.MasterKube
+		if kc == nil {
+			return fmt.Errorf("no master kube client for traefik ACME setup")
 		}
 		email := cfg.ACMEEmail
 		if email == "" {
 			email = "acme@" + firstConfigDomain(cfg)
 		}
-		if err := kube.EnsureTraefikACME(ctx, ssh, email, true); err != nil {
+		if err := kc.EnsureTraefikACME(ctx, email, true); err != nil {
 			return fmt.Errorf("traefik ACME: %w", err)
 		}
 

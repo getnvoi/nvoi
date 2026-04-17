@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"fmt"
 	"os"
 )
@@ -16,32 +15,20 @@ type CredentialSource interface {
 	Get(key string) (string, error)
 }
 
-// EnvSource reads credentials from os.Getenv. Used by --local mode.
+// EnvSource reads credentials from os.Getenv. Default source at the cmd/ boundary.
 type EnvSource struct{}
 
 func (EnvSource) Get(key string) (string, error) {
 	return os.Getenv(key), nil
 }
 
-// MapSource reads credentials from an in-memory map. Used by cloud mode
-// (InfraProvider.CredentialsMap()) and tests.
+// MapSource reads credentials from an in-memory map. Used by tests.
 type MapSource struct {
 	M map[string]string
 }
 
 func (s MapSource) Get(key string) (string, error) {
 	return s.M[key], nil
-}
-
-// SecretsSource reads credentials from a SecretsProvider. Used when
-// providers.secrets is configured — fetches values transiently.
-type SecretsSource struct {
-	Ctx      context.Context
-	Provider SecretsProvider
-}
-
-func (s SecretsSource) Get(key string) (string, error) {
-	return s.Provider.Get(s.Ctx, key)
 }
 
 // ResolveFrom resolves credentials for a provider schema from any source.
@@ -97,48 +84,30 @@ type computeEntry struct {
 	factory func(creds map[string]string) ComputeProvider
 }
 
-type buildEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) BuildProvider
-}
-
 type bucketEntry struct {
 	schema  CredentialSchema
 	factory func(creds map[string]string) BucketProvider
 }
-
-var computeProviders = map[string]computeEntry{}
-var buildProviders = map[string]buildEntry{}
-
-type secretsEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) SecretsProvider
-}
-
-var secretsProviders = map[string]secretsEntry{}
 
 type dnsEntry struct {
 	schema  CredentialSchema
 	factory func(creds map[string]string) DNSProvider
 }
 
-var dnsProviders = map[string]dnsEntry{}
-var bucketProviders = map[string]bucketEntry{}
+var (
+	computeProviders = map[string]computeEntry{}
+	dnsProviders     = map[string]dnsEntry{}
+	bucketProviders  = map[string]bucketEntry{}
+)
 
 func RegisterCompute(name string, schema CredentialSchema, factory func(creds map[string]string) ComputeProvider) {
 	computeProviders[name] = computeEntry{schema: schema, factory: factory}
-}
-func RegisterBuild(name string, schema CredentialSchema, factory func(creds map[string]string) BuildProvider) {
-	buildProviders[name] = buildEntry{schema: schema, factory: factory}
 }
 func RegisterDNS(name string, schema CredentialSchema, factory func(creds map[string]string) DNSProvider) {
 	dnsProviders[name] = dnsEntry{schema: schema, factory: factory}
 }
 func RegisterBucket(name string, schema CredentialSchema, factory func(creds map[string]string) BucketProvider) {
 	bucketProviders[name] = bucketEntry{schema: schema, factory: factory}
-}
-func RegisterSecrets(name string, schema CredentialSchema, factory func(creds map[string]string) SecretsProvider) {
-	secretsProviders[name] = secretsEntry{schema: schema, factory: factory}
 }
 
 // GetSchema returns the credential schema for any provider kind + name.
@@ -150,10 +119,6 @@ func GetSchema(kind, name string) (CredentialSchema, error) {
 		return GetDNSSchema(name)
 	case "storage":
 		return GetBucketSchema(name)
-	case "build":
-		return GetBuildSchema(name)
-	case "secrets":
-		return GetSecretsSchema(name)
 	default:
 		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
 	}
@@ -167,14 +132,6 @@ func GetComputeSchema(name string) (CredentialSchema, error) {
 	return entry.schema, nil
 }
 
-func GetBuildSchema(name string) (CredentialSchema, error) {
-	entry, ok := buildProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported build provider: %q", name)
-	}
-	return entry.schema, nil
-}
-
 // ── Resolve ────────────────────────────────────────────────────────────────────
 
 // ResolveCompute creates a compute provider with pre-resolved credentials.
@@ -183,17 +140,6 @@ func ResolveCompute(name string, creds map[string]string) (ComputeProvider, erro
 	entry, ok := computeProviders[name]
 	if !ok {
 		return nil, fmt.Errorf("unsupported compute provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
-}
-
-func ResolveBuild(name string, creds map[string]string) (BuildProvider, error) {
-	entry, ok := buildProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported build provider: %q", name)
 	}
 	if err := entry.schema.Validate(creds); err != nil {
 		return nil, err
@@ -232,25 +178,6 @@ func ResolveBucket(name string, creds map[string]string) (BucketProvider, error)
 	entry, ok := bucketProviders[name]
 	if !ok {
 		return nil, fmt.Errorf("unsupported storage provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
-}
-
-func GetSecretsSchema(name string) (CredentialSchema, error) {
-	entry, ok := secretsProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported secrets provider: %q", name)
-	}
-	return entry.schema, nil
-}
-
-func ResolveSecrets(name string, creds map[string]string) (SecretsProvider, error) {
-	entry, ok := secretsProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported secrets provider: %q", name)
 	}
 	if err := entry.schema.Validate(creds); err != nil {
 		return nil, err

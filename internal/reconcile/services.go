@@ -7,7 +7,6 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -17,10 +16,6 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 	svcNames := utils.SortedKeys(cfg.Services)
 	for _, name := range svcNames {
 		svc := cfg.Services[name]
-		image, err := resolveImageRef(ctx, dc, svc.Image, svc.Build)
-		if err != nil {
-			return err
-		}
 		servers := ResolveServers(cfg, svc.Servers, svc.Server, svc.Volumes)
 		replicas := svc.Replicas
 		if _, hasDomain := cfg.Domains[name]; hasDomain && replicas == 0 {
@@ -52,7 +47,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		}
 
 		if err := app.ServiceSet(ctx, app.ServiceSetRequest{
-			Cluster: dc.Cluster, Name: name, Image: image,
+			Cluster: dc.Cluster, Name: name, Image: svc.Image,
 			Port: svc.Port, Command: svc.Command, Replicas: replicas,
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
@@ -74,13 +69,8 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 
 	if live != nil {
 		desired := toSet(svcNames)
-		// Exclude package-managed services from orphan detection
-		protected := map[string]bool{}
-		for _, db := range cfg.Database {
-			protected[db.ServiceName] = true
-		}
 		for _, name := range live.Services {
-			if !desired[name] && !protected[name] {
+			if !desired[name] {
 				if err := app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
 					dc.Cluster.Log().Warning(fmt.Sprintf("orphan service %s not removed: %s", name, err))
 				}
@@ -135,29 +125,24 @@ func upsertServiceSecrets(ctx context.Context, dc *config.DeployContext, names *
 	if names == nil {
 		return nil
 	}
-	ssh := dc.Cluster.MasterSSH
-	if ssh == nil {
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
 		return nil
 	}
 	ns := names.KubeNamespace()
 	secretName := names.KubeServiceSecrets(svcName)
 
 	if len(kvs) == 0 {
-		// No secrets declared — delete the per-service secret if it exists
-		return kube.DeleteSecret(ctx, ssh, ns, secretName)
+		return kc.DeleteSecret(ctx, ns, secretName)
 	}
 
-	// Upsert each key
-	for key, val := range kvs {
-		if err := kube.UpsertSecretKey(ctx, ssh, ns, secretName, key, val); err != nil {
-			return fmt.Errorf("service %s secret %s: %w", svcName, key, err)
-		}
+	if err := kc.EnsureSecret(ctx, ns, secretName, kvs); err != nil {
+		return fmt.Errorf("service %s secret: %w", svcName, err)
 	}
 
-	// Orphan-remove keys no longer in the desired set
-	existing, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
+	existing, err := kc.ListSecretKeys(ctx, ns, secretName)
 	if err != nil {
-		return nil // secret may not exist yet on first deploy
+		return nil
 	}
 	desired := make(map[string]bool, len(kvs))
 	for k := range kvs {
@@ -165,7 +150,7 @@ func upsertServiceSecrets(ctx context.Context, dc *config.DeployContext, names *
 	}
 	for _, key := range existing {
 		if !desired[key] {
-			_ = kube.DeleteSecretKey(ctx, ssh, ns, secretName, key)
+			_ = kc.DeleteSecretKey(ctx, ns, secretName, key)
 		}
 	}
 	return nil
@@ -176,13 +161,11 @@ func deleteServiceSecret(ctx context.Context, dc *config.DeployContext, names *u
 	if names == nil {
 		return
 	}
-	ssh := dc.Cluster.MasterSSH
-	if ssh == nil {
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
 		return
 	}
-	ns := names.KubeNamespace()
-	secretName := names.KubeServiceSecrets(svcName)
-	_ = kube.DeleteSecret(ctx, ssh, ns, secretName)
+	_ = kc.DeleteSecret(ctx, names.KubeNamespace(), names.KubeServiceSecrets(svcName))
 }
 
 // mergeSources builds a unified lookup map for $VAR resolution.

@@ -91,10 +91,8 @@ func TestStorageDelete_StillRemovesSecretsWhenBucketAlreadyGone(t *testing.T) {
 		return bucket
 	})
 
-	ssh := &testutil.MockSSH{}
-
 	err := StorageDelete(context.Background(), StorageDeleteRequest{
-		Cluster: testCluster(ssh),
+		Cluster: testCluster(testKube()),
 		Storage: ProviderRef{Name: bucketProvider},
 		Name:    "assets",
 	})

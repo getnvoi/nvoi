@@ -52,13 +52,7 @@ func TestValidateConfig_VolumeServerNotDefined(t *testing.T) {
 func TestValidateConfig_ServiceNoImage(t *testing.T) {
 	cfg := validCfg()
 	cfg.Services["web"] = config.ServiceDef{}
-	assertValidationError(t, cfg, "image or build is required")
-}
-
-func TestValidateConfig_ServiceBuildNotDefined(t *testing.T) {
-	cfg := validCfg()
-	cfg.Services["web"] = config.ServiceDef{Build: "missing"}
-	assertValidationError(t, cfg, "not a defined build target")
+	assertValidationError(t, cfg, "image is required")
 }
 
 func TestValidateConfig_ServiceStorageNotDefined(t *testing.T) {
@@ -427,32 +421,6 @@ func TestValidateConfig_CronSecretEqualsWithoutDollar(t *testing.T) {
 		"job": {Image: "busybox", Schedule: "0 * * * *", Secrets: []string{"FOO=BAR"}},
 	}
 	assertValidationError(t, cfg, "requires $")
-}
-
-// ── Secrets provider validation ─────────────────────────────────────────────
-
-func TestValidateConfig_SecretsProviderValid(t *testing.T) {
-	cfg := validCfg()
-	cfg.Providers.Secrets = "doppler"
-	if err := ValidateConfig(cfg); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateConfig_SecretsProviderUnsupportedKind(t *testing.T) {
-	cfg := validCfg()
-	cfg.Providers.Secrets = "vault"
-	assertValidationError(t, cfg, "unsupported secrets provider")
-}
-
-func TestValidateConfig_SecretsProviderAllKinds(t *testing.T) {
-	for _, kind := range []string{"doppler", "awssm", "infisical"} {
-		cfg := validCfg()
-		cfg.Providers.Secrets = kind
-		if err := ValidateConfig(cfg); err != nil {
-			t.Fatalf("kind %q: unexpected error: %v", kind, err)
-		}
-	}
 }
 
 func assertValidationError(t *testing.T, cfg *config.AppConfig, substr string) {

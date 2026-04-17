@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-// ToUpperSnake converts a name to UPPER_SNAKE_CASE. Replaces hyphens with underscores.
-func ToUpperSnake(s string) string {
-	return strings.ToUpper(strings.ReplaceAll(s, "-", "_"))
-}
-
 // Obfuscate preserves the original length, replacing all but the last 4 chars with •.
 func Obfuscate(s string) string {
 	n := len(s)

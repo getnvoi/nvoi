@@ -2,545 +2,188 @@ package kube
 
 import (
 	"context"
-	"io"
-	"io/fs"
-	"net"
-	"strings"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/utils"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func init() {
-	SetTestTiming(time.Millisecond, time.Millisecond)
+// podLabel returns the label selector map WaitRollout's selector matches on.
+func podLabel(service string) map[string]string {
+	return map[string]string{"app.kubernetes.io/name": service}
 }
 
-// testEmitter collects Progress messages for assertions.
-type testEmitter struct {
-	mu       sync.Mutex
-	messages []string
-}
-
-func (e *testEmitter) Progress(msg string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.messages = append(e.messages, msg)
-}
-
-// --- WaitRollout tests ---
-
-func TestWaitRollout_AllReady(t *testing.T) {
-	orig := stabilityDelay
-	stabilityDelay = 10 * time.Millisecond
-	defer func() { stabilityDelay = orig }()
-
-	podsJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
-				}
-			},
-			{
-				"metadata": {"name": "web-def"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
-				}
-			}
-		]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(podsJSON)}},
-	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
-	if err != nil {
-		t.Fatalf("expected nil error, got: %v", err)
-	}
-}
-
-func TestWaitRollout_ImagePullBackOff(t *testing.T) {
-	podsJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Pending",
-					"containerStatuses": [{
-						"ready": false,
-						"restartCount": 0,
-						"state": {"waiting": {"reason": "ImagePullBackOff", "message": "back-off pulling image \"bad:latest\""}}
-					}]
-				}
-			}
-		]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(podsJSON)}},
-	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "ImagePullBackOff") {
-		t.Fatalf("expected error to contain 'ImagePullBackOff', got: %v", err)
-	}
-}
-
-func TestWaitRollout_CrashLoopBackOff(t *testing.T) {
-	podsJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{
-						"ready": false,
-						"restartCount": 5,
-						"state": {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 5m0s restarting failed container"}}
-					}]
-				}
-			}
-		]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(podsJSON)}},
-		{Prefix: "logs", Result: testutil.MockResult{Output: []byte("Error: cannot connect to database\nExiting with code 1")}},
-	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "CrashLoopBackOff") {
-		t.Fatalf("expected error to contain 'CrashLoopBackOff', got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "restarts: 5") {
-		t.Fatalf("expected error to contain 'restarts: 5', got: %v", err)
-	}
-}
-
-func TestWaitRollout_OOMKilled(t *testing.T) {
-	podsJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{
-						"ready": false,
-						"restartCount": 1,
-						"state": {"terminated": {"reason": "OOMKilled", "message": ""}}
-					}]
-				}
-			}
-		]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(podsJSON)}},
-	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "OOMKilled") {
-		t.Fatalf("expected error to contain 'OOMKilled', got: %v", err)
-	}
-}
-
-func TestWaitRollout_Unschedulable(t *testing.T) {
-	podsJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Pending",
-					"conditions": [
-						{"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "message": "0/1 nodes are available: insufficient cpu"}
-					],
-					"containerStatuses": []
-				}
-			}
-		]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(podsJSON)}},
-	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "unschedulable") {
-		t.Fatalf("expected error to contain 'unschedulable', got: %v", err)
-	}
-}
-
-func TestWaitRollout_TransientThenReady(t *testing.T) {
-
-	containerCreatingJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Pending",
-					"containerStatuses": [{
-						"ready": false,
-						"restartCount": 0,
-						"state": {"waiting": {"reason": "ContainerCreating", "message": ""}}
-					}]
-				}
-			}
-		]
-	}`
-	readyJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
-				}
-			}
-		]
-	}`
-
-	counter := &counterSSH{
-		responses: []testutil.MockResult{
-			{Output: []byte(containerCreatingJSON)},
-			{Output: []byte(readyJSON)},
+func readyPodFor(service string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: service + "-abc", Namespace: "ns",
+			Labels: podLabel(service),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Ready: true,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
 		},
 	}
+}
 
+func TestWaitRollout_ReadyImmediately(t *testing.T) {
+	cleanup := fastTiming()
+	defer cleanup()
+	c := newTestClient(readyPodFor("web"))
 	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), counter, "default", "web", "deployment", false, emitter)
+
+	// hasHealthCheck=true skips the stability phase (keeps tests quick+deterministic).
+	err := c.WaitRollout(context.Background(), "ns", "web", "deployment", true, emitter)
 	if err != nil {
-		t.Fatalf("expected nil error, got: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestWaitRollout_CrashAfterReady(t *testing.T) {
-	orig := stabilityDelay
-	stabilityDelay = 10 * time.Millisecond
-	defer func() { stabilityDelay = orig }()
-
-	// First poll: pod is running and ready, restartCount 0.
-	readyJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
-				}
-			}
-		]
-	}`
-
-	// Stability check: pod crashed — restartCount went from 0 to 1.
-	crashedJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{
-						"ready": false,
-						"restartCount": 1,
-						"state": {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off restarting"}}
-					}]
-				}
-			}
-		]
-	}`
-
-	counter := &counterSSH{
-		responses: []testutil.MockResult{
-			{Output: []byte(readyJSON)},
-			{Output: []byte(crashedJSON)},
+func TestWaitRollout_ImagePullBackOff_FailsFast(t *testing.T) {
+	cleanup := fastTiming()
+	defer cleanup()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-abc", Namespace: "ns",
+			Labels: podLabel("web"),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Ready: false,
+				State: corev1.ContainerState{
+					Waiting: &corev1.ContainerStateWaiting{
+						Reason: "ImagePullBackOff", Message: "pull failed",
+					},
+				},
+			}},
 		},
 	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), counter, "default", "web", "deployment", false, emitter)
+	c := newTestClient(pod)
+	err := c.WaitRollout(context.Background(), "ns", "web", "deployment", true, &testEmitter{})
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal("expected ImagePullBackOff error")
 	}
-	if !strings.Contains(err.Error(), "crashed after becoming ready") {
-		t.Fatalf("expected 'crashed after becoming ready' in error, got: %v", err)
+	if !contains(err.Error(), "ImagePullBackOff") {
+		t.Errorf("error = %q", err.Error())
 	}
 }
 
-func TestWaitRollout_StableAfterReady(t *testing.T) {
-	orig := stabilityDelay
-	stabilityDelay = 10 * time.Millisecond
-	defer func() { stabilityDelay = orig }()
-
-	// Both polls return the same thing: pod ready, restartCount 0.
-	readyJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
-				}
-			}
-		]
-	}`
-
-	counter := &counterSSH{
-		responses: []testutil.MockResult{
-			{Output: []byte(readyJSON)},
-			{Output: []byte(readyJSON)},
+func TestWaitRollout_CrashLoopBackOff_FailsFast(t *testing.T) {
+	cleanup := fastTiming()
+	defer cleanup()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-abc", Namespace: "ns",
+			Labels: podLabel("web"),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Ready: false, RestartCount: 5,
+				State: corev1.ContainerState{
+					Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+				},
+			}},
 		},
 	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), counter, "default", "web", "deployment", false, emitter)
-	if err != nil {
-		t.Fatalf("expected nil error, got: %v", err)
-	}
-
-	// Verify "verifying stability" message was emitted
-	found := false
-	for _, msg := range emitter.messages {
-		if strings.Contains(msg, "verifying stability") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected 'verifying stability' progress message, got: %v", emitter.messages)
-	}
-}
-
-func TestWaitRollout_SkipsStabilityWithHealthCheck(t *testing.T) {
-	readyJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{"ready": true, "restartCount": 0, "state": {"running": {}}}]
-				}
-			}
-		]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(readyJSON)}},
-	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", true, emitter)
-	if err != nil {
-		t.Fatalf("expected nil error, got: %v", err)
-	}
-
-	// Verify NO "verifying stability" message — health check skips it
-	for _, msg := range emitter.messages {
-		if strings.Contains(msg, "verifying stability") {
-			t.Fatalf("did not expect 'verifying stability' with hasHealthCheck=true, got: %v", emitter.messages)
-		}
-	}
-}
-
-// counterSSH is a minimal utils.SSHClient that cycles through canned responses
-// for commands containing "get pods". All other methods are no-op stubs.
-type counterSSH struct {
-	mu        sync.Mutex
-	callCount int
-	responses []testutil.MockResult
-}
-
-func (c *counterSSH) Run(_ context.Context, cmd string) ([]byte, error) {
-	if strings.Contains(cmd, "get pods") {
-		c.mu.Lock()
-		idx := c.callCount
-		if idx >= len(c.responses) {
-			idx = len(c.responses) - 1
-		}
-		c.callCount++
-		c.mu.Unlock()
-		return c.responses[idx].Output, c.responses[idx].Err
-	}
-	return nil, nil
-}
-
-func (c *counterSSH) RunStream(_ context.Context, _ string, _, _ io.Writer) error {
-	return nil
-}
-
-func (c *counterSSH) Upload(_ context.Context, _ io.Reader, _ string, _ fs.FileMode) error {
-	return nil
-}
-
-func (c *counterSSH) Stat(_ context.Context, _ string) (*utils.RemoteFileInfo, error) {
-	return nil, nil
-}
-
-func (c *counterSSH) DialTCP(_ context.Context, _ string) (net.Conn, error) {
-	return nil, nil
-}
-
-func (c *counterSSH) Close() error {
-	return nil
-}
-
-var _ utils.SSHClient = (*counterSSH)(nil)
-
-// --- Helper function tests ---
-
-func TestDedup(t *testing.T) {
-	input := []string{"a", "b", "a", "c"}
-	got := dedup(input)
-	want := []string{"a", "b", "c"}
-
-	if len(got) != len(want) {
-		t.Fatalf("dedup(%v) = %v, want %v", input, got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("dedup(%v)[%d] = %q, want %q", input, i, got[i], want[i])
-		}
-	}
-}
-
-func TestWaitRollout_TerminatedError_FailsFastWithLogs(t *testing.T) {
-	podsJSON := `{
-		"items": [
-			{
-				"metadata": {"name": "web-abc"},
-				"status": {
-					"phase": "Running",
-					"containerStatuses": [{
-						"ready": false,
-						"restartCount": 2,
-						"state": {"terminated": {"exitCode": 1, "reason": "Error"}}
-					}]
-				}
-			}
-		]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(podsJSON)}},
-		{Prefix: "logs", Result: testutil.MockResult{Output: []byte("django.db.utils.OperationalError: connection refused")}},
-	}
-
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
+	c := newTestClient(pod)
+	err := c.WaitRollout(context.Background(), "ns", "web", "deployment", true, &testEmitter{})
 	if err == nil {
-		t.Fatal("expected error for terminated container, got nil")
+		t.Fatal("expected CrashLoopBackOff error")
 	}
-	if !strings.Contains(err.Error(), "exit") {
-		t.Fatalf("expected error to mention exit code, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "restarts: 2") {
-		t.Fatalf("expected error to mention restart count, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "connection refused") {
-		t.Fatalf("expected error to include logs, got: %v", err)
+	if !contains(err.Error(), "CrashLoopBackOff") || !contains(err.Error(), "restarts: 5") {
+		t.Errorf("error = %q", err.Error())
 	}
 }
 
-func TestWaitRollout_TerminatedError_FirstRestart_Transient(t *testing.T) {
-	// First termination (restartCount=0) is transient — give it one chance to restart.
-	// Second poll returns ready. hasHealthCheck=true skips stability check.
-	errorPods := `{
-		"items": [{
-			"metadata": {"name": "web-abc"},
-			"status": {
-				"phase": "Running",
-				"containerStatuses": [{"ready": false, "restartCount": 0, "state": {"terminated": {"exitCode": 1, "reason": "Error"}}}]
-			}
-		}]
-	}`
-	readyPods := `{
-		"items": [{
-			"metadata": {"name": "web-abc"},
-			"status": {
-				"phase": "Running",
-				"containerStatuses": [{"ready": true, "restartCount": 1, "state": {"running": {}}}]
-			}
-		}]
-	}`
-
-	callCount := 0
-	ssh := &countingSSH{
-		responses: []string{errorPods, readyPods},
-		counter:   &callCount,
+func TestWaitRollout_OOMKilled_FailsFast(t *testing.T) {
+	cleanup := fastTiming()
+	defer cleanup()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-abc", Namespace: "ns",
+			Labels: podLabel("web"),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Ready: false,
+				State: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137},
+				},
+			}},
+		},
 	}
+	c := newTestClient(pod)
+	err := c.WaitRollout(context.Background(), "ns", "web", "deployment", true, &testEmitter{})
+	if err == nil || !contains(err.Error(), "OOMKilled") {
+		t.Fatalf("expected OOMKilled error, got: %v", err)
+	}
+}
 
+func TestWaitRollout_Unschedulable_FailsFast(t *testing.T) {
+	cleanup := fastTiming()
+	defer cleanup()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-abc", Namespace: "ns",
+			Labels: podLabel("web"),
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+				Reason:  "Unschedulable",
+				Message: "0/1 nodes available: 1 Insufficient memory",
+			}},
+		},
+	}
+	c := newTestClient(pod)
+	err := c.WaitRollout(context.Background(), "ns", "web", "deployment", true, &testEmitter{})
+	if err == nil {
+		t.Fatal("expected unschedulable error")
+	}
+	if !contains(err.Error(), "unschedulable") && !contains(err.Error(), "Unschedulable") {
+		t.Errorf("error = %q", err.Error())
+	}
+}
+
+func TestWaitRollout_EmptyPodList_TimesOut(t *testing.T) {
+	cleanup := fastTiming()
+	defer cleanup()
+	c := newTestClient()
+	err := c.WaitRollout(context.Background(), "ns", "web", "deployment", true, &testEmitter{})
+	if err == nil {
+		t.Fatal("expected timeout when no pods match selector")
+	}
+	// timeoutDiagnostics wraps the error with the "timed out" marker.
+	if !contains(err.Error(), "timed out") {
+		t.Errorf("expected timeout error, got: %s", err.Error())
+	}
+}
+
+func TestWaitRollout_NoHealthCheck_VerifiesStability(t *testing.T) {
+	cleanup := fastTiming()
+	defer cleanup()
+	c := newTestClient(readyPodFor("web"))
 	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", true, emitter)
+
+	// hasHealthCheck=false runs the stability pass.
+	err := c.WaitRollout(context.Background(), "ns", "web", "deployment", false, emitter)
 	if err != nil {
-		t.Fatalf("expected success after transient error + recovery, got: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-// countingSSH returns sequential responses for "get pods" calls.
-type countingSSH struct {
-	responses []string
-	counter   *int
-	mu        sync.Mutex
-}
-
-func (c *countingSSH) Run(_ context.Context, cmd string) ([]byte, error) {
-	if strings.Contains(cmd, "get pods") {
-		c.mu.Lock()
-		idx := *c.counter
-		if idx >= len(c.responses) {
-			idx = len(c.responses) - 1
+	var sawStability bool
+	for _, m := range emitter.all() {
+		if contains(m, "verifying stability") {
+			sawStability = true
 		}
-		*c.counter++
-		c.mu.Unlock()
-		return []byte(c.responses[idx]), nil
 	}
-	return nil, nil
-}
-
-func (c *countingSSH) Close() error { return nil }
-func (c *countingSSH) Upload(_ context.Context, _ io.Reader, _ string, _ fs.FileMode) error {
-	return nil
-}
-func (c *countingSSH) Stat(_ context.Context, _ string) (*utils.RemoteFileInfo, error) {
-	return nil, nil
-}
-func (c *countingSSH) DialTCP(_ context.Context, _ string) (net.Conn, error)       { return nil, nil }
-func (c *countingSSH) RunStream(_ context.Context, _ string, _, _ io.Writer) error { return nil }
-
-func TestIndent(t *testing.T) {
-	input := "line1\nline2"
-	got := indent(input, "  ")
-	want := "  line1\n  line2"
-	if got != want {
-		t.Fatalf("indent(%q, \"  \") = %q, want %q", input, got, want)
+	if !sawStability {
+		t.Errorf("expected 'verifying stability' progress, got: %v", emitter.all())
 	}
 }

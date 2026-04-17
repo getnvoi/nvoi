@@ -162,8 +162,9 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 		}
 		out.Success("joined cluster")
 
-		// Label via master SSH
-		if err := kube.LabelNode(ctx, masterSSH, names.Server(req.Name), req.Name); err != nil {
+		// Label the new node via the master's kube client (reuse the
+		// reconciler's MasterKube when set; build a transient one otherwise).
+		if err := labelNodeOverTunnel(ctx, &req.Cluster, masterSSH, names.Server(req.Name), req.Name); err != nil {
 			return nil, fmt.Errorf("label node: %w", err)
 		}
 	} else {
@@ -177,8 +178,8 @@ func ComputeSet(ctx context.Context, req ComputeSetRequest) (*ComputeSetResult, 
 			return nil, fmt.Errorf("registry: %w", err)
 		}
 
-		// Label via this SSH (it's the master)
-		if err := kube.LabelNode(ctx, ssh, names.Server(req.Name), req.Name); err != nil {
+		// Label this master via its own apiserver.
+		if err := labelNodeOverTunnel(ctx, &req.Cluster, ssh, names.Server(req.Name), req.Name); err != nil {
 			return nil, fmt.Errorf("label node: %w", err)
 		}
 	}
@@ -275,4 +276,19 @@ func FindMaster(ctx context.Context, prov provider.ComputeProvider, names *utils
 		master.PrivateIP = ip
 	}
 	return master, nil
+}
+
+// labelNodeOverTunnel labels a node via the master apiserver. Reuses the
+// Cluster's MasterKube when set (reconcile path / tests), otherwise opens a
+// transient kube client over the given SSH (CLI dispatch).
+func labelNodeOverTunnel(ctx context.Context, cluster *Cluster, ssh utils.SSHClient, nodeName, role string) error {
+	if cluster != nil && cluster.MasterKube != nil {
+		return cluster.MasterKube.LabelNode(ctx, nodeName, role)
+	}
+	kc, err := kube.New(ctx, ssh)
+	if err != nil {
+		return err
+	}
+	defer kc.Close()
+	return kc.LabelNode(ctx, nodeName, role)
 }

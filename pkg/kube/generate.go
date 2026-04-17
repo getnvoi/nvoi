@@ -7,8 +7,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -72,8 +72,10 @@ type ServiceSpec struct {
 	Managed       bool     // true if any volume is provider-managed → StatefulSet
 }
 
-// GenerateYAML produces k8s YAML for a single service: workload + Service.
-func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[string]string) (string, string, error) {
+// BuildService produces typed Workload (Deployment or StatefulSet) and
+// Service objects ready to pass to Client.Apply. The string return value is
+// the workload kind: "deployment" or "statefulset".
+func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[string]string) (workload runtime.Object, svc *corev1.Service, kind string, err error) {
 	ns := names.KubeNamespace()
 	labels := map[string]string{
 		utils.LabelAppName:      spec.Name,
@@ -124,7 +126,7 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 	// Volumes
 	volumes, mounts, err := buildVolumes(spec.Volumes, names, managedVolPaths)
 	if err != nil {
-		return "", "", err
+		return nil, nil, "", err
 	}
 	container.VolumeMounts = mounts
 
@@ -134,14 +136,9 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 	}
 	applyNodePlacement(&podSpec, spec.Name, spec.Servers)
 
-	// Workload: StatefulSet or Deployment
-	var workloadKind string
-	var docs []string
-
 	if spec.Managed {
-		workloadKind = "statefulset"
 		one := int32(1)
-		ss := appsv1.StatefulSet{
+		ss := &appsv1.StatefulSet{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "StatefulSet"},
 			ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
 			Spec: appsv1.StatefulSetSpec{
@@ -151,18 +148,14 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 				Template:    corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
 			},
 		}
-		b, err := sigsyaml.Marshal(ss)
-		if err != nil {
-			return "", "", err
-		}
-		docs = append(docs, strings.TrimSpace(string(b)))
+		workload = ss
+		kind = "statefulset"
 	} else {
-		workloadKind = "deployment"
 		replicas := int32(spec.Replicas)
 		if replicas < 1 {
 			replicas = 1
 		}
-		dep := appsv1.Deployment{
+		dep := &appsv1.Deployment{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
 			ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
 			Spec: appsv1.DeploymentSpec{
@@ -178,26 +171,16 @@ func GenerateYAML(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
 			},
 		}
-		b, err := sigsyaml.Marshal(dep)
-		if err != nil {
-			return "", "", err
-		}
-		docs = append(docs, strings.TrimSpace(string(b)))
+		workload = dep
+		kind = "deployment"
 	}
 
-	// Service
-	svc := corev1.Service{
+	svc = &corev1.Service{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
 		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
 		Spec:       svcSpec(spec.Name, spec.Port),
 	}
-	b, err := sigsyaml.Marshal(svc)
-	if err != nil {
-		return "", "", err
-	}
-	docs = append(docs, strings.TrimSpace(string(b)))
-
-	return strings.Join(docs, "\n---\n"), workloadKind, nil
+	return workload, svc, kind, nil
 }
 
 func svcSpec(selector string, port int) corev1.ServiceSpec {

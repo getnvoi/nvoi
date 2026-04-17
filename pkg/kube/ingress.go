@@ -2,17 +2,22 @@ package kube
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	sigsyaml "sigs.k8s.io/yaml"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// helmChartConfigGVK identifies the k3s Helm controller's HelmChartConfig CRD.
+var helmChartConfigGVK = schema.GroupVersionKind{
+	Group: "helm.cattle.io", Version: "v1", Kind: "HelmChartConfig",
+}
 
 // IngressRoute maps a service to its public domains.
 type IngressRoute struct {
@@ -24,18 +29,9 @@ type IngressRoute struct {
 // KubeIngressName returns the deterministic Ingress resource name for a service.
 func KubeIngressName(service string) string { return "ingress-" + service }
 
-// ApplyIngress creates or updates a standard k8s Ingress resource for a service.
-// One Ingress per service — no shared state, no read-modify-write.
-func ApplyIngress(ctx context.Context, ssh utils.SSHClient, ns string, route IngressRoute, acme bool) error {
-	yaml, err := GenerateIngressYAML(route, ns, acme)
-	if err != nil {
-		return err
-	}
-	return Apply(ctx, ssh, ns, yaml)
-}
-
-// GenerateIngressYAML produces a standard networking.k8s.io/v1 Ingress resource.
-func GenerateIngressYAML(route IngressRoute, ns string, acme bool) (string, error) {
+// BuildIngress constructs a typed Ingress for one service. Returned object is
+// ready to pass to Client.Apply.
+func BuildIngress(route IngressRoute, ns string, acme bool) *networkingv1.Ingress {
 	name := KubeIngressName(route.Service)
 	pathType := networkingv1.PathTypePrefix
 
@@ -70,7 +66,7 @@ func GenerateIngressYAML(route IngressRoute, ns string, acme bool) (string, erro
 		tlsHosts = append(tlsHosts, domain)
 	}
 
-	ingress := networkingv1.Ingress{
+	ingress := &networkingv1.Ingress{
 		TypeMeta: metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "Ingress"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -92,36 +88,40 @@ func GenerateIngressYAML(route IngressRoute, ns string, acme bool) (string, erro
 			SecretName: "tls-" + route.Service,
 		}}
 	}
+	return ingress
+}
 
-	b, err := sigsyaml.Marshal(ingress)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
+// ApplyIngress server-side applies an Ingress for a service.
+func (c *Client) ApplyIngress(ctx context.Context, ns string, route IngressRoute, acme bool) error {
+	return c.Apply(ctx, ns, BuildIngress(route, ns, acme))
 }
 
 // DeleteIngress removes the Ingress resource for a service.
-func DeleteIngress(ctx context.Context, ssh utils.SSHClient, ns, service string) error {
+func (c *Client) DeleteIngress(ctx context.Context, ns, service string) error {
 	name := KubeIngressName(service)
-	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete ingress %s --ignore-not-found", name))); err != nil {
+	err := c.cs.NetworkingV1().Ingresses(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
 		return fmt.Errorf("delete ingress %s: %w", name, err)
 	}
 	return nil
 }
 
-// GetIngressRoutes lists all nvoi-managed Ingress resources and parses them into routes.
-func GetIngressRoutes(ctx context.Context, ssh utils.SSHClient, ns string) ([]IngressRoute, error) {
-	out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get ingress -l %s=%s -o json 2>/dev/null", utils.LabelAppManagedBy, utils.LabelManagedBy)))
+// GetIngressRoutes lists all nvoi-managed Ingress resources and parses them
+// into routes (one IngressRoute per Service, aggregating multiple domains).
+func (c *Client) GetIngressRoutes(ctx context.Context, ns string) ([]IngressRoute, error) {
+	list, err := c.cs.NetworkingV1().Ingresses(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: NvoiSelector,
+	})
 	if err != nil {
-		return nil, nil // no ingress resources
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list ingresses in %s: %w", ns, err)
 	}
 
-	var list networkingv1.IngressList
-	if err := json.Unmarshal(out, &list); err != nil {
-		return nil, nil
-	}
-
-	// Group by service name.
 	byService := map[string]*IngressRoute{}
 	for _, item := range list.Items {
 		for _, rule := range item.Spec.Rules {
@@ -148,65 +148,60 @@ func GetIngressRoutes(ctx context.Context, ssh utils.SSHClient, ns string) ([]In
 	return routes, nil
 }
 
-// EnsureTraefikACME applies a HelmChartConfig to configure Traefik's Let's Encrypt resolver.
-// Idempotent — safe to call multiple times.
-// When acme is false, no ACME resolver is configured (HTTP-only mode for tunnel setups).
+// EnsureTraefikACME applies a HelmChartConfig to configure Traefik's
+// Let's Encrypt resolver via the dynamic client (HelmChartConfig is a CRD,
+// not in the typed clientset).
 //
-// After applying, waits for the Traefik deployment to be ready. The k3s Helm
-// controller picks up HelmChartConfig changes asynchronously — without this wait,
-// Ingress resources applied immediately after may land before Traefik has loaded
-// the ACME certresolver config, causing cert issuance to never start.
-func EnsureTraefikACME(ctx context.Context, ssh utils.SSHClient, email string, acme bool) error {
+// When acme is false, no ACME resolver is configured (HTTP-only mode for
+// tunnel setups).
+//
+// Waits for the Traefik deployment to be ready afterwards: the k3s Helm
+// controller picks up HelmChartConfig changes asynchronously, so without
+// this wait Ingress resources applied immediately after may land before
+// Traefik has loaded the ACME certresolver config.
+func (c *Client) EnsureTraefikACME(ctx context.Context, email string, acme bool) error {
 	var valuesContent string
 	if acme {
-		valuesContent = fmt.Sprintf(`    additionalArguments:
-      - "--certificatesresolvers.letsencrypt.acme.email=%s"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"`, email)
+		valuesContent = fmt.Sprintf(`additionalArguments:
+  - "--certificatesresolvers.letsencrypt.acme.email=%s"
+  - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+  - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+  - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"`, email)
 	} else {
-		valuesContent = `    ports:
-      websecure:
-        expose:
-          default: false`
+		valuesContent = `ports:
+  websecure:
+    expose:
+      default: false`
 	}
 
-	yaml := fmt.Sprintf(`apiVersion: helm.cattle.io/v1
-kind: HelmChartConfig
-metadata:
-  name: traefik
-  namespace: kube-system
-spec:
-  valuesContent: |-
-%s`, valuesContent)
+	hcc := &unstructured.Unstructured{}
+	hcc.SetGroupVersionKind(helmChartConfigGVK)
+	hcc.SetName("traefik")
+	hcc.SetNamespace("kube-system")
+	if err := unstructured.SetNestedField(hcc.Object, valuesContent, "spec", "valuesContent"); err != nil {
+		return fmt.Errorf("build helmchartconfig: %w", err)
+	}
 
-	if err := ApplyGlobal(ctx, ssh, yaml); err != nil {
+	if err := c.Apply(ctx, "kube-system", hcc); err != nil {
 		return err
 	}
 
-	// Wait for the Traefik deployment to be ready after the Helm controller
-	// reconciles the HelmChartConfig. On first deploy this may take 30-60s
-	// as the controller creates/updates the Traefik deployment.
-	return waitForTraefikReady(ctx, ssh)
+	return c.waitForTraefikReady(ctx)
 }
 
 // waitForTraefikReady polls until the Traefik deployment in kube-system has
-// all replicas available. Confirms the Helm controller has processed any
-// HelmChartConfig changes and Traefik is running with the updated config.
-func waitForTraefikReady(ctx context.Context, ssh utils.SSHClient) error {
-	cmd := kctl("kube-system", "get deploy traefik -o jsonpath='{.status.readyReplicas}/{.spec.replicas}' 2>/dev/null")
-
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
-		out, err := ssh.Run(ctx, cmd)
+// all replicas available.
+func (c *Client) waitForTraefikReady(ctx context.Context) error {
+	return utils.Poll(ctx, rolloutPollInterval, 2*time.Minute, func() (bool, error) {
+		dep, err := c.cs.AppsV1().Deployments("kube-system").Get(ctx, "traefik", metav1.GetOptions{})
 		if err != nil {
 			return false, nil // deployment may not exist yet — retry
 		}
-		raw := strings.Trim(strings.TrimSpace(string(out)), "'")
-		// Expect "1/1" or "N/N" — ready replicas match desired.
-		parts := strings.SplitN(raw, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return false, nil
+		desired := int32(0)
+		if dep.Spec.Replicas != nil {
+			desired = *dep.Spec.Replicas
 		}
-		return parts[0] == parts[1] && parts[0] != "0", nil
+		ready := dep.Status.ReadyReplicas
+		return desired > 0 && ready == desired, nil
 	})
 }

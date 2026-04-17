@@ -10,6 +10,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/testutil"
+	"github.com/getnvoi/nvoi/internal/testutil/kubefake"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
@@ -207,14 +208,16 @@ func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
 	activeMock = mock
 
 	ssh := convergeMock()
+	kf := kubefake.NewKubeFake()
 	sshKey, _, _ := utils.GenerateEd25519Key()
 	dc := &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey:    sshKey,
-			Output:    &testutil.MockOutput{},
-			MasterSSH: ssh,
+			SSHKey:     sshKey,
+			Output:     &testutil.MockOutput{},
+			MasterSSH:  ssh,
+			MasterKube: kf.Client,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
@@ -313,15 +316,35 @@ func convergeMock() *testutil.MockSSH {
 	}
 }
 
+// kubeFakes maps each test's DeployContext to its KubeFake so tests can
+// assert against the typed clientset without threading kf through every
+// helper signature. Tests use kfFor(dc) to retrieve.
+var kubeFakes = make(map[*config.DeployContext]*kubefake.KubeFake)
+
+func kfFor(dc *config.DeployContext) *kubefake.KubeFake {
+	return kubeFakes[dc]
+}
+
 func testDC(ssh *testutil.MockSSH) *config.DeployContext {
+	kf := kubefake.NewKubeFake()
+	kf.AutoReadyPods()
+	dc := testDCWithKube(ssh, kf)
+	kubeFakes[dc] = kf
+	return dc
+}
+
+// testDCWithKube wires MasterSSH and MasterKube together for tests that need
+// to inspect or pre-populate the kube tracker.
+func testDCWithKube(ssh *testutil.MockSSH, kf *kubefake.KubeFake) *config.DeployContext {
 	sshKey, _, _ := utils.GenerateEd25519Key()
 	return &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-compute", Credentials: map[string]string{},
-			SSHKey:    sshKey,
-			Output:    &testutil.MockOutput{},
-			MasterSSH: ssh,
+			SSHKey:     sshKey,
+			Output:     &testutil.MockOutput{},
+			MasterSSH:  ssh,
+			MasterKube: kf.Client,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
@@ -337,19 +360,24 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 	}}
 	activeMock = mock
 
+	kf := kubefake.NewKubeFake()
+	kf.AutoReadyPods()
 	sshKey, _, _ := utils.GenerateEd25519Key()
-	return &config.DeployContext{
+	dc := &config.DeployContext{
 		Cluster: app.Cluster{
 			AppName: "myapp", Env: "prod",
 			Provider: "test-reconcile", Credentials: map[string]string{},
-			SSHKey:    sshKey,
-			Output:    &testutil.MockOutput{},
-			MasterSSH: ssh,
+			SSHKey:     sshKey,
+			Output:     &testutil.MockOutput{},
+			MasterSSH:  ssh,
+			MasterKube: kf.Client,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
 		},
 	}
+	kubeFakes[dc] = kf
+	return dc
 }
 
 func testCreds(kvs ...string) provider.CredentialSource {

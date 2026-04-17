@@ -1,10 +1,6 @@
 package core
 
-import (
-	"context"
-
-	"github.com/getnvoi/nvoi/pkg/kube"
-)
+import "context"
 
 // WaitRolloutRequest asks the cluster to wait for a specific service's
 // rollout to complete. Scoped to one service — doesn't block on unrelated pods.
@@ -16,16 +12,16 @@ type WaitRolloutRequest struct {
 }
 
 // WaitRollout waits for a specific service's rollout to complete.
-// Uses kube.WaitRollout which polls pods by label, detects terminal failures,
-// and verifies stability for services without health checks.
+// Polls pods by label, detects terminal failures, and verifies stability for
+// services without health checks.
 func WaitRollout(ctx context.Context, req WaitRolloutRequest) error {
 	out := req.Log()
-	ssh, names, err := req.Cluster.SSH(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx)
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
+	defer cleanup()
 
 	ns := names.KubeNamespace()
-	return kube.WaitRollout(ctx, ssh, ns, req.Service, req.WorkloadKind, req.HasHealthCheck, out)
+	return kc.WaitRollout(ctx, ns, req.Service, req.WorkloadKind, req.HasHealthCheck, out)
 }

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/getnvoi/nvoi/internal/packages"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -30,12 +29,6 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	// ── Providers ─────────────────────────────────────────────────────────
 	if cfg.Providers.Compute == "" {
 		return fmt.Errorf("providers.compute is required")
-	}
-	if sp := cfg.Providers.Secrets; sp != "" {
-		knownSecrets := map[string]bool{"doppler": true, "awssm": true, "infisical": true}
-		if !knownSecrets[sp] {
-			return fmt.Errorf("providers.secrets: unsupported secrets provider %q (doppler, awssm, infisical)", sp)
-		}
 	}
 
 	// ── Servers ───────────────────────────────────────────────────────────
@@ -99,31 +92,13 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		}
 	}
 
-	// ── Build ─────────────────────────────────────────────────────────────
-	for name, source := range cfg.Build {
-		if err := utils.ValidateName("build."+name, name); err != nil {
-			return err
-		}
-		if source == "" {
-			return fmt.Errorf("build.%s: source is required", name)
-		}
-	}
-
 	// ── Services ──────────────────────────────────────────────────────────
 	for name, svc := range cfg.Services {
 		if err := utils.ValidateName("services."+name, name); err != nil {
 			return err
 		}
-		if svc.Image == "" && svc.Build == "" {
-			return fmt.Errorf("services.%s: image or build is required", name)
-		}
-		if svc.Image != "" && svc.Build != "" {
-			return fmt.Errorf("services.%s: image and build are mutually exclusive", name)
-		}
-		if svc.Build != "" {
-			if _, ok := cfg.Build[svc.Build]; !ok {
-				return fmt.Errorf("services.%s.build: %q is not a defined build target", name, svc.Build)
-			}
+		if svc.Image == "" {
+			return fmt.Errorf("services.%s: image is required", name)
 		}
 		if svc.Server != "" && len(svc.Servers) > 0 {
 			return fmt.Errorf("services.%s: server and servers are mutually exclusive", name)
@@ -160,16 +135,11 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if err := utils.ValidateName("crons."+name, name); err != nil {
 			return err
 		}
-		if cron.Image == "" && cron.Build == "" {
-			return fmt.Errorf("crons.%s: image or build is required", name)
+		if cron.Image == "" {
+			return fmt.Errorf("crons.%s: image is required", name)
 		}
 		if cron.Schedule == "" {
 			return fmt.Errorf("crons.%s.schedule is required", name)
-		}
-		if cron.Build != "" {
-			if _, ok := cfg.Build[cron.Build]; !ok {
-				return fmt.Errorf("crons.%s.build: %q is not a defined build target", name, cron.Build)
-			}
 		}
 		if cron.Server != "" && len(cron.Servers) > 0 {
 			return fmt.Errorf("crons.%s: server and servers are mutually exclusive", name)
@@ -225,11 +195,6 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if err := utils.ValidateEnvVarName("secrets."+name, name); err != nil {
 			return err
 		}
-	}
-
-	// ── Packages (database, etc.) ────────────────────────────────────────
-	if err := packages.ValidateAll(cfg); err != nil {
-		return err
 	}
 
 	return nil

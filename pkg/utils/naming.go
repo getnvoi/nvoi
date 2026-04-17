@@ -9,7 +9,6 @@ package utils
 import (
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -129,45 +128,11 @@ const (
 	RoleMaster          = "master"
 )
 
-// ── Database resource naming ──────────────────────────────────────────────────
-// Single source of truth for database resource name conventions.
-// Used by config.Resolve() and CLI-path consumers (pkg/core/database.go).
-// These derive deterministic k8s resource names from the database config key.
-
-func DatabaseServiceName(name string) string       { return name + "-db" }
-func DatabaseSecretName(name string) string        { return name + "-db-credentials" }
-func DatabaseBackupCronName(name string) string    { return name + "-db-backup" }
-func DatabaseBackupBucket(name string) string      { return name + "-db-backups" }
-func DatabasePodName(name string) string           { return name + "-db-0" }
-func DatabaseBackupCredsSecret(name string) string { return name + "-db-backup-secrets" }
-
 // ── Storage env naming ─────────────────────────────────────────────────────────
 
 func StorageEnvPrefix(bucketName string) string {
 	upper := strings.ToUpper(bucketName)
 	return "STORAGE_" + strings.ReplaceAll(upper, "-", "_")
-}
-
-// ── Name resolution ──────────────────────────────────────────────────────────
-
-// ResolveDBName returns the database name to operate on.
-// Flag overrides everything. With exactly one available, it's unambiguous.
-// Multiple available without a flag is an error — the user must specify --name.
-func ResolveDBName(flag string, available []string) (string, error) {
-	if flag != "" {
-		return flag, nil
-	}
-	switch len(available) {
-	case 0:
-		return "", fmt.Errorf("no databases configured")
-	case 1:
-		return available[0], nil
-	default:
-		sorted := make([]string, len(available))
-		copy(sorted, available)
-		sort.Strings(sorted)
-		return "", fmt.Errorf("multiple databases configured (%s), specify --name", strings.Join(sorted, ", "))
-	}
 }
 
 // ── Network CIDRs ──────────────────────────────────────────────────────────────

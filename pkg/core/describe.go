@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -82,38 +86,37 @@ type DescribeResult struct {
 // ── Public ──────────────────────────────────────────────────────────────────────
 
 func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error) {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer ssh.Close()
+	defer cleanup()
 
 	ns := names.KubeNamespace()
 
 	result := &DescribeResult{Namespace: ns}
-	result.Nodes = describeNodes(ctx, ssh)
+	result.Nodes = describeNodes(ctx, kc)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
-	result.Workloads = describeWorkloads(ctx, ssh, ns)
+	result.Workloads = describeWorkloads(ctx, kc, ns)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
-	result.Pods = describePods(ctx, ssh, ns)
+	result.Pods = describePods(ctx, kc, ns)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
-	result.Services = describeServices(ctx, ssh, ns)
+	result.Services = describeServices(ctx, kc, ns)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
-	result.Crons = describeCrons(ctx, ssh, ns)
+	result.Crons = describeCrons(ctx, kc, ns)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
 
-	// Ingress (k8s Ingress resources)
-	routes, err := kube.GetIngressRoutes(ctx, ssh, ns)
+	routes, err := kc.GetIngressRoutes(ctx, ns)
 	if err != nil {
 		return result, fmt.Errorf("describe ingress: %w", err)
 	}
@@ -136,9 +139,9 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 	// Secrets — read live keys from each per-service k8s Secret
 	for _, svc := range utils.SortedKeys(req.ServiceSecrets) {
 		secretName := names.KubeServiceSecrets(svc)
-		keys, err := kube.ListSecretKeys(ctx, ssh, ns, secretName)
+		keys, err := kc.ListSecretKeys(ctx, ns, secretName)
 		if err != nil {
-			continue // secret may not exist yet
+			continue
 		}
 		for _, key := range keys {
 			result.Secrets = append(result.Secrets, DescribeSecret{Key: key, Service: svc})
@@ -148,13 +151,14 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 	return result, nil
 }
 
-// DescribeJSON returns raw kubectl JSON keyed by resource type.
+// DescribeJSON returns raw JSON for each kube resource type, preserving the
+// shape clients of the legacy command depended on.
 func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.RawMessage, error) {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer ssh.Close()
+	defer cleanup()
 
 	ns := names.KubeNamespace()
 	sel := kube.NvoiSelector
@@ -162,22 +166,39 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 
 	type query struct {
 		key string
-		fn  func() ([]byte, error)
+		fn  func() (any, error)
 	}
 	queries := []query{
-		{"nodes", func() ([]byte, error) { return kube.GetClusterJSON(ctx, ssh, "nodes") }},
-		{"deployments", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "deployments", sel) }},
-		{"statefulsets", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "statefulsets", sel) }},
-		{"pods", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "pods", sel) }},
-		{"services", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "services", sel) }},
-		{"cronjobs", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "cronjobs", sel) }},
-		// Global "secrets" k8s Secret no longer exists — secrets live in per-service secrets only.
-		{"ingresses", func() ([]byte, error) { return kube.GetJSON(ctx, ssh, ns, "ingresses", kube.NvoiSelector) }},
+		{"nodes", func() (any, error) {
+			return kc.Clientset().CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		}},
+		{"deployments", func() (any, error) {
+			return kc.Clientset().AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		}},
+		{"statefulsets", func() (any, error) {
+			return kc.Clientset().AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		}},
+		{"pods", func() (any, error) {
+			return kc.Clientset().CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		}},
+		{"services", func() (any, error) {
+			return kc.Clientset().CoreV1().Services(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		}},
+		{"cronjobs", func() (any, error) {
+			return kc.Clientset().BatchV1().CronJobs(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		}},
+		{"ingresses", func() (any, error) {
+			return kc.Clientset().NetworkingV1().Ingresses(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
+		}},
 	}
 
 	for _, q := range queries {
-		if out, err := q.fn(); err == nil && len(out) > 0 {
-			result[q.key] = json.RawMessage(out)
+		obj, err := q.fn()
+		if err != nil {
+			continue
+		}
+		if data, err := json.Marshal(obj); err == nil && len(data) > 0 {
+			result[q.key] = data
 		}
 	}
 	return result, nil
@@ -185,190 +206,156 @@ func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.Raw
 
 // ── Internal helpers ────────────────────────────────────────────────────────────
 
-// kubeGet runs a kubectl get and unmarshals the JSON result into dest.
-func kubeGet(ctx context.Context, ssh utils.SSHClient, ns, resource string, dest any) error {
-	out, err := kube.GetJSON(ctx, ssh, ns, resource, kube.NvoiSelector)
+func describeNodes(ctx context.Context, kc *kube.Client) []DescribeNode {
+	nodes, err := kc.Clientset().CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return err
-	}
-	return json.Unmarshal(out, dest)
-}
-
-func kubeGetCluster(ctx context.Context, ssh utils.SSHClient, resource string, dest any) error {
-	out, err := kube.GetClusterJSON(ctx, ssh, resource)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(out, dest)
-}
-
-// ── kubectl parsers ─────────────────────────────────────────────────────────────
-
-func describeNodes(ctx context.Context, ssh utils.SSHClient) []DescribeNode {
-	var resp struct {
-		Items []struct {
-			Metadata struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			} `json:"metadata"`
-			Status struct {
-				Addresses  []struct{ Type, Address string } `json:"addresses"`
-				Conditions []struct{ Type, Status string }  `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if kubeGetCluster(ctx, ssh, "nodes", &resp) != nil {
 		return nil
 	}
-	var out []DescribeNode
-	for _, n := range resp.Items {
+	out := make([]DescribeNode, 0, len(nodes.Items))
+	for _, n := range nodes.Items {
 		status := "NotReady"
 		for _, c := range n.Status.Conditions {
-			if c.Type == "Ready" && c.Status == "True" {
+			if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
 				status = "Ready"
 			}
 		}
 		ip := ""
 		for _, a := range n.Status.Addresses {
-			if a.Type == "InternalIP" {
+			if a.Type == corev1.NodeInternalIP {
 				ip = a.Address
 				break
 			}
 		}
 		out = append(out, DescribeNode{
-			Name: n.Metadata.Name, Status: status,
-			Role: n.Metadata.Labels[utils.LabelNvoiRole], IP: ip,
+			Name:   n.Name,
+			Status: status,
+			Role:   n.Labels[utils.LabelNvoiRole],
+			IP:     ip,
 		})
 	}
 	return out
 }
 
-func describeWorkloads(ctx context.Context, ssh utils.SSHClient, ns string) []DescribeWorkload {
+func describeWorkloads(ctx context.Context, kc *kube.Client, ns string) []DescribeWorkload {
 	var out []DescribeWorkload
-	for _, kind := range []string{"deployments", "statefulsets"} {
-		var resp kube.WorkloadList
-		if kubeGet(ctx, ssh, ns, kind, &resp) != nil {
-			continue
-		}
-		kindName := strings.TrimSuffix(kind, "s")
-		for _, w := range resp.Items {
+
+	deps, err := kc.Clientset().AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
+	if err == nil {
+		for _, d := range deps.Items {
 			image := ""
-			if len(w.Spec.Template.Spec.Containers) > 0 {
-				image = w.Spec.Template.Spec.Containers[0].Image
+			if len(d.Spec.Template.Spec.Containers) > 0 {
+				image = d.Spec.Template.Spec.Containers[0].Image
+			}
+			replicas := int32(0)
+			if d.Spec.Replicas != nil {
+				replicas = *d.Spec.Replicas
 			}
 			out = append(out, DescribeWorkload{
-				Name: w.Metadata.Name, Kind: kindName,
-				Ready: fmt.Sprintf("%d/%d", w.Status.ReadyReplicas, w.Spec.Replicas),
-				Image: image, Age: utils.HumanAge(w.Metadata.CreationTimestamp),
+				Name:  d.Name,
+				Kind:  "deployment",
+				Ready: fmt.Sprintf("%d/%d", d.Status.ReadyReplicas, replicas),
+				Image: image,
+				Age:   utils.HumanAge(d.CreationTimestamp.Format("2006-01-02T15:04:05Z")),
+			})
+		}
+	}
+
+	ss, err := kc.Clientset().AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
+	if err == nil {
+		for _, s := range ss.Items {
+			image := ""
+			if len(s.Spec.Template.Spec.Containers) > 0 {
+				image = s.Spec.Template.Spec.Containers[0].Image
+			}
+			replicas := int32(0)
+			if s.Spec.Replicas != nil {
+				replicas = *s.Spec.Replicas
+			}
+			out = append(out, DescribeWorkload{
+				Name:  s.Name,
+				Kind:  "statefulset",
+				Ready: fmt.Sprintf("%d/%d", s.Status.ReadyReplicas, replicas),
+				Image: image,
+				Age:   utils.HumanAge(s.CreationTimestamp.Format("2006-01-02T15:04:05Z")),
 			})
 		}
 	}
 	return out
 }
 
-func describeCrons(ctx context.Context, ssh utils.SSHClient, ns string) []DescribeCron {
-	var resp struct {
-		Items []struct {
-			Metadata struct {
-				Name              string `json:"name"`
-				CreationTimestamp string `json:"creationTimestamp"`
-			} `json:"metadata"`
-			Spec struct {
-				Schedule    string `json:"schedule"`
-				JobTemplate struct {
-					Spec struct {
-						Template struct {
-							Spec struct {
-								Containers []struct {
-									Image string `json:"image"`
-								} `json:"containers"`
-							} `json:"spec"`
-						} `json:"template"`
-					} `json:"spec"`
-				} `json:"jobTemplate"`
-			} `json:"spec"`
-			Status struct {
-				LastScheduleTime *string `json:"lastScheduleTime"`
-				Active           []any   `json:"active"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if kubeGet(ctx, ssh, ns, "cronjobs", &resp) != nil {
+func describeCrons(ctx context.Context, kc *kube.Client, ns string) []DescribeCron {
+	list, err := kc.Clientset().BatchV1().CronJobs(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
+	if err != nil {
 		return nil
 	}
-	var out []DescribeCron
-	for _, item := range resp.Items {
+	out := make([]DescribeCron, 0, len(list.Items))
+	for _, c := range list.Items {
 		status := "idle"
-		if len(item.Status.Active) > 0 {
+		if len(c.Status.Active) > 0 {
 			status = "active"
-		} else if item.Status.LastScheduleTime != nil && *item.Status.LastScheduleTime != "" {
+		} else if c.Status.LastScheduleTime != nil {
 			status = "scheduled"
 		}
 		image := ""
-		if len(item.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
-			image = item.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
+		if len(c.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
+			image = c.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
 		}
 		out = append(out, DescribeCron{
-			Name:     item.Metadata.Name,
-			Schedule: item.Spec.Schedule,
+			Name:     c.Name,
+			Schedule: c.Spec.Schedule,
 			Image:    image,
-			Age:      utils.HumanAge(item.Metadata.CreationTimestamp),
+			Age:      utils.HumanAge(c.CreationTimestamp.Format("2006-01-02T15:04:05Z")),
 			Status:   status,
 		})
 	}
 	return out
 }
 
-func describePods(ctx context.Context, ssh utils.SSHClient, ns string) []DescribePod {
-	var resp kube.PodList
-	if kubeGet(ctx, ssh, ns, "pods", &resp) != nil {
+func describePods(ctx context.Context, kc *kube.Client, ns string) []DescribePod {
+	pods, err := kc.Clientset().CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil
+		}
 		return nil
 	}
-	var out []DescribePod
-	for _, p := range resp.Items {
-		status := p.Status.Phase
+	out := make([]DescribePod, 0, len(pods.Items))
+	for _, p := range pods.Items {
+		status := string(p.Status.Phase)
 		restarts := 0
 		for _, cs := range p.Status.ContainerStatuses {
-			restarts += cs.RestartCount
+			restarts += int(cs.RestartCount)
 			if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
 				status = cs.State.Waiting.Reason
 			}
 		}
 		out = append(out, DescribePod{
-			Name: p.Metadata.Name, Status: status,
-			Node: p.Spec.NodeName, Restarts: restarts,
-			Age: utils.HumanAge(p.Metadata.CreationTimestamp),
+			Name:     p.Name,
+			Status:   status,
+			Node:     p.Spec.NodeName,
+			Restarts: restarts,
+			Age:      utils.HumanAge(p.CreationTimestamp.Format("2006-01-02T15:04:05Z")),
 		})
 	}
 	return out
 }
 
-func describeServices(ctx context.Context, ssh utils.SSHClient, ns string) []DescribeService {
-	var resp struct {
-		Items []struct {
-			Metadata struct{ Name string } `json:"metadata"`
-			Spec     struct {
-				Type      string `json:"type"`
-				ClusterIP string `json:"clusterIP"`
-				Ports     []struct {
-					Port     int    `json:"port"`
-					Protocol string `json:"protocol"`
-				} `json:"ports"`
-			} `json:"spec"`
-		} `json:"items"`
-	}
-	if kubeGet(ctx, ssh, ns, "services", &resp) != nil {
+func describeServices(ctx context.Context, kc *kube.Client, ns string) []DescribeService {
+	svcs, err := kc.Clientset().CoreV1().Services(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
+	if err != nil {
 		return nil
 	}
-	var out []DescribeService
-	for _, s := range resp.Items {
-		var ports []string
+	out := make([]DescribeService, 0, len(svcs.Items))
+	for _, s := range svcs.Items {
+		ports := make([]string, 0, len(s.Spec.Ports))
 		for _, p := range s.Spec.Ports {
 			ports = append(ports, fmt.Sprintf("%d/%s", p.Port, p.Protocol))
 		}
 		out = append(out, DescribeService{
-			Name: s.Metadata.Name, Type: s.Spec.Type,
-			ClusterIP: s.Spec.ClusterIP, Ports: strings.Join(ports, ","),
+			Name:      s.Name,
+			Type:      string(s.Spec.Type),
+			ClusterIP: s.Spec.ClusterIP,
+			Ports:     strings.Join(ports, ","),
 		})
 	}
 	return out

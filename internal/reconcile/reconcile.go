@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/getnvoi/nvoi/internal/packages"
+	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
 // Deploy reconciles live infrastructure to match the YAML config.
@@ -29,7 +29,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	}
 
 	// Master is now guaranteed to exist. Establish a single SSH connection
-	// for all remaining operations.
+	// for all remaining operations, plus a kube client over the same tunnel.
 	master, _, _, err := dc.Cluster.Master(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve master after server setup: %w", err)
@@ -41,23 +41,20 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	defer ssh.Close()
 	dc.Cluster.MasterSSH = ssh
 
+	kc, err := kube.New(ctx, ssh)
+	if err != nil {
+		return fmt.Errorf("establish master kube client: %w", err)
+	}
+	defer kc.Close()
+	dc.Cluster.MasterKube = kc
+
 	if err := Firewall(ctx, dc, live, cfg); err != nil {
 		return err
 	}
 	if err := Volumes(ctx, dc, live, cfg); err != nil {
 		return err
 	}
-	if err := Build(ctx, dc, cfg); err != nil {
-		return err
-	}
 	secretValues, err := Secrets(ctx, dc, live, cfg)
-	if err != nil {
-		return err
-	}
-
-	// Packages (database, etc.) — after volumes/secrets, before services.
-	// Returns env vars available as $VAR resolution sources.
-	packageEnvVars, err := packages.ReconcileAll(ctx, dc, cfg)
 	if err != nil {
 		return err
 	}
@@ -68,7 +65,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	}
 
 	// Build unified sources for $VAR resolution and per-service secret storage.
-	sources := mergeSources(secretValues, packageEnvVars, storageCreds)
+	sources := mergeSources(secretValues, storageCreds)
 
 	if err := Services(ctx, dc, live, cfg, sources); err != nil {
 		return err

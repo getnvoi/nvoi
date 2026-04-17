@@ -2,24 +2,20 @@ package kube
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// podStatus and podList are aliases to the shared types in types.go.
-type podStatus = PodItem
-type podList = PodList
-
-// WaitRollout polls pods by label until all are Ready, printing state changes.
-// Terminal failures (bad image, config error, crash loop) exit immediately.
-// Transient states (scheduling, pulling, creating) keep polling with feedback.
 // ProgressEmitter receives status updates during rollout polling.
-// Defined here so kube/ doesn't import app/. app.Output satisfies this.
+// app.Output satisfies this — defined here so kube/ doesn't import app/.
 type ProgressEmitter interface {
 	Progress(msg string)
 }
@@ -39,8 +35,11 @@ func SetTestTiming(poll, stability time.Duration) {
 	stabilityDelay = stability
 }
 
-func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string, hasHealthCheck bool, emitter ProgressEmitter) error {
-	selector := fmt.Sprintf("%s=%s", utils.LabelAppName, name)
+// WaitRollout polls pods by label until all are Ready, printing state changes.
+// Terminal failures (bad image, config error, crash loop) exit immediately.
+// Transient states (scheduling, pulling, creating) keep polling with feedback.
+func (c *Client) WaitRollout(ctx context.Context, ns, name, kind string, hasHealthCheck bool, emitter ProgressEmitter) error {
+	selector := PodSelector(name)
 	lastStatus := ""
 
 	// Track the initial restart count for each pod so we can detect crashes
@@ -48,29 +47,22 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 	initialRestarts := map[string]int{}
 
 	err := utils.Poll(ctx, rolloutPollInterval, rolloutTimeout, func() (bool, error) {
-		cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
-		out, err := ssh.Run(ctx, cmd)
+		pods, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 		if err != nil {
 			return false, nil // transient — retry
 		}
-
-		var pods podList
-		if err := json.Unmarshal(out, &pods); err != nil {
-			return false, nil
-		}
-
 		if len(pods.Items) == 0 {
 			return false, nil
 		}
 
-		// Record initial restart counts the first time we see each pod.
-		for _, pod := range pods.Items {
-			if _, tracked := initialRestarts[pod.Metadata.Name]; !tracked {
+		for i := range pods.Items {
+			pod := &pods.Items[i]
+			if _, tracked := initialRestarts[pod.Name]; !tracked {
 				total := 0
 				for _, cs := range pod.Status.ContainerStatuses {
-					total += cs.RestartCount
+					total += int(cs.RestartCount)
 				}
-				initialRestarts[pod.Metadata.Name] = total
+				initialRestarts[pod.Name] = total
 			}
 		}
 
@@ -79,15 +71,16 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 		var states []string
 		var probeFailPod string
 
-		for _, pod := range pods.Items {
+		for i := range pods.Items {
+			pod := &pods.Items[i]
 			// Check for unschedulable — terminal
 			for _, cond := range pod.Status.Conditions {
-				if cond.Type == "PodScheduled" && cond.Status == "False" && cond.Reason == "Unschedulable" {
-					return false, fmt.Errorf("%s: pod %s unschedulable — %s", name, pod.Metadata.Name, cond.Message)
+				if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse && cond.Reason == "Unschedulable" {
+					return false, fmt.Errorf("%s: pod %s unschedulable — %s", name, pod.Name, cond.Message)
 				}
 			}
 
-			if pod.Status.Phase == "Succeeded" {
+			if pod.Status.Phase == corev1.PodSucceeded {
 				ready++
 				continue
 			}
@@ -97,7 +90,6 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 					continue
 				}
 
-				// Terminal — exit immediately
 				if cs.State.Waiting != nil {
 					reason := cs.State.Waiting.Reason
 					switch reason {
@@ -106,10 +98,9 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 					case "CreateContainerConfigError":
 						return false, fmt.Errorf("%s: %s — %s", name, reason, cs.State.Waiting.Message)
 					case "CrashLoopBackOff":
-						logs := RecentLogs(ctx, ssh, ns, name, kind, 20)
+						logs := c.RecentLogs(ctx, ns, name, kind, 20)
 						return false, fmt.Errorf("%s: CrashLoopBackOff (restarts: %d)\nlogs:\n%s", name, cs.RestartCount, indent(logs, "  "))
 					}
-					// Transient — keep polling
 					if reason != "" {
 						states = append(states, reason)
 					}
@@ -121,10 +112,8 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 					case "OOMKilled":
 						return false, fmt.Errorf("%s: OOMKilled — container ran out of memory", name)
 					case "Error", "":
-						// Container exited with non-zero. If it has restarted,
-						// fail fast with logs instead of waiting for CrashLoopBackOff.
 						if cs.RestartCount > 0 {
-							logs := RecentLogs(ctx, ssh, ns, name, kind, 30)
+							logs := c.RecentLogs(ctx, ns, name, kind, 30)
 							return false, fmt.Errorf("%s: container exited with code %d (restarts: %d)\nlogs:\n%s",
 								name, exitCode, cs.RestartCount, indent(logs, "  "))
 						}
@@ -135,16 +124,15 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 						}
 					}
 				}
-				// Running but not Ready = readiness probe failing
 				if cs.State.Running != nil {
 					if probeFailPod == "" {
-						probeFailPod = pod.Metadata.Name
+						probeFailPod = pod.Name
 					}
 					states = append(states, "probe failing")
 				}
 			}
 
-			if pod.Status.Phase == "Running" {
+			if pod.Status.Phase == corev1.PodRunning {
 				allReady := true
 				for _, cs := range pod.Status.ContainerStatuses {
 					if !cs.Ready {
@@ -154,15 +142,13 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 				if allReady {
 					ready++
 				}
-			} else if pod.Status.Phase == "Pending" && len(pod.Status.ContainerStatuses) == 0 {
+			} else if pod.Status.Phase == corev1.PodPending && len(pod.Status.ContainerStatuses) == 0 {
 				states = append(states, "Scheduling")
 			}
 		}
 
-		// Enrich "probe failing" with the actual error from pod events.
-		// Event messages naturally vary → status string changes → reprints.
 		if probeFailPod != "" {
-			if detail := probeFailureDetail(ctx, ssh, ns, probeFailPod); detail != "" {
+			if detail := c.probeFailureDetail(ctx, ns, probeFailPod); detail != "" {
 				for i, s := range states {
 					if s == "probe failing" {
 						states[i] = "probe failing: " + detail
@@ -172,7 +158,6 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 			}
 		}
 
-		// Build status line, print only on change
 		status := fmt.Sprintf("%d/%d ready", ready, total)
 		if len(states) > 0 {
 			status += " (" + strings.Join(dedup(states), ", ") + ")"
@@ -185,21 +170,16 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 		return ready == total, nil
 	})
 	if errors.Is(err, utils.ErrTimeout) {
-		return timeoutDiagnostics(ctx, ssh, ns, name, kind, selector, lastStatus)
+		return c.timeoutDiagnostics(ctx, ns, name, kind, selector, lastStatus)
 	}
 	if err != nil {
 		return err
 	}
 
-	// Services with a health check (readiness probe) don't need the extra
-	// stability check — k8s won't mark the pod Ready until the probe passes,
-	// so CrashLoopBackOff is detected naturally during polling above.
 	if hasHealthCheck {
 		return nil
 	}
 
-	// No health check: wait briefly and re-check for post-startup crashes.
-	// Apps without a readiness probe can briefly reach Ready then crash.
 	emitter.Progress(name + ": verifying stability")
 
 	select {
@@ -208,36 +188,29 @@ func WaitRollout(ctx context.Context, ssh utils.SSHClient, ns, name, kind string
 	case <-time.After(stabilityDelay):
 	}
 
-	return verifyStability(ctx, ssh, ns, name, kind, selector, initialRestarts, emitter)
+	return c.verifyStability(ctx, ns, name, kind, selector, initialRestarts, emitter)
 }
 
 // verifyStability re-polls pods after the stability delay and fails if any
-// pod's restart count increased since tracking began — indicating a post-startup crash.
-func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, selector string, initialRestarts map[string]int, emitter ProgressEmitter) error {
-	cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
-	out, err := ssh.Run(ctx, cmd)
+// pod's restart count increased since tracking began.
+func (c *Client) verifyStability(ctx context.Context, ns, name, kind, selector string, initialRestarts map[string]int, emitter ProgressEmitter) error {
+	pods, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return fmt.Errorf("%s: stability check failed: %w", name, err)
 	}
 
-	var pods podList
-	if err := json.Unmarshal(out, &pods); err != nil {
-		return fmt.Errorf("%s: stability check failed: %w", name, err)
-	}
-
-	for _, pod := range pods.Items {
-		// Detect crash-after-ready: total restart count increased for this pod.
+	for i := range pods.Items {
+		pod := &pods.Items[i]
 		currentTotal := 0
 		for _, cs := range pod.Status.ContainerStatuses {
-			currentTotal += cs.RestartCount
+			currentTotal += int(cs.RestartCount)
 		}
-		initial, tracked := initialRestarts[pod.Metadata.Name]
+		initial, tracked := initialRestarts[pod.Name]
 		if tracked && currentTotal > initial {
-			logs := RecentLogs(ctx, ssh, ns, name, kind, 20)
+			logs := c.RecentLogs(ctx, ns, name, kind, 20)
 			return fmt.Errorf("%s: pod crashed after becoming ready (restarts: %d)\nlogs:\n%s", name, currentTotal, indent(logs, "  "))
 		}
 
-		// Also check for terminal states that appeared after the ready window.
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Ready {
 				continue
@@ -246,7 +219,7 @@ func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, s
 				reason := cs.State.Waiting.Reason
 				switch reason {
 				case "CrashLoopBackOff":
-					logs := RecentLogs(ctx, ssh, ns, name, kind, 20)
+					logs := c.RecentLogs(ctx, ns, name, kind, 20)
 					return fmt.Errorf("%s: CrashLoopBackOff (restarts: %d)\nlogs:\n%s", name, cs.RestartCount, indent(logs, "  "))
 				case "ImagePullBackOff", "ErrImagePull", "InvalidImageName",
 					"CreateContainerConfigError":
@@ -262,37 +235,59 @@ func verifyStability(ctx context.Context, ssh utils.SSHClient, ns, name, kind, s
 	return nil
 }
 
-// RecentLogs fetches the last lines from a pod or workload.
-// For pods: kind="" and name is the pod name. Tries --previous first (crashed container).
-// For workloads: kind="deployment" or "statefulset", name is the workload name.
-func RecentLogs(ctx context.Context, ssh utils.SSHClient, ns, name, kind string, tail int) string {
+// RecentLogs fetches the last lines from a pod or workload via the streaming
+// log endpoint. For bare pods (kind=="") tries --previous first to capture
+// crashed-container logs.
+func (c *Client) RecentLogs(ctx context.Context, ns, name, kind string, tail int) string {
 	if tail == 0 {
 		tail = 20
 	}
-	target := name
+
+	// For workload kinds, resolve to the first matching pod by label.
+	podName := name
 	if kind != "" {
-		target = kind + "/" + name
+		got, err := c.FirstPod(ctx, ns, name)
+		if err != nil {
+			return ""
+		}
+		podName = got
 	}
 
-	// For bare pods (no kind), try --previous first to get crashed container logs
+	// For bare pods, try previous-container logs first (catches crashes).
 	if kind == "" {
-		out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("logs %s --previous --tail=%d", target, tail)))
-		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
-			return strings.TrimSpace(string(out))
+		if prev := c.podLogs(ctx, ns, podName, &corev1.PodLogOptions{
+			Previous:  true,
+			TailLines: int64Ptr(int64(tail)),
+		}); prev != "" {
+			return prev
 		}
 	}
 
-	out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("logs %s --tail=%d", target, tail)))
+	return c.podLogs(ctx, ns, podName, &corev1.PodLogOptions{
+		TailLines: int64Ptr(int64(tail)),
+	})
+}
+
+func (c *Client) podLogs(ctx context.Context, ns, podName string, opts *corev1.PodLogOptions) string {
+	req := c.cs.CoreV1().Pods(ns).GetLogs(podName, opts)
+	stream, err := req.Stream(ctx)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	defer stream.Close()
+	data, err := io.ReadAll(stream)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
+
+func int64Ptr(v int64) *int64 { return &v }
 
 // probeFailureDetail fetches the latest Warning event for a pod and returns
 // its message, truncated for single-line status display.
-func probeFailureDetail(ctx context.Context, ssh utils.SSHClient, ns, podName string) string {
-	events := recentEvents(ctx, ssh, ns, podName)
+func (c *Client) probeFailureDetail(ctx context.Context, ns, podName string) string {
+	events := c.recentEvents(ctx, ns, podName)
 	for _, ev := range events {
 		if ev.Message != "" {
 			return truncate(ev.Message, 80)

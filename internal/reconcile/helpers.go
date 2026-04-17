@@ -8,7 +8,6 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -108,12 +107,12 @@ func drainNode(ctx context.Context, dc *config.DeployContext, name string) error
 	if err != nil {
 		return fmt.Errorf("drain %s: %w", name, err)
 	}
-	ssh := dc.Cluster.MasterSSH
-	if ssh == nil {
-		return fmt.Errorf("drain %s: no master SSH connection", name)
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
+		return fmt.Errorf("drain %s: no master kube client", name)
 	}
 	dc.Cluster.Log().Command("node", "drain", names.Server(name))
-	return kube.DrainAndRemoveNode(ctx, ssh, names.Server(name))
+	return kc.DrainAndRemoveNode(ctx, names.Server(name))
 }
 
 func clusterWith(dc *config.DeployContext, creds map[string]string) app.Cluster {
@@ -164,25 +163,6 @@ func ResolveServers(cfg *config.AppConfig, servers []string, server string, moun
 		}
 	}
 	return nil
-}
-
-func resolveImageRef(ctx context.Context, dc *config.DeployContext, image, buildRef string) (string, error) {
-	if buildRef != "" {
-		ref, err := app.BuildLatest(ctx, app.BuildLatestRequest{Cluster: dc.Cluster, Name: buildRef})
-		if err != nil {
-			return "", fmt.Errorf("resolve build %q: %w", buildRef, err)
-		}
-		return ref, nil
-	}
-	return image, nil
-}
-
-func buildTargetStrings(build map[string]string) []string {
-	var targets []string
-	for _, name := range utils.SortedKeys(build) {
-		targets = append(targets, name+":"+build[name])
-	}
-	return targets
 }
 
 func toSet(items []string) map[string]bool {

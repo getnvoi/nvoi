@@ -17,6 +17,9 @@ import (
 // continues with a warning — certs finish issuing in the background.
 var acmeVerifyTimeout = 10 * time.Minute
 
+// SetACMEVerifyTimeoutForTest overrides acmeVerifyTimeout. Only for tests.
+func SetACMEVerifyTimeoutForTest(d time.Duration) { acmeVerifyTimeout = d }
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 // IngressRouteArg is a parsed service:domain,domain arg.
@@ -87,30 +90,33 @@ func ParseIngressArgs(args []string) ([]IngressRouteArg, error) {
 
 // IngressSet creates or updates a k8s Ingress resource for a service.
 // One Ingress per service — no shared state, no read-modify-write.
+//
+// ACME verification (cert + HTTPS reachability) runs from the master via
+// SSH because it inspects Traefik's acme.json on disk and curls the public
+// hostname through the master's network — both intrinsically off-cluster.
 func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	out := req.Log()
 
-	ssh, names, err := req.Cluster.SSH(ctx)
+	kc, names, kcleanup, err := req.Cluster.Kube(ctx)
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
+	defer kcleanup()
 
 	ns := names.KubeNamespace()
-	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
+	if err := kc.EnsureNamespace(ctx, ns); err != nil {
 		return err
 	}
 
 	out.Command("ingress", "set", req.Route.Service, "domains", req.Route.Domains)
 
-	// Resolve the service port from the cluster.
-	port, err := kube.GetServicePort(ctx, ssh, ns, req.Route.Service)
+	port, err := kc.GetServicePort(ctx, ns, req.Route.Service)
 	if err != nil {
 		return fmt.Errorf("service %q has no port — ingress requires a service with --port: %w", req.Route.Service, err)
 	}
 
 	out.Progress("applying ingress")
-	if err := kube.ApplyIngress(ctx, ssh, ns, kube.IngressRoute{
+	if err := kc.ApplyIngress(ctx, ns, kube.IngressRoute{
 		Service: req.Route.Service,
 		Port:    port,
 		Domains: req.Route.Domains,
@@ -119,44 +125,49 @@ func IngressSet(ctx context.Context, req IngressSetRequest) error {
 	}
 	out.Success("ingress ready")
 
-	if req.ACME {
-		waitForCert := req.Hooks.waitForCertificate()
-		waitForHTTPS := req.Hooks.waitForHTTPS()
-		healthPath := req.HealthPath
-		if healthPath == "" {
-			healthPath = "/"
-		}
+	if !req.ACME {
+		return nil
+	}
 
-		// Single deadline across all domains. If it expires, warn and
-		// continue — certs finish issuing in the background, next deploy
-		// will confirm them.
-		acmeCtx, cancel := context.WithTimeout(ctx, acmeVerifyTimeout)
-		defer cancel()
+	// ACME verification needs an SSH session into the master (acme.json
+	// inspection + curl over the master's egress).
+	ssh, _, err := req.Cluster.SSH(ctx)
+	if err != nil {
+		return err
+	}
+	defer ssh.Close()
 
-		for _, domain := range req.Route.Domains {
-			// Step 1: cert issued by ACME
-			out.Progress(fmt.Sprintf("waiting for certificate %s", domain))
-			if err := waitForCert(acmeCtx, ssh, domain); err != nil {
-				if acmeCtx.Err() != nil {
-					out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
-					return nil
-				}
-				return fmt.Errorf("certificate for %s not provisioned: %w", domain, err)
+	waitForCert := req.Hooks.waitForCertificate()
+	waitForHTTPS := req.Hooks.waitForHTTPS()
+	healthPath := req.HealthPath
+	if healthPath == "" {
+		healthPath = "/"
+	}
+
+	acmeCtx, cancel := context.WithTimeout(ctx, acmeVerifyTimeout)
+	defer cancel()
+
+	for _, domain := range req.Route.Domains {
+		out.Progress(fmt.Sprintf("waiting for certificate %s", domain))
+		if err := waitForCert(acmeCtx, ssh, domain); err != nil {
+			if acmeCtx.Err() != nil {
+				out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
+				return nil
 			}
-			out.Success(fmt.Sprintf("certificate %s ready", domain))
-
-			// Step 2: service reachable over HTTPS
-			url := fmt.Sprintf("https://%s%s", domain, healthPath)
-			out.Progress(fmt.Sprintf("waiting for %s", url))
-			if err := waitForHTTPS(acmeCtx, ssh, domain, healthPath); err != nil {
-				if acmeCtx.Err() != nil {
-					out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
-					return nil
-				}
-				return fmt.Errorf("%s not reachable: %w", url, err)
-			}
-			out.Success(fmt.Sprintf("%s live", url))
+			return fmt.Errorf("certificate for %s not provisioned: %w", domain, err)
 		}
+		out.Success(fmt.Sprintf("certificate %s ready", domain))
+
+		url := fmt.Sprintf("https://%s%s", domain, healthPath)
+		out.Progress(fmt.Sprintf("waiting for %s", url))
+		if err := waitForHTTPS(acmeCtx, ssh, domain, healthPath); err != nil {
+			if acmeCtx.Err() != nil {
+				out.Warning(fmt.Sprintf("ACME verification timed out at %s — certs may still be issuing. Next deploy will re-verify.", domain))
+				return nil
+			}
+			return fmt.Errorf("%s not reachable: %w", url, err)
+		}
+		out.Success(fmt.Sprintf("%s live", url))
 	}
 
 	return nil
@@ -169,19 +180,19 @@ func IngressDelete(ctx context.Context, req IngressDeleteRequest) error {
 	out := req.Log()
 	out.Command("ingress", "delete", req.Route.Service, "domains", req.Route.Domains)
 
-	ssh, names, sshErr := req.Cluster.SSH(ctx)
-	if sshErr != nil {
-		if errors.Is(sshErr, ErrNoMaster) {
+	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	if err != nil {
+		if errors.Is(err, ErrNoMaster) {
 			out.Success("cluster gone — local resources already absent")
 			return nil
 		}
-		return sshErr
+		return err
 	}
-	defer ssh.Close()
+	defer cleanup()
 
 	ns := names.KubeNamespace()
 	out.Progress("removing ingress")
-	if err := kube.DeleteIngress(ctx, ssh, ns, req.Route.Service); err != nil {
+	if err := kc.DeleteIngress(ctx, ns, req.Route.Service); err != nil {
 		return err
 	}
 	out.Success("ingress removed")

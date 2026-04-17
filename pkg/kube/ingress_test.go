@@ -2,516 +2,274 @@ package kube
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
+	"sort"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	sigsyaml "sigs.k8s.io/yaml"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func TestGenerateIngressYAML_SingleDomain_ACME(t *testing.T) {
-	route := IngressRoute{Service: "web", Port: 3000, Domains: []string{"example.com"}}
-	yaml, err := GenerateIngressYAML(route, "nvoi-test-prod", true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+func TestBuildIngress_SingleDomainACME(t *testing.T) {
+	ing := BuildIngress(IngressRoute{Service: "web", Port: 3000, Domains: []string{"example.com"}}, "nvoi-test-prod", true)
 
-	var ingress networkingv1.Ingress
-	if err := sigsyaml.Unmarshal([]byte(yaml), &ingress); err != nil {
-		t.Fatalf("invalid YAML: %v", err)
+	if ing.Name != "ingress-web" {
+		t.Errorf("name = %q", ing.Name)
 	}
-
-	if ingress.Name != "ingress-web" {
-		t.Errorf("name = %q, want ingress-web", ingress.Name)
+	if ing.Namespace != "nvoi-test-prod" {
+		t.Errorf("namespace = %q", ing.Namespace)
 	}
-	if ingress.Namespace != "nvoi-test-prod" {
-		t.Errorf("namespace = %q, want nvoi-test-prod", ingress.Namespace)
+	if ing.Annotations["traefik.ingress.kubernetes.io/router.tls.certresolver"] != "letsencrypt" {
+		t.Errorf("ACME annotation missing: %v", ing.Annotations)
 	}
-
-	// Annotations
-	if ingress.Annotations["traefik.ingress.kubernetes.io/router.tls.certresolver"] != "letsencrypt" {
-		t.Error("missing certresolver annotation")
+	if len(ing.Spec.TLS) != 1 || ing.Spec.TLS[0].SecretName != "tls-web" {
+		t.Errorf("TLS = %+v", ing.Spec.TLS)
 	}
-	if ingress.Annotations["traefik.ingress.kubernetes.io/router.entrypoints"] != "web,websecure" {
-		t.Error("missing entrypoints annotation")
+	rules := ing.Spec.Rules
+	if len(rules) != 1 || rules[0].Host != "example.com" {
+		t.Fatalf("rules = %+v", rules)
 	}
-
-	// Rules
-	if len(ingress.Spec.Rules) != 1 {
-		t.Fatalf("rules = %d, want 1", len(ingress.Spec.Rules))
-	}
-	rule := ingress.Spec.Rules[0]
-	if rule.Host != "example.com" {
-		t.Errorf("host = %q, want example.com", rule.Host)
-	}
-	if rule.HTTP.Paths[0].Backend.Service.Name != "web" {
-		t.Errorf("backend service = %q, want web", rule.HTTP.Paths[0].Backend.Service.Name)
-	}
-	if rule.HTTP.Paths[0].Backend.Service.Port.Number != 3000 {
-		t.Errorf("backend port = %d, want 3000", rule.HTTP.Paths[0].Backend.Service.Port.Number)
-	}
-
-	// TLS
-	if len(ingress.Spec.TLS) != 1 {
-		t.Fatalf("tls = %d, want 1", len(ingress.Spec.TLS))
-	}
-	if ingress.Spec.TLS[0].SecretName != "tls-web" {
-		t.Errorf("tls secret = %q, want tls-web", ingress.Spec.TLS[0].SecretName)
-	}
-	if ingress.Spec.TLS[0].Hosts[0] != "example.com" {
-		t.Errorf("tls host = %q, want example.com", ingress.Spec.TLS[0].Hosts[0])
+	backend := rules[0].HTTP.Paths[0].Backend.Service
+	if backend.Name != "web" || backend.Port.Number != 3000 {
+		t.Errorf("backend = %+v", backend)
 	}
 }
 
-func TestGenerateIngressYAML_MultipleDomains(t *testing.T) {
-	route := IngressRoute{Service: "web", Port: 3000, Domains: []string{"example.com", "www.example.com"}}
-	yaml, err := GenerateIngressYAML(route, "ns", true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+func TestBuildIngress_MultipleDomains(t *testing.T) {
+	ing := BuildIngress(IngressRoute{
+		Service: "api", Port: 8080,
+		Domains: []string{"api.example.com", "api2.example.com"},
+	}, "ns", true)
 
-	var ingress networkingv1.Ingress
-	if err := sigsyaml.Unmarshal([]byte(yaml), &ingress); err != nil {
-		t.Fatalf("invalid YAML: %v", err)
+	if len(ing.Spec.Rules) != 2 {
+		t.Fatalf("rules = %d, want 2", len(ing.Spec.Rules))
 	}
-
-	if len(ingress.Spec.Rules) != 2 {
-		t.Fatalf("rules = %d, want 2", len(ingress.Spec.Rules))
-	}
-	if ingress.Spec.Rules[0].Host != "example.com" {
-		t.Errorf("rule[0] host = %q", ingress.Spec.Rules[0].Host)
-	}
-	if ingress.Spec.Rules[1].Host != "www.example.com" {
-		t.Errorf("rule[1] host = %q", ingress.Spec.Rules[1].Host)
-	}
-
-	if len(ingress.Spec.TLS) != 1 {
-		t.Fatalf("tls = %d, want 1", len(ingress.Spec.TLS))
-	}
-	if len(ingress.Spec.TLS[0].Hosts) != 2 {
-		t.Fatalf("tls hosts = %d, want 2", len(ingress.Spec.TLS[0].Hosts))
+	if len(ing.Spec.TLS[0].Hosts) != 2 {
+		t.Errorf("TLS hosts = %v", ing.Spec.TLS[0].Hosts)
 	}
 }
 
-func TestGenerateIngressYAML_NoACME(t *testing.T) {
-	route := IngressRoute{Service: "web", Port: 3000, Domains: []string{"example.com"}}
-	yaml, err := GenerateIngressYAML(route, "ns", false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestBuildIngress_NoACME(t *testing.T) {
+	ing := BuildIngress(IngressRoute{Service: "web", Port: 80, Domains: []string{"example.com"}}, "ns", false)
+	if _, has := ing.Annotations["traefik.ingress.kubernetes.io/router.tls.certresolver"]; has {
+		t.Error("ACME annotation must not be present when acme=false")
 	}
-
-	var ingress networkingv1.Ingress
-	if err := sigsyaml.Unmarshal([]byte(yaml), &ingress); err != nil {
-		t.Fatalf("invalid YAML: %v", err)
-	}
-
-	// No certresolver annotation
-	if _, ok := ingress.Annotations["traefik.ingress.kubernetes.io/router.tls.certresolver"]; ok {
-		t.Error("certresolver annotation should not be present when ACME is false")
-	}
-
-	// Entrypoints still set
-	if ingress.Annotations["traefik.ingress.kubernetes.io/router.entrypoints"] != "web,websecure" {
-		t.Error("entrypoints annotation should always be present")
-	}
-
-	// No TLS block
-	if len(ingress.Spec.TLS) != 0 {
-		t.Errorf("tls should be empty when ACME is false, got %d", len(ingress.Spec.TLS))
+	if len(ing.Spec.TLS) != 0 {
+		t.Errorf("TLS must be empty when acme=false, got %+v", ing.Spec.TLS)
 	}
 }
 
-func TestGenerateIngressYAML_ValidYAML(t *testing.T) {
-	route := IngressRoute{Service: "api", Port: 8080, Domains: []string{"api.example.com"}}
-	yaml, err := GenerateIngressYAML(route, "ns", true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Must be valid YAML that parses to valid JSON
-	var raw map[string]any
-	if err := sigsyaml.Unmarshal([]byte(yaml), &raw); err != nil {
-		t.Fatalf("invalid YAML: %v", err)
-	}
-	if raw["apiVersion"] != "networking.k8s.io/v1" {
-		t.Errorf("apiVersion = %v, want networking.k8s.io/v1", raw["apiVersion"])
-	}
-	if raw["kind"] != "Ingress" {
-		t.Errorf("kind = %v, want Ingress", raw["kind"])
-	}
-}
-
-func TestGetIngressRoutes_ParsesJSON(t *testing.T) {
-	// Simulate kubectl JSON output
-	list := networkingv1.IngressList{
-		Items: []networkingv1.Ingress{
-			{
-				Spec: networkingv1.IngressSpec{
-					Rules: []networkingv1.IngressRule{
-						{
-							Host: "example.com",
-							IngressRuleValue: networkingv1.IngressRuleValue{
-								HTTP: &networkingv1.HTTPIngressRuleValue{
-									Paths: []networkingv1.HTTPIngressPath{{
-										Backend: networkingv1.IngressBackend{
-											Service: &networkingv1.IngressServiceBackend{
-												Name: "web",
-												Port: networkingv1.ServiceBackendPort{Number: 3000},
-											},
-										},
-									}},
-								},
-							},
-						},
-						{
-							Host: "www.example.com",
-							IngressRuleValue: networkingv1.IngressRuleValue{
-								HTTP: &networkingv1.HTTPIngressRuleValue{
-									Paths: []networkingv1.HTTPIngressPath{{
-										Backend: networkingv1.IngressBackend{
-											Service: &networkingv1.IngressServiceBackend{
-												Name: "web",
-												Port: networkingv1.ServiceBackendPort{Number: 3000},
-											},
-										},
-									}},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	data, _ := json.Marshal(list)
-
-	// Parse using the same logic as GetIngressRoutes
-	var parsed networkingv1.IngressList
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	byService := map[string]*IngressRoute{}
-	for _, item := range parsed.Items {
-		for _, rule := range item.Spec.Rules {
-			if rule.HTTP == nil || len(rule.HTTP.Paths) == 0 {
-				continue
-			}
-			path := rule.HTTP.Paths[0]
-			if path.Backend.Service == nil {
-				continue
-			}
-			svc := path.Backend.Service.Name
-			port := int(path.Backend.Service.Port.Number)
-			if _, ok := byService[svc]; !ok {
-				byService[svc] = &IngressRoute{Service: svc, Port: port}
-			}
-			byService[svc].Domains = append(byService[svc].Domains, rule.Host)
-		}
-	}
-
-	if len(byService) != 1 {
-		t.Fatalf("expected 1 service, got %d", len(byService))
-	}
-	web := byService["web"]
-	if web.Port != 3000 {
-		t.Errorf("port = %d, want 3000", web.Port)
-	}
-	if len(web.Domains) != 2 {
-		t.Fatalf("domains = %d, want 2", len(web.Domains))
-	}
-}
-
-// ingressRule builds a single IngressRule pointing to service:port.
-func ingressRule(host, service string, port int) networkingv1.IngressRule {
-	return networkingv1.IngressRule{
-		Host: host,
-		IngressRuleValue: networkingv1.IngressRuleValue{
-			HTTP: &networkingv1.HTTPIngressRuleValue{
-				Paths: []networkingv1.HTTPIngressPath{{
-					Backend: networkingv1.IngressBackend{
-						Service: &networkingv1.IngressServiceBackend{
-							Name: service,
-							Port: networkingv1.ServiceBackendPort{Number: int32(port)},
-						},
-					},
-				}},
-			},
-		},
-	}
-}
-
-// ingressListSSH returns a MockSSH that responds to "get ingress" with the serialized list.
-func ingressListSSH(items ...networkingv1.Ingress) *testutil.MockSSH {
-	list := networkingv1.IngressList{Items: items}
-	data, _ := json.Marshal(list)
-	return &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "get ingress", Result: testutil.MockResult{Output: data}},
-		},
-	}
-}
-
-func findRoute(routes []IngressRoute, service string) *IngressRoute {
-	for _, r := range routes {
-		if r.Service == service {
-			return &r
-		}
-	}
-	return nil
-}
-
-func TestGetIngressRoutes_TwoServices(t *testing.T) {
-	ssh := ingressListSSH(
-		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
-			Rules: []networkingv1.IngressRule{ingressRule("example.com", "web", 3000)},
-		}},
-		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
-			Rules: []networkingv1.IngressRule{ingressRule("api.example.com", "api", 8080)},
-		}},
-	)
-
-	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 2 {
-		t.Fatalf("expected 2 routes, got %d", len(routes))
-	}
-
-	web := findRoute(routes, "web")
-	api := findRoute(routes, "api")
-	if web == nil {
-		t.Fatal("missing route for web")
-	}
-	if api == nil {
-		t.Fatal("missing route for api")
-	}
-	if web.Port != 3000 {
-		t.Errorf("web port = %d, want 3000", web.Port)
-	}
-	if api.Port != 8080 {
-		t.Errorf("api port = %d, want 8080", api.Port)
-	}
-	if len(web.Domains) != 1 || web.Domains[0] != "example.com" {
-		t.Errorf("web domains = %v, want [example.com]", web.Domains)
-	}
-	if len(api.Domains) != 1 || api.Domains[0] != "api.example.com" {
-		t.Errorf("api domains = %v, want [api.example.com]", api.Domains)
-	}
-}
-
-func TestGetIngressRoutes_SameServiceTwoIngresses_DomainsMerge(t *testing.T) {
-	// Two separate Ingress resources both pointing to "web" — domains should merge.
-	ssh := ingressListSSH(
-		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
-			Rules: []networkingv1.IngressRule{ingressRule("example.com", "web", 3000)},
-		}},
-		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
-			Rules: []networkingv1.IngressRule{ingressRule("www.example.com", "web", 3000)},
-		}},
-	)
-
-	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 1 {
-		t.Fatalf("expected 1 route (merged), got %d", len(routes))
-	}
-	if routes[0].Service != "web" {
-		t.Errorf("service = %q, want web", routes[0].Service)
-	}
-	if len(routes[0].Domains) != 2 {
-		t.Fatalf("expected 2 domains merged, got %d: %v", len(routes[0].Domains), routes[0].Domains)
-	}
-}
-
-func TestGetIngressRoutes_MultiRulesPerIngress(t *testing.T) {
-	// One Ingress with multiple rules — same service, multiple domains.
-	ssh := ingressListSSH(
-		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
-			Rules: []networkingv1.IngressRule{
-				ingressRule("example.com", "web", 3000),
-				ingressRule("www.example.com", "web", 3000),
-				ingressRule("api.example.com", "api", 8080),
-			},
-		}},
-	)
-
-	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 2 {
-		t.Fatalf("expected 2 routes, got %d", len(routes))
-	}
-
-	web := findRoute(routes, "web")
-	api := findRoute(routes, "api")
-	if web == nil || api == nil {
-		t.Fatalf("missing routes: web=%v api=%v", web, api)
-	}
-	if len(web.Domains) != 2 {
-		t.Errorf("web should have 2 domains, got %d: %v", len(web.Domains), web.Domains)
-	}
-	if len(api.Domains) != 1 {
-		t.Errorf("api should have 1 domain, got %d: %v", len(api.Domains), api.Domains)
-	}
-}
-
-func TestGetIngressRoutes_EmptyList(t *testing.T) {
-	ssh := ingressListSSH() // no items
-
-	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 0 {
-		t.Errorf("expected 0 routes, got %d", len(routes))
-	}
-}
-
-func TestGetIngressRoutes_SkipsRulesWithoutHTTP(t *testing.T) {
-	// Rule with no HTTP block — should be skipped without error.
-	ssh := ingressListSSH(
-		networkingv1.Ingress{Spec: networkingv1.IngressSpec{
-			Rules: []networkingv1.IngressRule{
-				{Host: "tcp.example.com"}, // no HTTP
-				ingressRule("example.com", "web", 3000),
-			},
-		}},
-	)
-
-	routes, err := GetIngressRoutes(context.Background(), ssh, "ns")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(routes) != 1 {
-		t.Fatalf("expected 1 route, got %d", len(routes))
-	}
-	if len(routes[0].Domains) != 1 || routes[0].Domains[0] != "example.com" {
-		t.Errorf("domains = %v, want [example.com]", routes[0].Domains)
+func TestBuildIngress_Labels(t *testing.T) {
+	ing := BuildIngress(IngressRoute{Service: "web", Port: 80, Domains: []string{"example.com"}}, "ns", true)
+	if ing.Labels[utils.LabelAppManagedBy] != utils.LabelManagedBy {
+		t.Errorf("managed-by label missing: %v", ing.Labels)
 	}
 }
 
 func TestKubeIngressName(t *testing.T) {
 	if got := KubeIngressName("web"); got != "ingress-web" {
-		t.Errorf("got %q, want ingress-web", got)
-	}
-	if got := KubeIngressName("api"); got != "ingress-api" {
-		t.Errorf("got %q, want ingress-api", got)
+		t.Errorf("got %q", got)
 	}
 }
 
-func TestEnsureTraefikACME_UsesUploadNotHeredoc(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
-			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
+func TestDeleteIngress_Idempotent(t *testing.T) {
+	c := newTestClient()
+	if err := c.DeleteIngress(context.Background(), "ns", "missing"); err != nil {
+		t.Errorf("absent ingress must not error: %v", err)
+	}
+	existing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "ingress-web", Namespace: "ns"},
+	}
+	c = newTestClient(existing)
+	if err := c.DeleteIngress(context.Background(), "ns", "web"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := c.cs.NetworkingV1().Ingresses("ns").Get(context.Background(), "ingress-web", metav1.GetOptions{}); err == nil {
+		t.Error("ingress should be gone")
+	}
+}
+
+func managedIngress(name, host, svc string, port int32) *networkingv1.Ingress {
+	pathType := networkingv1.PathTypePrefix
+	return &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "ns",
+			Labels:    map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{
+				Host: host,
+				IngressRuleValue: networkingv1.IngressRuleValue{
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{{
+							Path:     "/",
+							PathType: &pathType,
+							Backend: networkingv1.IngressBackend{
+								Service: &networkingv1.IngressServiceBackend{
+									Name: svc,
+									Port: networkingv1.ServiceBackendPort{Number: port},
+								},
+							},
+						}},
+					},
+				},
+			}},
 		},
 	}
+}
 
-	err := EnsureTraefikACME(context.Background(), mock, "admin@example.com", true)
+func TestGetIngressRoutes_ParsesServices(t *testing.T) {
+	c := newTestClient(
+		managedIngress("ingress-web", "example.com", "web", 80),
+		managedIngress("ingress-api", "api.example.com", "api", 8080),
+	)
+
+	routes, err := c.GetIngressRoutes(context.Background(), "ns")
 	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+		t.Fatalf("get: %v", err)
 	}
-
-	// Must use SFTP upload — not heredoc
-	if len(mock.Uploads) != 1 {
-		t.Fatalf("expected 1 upload (SFTP), got %d — heredoc bypasses upload", len(mock.Uploads))
+	if len(routes) != 2 {
+		t.Fatalf("routes = %d, want 2", len(routes))
 	}
-	yaml := string(mock.Uploads[0].Content)
-	if !strings.Contains(yaml, "HelmChartConfig") {
-		t.Error("uploaded YAML should contain HelmChartConfig")
+	byService := map[string]IngressRoute{}
+	for _, r := range routes {
+		byService[r.Service] = r
 	}
-	if !strings.Contains(yaml, "admin@example.com") {
-		t.Error("uploaded YAML should contain the ACME email")
+	if byService["web"].Port != 80 || byService["web"].Domains[0] != "example.com" {
+		t.Errorf("web = %+v", byService["web"])
 	}
-	if !strings.Contains(yaml, "letsencrypt") {
-		t.Error("uploaded YAML should contain letsencrypt resolver config")
-	}
-
-	// Verify KUBECONFIG is used, no heredoc markers
-	for _, cmd := range mock.Calls {
-		if !strings.Contains(cmd, "KUBECONFIG=") {
-			t.Errorf("should use KUBECONFIG env, got: %s", cmd)
-		}
-		if strings.Contains(cmd, "EOYAML") || strings.Contains(cmd, "cat <<") {
-			t.Errorf("should not use heredoc, got: %s", cmd)
-		}
+	if byService["api"].Port != 8080 || byService["api"].Domains[0] != "api.example.com" {
+		t.Errorf("api = %+v", byService["api"])
 	}
 }
 
-func TestEnsureTraefikACME_NoACME(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
-			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
+func TestGetIngressRoutes_SameServiceMerges(t *testing.T) {
+	c := newTestClient(
+		managedIngress("ingress-web-1", "a.example.com", "web", 80),
+		managedIngress("ingress-web-2", "b.example.com", "web", 80),
+	)
+
+	routes, err := c.GetIngressRoutes(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("routes = %d, want 1 (merged)", len(routes))
+	}
+	domains := routes[0].Domains
+	sort.Strings(domains)
+	if len(domains) != 2 || domains[0] != "a.example.com" || domains[1] != "b.example.com" {
+		t.Errorf("domains = %v", domains)
+	}
+}
+
+func TestGetIngressRoutes_Empty(t *testing.T) {
+	c := newTestClient()
+	routes, err := c.GetIngressRoutes(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(routes) != 0 {
+		t.Errorf("routes = %v", routes)
+	}
+}
+
+func TestGetIngressRoutes_SkipsRulesWithoutHTTP(t *testing.T) {
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "broken",
+			Namespace: "ns",
+			Labels:    map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
 		},
+		Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "x"}}}, // no HTTP
 	}
-
-	err := EnsureTraefikACME(context.Background(), mock, "", false)
+	c := newTestClient(ing)
+	routes, err := c.GetIngressRoutes(context.Background(), "ns")
 	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+		t.Fatalf("get: %v", err)
 	}
-
-	if len(mock.Uploads) != 1 {
-		t.Fatalf("expected 1 upload, got %d", len(mock.Uploads))
-	}
-	yaml := string(mock.Uploads[0].Content)
-	if !strings.Contains(yaml, "HelmChartConfig") {
-		t.Error("uploaded YAML should contain HelmChartConfig")
-	}
-	// No ACME mode disables websecure
-	if strings.Contains(yaml, "letsencrypt") {
-		t.Error("no-ACME mode should not contain letsencrypt config")
-	}
-	if !strings.Contains(yaml, "websecure") {
-		t.Error("no-ACME mode should disable websecure port")
+	if len(routes) != 0 {
+		t.Errorf("rules without HTTP must be skipped, got %v", routes)
 	}
 }
 
-func TestEnsureTraefikACME_WaitsForTraefikReady(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "apply --server-side", Result: testutil.MockResult{}},
-			{Prefix: "get deploy traefik", Result: testutil.MockResult{Output: []byte("'1/1'")}},
-		},
+func TestEnsureTraefikACME_AppliesHelmChartConfig(t *testing.T) {
+	one := int32(1)
+	readyTraefik := &appsv1.Deployment{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{Name: "traefik", Namespace: "kube-system"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &one},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
 	}
+	c := newTestClient(readyTraefik)
 
-	err := EnsureTraefikACME(context.Background(), mock, "admin@example.com", true)
+	cleanup := fastTiming()
+	defer cleanup()
+
+	if err := c.EnsureTraefikACME(context.Background(), "admin@example.com", true); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	gvr := schema.GroupVersionResource{Group: "helm.cattle.io", Version: "v1", Resource: "helmchartconfigs"}
+	got, err := c.dyn.Resource(gvr).Namespace("kube-system").Get(context.Background(), "traefik", metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+		t.Fatalf("HelmChartConfig not applied: %v", err)
 	}
+	values, _, _ := unstructuredGet(got.Object, "spec", "valuesContent")
+	vs, _ := values.(string)
+	if !contains(vs, "admin@example.com") {
+		t.Errorf("valuesContent missing email: %q", vs)
+	}
+	if !contains(vs, "letsencrypt") {
+		t.Errorf("valuesContent missing letsencrypt: %q", vs)
+	}
+}
 
-	// Must have called get deploy traefik to wait for readiness
-	foundReadyCheck := false
-	for _, cmd := range mock.Calls {
-		if strings.Contains(cmd, "get deploy traefik") && strings.Contains(cmd, "jsonpath") {
-			foundReadyCheck = true
+func TestEnsureTraefikACME_NoACMEMode(t *testing.T) {
+	one := int32(1)
+	readyTraefik := &appsv1.Deployment{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{Name: "traefik", Namespace: "kube-system"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &one},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
+	}
+	c := newTestClient(readyTraefik)
+
+	cleanup := fastTiming()
+	defer cleanup()
+
+	if err := c.EnsureTraefikACME(context.Background(), "", false); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	gvr := schema.GroupVersionResource{Group: "helm.cattle.io", Version: "v1", Resource: "helmchartconfigs"}
+	got, err := c.dyn.Resource(gvr).Namespace("kube-system").Get(context.Background(), "traefik", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("HelmChartConfig not applied: %v", err)
+	}
+	values, _, _ := unstructuredGet(got.Object, "spec", "valuesContent")
+	vs, _ := values.(string)
+	if contains(vs, "letsencrypt") {
+		t.Errorf("no-ACME mode must not configure letsencrypt, got: %q", vs)
+	}
+}
+
+// unstructuredGet fetches a nested value from an unstructured.Unstructured
+// object's raw map. Exposed to tests via file-scope helper so we don't couple
+// the test to a specific k8s helper import path.
+func unstructuredGet(obj map[string]any, path ...string) (any, bool, error) {
+	cur := any(obj)
+	for _, key := range path {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false, nil
+		}
+		cur, ok = m[key]
+		if !ok {
+			return nil, false, nil
 		}
 	}
-	if !foundReadyCheck {
-		t.Errorf("EnsureTraefikACME must wait for traefik readiness after applying config, calls: %v", mock.Calls)
-	}
-}
-
-func TestGenerateIngressYAML_Labels(t *testing.T) {
-	route := IngressRoute{Service: "web", Port: 3000, Domains: []string{"example.com"}}
-	yaml, err := GenerateIngressYAML(route, "ns", true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !strings.Contains(yaml, "app.kubernetes.io/managed-by: nvoi") {
-		t.Error("missing managed-by label")
-	}
-	if !strings.Contains(yaml, "app.kubernetes.io/name: ingress-web") {
-		t.Error("missing app name label")
-	}
+	return cur, true, nil
 }

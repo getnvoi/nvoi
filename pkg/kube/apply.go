@@ -1,344 +1,340 @@
-// Package kube handles Kubernetes YAML generation, kubectl operations over SSH, Ingress resource management, and rollout monitoring.
+// Package kube wraps client-go with nvoi's deployment conventions:
+// server-side apply with the "nvoi" field manager, idempotent secret
+// upserts, watch-driven rollout monitoring, namespace+label scoping.
+//
+// Every operation goes through *Client, which holds a typed clientset and
+// a dynamic clientset over an SSH-tunneled connection to the apiserver.
 package kube
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"strings"
+
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes/scheme"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-var kubeconfigPath = fmt.Sprintf("/home/%s/.kube/config", utils.DefaultUser)
+// FieldManager identifies nvoi as the owner of fields it sets via
+// server-side apply. Conflicting field manipulation surfaces as a real error
+// (not silently overwritten) unless --force-conflicts is set on the patch.
+const FieldManager = "nvoi"
 
-// NvoiSelector is the label selector for nvoi-managed resources.
+// NvoiSelector is the label selector matching every nvoi-managed resource.
 var NvoiSelector = fmt.Sprintf("%s=%s", utils.LabelAppManagedBy, utils.LabelManagedBy)
 
-// kctl is the single source of truth for kubectl command strings.
-// ns == "" → cluster-scoped. ns != "" → namespaced.
-func kctl(ns, command string) string {
-	if ns != "" {
-		return fmt.Sprintf("KUBECONFIG=%s kubectl -n %s %s", kubeconfigPath, ns, command)
-	}
-	return fmt.Sprintf("KUBECONFIG=%s kubectl %s", kubeconfigPath, command)
-}
-
-// GetJSON runs a namespaced kubectl get and returns raw JSON bytes.
-// selector is optional (e.g. NvoiSelector or "").
-func GetJSON(ctx context.Context, ssh utils.SSHClient, ns, resource, selector string) ([]byte, error) {
-	sel := ""
-	if selector != "" {
-		sel = " -l " + selector
-	}
-	return ssh.Run(ctx, kctl(ns, fmt.Sprintf("get %s%s -o json", resource, sel)))
-}
-
-// GetClusterJSON runs a cluster-wide (non-namespaced) kubectl get and returns raw JSON bytes.
-func GetClusterJSON(ctx context.Context, ssh utils.SSHClient, resource string) ([]byte, error) {
-	return GetJSON(ctx, ssh, "", resource, "")
-}
-
-// GetNamedJSON runs kubectl get on a specific named resource and returns raw JSON bytes.
-func GetNamedJSON(ctx context.Context, ssh utils.SSHClient, ns, resource, name string) ([]byte, error) {
-	return ssh.Run(ctx, kctl(ns, fmt.Sprintf("get %s %s -o json 2>/dev/null", resource, name)))
-}
-
-// RunKubectl runs an arbitrary kubectl command and returns output.
-func RunKubectl(ctx context.Context, ssh utils.SSHClient, ns, command string) ([]byte, error) {
-	return ssh.Run(ctx, kctl(ns, command))
-}
-
-// RunStream runs a kubectl command and streams stdout/stderr to the provided writers.
-func RunStream(ctx context.Context, ssh utils.SSHClient, ns, command string, stdout, stderr io.Writer) error {
-	return ssh.RunStream(ctx, kctl(ns, command), stdout, stderr)
-}
-
-// PodSelector returns the label selector for pods belonging to a service.
+// PodSelector returns the label selector matching pods of a given service.
 func PodSelector(service string) string {
 	return fmt.Sprintf("%s=%s", utils.LabelAppName, service)
 }
 
-// FirstPod returns the name of the first running pod for a service.
-func FirstPod(ctx context.Context, ssh utils.SSHClient, ns, service string) (string, error) {
-	sel := PodSelector(service)
-	out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get pods -l %s -o jsonpath='{.items[0].metadata.name}'", sel)))
-	if err != nil {
-		return "", fmt.Errorf("get pods for %q: %w", service, err)
-	}
-	pod := strings.Trim(strings.TrimSpace(string(out)), "'")
-	if pod == "" {
-		return "", fmt.Errorf("no pods found for service %q", service)
-	}
-	return pod, nil
+// gvrFor maps every GVK we handle to its REST resource. Static — no
+// discovery roundtrip, no fake-discovery-mapper gymnastics in tests.
+// Add entries as new resource kinds get used.
+var gvrFor = map[schema.GroupVersionKind]schema.GroupVersionResource{
+	corev1.SchemeGroupVersion.WithKind("Namespace"):                   corev1.SchemeGroupVersion.WithResource("namespaces"),
+	corev1.SchemeGroupVersion.WithKind("Service"):                     corev1.SchemeGroupVersion.WithResource("services"),
+	corev1.SchemeGroupVersion.WithKind("Secret"):                      corev1.SchemeGroupVersion.WithResource("secrets"),
+	corev1.SchemeGroupVersion.WithKind("ConfigMap"):                   corev1.SchemeGroupVersion.WithResource("configmaps"),
+	corev1.SchemeGroupVersion.WithKind("Pod"):                         corev1.SchemeGroupVersion.WithResource("pods"),
+	corev1.SchemeGroupVersion.WithKind("Node"):                        corev1.SchemeGroupVersion.WithResource("nodes"),
+	{Group: "apps", Version: "v1", Kind: "Deployment"}:                {Group: "apps", Version: "v1", Resource: "deployments"},
+	{Group: "apps", Version: "v1", Kind: "StatefulSet"}:               {Group: "apps", Version: "v1", Resource: "statefulsets"},
+	{Group: "batch", Version: "v1", Kind: "Job"}:                      {Group: "batch", Version: "v1", Resource: "jobs"},
+	{Group: "batch", Version: "v1", Kind: "CronJob"}:                  {Group: "batch", Version: "v1", Resource: "cronjobs"},
+	{Group: "networking.k8s.io", Version: "v1", Kind: "Ingress"}:      {Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"},
+	{Group: "helm.cattle.io", Version: "v1", Kind: "HelmChartConfig"}: {Group: "helm.cattle.io", Version: "v1", Resource: "helmchartconfigs"},
 }
 
-// Apply uploads a YAML manifest and applies it with server-side apply.
-// Server-side apply does field-level merge — rolling updates work correctly
-// when nodeSelector or other fields change (new pods created before old ones die).
-func Apply(ctx context.Context, ssh utils.SSHClient, ns string, yaml string) error {
-	if err := ssh.Upload(ctx, bytes.NewReader([]byte(yaml)), utils.KubeManifestPath(), 0o644); err != nil {
-		return fmt.Errorf("upload manifest: %w", err)
-	}
-	out, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("apply --server-side --force-conflicts -f %s", utils.KubeManifestPath())))
-	if err != nil {
-		return fmt.Errorf("kubectl apply: %s: %w", string(out), err)
-	}
-	return nil
-}
-
-// ApplyGlobal uploads a YAML manifest and applies it cluster-wide (no namespace).
-func ApplyGlobal(ctx context.Context, ssh utils.SSHClient, yaml string) error {
-	return Apply(ctx, ssh, "", yaml)
-}
-
-// DeleteByName removes a workload + service by name. Tries both deployment and statefulset.
-// --ignore-not-found handles "already gone." SSH errors are real failures.
-func DeleteByName(ctx context.Context, ssh utils.SSHClient, ns, name string) error {
-	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete deployment/%s --ignore-not-found", name))); err != nil {
-		return fmt.Errorf("delete deployment/%s: %w", name, err)
-	}
-	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete statefulset/%s --ignore-not-found", name))); err != nil {
-		return fmt.Errorf("delete statefulset/%s: %w", name, err)
-	}
-	if _, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("delete service/%s --ignore-not-found", name))); err != nil {
-		return fmt.Errorf("delete service/%s: %w", name, err)
-	}
-	return nil
-}
-
-// ListSecretKeys returns the keys stored in a k8s Secret, or nil if the secret doesn't exist.
-func ListSecretKeys(ctx context.Context, ssh utils.SSHClient, ns, secretName string) ([]string, error) {
-	cmd := kctl(ns, fmt.Sprintf("get secret %s -o jsonpath='{.data}' 2>/dev/null", secretName))
-	out, err := ssh.Run(ctx, cmd)
-	if err != nil {
-		return nil, fmt.Errorf("secret %q not found in namespace %q", secretName, ns)
-	}
-
-	// jsonpath output: '{"KEY1":"base64val","KEY2":"base64val"}'
-	// We only need the keys.
-	raw := strings.TrimSpace(string(out))
-	raw = strings.Trim(raw, "'")
-	if raw == "" || raw == "{}" {
-		return nil, nil
-	}
-
-	var data map[string]string
-	if err := json.Unmarshal([]byte(raw), &data); err != nil {
-		return nil, fmt.Errorf("parse secret keys: %w", err)
-	}
-
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
-	}
-	return keys, nil
-}
-
-// UpsertSecretKey adds or updates a single key in a k8s Secret.
-// Creates the secret if it doesn't exist. Idempotent.
-// Uses --from-literal for create (shellQuote handles special chars)
-// and uploads a JSON patch file for update (avoids shell injection).
-func UpsertSecretKey(ctx context.Context, ssh utils.SSHClient, ns, secretName, key, value string) error {
-	// Check if secret exists
-	_, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get secret %s 2>/dev/null", secretName)))
-	if err != nil {
-		// Secret doesn't exist — create it
-		cmd := kctl(ns, fmt.Sprintf(
-			"create secret generic %s --from-literal=%s=%s",
-			secretName, shellQuote(key), shellQuote(value),
-		))
-		out, err := ssh.Run(ctx, cmd)
-		if err != nil {
-			return fmt.Errorf("create secret: %s: %w", string(out), err)
+// gvkOf resolves a typed object's GroupVersionKind. Falls back to the scheme
+// registry if the object's TypeMeta is empty (which is common with hand-built
+// typed objects).
+func gvkOf(obj runtime.Object) (schema.GroupVersionKind, error) {
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		gvk := u.GroupVersionKind()
+		if gvk.Kind == "" {
+			return schema.GroupVersionKind{}, fmt.Errorf("unstructured object missing GVK")
 		}
-		return nil
+		return gvk, nil
 	}
-
-	// Secret exists — upload patch as file to avoid shell injection
-	patch, err := json.Marshal(map[string]any{"stringData": map[string]string{key: value}})
+	gvk := obj.GetObjectKind().GroupVersionKind()
+	if gvk.Kind != "" {
+		return gvk, nil
+	}
+	gvks, _, err := scheme.Scheme.ObjectKinds(obj)
 	if err != nil {
-		return fmt.Errorf("marshal patch: %w", err)
+		return schema.GroupVersionKind{}, fmt.Errorf("resolve GVK: %w", err)
 	}
-	patchPath := fmt.Sprintf("/home/%s/.nvoi-patch.json", utils.DefaultUser)
-	if err := ssh.Upload(ctx, bytes.NewReader(patch), patchPath, 0o600); err != nil {
-		return fmt.Errorf("upload patch: %w", err)
+	if len(gvks) == 0 {
+		return schema.GroupVersionKind{}, fmt.Errorf("no GVK registered for %T", obj)
 	}
-
-	cmd := kctl(ns, fmt.Sprintf("patch secret %s --type=merge -p \"$(cat %s)\"", secretName, patchPath))
-	out, err := ssh.Run(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("patch secret: %s: %w", string(out), err)
-	}
-	return nil
+	return gvks[0], nil
 }
 
-// DeleteSecretKey removes a single key from a k8s Secret.
-// Idempotent — succeeds if the key or secret doesn't exist.
-func DeleteSecretKey(ctx context.Context, ssh utils.SSHClient, ns, secretName, key string) error {
-	// Check if secret exists
-	_, err := ssh.Run(ctx, kctl(ns, fmt.Sprintf("get secret %s 2>/dev/null", secretName)))
+// resourceFor returns the dynamic ResourceInterface for an object, plus a
+// boolean indicating whether the resource is namespace-scoped. The object's
+// GVK must be in gvrFor.
+func (c *Client) resourceFor(obj runtime.Object, ns string) (dynamic.ResourceInterface, schema.GroupVersionKind, error) {
+	gvk, err := gvkOf(obj)
 	if err != nil {
-		return nil // secret doesn't exist — nothing to delete
+		return nil, schema.GroupVersionKind{}, err
 	}
-
-	// Check if key exists in the secret
-	existing, err := ListSecretKeys(ctx, ssh, ns, secretName)
-	if err != nil {
-		return nil
+	gvr, ok := gvrFor[gvk]
+	if !ok {
+		return nil, gvk, fmt.Errorf("unknown GVK %s — add to gvrFor in pkg/kube/apply.go", gvk)
 	}
-	found := false
-	for _, k := range existing {
-		if k == key {
-			found = true
-			break
+	if isClusterScoped(gvk) {
+		return c.dyn.Resource(gvr), gvk, nil
+	}
+	if ns == "" {
+		// Try to read namespace from the object itself.
+		if accessor, ok := obj.(metav1.Object); ok {
+			ns = accessor.GetNamespace()
 		}
 	}
-	if !found {
-		return nil // key doesn't exist — already deleted
+	if ns == "" {
+		return nil, gvk, fmt.Errorf("%s requires a namespace", gvk.Kind)
 	}
-
-	cmd := kctl(ns, fmt.Sprintf(
-		"patch secret %s --type=json -p '[{\"op\":\"remove\",\"path\":\"/data/%s\"}]'",
-		secretName, key,
-	))
-	out, err := ssh.Run(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("delete secret key %s: %s: %w", key, string(out), err)
-	}
-	return nil
+	return c.dyn.Resource(gvr).Namespace(ns), gvk, nil
 }
 
-// DeleteSecret removes an entire k8s Secret by name.
-// Idempotent — succeeds if the secret doesn't exist.
-func DeleteSecret(ctx context.Context, ssh utils.SSHClient, ns, secretName string) error {
-	cmd := kctl(ns, fmt.Sprintf("delete secret %s --ignore-not-found", secretName))
-	if _, err := ssh.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("delete secret %s: %w", secretName, err)
+func isClusterScoped(gvk schema.GroupVersionKind) bool {
+	switch gvk.Kind {
+	case "Namespace", "Node":
+		return true
 	}
-	return nil
+	return false
 }
 
-// GetSecretValue returns the decoded value of a single key from a k8s Secret.
-func GetSecretValue(ctx context.Context, ssh utils.SSHClient, ns, secretName, key string) (string, error) {
-	cmd := kctl(ns, fmt.Sprintf(
-		"get secret %s -o jsonpath='{.data.%s}'", secretName, key,
-	))
-	out, err := ssh.Run(ctx, cmd)
-	if err != nil {
-		return "", fmt.Errorf("secret key %q not found", key)
-	}
-
-	raw := strings.TrimSpace(string(out))
-	raw = strings.Trim(raw, "'")
-	if raw == "" {
-		return "", fmt.Errorf("secret key %q not found or empty", key)
-	}
-
-	// Decode base64
-	decoded, err := base64Decode(raw)
-	if err != nil {
-		return "", fmt.Errorf("decode secret %q: %w", key, err)
-	}
-	return decoded, nil
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
-
-func escapeJSON(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
-}
-
-func base64Decode(s string) (string, error) {
-	b, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// DrainAndRemoveNode removes a node from the cluster.
-// If the node is alive, drains it first (evicts pods gracefully).
-// If the node is dead (NotReady), skips drain and force-removes it.
-// Idempotent — succeeds if the node doesn't exist.
-// DrainAndRemoveNode drains workloads from a node and removes it from the cluster.
-// Returns nil if the node doesn't exist (already removed).
+// Apply upserts a typed object as nvoi.
 //
-// Self-healing: if drain fails and the node is NotReady (dead/unreachable),
-// force-removes the node — workloads are already gone, no data loss.
-// If drain fails on a Ready node, returns error — workloads are running
-// and can't be evicted, caller must NOT delete the server.
-func DrainAndRemoveNode(ctx context.Context, ssh utils.SSHClient, nodeName string) error {
-	// Check if node exists in the cluster.
-	out, err := ssh.Run(ctx, kctl("", fmt.Sprintf("get node %s --no-headers 2>/dev/null", nodeName)))
-	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
-		return nil // node not in cluster — nothing to drain
+// For built-in core/apps/batch/networking kinds the typed clientset is
+// used directly (Get → Create-if-missing → Update-otherwise). This gives
+// idempotent rolling updates and works against the standard fake clientset
+// without server-side-apply emulation gymnastics.
+//
+// For unknown kinds (e.g. HelmChartConfig CRDs) the dynamic client is used
+// with server-side-apply Patch.
+func (c *Client) Apply(ctx context.Context, ns string, obj runtime.Object) error {
+	gvk, err := gvkOf(obj)
+	if err != nil {
+		return err
 	}
+	obj.GetObjectKind().SetGroupVersionKind(gvk)
 
-	// Try drain.
-	if _, drainErr := ssh.Run(ctx, kctl("", fmt.Sprintf(
-		"drain %s --ignore-daemonsets --delete-emptydir-data --force --timeout=30s", nodeName))); drainErr != nil {
-
-		// Drain failed — check if node is NotReady (dead/unreachable).
-		statusOut, _ := ssh.Run(ctx, kctl("", fmt.Sprintf(
-			"get node %s -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null", nodeName)))
-		nodeReady := strings.Trim(strings.TrimSpace(string(statusOut)), "'") == "True"
-
-		if nodeReady {
-			// Node is alive but drain failed — workloads can't be evicted. Don't delete.
-			return fmt.Errorf("drain node %s: %w", nodeName, drainErr)
+	if accessor, ok := obj.(metav1.Object); ok && !isClusterScoped(gvk) {
+		if accessor.GetNamespace() == "" && ns != "" {
+			accessor.SetNamespace(ns)
 		}
-
-		// Node is NotReady — already dead. Force-remove from cluster.
 	}
 
-	// Remove the node from the cluster.
-	if _, err := ssh.Run(ctx, kctl("", fmt.Sprintf("delete node %s --ignore-not-found", nodeName))); err != nil {
-		return fmt.Errorf("delete node %s: %w", nodeName, err)
+	name := ""
+	if accessor, ok := obj.(metav1.Object); ok {
+		name = accessor.GetName()
+	}
+	if name == "" {
+		return fmt.Errorf("%s missing metadata.name", gvk.Kind)
 	}
 
-	return nil
+	// Typed dispatch — preferred path for every kind we ship by default.
+	if handled, err := c.applyTyped(ctx, ns, gvk, name, obj); handled {
+		return err
+	}
+
+	// Dynamic SSA fallback — used for HelmChartConfig and any future CRDs.
+	return c.applyDynamic(ctx, ns, gvk, name, obj)
 }
 
-// LabelNode labels a k8s node with nvoi-role={role}. Idempotent — runs every deploy.
-func LabelNode(ctx context.Context, ssh utils.SSHClient, nodeName, role string) error {
-	cmd := kctl("", fmt.Sprintf("label node %s %s=%s --overwrite", nodeName, utils.LabelNvoiRole, role))
-	out, err := ssh.Run(ctx, cmd)
+// applyTyped dispatches to the typed clientset for known resource kinds.
+// Returns handled=true (with err==nil on success) when the GVK is recognized.
+func (c *Client) applyTyped(ctx context.Context, ns string, gvk schema.GroupVersionKind, name string, obj runtime.Object) (bool, error) {
+	switch typed := obj.(type) {
+	case *corev1.Namespace:
+		_, err := c.cs.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.CoreV1().Namespaces().Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		_, err = c.cs.CoreV1().Namespaces().Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	case *corev1.Service:
+		existing, err := c.cs.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.CoreV1().Services(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		// Preserve immutable fields (ClusterIP, ResourceVersion).
+		typed.Spec.ClusterIP = existing.Spec.ClusterIP
+		typed.ResourceVersion = existing.ResourceVersion
+		_, err = c.cs.CoreV1().Services(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	case *corev1.Secret:
+		_, err := c.cs.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.CoreV1().Secrets(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		_, err = c.cs.CoreV1().Secrets(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	case *corev1.ConfigMap:
+		_, err := c.cs.CoreV1().ConfigMaps(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.CoreV1().ConfigMaps(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		_, err = c.cs.CoreV1().ConfigMaps(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	case *appsv1.Deployment:
+		_, err := c.cs.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.AppsV1().Deployments(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		_, err = c.cs.AppsV1().Deployments(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	case *appsv1.StatefulSet:
+		_, err := c.cs.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.AppsV1().StatefulSets(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		_, err = c.cs.AppsV1().StatefulSets(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	case *batchv1.CronJob:
+		_, err := c.cs.BatchV1().CronJobs(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.BatchV1().CronJobs(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		_, err = c.cs.BatchV1().CronJobs(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	case *batchv1.Job:
+		_, err := c.cs.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.BatchV1().Jobs(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		_, err = c.cs.BatchV1().Jobs(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	case *networkingv1.Ingress:
+		_, err := c.cs.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			_, err = c.cs.NetworkingV1().Ingresses(ns).Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+			return true, wrapApply(gvk, name, err)
+		}
+		if err != nil {
+			return true, wrapApply(gvk, name, err)
+		}
+		_, err = c.cs.NetworkingV1().Ingresses(ns).Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+		return true, wrapApply(gvk, name, err)
+	}
+	return false, nil
+}
+
+// applyDynamic SSA-patches via the dynamic client. Used for CRDs (eg
+// HelmChartConfig). Falls back to Create on NotFound for parity with real
+// apiserver upsert semantics.
+func (c *Client) applyDynamic(ctx context.Context, ns string, gvk schema.GroupVersionKind, name string, obj runtime.Object) error {
+	ri, _, err := c.resourceFor(obj, ns)
 	if err != nil {
-		return fmt.Errorf("label node %s: %s: %w", nodeName, string(out), err)
+		return err
 	}
-	return nil
-}
-
-// GetServicePort returns the first port of a k8s Service, or error if not found.
-func GetServicePort(ctx context.Context, ssh utils.SSHClient, ns, name string) (int, error) {
-	cmd := kctl(ns, fmt.Sprintf("get service %s -o jsonpath='{.spec.ports[0].port}' 2>/dev/null", name))
-	out, err := ssh.Run(ctx, cmd)
+	data, err := json.Marshal(obj)
 	if err != nil {
-		return 0, fmt.Errorf("service %q not found", name)
+		return fmt.Errorf("marshal %s: %w", gvk.Kind, err)
 	}
-	raw := strings.TrimSpace(string(out))
-	raw = strings.Trim(raw, "'")
-	var port int
-	if _, err := fmt.Sscanf(raw, "%d", &port); err != nil || port == 0 {
-		return 0, fmt.Errorf("service %q has no port", name)
+	force := true
+	_, err = ri.Patch(ctx, name, types.ApplyPatchType, data, metav1.PatchOptions{
+		FieldManager: FieldManager,
+		Force:        &force,
+	})
+	if err == nil {
+		return nil
 	}
-	return port, nil
+	if apierrors.IsNotFound(err) {
+		u, cerr := toUnstructured(obj)
+		if cerr != nil {
+			return fmt.Errorf("apply %s/%s: convert to unstructured: %w", gvk.Kind, name, cerr)
+		}
+		if _, cerr := ri.Create(ctx, u, metav1.CreateOptions{FieldManager: FieldManager}); cerr != nil {
+			return fmt.Errorf("apply %s/%s: %w", gvk.Kind, name, cerr)
+		}
+		return nil
+	}
+	return fmt.Errorf("apply %s/%s: %w", gvk.Kind, name, err)
 }
 
-// EnsureNamespace creates a namespace if it doesn't exist.
-func EnsureNamespace(ctx context.Context, ssh utils.SSHClient, ns string) error {
-	cmd := kctl("", fmt.Sprintf("create namespace %s --dry-run=client -o yaml", ns)) +
-		" | " + kctl("", "apply -f -")
-	if _, err := ssh.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("ensure namespace %s: %w", ns, err)
+func wrapApply(gvk schema.GroupVersionKind, name string, err error) error {
+	if err == nil {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("apply %s/%s: %w", gvk.Kind, name, err)
+}
+
+// toUnstructured converts any typed runtime.Object to *unstructured.Unstructured.
+func toUnstructured(obj runtime.Object) (*unstructured.Unstructured, error) {
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		return u, nil
+	}
+	out := &unstructured.Unstructured{}
+	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return nil, err
+	}
+	out.Object = m
+	return out, nil
+}
+
+// EnsureNamespace creates a Namespace if missing. Idempotent.
+func (c *Client) EnsureNamespace(ctx context.Context, name string) error {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+	}
+	return c.Apply(ctx, "", ns)
+}
+
+// IgnoreNotFound returns nil when err is a NotFound API error, err otherwise.
+// Lets callers write `return IgnoreNotFound(client.Delete(...))` without
+// re-implementing the check.
+func IgnoreNotFound(err error) error {
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
