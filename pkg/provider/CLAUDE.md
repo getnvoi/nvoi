@@ -2,7 +2,7 @@
 
 Provider interfaces and credential resolution. Everything pluggable is a provider.
 
-Three provider kinds live in core: `compute`, `dns`, `storage`. Anything else (secrets backends, build pipelines, database engines) is product-layer and must not land in core.
+Four provider kinds live in core: `compute`, `dns`, `storage`, `secrets`. Build pipelines and database engines stay product-layer and do not land in core — `build:` on a service is a local shell-out to `docker buildx`, not a provider plugin.
 
 ## Registration pattern
 
@@ -34,7 +34,12 @@ provider.RegisterX("name", CredentialSchema{...}, func(creds map[string]string) 
 provider.ResolveFrom(schema, source) → map[string]string  // HETZNER_TOKEN lookup → token=xxx
 ```
 
-At the cmd/ boundary `cmd/cli/context.go` builds an `EnvSource{}` and uses it for every provider credential lookup. No secrets provider bootstrap — that's a product-layer extension point.
+At the cmd/ boundary `cmd/cli/context.go` calls `credentialSource(ctx, cfg)` which returns either:
+
+- `EnvSource{}` — default, when `providers.secrets` is unset in `nvoi.yaml`. Every credential comes from `os.Getenv`.
+- `SecretsSource{Ctx, Provider}` — when `providers.secrets` is set to `doppler | awssm | infisical` (scalar, same shape as the other providers; struct form `{kind: ...}` is also accepted for forward compat). The backend's own creds bootstrap from env (the escape hatch), then every downstream credential — compute, DNS, storage, SSH key, service `$VAR` expansion — is fetched from the backend at deploy time. `ValidateCredentials` runs at startup so a misconfigured backend fails loudly, not mid-deploy.
+
+**Adapters are direct-API, never shell-outs.** Doppler via REST (`utils.HTTPClient` + Bearer). AWS Secrets Manager via `aws-sdk-go-v2`. Infisical via REST Universal Auth (`client_id` + `client_secret` → access token), cloud and self-hosted.
 
 **Region override:** `--compute-region` overrides `creds["region"]` after credential resolution.
 

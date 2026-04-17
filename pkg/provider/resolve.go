@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"os"
 )
@@ -29,6 +30,24 @@ type MapSource struct {
 
 func (s MapSource) Get(key string) (string, error) {
 	return s.M[key], nil
+}
+
+// SecretsSource reads credentials from a SecretsProvider (Doppler, AWS
+// Secrets Manager, Infisical, …). Used when providers.secrets is
+// configured in nvoi.yaml — every credential the deploy touches
+// (compute / DNS / storage / SSH key / service $VAR expansion) is
+// fetched through the provider at deploy time. No disk fallback, no
+// env fallback — the secrets provider is THE source.
+//
+// The embedded ctx lets callers use the same cancellation scope as the
+// rest of the deploy without plumbing ctx through every Get() call.
+type SecretsSource struct {
+	Ctx      context.Context
+	Provider SecretsProvider
+}
+
+func (s SecretsSource) Get(key string) (string, error) {
+	return s.Provider.Get(s.Ctx, key)
 }
 
 // ResolveFrom resolves credentials for a provider schema from any source.
@@ -94,10 +113,16 @@ type dnsEntry struct {
 	factory func(creds map[string]string) DNSProvider
 }
 
+type secretsEntry struct {
+	schema  CredentialSchema
+	factory func(creds map[string]string) SecretsProvider
+}
+
 var (
 	computeProviders = map[string]computeEntry{}
 	dnsProviders     = map[string]dnsEntry{}
 	bucketProviders  = map[string]bucketEntry{}
+	secretsProviders = map[string]secretsEntry{}
 )
 
 func RegisterCompute(name string, schema CredentialSchema, factory func(creds map[string]string) ComputeProvider) {
@@ -109,6 +134,9 @@ func RegisterDNS(name string, schema CredentialSchema, factory func(creds map[st
 func RegisterBucket(name string, schema CredentialSchema, factory func(creds map[string]string) BucketProvider) {
 	bucketProviders[name] = bucketEntry{schema: schema, factory: factory}
 }
+func RegisterSecrets(name string, schema CredentialSchema, factory func(creds map[string]string) SecretsProvider) {
+	secretsProviders[name] = secretsEntry{schema: schema, factory: factory}
+}
 
 // GetSchema returns the credential schema for any provider kind + name.
 func GetSchema(kind, name string) (CredentialSchema, error) {
@@ -119,6 +147,8 @@ func GetSchema(kind, name string) (CredentialSchema, error) {
 		return GetDNSSchema(name)
 	case "storage":
 		return GetBucketSchema(name)
+	case "secrets":
+		return GetSecretsSchema(name)
 	default:
 		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
 	}
@@ -178,6 +208,29 @@ func ResolveBucket(name string, creds map[string]string) (BucketProvider, error)
 	entry, ok := bucketProviders[name]
 	if !ok {
 		return nil, fmt.Errorf("unsupported storage provider: %q", name)
+	}
+	if err := entry.schema.Validate(creds); err != nil {
+		return nil, err
+	}
+	return entry.factory(creds), nil
+}
+
+func GetSecretsSchema(name string) (CredentialSchema, error) {
+	entry, ok := secretsProviders[name]
+	if !ok {
+		return CredentialSchema{}, fmt.Errorf("unsupported secrets provider: %q", name)
+	}
+	return entry.schema, nil
+}
+
+// ResolveSecrets creates a secrets provider with pre-resolved credentials.
+// Same contract as the other Resolve* functions — credentials must be
+// validated before factory construction so a misconfigured provider
+// fails loudly at startup instead of deferring the error mid-deploy.
+func ResolveSecrets(name string, creds map[string]string) (SecretsProvider, error) {
+	entry, ok := secretsProviders[name]
+	if !ok {
+		return nil, fmt.Errorf("unsupported secrets provider: %q", name)
 	}
 	if err := entry.schema.Validate(creds); err != nil {
 		return nil, err

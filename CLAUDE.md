@@ -15,7 +15,7 @@ The foundational engine for reconciling cloud infrastructure + Kubernetes worklo
 - **Two-layer core.** Layer 1: provider infra (servers, firewall, volumes, DNS, buckets). Layer 2: k8s manifests (services, crons, ingress, secrets). Bound by deterministic naming. Nothing else.
 - **Provider interfaces scale.** Hetzner, Cloudflare, AWS, Scaleway. Interface-first. Add a provider = implement the interface. Organized by domain: `compute/`, `dns/`, `storage/`.
 - **SSH transport + typed kube client.** Single SSH connection per deploy (`MasterSSH`). A client-go `*kube.Client` tunnels through the same SSH to the apiserver (`MasterKube`), shared across all reconcile operations.
-- **Secrets are k8s secrets.** Values live in the cluster only. Resolved at deploy time from env vars via `CredentialSource`. No opinionated external secret backends in core.
+- **Secrets are k8s secrets.** Values live in the cluster only. Resolved at deploy time via `CredentialSource`. Default `CredentialSource = EnvSource` (`os.Getenv`). When `providers.secrets` is set to `doppler | awssm | infisical`, the source switches to `SecretsSource` and every credential (compute / DNS / storage / SSH key / service `$VAR`) is fetched from the backend via its direct API (no shell-outs).
 
 ## Build & Test
 
@@ -449,17 +449,32 @@ Organized by domain with shared base clients:
 
 ## Credential resolution
 
-Every credential — provider tokens, SSH key, secret values referenced via `$VAR` — goes through a single `provider.CredentialSource` built at the `cmd/` boundary in `cmd/cli/context.go`.
+Every credential — provider tokens, SSH key, secret values referenced via `$VAR` — goes through a single `provider.CredentialSource` built at the `cmd/` boundary in `cmd/cli/context.go::credentialSource(ctx, cfg)`.
 
-**`CredentialSource = EnvSource{}`.** `source.Get(k)` is literally `os.Getenv(k)`. All referenced variables come from the shell/`.env`.
+**Two modes, chosen by `providers.secrets` in `nvoi.yaml`:**
 
-| Credential | Resolution |
-|---|---|
-| Compute / DNS / Storage creds | env (schema `EnvVar` field) |
-| Service `$VAR` in `secrets:` | env |
-| SSH private key | `SSH_PRIVATE_KEY` env → `SSH_KEY_PATH` env → `~/.ssh/id_ed25519` → `~/.ssh/id_rsa` |
+| `providers.secrets` | Source | How it reads |
+|---|---|---|
+| unset | `EnvSource{}` | `os.Getenv(k)` — values come from shell / `.env` |
+| `doppler` \| `awssm` \| `infisical` (scalar, matches other providers) | `SecretsSource{ctx, provider}` | fetched through the backend's direct API at deploy time — no env fallback |
 
-Opinionated external secret backends (Doppler, AWS Secrets Manager, Infisical) are product-layer concerns. Core exposes `CredentialSource` as the extension point; implementations plug in outside this repo.
+Struct form `secrets: {kind: <name>}` is also accepted — identical semantics, reserved for future per-backend knobs (TTL, scopes, …) without a breaking change.
+
+**Strict mode when a backend is declared:** the backend IS the source. There's exactly one escape hatch — the backend's own bootstrap credentials (e.g. `DOPPLER_TOKEN`, `AWS_ACCESS_KEY_ID`+`AWS_SECRET_ACCESS_KEY`+`AWS_REGION`, `INFISICAL_CLIENT_ID`+`INFISICAL_CLIENT_SECRET`+`INFISICAL_PROJECT_SLUG`) must be in env. Everything else — compute tokens, DNS keys, storage creds, SSH private key, service `$VAR` secrets — resolves through the backend. Misconfigured backend → hard error at startup via `ValidateCredentials`, not deferred mid-deploy.
+
+**Adapter implementations are direct-API, never shell-outs** (Kamal shells out to vendor CLIs; nvoi calls the vendor REST/SDK directly):
+- `pkg/provider/secrets/doppler` — Doppler REST API, Bearer token
+- `pkg/provider/secrets/awssm` — AWS SDK v2 `service/secretsmanager`
+- `pkg/provider/secrets/infisical` — Infisical REST API, Universal Auth (cloud + self-hosted)
+
+| Credential | Env mode | Backend mode |
+|---|---|---|
+| Compute / DNS / Storage creds | env (schema `EnvVar` field) | backend.Get(`EnvVar`) |
+| Service `$VAR` in `secrets:` | env | backend.Get(`VAR`) |
+| SSH private key | `SSH_PRIVATE_KEY` → `SSH_KEY_PATH` → `~/.ssh/id_ed25519` → `~/.ssh/id_rsa` | `source.Get("SSH_PRIVATE_KEY")` → `SSH_KEY_PATH` → disk fallback (backends don't store files) |
+| Backend's own creds | — | env (bootstrap) |
+
+Adding a new backend: drop a package under `pkg/provider/secrets/<name>/` with a `CredentialSchema` + `init()` call to `provider.RegisterSecrets`, blank-import it in `cmd/cli/main.go`, add the name to the `ValidateConfig` case list. No other changes.
 
 ## Working tree
 

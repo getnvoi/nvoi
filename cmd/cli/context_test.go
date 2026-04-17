@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,7 +224,7 @@ func TestBuildDeployContext_EnvOnlyMode(t *testing.T) {
 		},
 	}
 
-	dc, err := buildDeployContext(nil, cfg)
+	dc, err := buildDeployContext(context.Background(), nil, cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

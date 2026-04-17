@@ -30,6 +30,17 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	if cfg.Providers.Compute == "" {
 		return fmt.Errorf("providers.compute is required")
 	}
+	if s := cfg.Providers.Secrets; s != nil {
+		if s.Kind == "" {
+			return fmt.Errorf("providers.secrets.kind is required when the secrets block is declared")
+		}
+		switch s.Kind {
+		case "doppler", "awssm", "infisical":
+			// supported
+		default:
+			return fmt.Errorf("providers.secrets.kind %q is not supported (expected: doppler | awssm | infisical)", s.Kind)
+		}
+	}
 
 	// ── Servers ───────────────────────────────────────────────────────────
 	if len(cfg.Servers) == 0 {

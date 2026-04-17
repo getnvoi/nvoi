@@ -548,3 +548,27 @@ func TestImageRegistryHost(t *testing.T) {
 		}
 	}
 }
+
+// ── providers.secrets validation ──────────────────────────────────────────
+
+func TestValidateConfig_SecretsValid(t *testing.T) {
+	for _, kind := range []string{"doppler", "awssm", "infisical"} {
+		cfg := validCfg()
+		cfg.Providers.Secrets = &config.SecretsDef{Kind: kind}
+		if err := ValidateConfig(cfg); err != nil {
+			t.Errorf("kind %q: unexpected error: %v", kind, err)
+		}
+	}
+}
+
+func TestValidateConfig_SecretsMissingKind(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Secrets = &config.SecretsDef{}
+	assertValidationError(t, cfg, "providers.secrets.kind is required")
+}
+
+func TestValidateConfig_SecretsUnknownKind(t *testing.T) {
+	cfg := validCfg()
+	cfg.Providers.Secrets = &config.SecretsDef{Kind: "vault"}
+	assertValidationError(t, cfg, "not supported")
+}

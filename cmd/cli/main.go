@@ -26,6 +26,10 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/scaleway"
+	// Secrets backends
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"
+	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/infisical"
 )
 
 func main() {
@@ -88,7 +92,7 @@ func initRuntime(cmd *cobra.Command, rt *runtime) error {
 		return err
 	}
 	out := resolveOutput(cmd)
-	dc, err := buildDeployContext(out, cfg)
+	dc, err := buildDeployContext(cmd.Context(), out, cfg)
 	if err != nil {
 		return err
 	}
