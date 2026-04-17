@@ -71,6 +71,7 @@ type ServiceSpec struct {
 	Servers        []string // node placement (empty = master only)
 	Managed        bool     // true if any volume is provider-managed → StatefulSet
 	PullSecretName string   // optional imagePullSecrets reference (cluster-wide registry-auth Secret); empty = no pull auth
+	DeployHash     string   // per-deploy tag stamped on workload + pod template metadata as nvoi/deploy-hash; empty = no stamp
 }
 
 // BuildService produces typed Workload (Deployment or StatefulSet) and
@@ -82,6 +83,15 @@ func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 		utils.LabelAppName:      spec.Name,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
 		utils.LabelNvoiService:  spec.Name,
+	}
+	// DeployHash is informational only — never appears in selectors
+	// (the Deployment/StatefulSet Selector below uses LabelAppName
+	// alone, so adding extra label keys here is safe). On workload +
+	// pod-template metadata it gives `kubectl -L nvoi/deploy-hash` a
+	// direct "which deploy placed this" readout, and changing it
+	// between deploys is exactly what drives the rolling restart.
+	if spec.DeployHash != "" {
+		labels[utils.LabelNvoiDeployHash] = spec.DeployHash
 	}
 
 	// Container

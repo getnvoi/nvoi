@@ -111,6 +111,7 @@ const (
 	LabelNvoiStack      = "nvoi/stack"
 	LabelNvoiRole       = "nvoi-role"
 	LabelConfigChecksum = "nvoi/config-checksum"
+	LabelNvoiDeployHash = "nvoi/deploy-hash"
 	RoleMaster          = "master"
 )
 

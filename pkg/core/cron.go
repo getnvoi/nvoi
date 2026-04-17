@@ -86,6 +86,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 		Volumes:        req.Volumes,
 		Servers:        req.Servers,
 		PullSecretName: req.PullSecretName,
+		DeployHash:     req.Cluster.DeployHash,
 	}, names, managedVolPaths)
 	if err != nil {
 		return fmt.Errorf("build cronjob: %w", err)

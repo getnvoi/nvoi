@@ -152,18 +152,91 @@ type StorageDef struct {
 }
 
 type ServiceDef struct {
-	Image     string   `yaml:"image,omitempty"`
-	Port      int      `yaml:"port,omitempty"`
-	Replicas  int      `yaml:"replicas,omitempty"`
-	Command   string   `yaml:"command,omitempty"`
-	Health    string   `yaml:"health,omitempty"`
-	Server    string   `yaml:"server,omitempty"`
-	Servers   []string `yaml:"servers,omitempty"`
-	Env       []string `yaml:"env,omitempty"`
-	Secrets   []string `yaml:"secrets,omitempty"`
-	Storage   []string `yaml:"storage,omitempty"`
-	Volumes   []string `yaml:"volumes,omitempty"`
-	DependsOn []string `yaml:"depends_on,omitempty"` // other services that must be Ready before this one is applied
+	Image     string     `yaml:"image,omitempty"`
+	Port      int        `yaml:"port,omitempty"`
+	Replicas  int        `yaml:"replicas,omitempty"`
+	Command   string     `yaml:"command,omitempty"`
+	Health    string     `yaml:"health,omitempty"`
+	Server    string     `yaml:"server,omitempty"`
+	Servers   []string   `yaml:"servers,omitempty"`
+	Env       []string   `yaml:"env,omitempty"`
+	Secrets   []string   `yaml:"secrets,omitempty"`
+	Storage   []string   `yaml:"storage,omitempty"`
+	Volumes   []string   `yaml:"volumes,omitempty"`
+	DependsOn []string   `yaml:"depends_on,omitempty"` // other services that must be Ready before this one is applied
+	Build     *BuildSpec `yaml:"build,omitempty"`      // nil → pull-only; non-nil → build locally + push + pull
+}
+
+// BuildSpec declares that a service is built locally from a Dockerfile and
+// pushed to the registry whose creds live in cfg.Registry before the
+// cluster pulls it. Three YAML shapes, all equivalent in expressiveness
+// to docker-compose's `build:` field:
+//
+//	build: true
+//	  # context=./, dockerfile=./Dockerfile
+//
+//	build: services/api
+//	  # context=services/api, dockerfile=services/api/Dockerfile
+//
+//	build:
+//	  context: ./
+//	  dockerfile: ./cmd/api/Dockerfile
+//	  # monorepo pattern — Dockerfile lives in a subdir but the build
+//	  # context covers the whole repo (e.g. Go builds that COPY go.mod
+//	  # from the root).
+//
+// Context is what `docker build` sends as the build context (every file
+// in it is COPY-able). Dockerfile is the path to the Dockerfile, which
+// can live inside OR outside the context directory — Docker resolves
+// `-f` independently of the context. When Dockerfile is empty, it
+// defaults to `<Context>/Dockerfile` inside pkg/core/build.go.
+type BuildSpec struct {
+	Context    string `yaml:"context,omitempty"`
+	Dockerfile string `yaml:"dockerfile,omitempty"`
+}
+
+// UnmarshalYAML accepts all three shapes. `build: false` sets Context to
+// empty — the outer pointer stays non-nil but downstream code treats an
+// empty Context as "no build".
+func (b *BuildSpec) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		switch strings.ToLower(value.Value) {
+		case "true":
+			b.Context = "./"
+			return nil
+		case "false":
+			b.Context = ""
+			return nil
+		default:
+			b.Context = value.Value
+			return nil
+		}
+	case yaml.MappingNode:
+		// Decode through a type alias so we don't recurse back into
+		// this custom unmarshaler.
+		type plain BuildSpec
+		if err := value.Decode((*plain)(b)); err != nil {
+			return fmt.Errorf("build: %w", err)
+		}
+		// If only dockerfile was given, context defaults to the current
+		// directory — matches docker-compose's behavior and keeps the
+		// common monorepo case concise.
+		if b.Context == "" && b.Dockerfile != "" {
+			b.Context = "./"
+		}
+		return nil
+	}
+	return fmt.Errorf("build: unexpected YAML kind — use `build: true`, `build: <path>`, or `build: {context, dockerfile}`")
+}
+
+// BuildContext returns the resolved context directory. Callers treat the
+// empty string as "no build".
+func (b *BuildSpec) BuildContext() string {
+	if b == nil {
+		return ""
+	}
+	return b.Context
 }
 
 type CronDef struct {

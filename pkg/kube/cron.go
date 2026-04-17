@@ -25,6 +25,7 @@ type CronSpec struct {
 	Volumes        []string
 	Servers        []string
 	PullSecretName string // optional imagePullSecrets reference; empty = no pull auth
+	DeployHash     string // per-deploy tag stamped on CronJob + pod template metadata as nvoi/deploy-hash; empty = no stamp
 }
 
 // BuildCronJob constructs a typed batchv1.CronJob from a CronSpec.
@@ -35,6 +36,9 @@ func BuildCronJob(spec CronSpec, names *utils.Names, managedVolPaths map[string]
 		utils.LabelAppName:      spec.Name,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
 		utils.LabelNvoiService:  spec.Name,
+	}
+	if spec.DeployHash != "" {
+		labels[utils.LabelNvoiDeployHash] = spec.DeployHash
 	}
 
 	envVars := append([]corev1.EnvVar{}, spec.Env...)

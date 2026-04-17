@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
@@ -14,6 +15,20 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 	if err := cfg.Resolve(); err != nil {
+		return err
+	}
+
+	// Per-deploy hash stamps built image tags AND every workload's
+	// metadata + pod template. Format is a sortable UTC timestamp down
+	// to the second — unique per `bin/deploy` run, readable in any
+	// `kubectl` or registry UI.
+	dc.Cluster.DeployHash = time.Now().UTC().Format("20060102-150405")
+
+	// Build services with `build:` declared BEFORE touching infra. A build
+	// failure should never leave us with half-provisioned servers. Runs
+	// locally — shells out to `docker` on the operator's PATH, authenticates
+	// via cfg.Registry creds, pushes to the target image tag.
+	if err := Build(ctx, dc, cfg); err != nil {
 		return err
 	}
 

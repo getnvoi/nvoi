@@ -100,6 +100,38 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if svc.Image == "" {
 			return fmt.Errorf("services.%s: image is required", name)
 		}
+		// build: requires a registry to push to AND auth in cfg.Registry.
+		// Image references may be repo-only (host inferred from a single
+		// registry entry, Kamal-style) or fully qualified (host explicit).
+		// Ambiguity — bare repo with multiple registries declared — is a
+		// hard error at validate so the operator never gets surprised
+		// mid-deploy.
+		if svc.Build != nil && svc.Build.Context != "" {
+			if len(cfg.Registry) == 0 {
+				return fmt.Errorf("services.%s.build: set but `registry:` block is missing — nvoi needs push credentials", name)
+			}
+			if host := imageRegistryHost(svc.Image); host != "" {
+				// Explicit host — must match a declared registry.
+				if _, ok := cfg.Registry[host]; !ok {
+					return fmt.Errorf("services.%s.build: image targets registry %q but no `registry.%s` entry declares credentials", name, host, host)
+				}
+			} else {
+				// No host — infer from the single registry if exactly one
+				// is declared; reject ambiguity otherwise.
+				if svc.Image == "" {
+					return fmt.Errorf("services.%s.build: image is required", name)
+				}
+				if strings.Contains(svc.Image, "/") == false {
+					// Bare shortname like `nginx` — no repo namespace. Push
+					// would land at `<host>/nginx:<hash>` which is almost
+					// certainly not what the user wants.
+					return fmt.Errorf("services.%s.build: image %q has no repo namespace — use `<org>/<name>` (e.g. `deemx/nvoi-api`) or a fully qualified tag", name, svc.Image)
+				}
+				if len(cfg.Registry) > 1 {
+					return fmt.Errorf("services.%s.image: %q has no host prefix but multiple registries are declared — write a fully qualified tag (e.g. `ghcr.io/%s`) to disambiguate", name, svc.Image, svc.Image)
+				}
+			}
+		}
 		if svc.Server != "" && len(svc.Servers) > 0 {
 			return fmt.Errorf("services.%s: server and servers are mutually exclusive", name)
 		}
@@ -324,6 +356,28 @@ func validateVolumeServer(cfg *config.AppConfig, workload, server string, mounts
 		}
 	}
 	return nil
+}
+
+// imageRegistryHost extracts the registry host from an image reference.
+//
+//	"ghcr.io/org/app:v1"        → "ghcr.io"
+//	"registry.example.com:5000/foo:v1" → "registry.example.com:5000"
+//	"docker.io/library/nginx"   → "docker.io"
+//	"nginx"                     → ""  (bare shortname — caller treats as invalid for build targets)
+//	"alpine:3.19"               → ""  (bare shortname with tag — same)
+//
+// The heuristic: everything before the first `/` is the host iff it
+// contains a `.` or `:` or equals "localhost". Otherwise there's no host.
+func imageRegistryHost(image string) string {
+	slash := strings.IndexByte(image, '/')
+	if slash <= 0 {
+		return ""
+	}
+	first := image[:slash]
+	if first == "localhost" || strings.ContainsAny(first, ".:") {
+		return first
+	}
+	return ""
 }
 
 func validateSecretRefs(context string, refs []string) error {

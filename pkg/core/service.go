@@ -96,6 +96,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		Servers:        req.Servers,
 		Managed:        managed,
 		PullSecretName: req.PullSecretName,
+		DeployHash:     req.Cluster.DeployHash,
 	}
 
 	out.Command("service", "set", req.Name)

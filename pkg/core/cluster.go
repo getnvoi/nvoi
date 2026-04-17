@@ -54,6 +54,21 @@ type Cluster struct {
 	// client on demand and the caller owns Close().
 	MasterKube *kube.Client
 
+	// DeployHash is a per-deploy tag fragment. Set once at the top of
+	// reconcile.Deploy (format YYYYMMDD-HHMMSS UTC) and inherited by
+	// every downstream operation. Two jobs:
+	//
+	//   - Built images get tagged with it (user-tag-"-"-hash or just
+	//     hash if no user tag), so every deploy produces a unique image
+	//     reference and PodSpec diffs trigger an automatic rolling update.
+	//   - Every nvoi-managed workload's metadata + pod template gets
+	//     labelled nvoi/deploy-hash=<hash>, so `kubectl get deploy -L
+	//     nvoi/deploy-hash` shows which deploy placed each resource.
+	//
+	// Empty string on CLI dispatch paths (nvoi logs, exec, etc.) that
+	// don't run a deploy — callers there check len() before consuming.
+	DeployHash string
+
 	// SSHFunc overrides the default SSH connection for testing.
 	// When nil, uses infra.ConnectSSH (production path).
 	SSHFunc func(ctx context.Context, addr string) (utils.SSHClient, error)
