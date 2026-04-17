@@ -14,6 +14,18 @@ set -euo pipefail
 : "${CLOUDFLARE_API_TOKEN:?required}"
 : "${CLOUDFLARE_ACCOUNT_ID:?required}"
 
+# Resolve DIST to an absolute path BEFORE we cd — otherwise the subsequent
+# `cd "$(dirname "$0")"` makes relative paths (like "dist" passed from
+# release.yml running in the repo root) point at worker/dist/ which doesn't
+# exist, and the upload loop silently matches nothing. Every release from
+# v0.0.1 onward skipped R2 binary uploads because of this.
+if [ "${1:-}" = "release" ] && [ -n "${3:-}" ]; then
+  case "$3" in
+    /*) ;;                                 # already absolute
+    *) set -- "$1" "$2" "$(cd "$3" && pwd)" ;;
+  esac
+fi
+
 cd "$(dirname "$0")"
 
 BUCKET="nvoi-releases"
