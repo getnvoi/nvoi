@@ -4,7 +4,6 @@ env: production
 providers:
   compute: hetzner
   dns: cloudflare
-  storage: cloudflare
 
 servers:
   master:
@@ -13,3 +12,38 @@ servers:
     role: master
 
 firewall: default
+
+volumes:
+  pgdata:
+    size: 20
+    server: master
+
+secrets:
+  - POSTGRES_USER
+  - POSTGRES_PASSWORD
+  - POSTGRES_DB
+
+services:
+  postgres:
+    image: postgres:17
+    port: 5432
+    server: master
+    replicas: 1
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    env:
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    secrets:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+
+  api:
+    image: docker.io/deemx/nvoi-api:latest
+    port: 8080
+    server: master
+    secrets:
+      - DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB?sslmode=disable
+
+domains:
+  api: [api.nvoi.to]
