@@ -127,9 +127,50 @@ func (c *AppConfig) Resolve() error {
 }
 
 type ProvidersDef struct {
-	Compute string `yaml:"compute"`
-	DNS     string `yaml:"dns,omitempty"`
-	Storage string `yaml:"storage,omitempty"`
+	Compute string      `yaml:"compute"`
+	DNS     string      `yaml:"dns,omitempty"`
+	Storage string      `yaml:"storage,omitempty"`
+	Secrets *SecretsDef `yaml:"secrets,omitempty"`
+}
+
+// SecretsDef selects a secrets backend. Unset → nvoi falls back to
+// `EnvSource` (os.Getenv) for every credential lookup, same as today.
+// Set → the named backend's own creds are bootstrapped from env, then
+// every downstream credential (compute / DNS / storage / SSH key /
+// service $VAR) is fetched through the backend at deploy time. Strict
+// mode — no env fallback once a backend is declared.
+//
+// Two YAML shapes, mirroring the scalar-or-struct pattern `build:` uses:
+//
+//	providers:
+//	  secrets: doppler          # scalar — matches compute/dns/storage
+//
+//	providers:                  # struct — for future per-backend knobs
+//	  secrets:
+//	    kind: doppler
+//	    # ttl: 1h, scopes: [...]   (none of these exist yet)
+//
+// Supported kinds: doppler | awssm | infisical.
+type SecretsDef struct {
+	Kind string `yaml:"kind"`
+}
+
+// UnmarshalYAML accepts both the scalar shortcut (`secrets: doppler`)
+// and the struct form (`secrets: {kind: doppler}`). The scalar is
+// preferred — same shape as the other providers — and the struct
+// stays open for future per-backend fields without a breaking change.
+func (s *SecretsDef) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		s.Kind = value.Value
+		return nil
+	case yaml.MappingNode:
+		// Avoid an infinite UnmarshalYAML loop by decoding into a type
+		// alias that doesn't re-implement UnmarshalYAML.
+		type plain SecretsDef
+		return value.Decode((*plain)(s))
+	}
+	return fmt.Errorf("providers.secrets: unexpected YAML kind — use `secrets: <name>` or `secrets: {kind: <name>}`")
 }
 
 type ServerDef struct {

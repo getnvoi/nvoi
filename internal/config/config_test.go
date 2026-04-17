@@ -296,3 +296,74 @@ services:
 		t.Error("absent build: should leave Build == nil")
 	}
 }
+
+// ── providers.secrets YAML shapes ────────────────────────────────────────────
+
+func TestProvidersSecrets_ScalarShape(t *testing.T) {
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+  secrets: doppler
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Providers.Secrets == nil {
+		t.Fatal("Secrets pointer should be non-nil")
+	}
+	if cfg.Providers.Secrets.Kind != "doppler" {
+		t.Errorf("Kind = %q, want doppler", cfg.Providers.Secrets.Kind)
+	}
+}
+
+func TestProvidersSecrets_StructShape(t *testing.T) {
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+  secrets:
+    kind: infisical
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Providers.Secrets == nil || cfg.Providers.Secrets.Kind != "infisical" {
+		t.Errorf("Secrets = %+v, want {Kind: infisical}", cfg.Providers.Secrets)
+	}
+}
+
+func TestProvidersSecrets_Absent(t *testing.T) {
+	yaml := []byte(`
+app: myapp
+env: prod
+providers:
+  compute: hetzner
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+`)
+	cfg, err := ParseAppConfig(yaml)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Providers.Secrets != nil {
+		t.Errorf("Secrets should be nil when absent, got %+v", cfg.Providers.Secrets)
+	}
+}

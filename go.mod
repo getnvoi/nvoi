@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.296.2
 	github.com/aws/aws-sdk-go-v2/service/route53 v1.62.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.98.0
+	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.5
 	github.com/danielgtaylor/huma/v2 v2.37.3
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/go-cmp v0.7.0
