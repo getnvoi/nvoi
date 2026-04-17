@@ -4,6 +4,7 @@ env: production
 providers:
   compute: hetzner
   dns: cloudflare
+  secrets: infisical
 
 servers:
   master:

@@ -86,18 +86,23 @@ func resolveProviderCreds(source provider.CredentialSource, kind, name string) (
 }
 
 // resolveSSHKey reads the SSH private key for master/worker provisioning.
-// Resolution order:
-//  1. SSH_PRIVATE_KEY (from source — env or secrets backend)
-//  2. SSH_KEY_PATH (from source, tilde expanded) → read file
-//  3. ~/.ssh/id_ed25519 or ~/.ssh/id_rsa on disk
 //
-// Step 3 is a local-filesystem fallback — genuinely absent from a
-// secrets backend by design (backends don't store files). Safe because
-// the default private-key paths are the same convention every other
-// SSH-using tool follows.
+// When a secrets backend is in use (`providers.secrets` set), strict mode
+// applies: SSH_PRIVATE_KEY must be stored in the backend as a PEM blob.
+// No disk fallback — a backend declares itself the single source of truth
+// and silently reading `~/.ssh/id_*` would create a ghost dependency on
+// the operator's home directory that nobody can audit.
+//
+// Under EnvSource (no backend), resolution order is the historical one:
+//  1. SSH_PRIVATE_KEY (env, full PEM blob)
+//  2. SSH_KEY_PATH (env, tilde-expanded) → read file
+//  3. ~/.ssh/id_ed25519 or ~/.ssh/id_rsa on disk
 func resolveSSHKey(source provider.CredentialSource) ([]byte, error) {
 	if pem, _ := source.Get("SSH_PRIVATE_KEY"); pem != "" {
 		return []byte(pem), nil
+	}
+	if _, strict := source.(provider.SecretsSource); strict {
+		return nil, fmt.Errorf("secrets backend in use — SSH_PRIVATE_KEY must be stored in the backend (no disk fallback)")
 	}
 	if keyPath, _ := source.Get("SSH_KEY_PATH"); keyPath != "" {
 		if strings.HasPrefix(keyPath, "~/") {

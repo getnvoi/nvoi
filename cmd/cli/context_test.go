@@ -242,3 +242,54 @@ func TestBuildDeployContext_EnvOnlyMode(t *testing.T) {
 		t.Errorf("dc.Creds should be EnvSource, got %T", dc.Creds)
 	}
 }
+
+// INVARIANT: under a secrets backend, SSH_PRIVATE_KEY must come FROM
+// the backend — no silent disk fallback to ~/.ssh/id_* which would
+// create an unaudited dependency on the operator's home directory.
+func TestResolveSSHKey_BackendRequiresSSHPrivateKey(t *testing.T) {
+	// Empty backend — no SSH_PRIVATE_KEY.
+	src := provider.SecretsSource{Ctx: context.Background(), Provider: emptyBackend{}}
+	_, err := resolveSSHKey(src)
+	if err == nil {
+		t.Fatal("expected error when backend has no SSH_PRIVATE_KEY")
+	}
+	if !strings.Contains(err.Error(), "SSH_PRIVATE_KEY") {
+		t.Errorf("error should name SSH_PRIVATE_KEY, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no disk fallback") {
+		t.Errorf("error should document the strict-mode policy, got: %v", err)
+	}
+}
+
+func TestResolveSSHKey_BackendReturnsPEM(t *testing.T) {
+	src := provider.SecretsSource{
+		Ctx:      context.Background(),
+		Provider: mapBackend{"SSH_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\nhello\n-----END PRIVATE KEY-----"},
+	}
+	key, err := resolveSSHKey(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(key), "BEGIN PRIVATE KEY") {
+		t.Errorf("key not threaded through, got: %q", string(key))
+	}
+}
+
+// mapBackend / emptyBackend — minimal SecretsProvider fakes for this test.
+type mapBackend map[string]string
+
+func (m mapBackend) ValidateCredentials(_ context.Context) error     { return nil }
+func (m mapBackend) Get(_ context.Context, k string) (string, error) { return m[k], nil }
+func (m mapBackend) List(_ context.Context) ([]string, error) {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out, nil
+}
+
+type emptyBackend struct{}
+
+func (emptyBackend) ValidateCredentials(_ context.Context) error     { return nil }
+func (emptyBackend) Get(_ context.Context, _ string) (string, error) { return "", nil }
+func (emptyBackend) List(_ context.Context) ([]string, error)        { return nil, nil }
