@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 )
@@ -17,33 +16,22 @@ type LogsRequest struct {
 	Timestamps bool
 }
 
+// Logs streams logs of every pod backing req.Service to the request's
+// Output writer. Translates flag values into typed PodLogOptions.
 func Logs(ctx context.Context, req LogsRequest) error {
-	ssh, names, err := req.Cluster.SSH(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx)
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
+	defer cleanup()
 
-	ns := names.KubeNamespace()
-	sel := kube.PodSelector(req.Service)
-
-	args := fmt.Sprintf(" -l %s", sel)
-	if req.Follow {
-		args += " -f"
-	}
-	if req.Tail > 0 {
-		args += fmt.Sprintf(" --tail=%d", req.Tail)
-	}
-	if req.Since != "" {
-		args += fmt.Sprintf(" --since=%s", req.Since)
-	}
-	if req.Previous {
-		args += " --previous"
-	}
-	if req.Timestamps {
-		args += " --timestamps"
-	}
-
-	w := req.Log().Writer()
-	return kube.RunStream(ctx, ssh, ns, "logs"+args, w, w)
+	return kc.StreamLogs(ctx, req.Log().Writer(), kube.LogsRequest{
+		Namespace:  names.KubeNamespace(),
+		Selector:   kube.PodSelector(req.Service),
+		Follow:     req.Follow,
+		Tail:       req.Tail,
+		Since:      req.Since,
+		Previous:   req.Previous,
+		Timestamps: req.Timestamps,
+	})
 }

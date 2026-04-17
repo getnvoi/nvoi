@@ -78,7 +78,7 @@ Volumes are user data. The rules:
 - Security groups (firewalls) cannot be deleted while attached to any instance. `DeleteServer` moves the instance to the VPC default SG before termination.
 - Volumes survive instance termination. `DeleteServer` explicitly detaches and waits for `available` state before terminating. Errors are returned, not swallowed.
 - Network cleanup requires cascading: IGWs, subnets, route tables before VPC delete.
-- **Testing gap:** AWS `DeleteServer` uses concrete `*ec2.Client`, not an interface. Provider-level tests are pure function tests only. Behavior tested at `MockCompute` level in reconcile/teardown tests. Full coverage requires refactoring to an EC2 interface.
+- **Testing gap:** AWS `DeleteServer` uses concrete `*ec2.Client`, not an interface. Provider-level tests are pure function tests only. There is no AWS httptest fake yet; Hetzner behavior is covered end-to-end by `HetznerFake` (see `internal/testutil/providermocks.go`). Full AWS coverage requires an `awsfake` peer in the same file, following the same governance.
 
 ### Scaleway
 - Server terminate is async. `DeleteServer` polls until gone.

@@ -8,7 +8,6 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -156,11 +155,10 @@ func TestVerifyDNSPropagation_NoMasterSSH_Noop(t *testing.T) {
 func TestVerifyDNSPropagation_NoMasterServer_Noop(t *testing.T) {
 	ssh := &testutil.MockSSH{}
 	dc := dnsDC(ssh)
-	// Register a provider that returns no servers — Master() will fail.
+	// Register a Hetzner fake with no seeded servers — Master() will fail.
 	provName := "test-dns-verify-empty"
-	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
-		return &testutil.MockCompute{Servers: nil}
-	})
+	empty := testutil.NewHetznerFake(t)
+	empty.Register(provName)
 	dc.Cluster.Provider = provName
 	out := dc.Cluster.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{

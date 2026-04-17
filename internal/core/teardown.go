@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/getnvoi/nvoi/internal/packages"
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -45,9 +44,6 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 			collect(app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name}))
 		}
 	}
-
-	// Package resources (database backup buckets, etc.)
-	packages.TeardownAll(ctx, dc, cfg, deleteStorage)
 
 	// Volumes — external, preserved by default
 	if deleteVolumes {

@@ -15,10 +15,6 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 	cronNames := utils.SortedKeys(cfg.Crons)
 	for _, name := range cronNames {
 		cron := cfg.Crons[name]
-		image, err := resolveImageRef(ctx, dc, cron.Image, cron.Build)
-		if err != nil {
-			return err
-		}
 		servers := ResolveServers(cfg, cron.Servers, cron.Server, cron.Volumes)
 
 		// Resolve env: entries — plain text in manifest
@@ -45,7 +41,7 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 		}
 
 		if err := app.CronSet(ctx, app.CronSetRequest{
-			Cluster: dc.Cluster, Name: name, Image: image,
+			Cluster: dc.Cluster, Name: name, Image: cron.Image,
 			Command:    cron.Command,
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
@@ -57,12 +53,8 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 	}
 	if live != nil {
 		desired := toSet(cronNames)
-		protected := map[string]bool{}
-		for _, db := range cfg.Database {
-			protected[db.BackupCronName] = true
-		}
 		for _, name := range live.Crons {
-			if !desired[name] && !protected[name] {
+			if !desired[name] {
 				if err := app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
 					dc.Cluster.Log().Warning(fmt.Sprintf("orphan cron %s not removed: %s", name, err))
 				}

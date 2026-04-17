@@ -4,6 +4,7 @@ package infra
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -43,11 +44,12 @@ func SwapSize(diskGB int) int {
 }
 
 // EnsureSwap sets up swap via SSH. Reads actual disk size from the server.
-// Idempotent — skips if swap is already active.
-func EnsureSwap(ctx context.Context, ssh utils.SSHClient) error {
+// Idempotent — skips if swap is already active. Streams progress to w.
+func EnsureSwap(ctx context.Context, ssh utils.SSHClient, w io.Writer) error {
 	// Already has swap?
 	out, err := ssh.Run(ctx, "swapon --show --noheadings")
 	if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		fmt.Fprintln(w, "swap already active")
 		return nil
 	}
 
@@ -60,17 +62,22 @@ func EnsureSwap(ctx context.Context, ssh utils.SSHClient) error {
 	fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &diskKB)
 	diskGB := diskKB / 1024 / 1024
 	swapMB := SwapSize(diskGB)
+	fmt.Fprintf(w, "allocating %dMB swap on /swapfile...\n", swapMB)
 
-	cmds := []string{
-		fmt.Sprintf("fallocate -l %dM /swapfile", swapMB),
-		"chmod 600 /swapfile",
-		"mkswap /swapfile",
-		"swapon /swapfile",
-		"bash -c \"grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab\"",
+	steps := []struct {
+		label string
+		cmd   string
+	}{
+		{"allocating /swapfile", fmt.Sprintf("fallocate -l %dM /swapfile", swapMB)},
+		{"chmod 600 /swapfile", "chmod 600 /swapfile"},
+		{"mkswap /swapfile", "mkswap /swapfile"},
+		{"swapon /swapfile", "swapon /swapfile"},
+		{"registering in /etc/fstab", "bash -c \"grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab\""},
 	}
-	for _, cmd := range cmds {
-		if _, err := ssh.Run(ctx, "sudo "+cmd); err != nil {
-			return fmt.Errorf("swap setup: %s: %w", cmd, err)
+	for _, s := range steps {
+		fmt.Fprintln(w, s.label+"...")
+		if err := ssh.RunStream(ctx, "sudo "+s.cmd, w, w); err != nil {
+			return fmt.Errorf("swap setup: %s: %w", s.label, err)
 		}
 	}
 	return nil

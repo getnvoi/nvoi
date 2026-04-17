@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -46,6 +47,12 @@ type Cluster struct {
 	// Set once after Servers() in reconcile. When set, SSH() returns a
 	// borrowed reference (no-op Close). When nil, SSH() connects on demand.
 	MasterSSH utils.SSHClient
+
+	// MasterKube is the pre-established Kubernetes client over the master
+	// SSH tunnel. Mirrors MasterSSH: set once after MasterSSH in reconcile;
+	// Kube() returns a borrowed reference. When nil, Kube() builds a fresh
+	// client on demand and the caller owns Close().
+	MasterKube *kube.Client
 
 	// SSHFunc overrides the default SSH connection for testing.
 	// When nil, uses infra.ConnectSSH (production path).
@@ -140,4 +147,38 @@ func (c *Cluster) Connect(ctx context.Context, addr string) (utils.SSHClient, er
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 	return ssh, nil
+}
+
+// Kube returns a Kubernetes client to the master node alongside a cleanup
+// func the caller must defer.
+//
+// When MasterKube is set (reconcile path): returns a borrowed reference and
+// a no-op cleanup. The reconciler owns Close().
+//
+// When MasterKube is nil (CLI dispatch): finds the master, opens a fresh SSH
+// connection + tunnel, builds a Client. cleanup() closes the kube tunnel and
+// the underlying SSH connection.
+func (c *Cluster) Kube(ctx context.Context) (*kube.Client, *utils.Names, func(), error) {
+	if c.MasterKube != nil {
+		names, err := c.Names()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return c.MasterKube, names, func() {}, nil
+	}
+
+	ssh, names, err := c.SSH(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	kc, err := kube.New(ctx, ssh)
+	if err != nil {
+		ssh.Close()
+		return nil, nil, nil, fmt.Errorf("kube client: %w", err)
+	}
+	cleanup := func() {
+		_ = kc.Close()
+		_ = ssh.Close()
+	}
+	return kc, names, cleanup, nil
 }

@@ -1,490 +1,348 @@
 package kube
 
 import (
-	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	sigsyaml "sigs.k8s.io/yaml"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func mustNames(t *testing.T) *utils.Names {
+// asDeployment unwraps the typed workload returned by BuildService.
+func asDeployment(t *testing.T, obj runtime.Object) *appsv1.Deployment {
 	t.Helper()
-	n, err := utils.NewNames("myapp", "production")
-	if err != nil {
-		t.Fatalf("NewNames: %v", err)
+	dep, ok := obj.(*appsv1.Deployment)
+	if !ok {
+		t.Fatalf("expected *Deployment, got %T", obj)
 	}
-	return n
+	return dep
 }
 
-// splitDocs splits multi-doc YAML on "---" separators and returns non-empty documents.
-func splitDocs(yaml string) []string {
-	parts := strings.Split(yaml, "---")
-	var docs []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			docs = append(docs, p)
-		}
+func asStatefulSet(t *testing.T, obj runtime.Object) *appsv1.StatefulSet {
+	t.Helper()
+	ss, ok := obj.(*appsv1.StatefulSet)
+	if !ok {
+		t.Fatalf("expected *StatefulSet, got %T", obj)
 	}
-	return docs
+	return ss
 }
 
-func TestBasicDeployment(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
+func TestBuildService_BasicDeployment(t *testing.T) {
+	workload, svc, kind, err := BuildService(ServiceSpec{
 		Name:     "web",
-		Image:    "nginx",
+		Image:    "nginx:latest",
 		Port:     80,
 		Replicas: 2,
-	}
-
-	yamlStr, kind, err := GenerateYAML(spec, names, nil)
+	}, mustNames(t), nil)
 	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
+		t.Fatalf("build: %v", err)
 	}
 	if kind != "deployment" {
-		t.Fatalf("expected workloadKind=deployment, got %q", kind)
+		t.Errorf("kind = %q", kind)
 	}
-
-	docs := splitDocs(yamlStr)
-	if len(docs) != 2 {
-		t.Fatalf("expected 2 YAML docs, got %d", len(docs))
-	}
-
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
-	}
+	dep := asDeployment(t, workload)
 	if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 2 {
-		t.Fatalf("expected replicas=2, got %v", dep.Spec.Replicas)
+		t.Errorf("replicas = %v", dep.Spec.Replicas)
 	}
-	containers := dep.Spec.Template.Spec.Containers
-	if len(containers) != 1 {
-		t.Fatalf("expected 1 container, got %d", len(containers))
+	if svc.Spec.Ports[0].Port != 80 {
+		t.Errorf("svc port = %d", svc.Spec.Ports[0].Port)
 	}
-	if containers[0].Image != "nginx" {
-		t.Errorf("expected image=nginx, got %q", containers[0].Image)
+	ct := dep.Spec.Template.Spec.Containers[0]
+	if ct.Image != "nginx:latest" {
+		t.Errorf("image = %q", ct.Image)
 	}
-	if len(containers[0].Ports) != 1 || containers[0].Ports[0].ContainerPort != 80 {
-		t.Errorf("expected container port 80, got %v", containers[0].Ports)
-	}
-
-	var svc corev1.Service
-	if err := sigsyaml.Unmarshal([]byte(docs[1]), &svc); err != nil {
-		t.Fatalf("unmarshal Service: %v", err)
-	}
-	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 80 {
-		t.Errorf("expected service port 80, got %v", svc.Spec.Ports)
+	if ct.Ports[0].ContainerPort != 80 {
+		t.Errorf("containerPort = %d", ct.Ports[0].ContainerPort)
 	}
 }
 
-func TestStatefulSet(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:     "db",
-		Image:    "postgres:17",
-		Port:     5432,
-		Replicas: 3, // should be forced to 1
-		Managed:  true,
-	}
-
-	yamlStr, kind, err := GenerateYAML(spec, names, nil)
+func TestBuildService_StatefulSetForManagedVolume(t *testing.T) {
+	workload, svc, kind, err := BuildService(ServiceSpec{
+		Name:    "db",
+		Image:   "postgres:17",
+		Port:    5432,
+		Volumes: []string{"pgdata:/var/lib/postgresql/data"},
+		Managed: true,
+	}, mustNames(t), map[string]string{"pgdata": "/mnt/data/pgdata"})
 	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
+		t.Fatalf("build: %v", err)
 	}
 	if kind != "statefulset" {
-		t.Fatalf("expected workloadKind=statefulset, got %q", kind)
+		t.Errorf("kind = %q", kind)
 	}
-
-	docs := splitDocs(yamlStr)
-	if len(docs) != 2 {
-		t.Fatalf("expected 2 YAML docs, got %d", len(docs))
+	ss := asStatefulSet(t, workload)
+	if ss.Spec.ServiceName != "db" {
+		t.Errorf("serviceName = %q", ss.Spec.ServiceName)
 	}
-
-	var ss appsv1.StatefulSet
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &ss); err != nil {
-		t.Fatalf("unmarshal StatefulSet: %v", err)
+	if len(ss.Spec.Template.Spec.Volumes) != 1 {
+		t.Errorf("volumes = %v", ss.Spec.Template.Spec.Volumes)
 	}
-	if ss.Spec.Replicas == nil || *ss.Spec.Replicas != 1 {
-		t.Fatalf("expected replicas forced to 1, got %v", ss.Spec.Replicas)
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 5432 {
+		t.Errorf("svc ports = %+v", svc.Spec.Ports)
 	}
 }
 
-func TestNoPort(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
+func TestBuildService_NoPortHeadlessService(t *testing.T) {
+	_, svc, _, err := BuildService(ServiceSpec{
 		Name:  "worker",
-		Image: "myworker:latest",
-		Port:  0,
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, nil)
+		Image: "worker:v1",
+	}, mustNames(t), nil)
 	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
-
-	docs := splitDocs(yamlStr)
-	if len(docs) != 2 {
-		t.Fatalf("expected 2 YAML docs, got %d", len(docs))
-	}
-
-	var svc corev1.Service
-	if err := sigsyaml.Unmarshal([]byte(docs[1]), &svc); err != nil {
-		t.Fatalf("unmarshal Service: %v", err)
+		t.Fatalf("build: %v", err)
 	}
 	if svc.Spec.ClusterIP != "None" {
-		t.Errorf("expected ClusterIP=None, got %q", svc.Spec.ClusterIP)
+		t.Errorf("expected headless service when no port, got %q", svc.Spec.ClusterIP)
 	}
 	if len(svc.Spec.Ports) != 0 {
 		t.Errorf("expected no ports, got %v", svc.Spec.Ports)
 	}
 }
 
-func TestCommandWrapping(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:    "web",
-		Image:   "rails:latest",
-		Port:    3000,
-		Command: "bundle exec rails s",
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, nil)
+func TestBuildService_CommandWrapping(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:    "worker",
+		Image:   "busybox",
+		Command: "echo hi",
+	}, mustNames(t), nil)
 	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
+		t.Fatalf("build: %v", err)
 	}
-
-	docs := splitDocs(yamlStr)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
+	dep := asDeployment(t, workload)
+	ct := dep.Spec.Template.Spec.Containers[0]
+	if len(ct.Command) != 2 || ct.Command[0] != "/bin/sh" || ct.Command[1] != "-c" {
+		t.Errorf("command = %v", ct.Command)
 	}
-
-	c := dep.Spec.Template.Spec.Containers[0]
-	if len(c.Command) != 2 || c.Command[0] != "/bin/sh" || c.Command[1] != "-c" {
-		t.Errorf("expected Command=[\"/bin/sh\", \"-c\"], got %v", c.Command)
-	}
-	if len(c.Args) != 1 || c.Args[0] != "bundle exec rails s" {
-		t.Errorf("expected Args=[\"bundle exec rails s\"], got %v", c.Args)
+	if len(ct.Args) != 1 || ct.Args[0] != "echo hi" {
+		t.Errorf("args = %v", ct.Args)
 	}
 }
 
-func TestSecretReferences(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:          "web",
-		Image:         "myapp:latest",
-		Port:          3000,
-		SvcSecrets:    []string{"DB_PASSWORD", "RAILS_KEY"},
-		SvcSecretName: "web-secrets",
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, nil)
+func TestBuildService_TCPProbeByDefault(t *testing.T) {
+	// Port set, no HealthPath → readiness probe is TCP connect on the port.
+	// This makes Ready mean "accepting connections", not just "container
+	// Running" — critical for depends_on ordering.
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:  "db",
+		Image: "postgres:17",
+		Port:  5432,
+	}, mustNames(t), nil)
 	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
+		t.Fatalf("build: %v", err)
 	}
+	probe := asDeployment(t, workload).Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil {
+		t.Fatal("expected default TCP probe when port is set")
+	}
+	if probe.TCPSocket == nil {
+		t.Errorf("expected TCPSocket probe, got %+v", probe)
+	}
+	if probe.TCPSocket.Port.IntValue() != 5432 {
+		t.Errorf("probe port = %v, want 5432", probe.TCPSocket.Port)
+	}
+	if probe.HTTPGet != nil {
+		t.Error("HTTPGet should be nil when no HealthPath")
+	}
+}
 
-	docs := splitDocs(yamlStr)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
+func TestBuildService_HTTPProbeOverridesTCP(t *testing.T) {
+	// Explicit HealthPath → HTTP GET probe, not TCP.
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name: "web", Image: "nginx", Port: 80, HealthPath: "/healthz",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
 	}
+	probe := asDeployment(t, workload).Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe.HTTPGet == nil {
+		t.Fatal("HealthPath should yield HTTP probe")
+	}
+	if probe.TCPSocket != nil {
+		t.Error("TCP probe must not coexist with HTTP probe")
+	}
+}
 
-	envVars := dep.Spec.Template.Spec.Containers[0].Env
-	wantSecrets := map[string]string{
-		"DB_PASSWORD": "web-secrets",
-		"RAILS_KEY":   "web-secrets",
+func TestBuildService_NoProbeWithoutPort(t *testing.T) {
+	// No port → no probe at all (headless service, nothing to check).
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name: "worker", Image: "worker:v1",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
 	}
-	found := make(map[string]bool)
-	for _, ev := range envVars {
-		if ev.ValueFrom != nil && ev.ValueFrom.SecretKeyRef != nil {
-			ref := ev.ValueFrom.SecretKeyRef
-			expectedSecret, ok := wantSecrets[ev.Name]
-			if !ok {
-				t.Errorf("unexpected secret env var %q", ev.Name)
-				continue
-			}
-			if ref.Name != expectedSecret {
-				t.Errorf("env %q: expected secret name %q, got %q", ev.Name, expectedSecret, ref.Name)
-			}
-			if ref.Key != ev.Name {
-				t.Errorf("env %q: expected key %q, got %q", ev.Name, ev.Name, ref.Key)
-			}
-			found[ev.Name] = true
-		}
+	probe := asDeployment(t, workload).Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe != nil {
+		t.Errorf("no port, expected no probe, got %+v", probe)
 	}
-	for key := range wantSecrets {
-		if !found[key] {
-			t.Errorf("missing secret env var %q", key)
-		}
+}
+
+func TestBuildService_HealthCheckProbe(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:       "web",
+		Image:      "nginx",
+		Port:       80,
+		HealthPath: "/healthz",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dep := asDeployment(t, workload)
+	probe := dep.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil {
+		t.Fatal("readiness probe missing")
+	}
+	if probe.HTTPGet.Path != "/healthz" {
+		t.Errorf("probe path = %q", probe.HTTPGet.Path)
+	}
+	if probe.HTTPGet.Port.IntValue() != 80 {
+		t.Errorf("probe port = %v", probe.HTTPGet.Port)
+	}
+}
+
+func TestBuildService_SecretRef(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:          "web",
+		Image:         "nginx",
+		SvcSecrets:    []string{"API_KEY"},
+		SvcSecretName: "web-secrets",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dep := asDeployment(t, workload)
+	env := dep.Spec.Template.Spec.Containers[0].Env
+	if len(env) != 1 || env[0].Name != "API_KEY" {
+		t.Fatalf("env = %+v", env)
+	}
+	ref := env[0].ValueFrom.SecretKeyRef
+	if ref.Name != "web-secrets" || ref.Key != "API_KEY" {
+		t.Errorf("secretKeyRef = %+v", ref)
+	}
+}
+
+func TestBuildService_SecretRefAliased(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:          "web",
+		Image:         "nginx",
+		SvcSecrets:    []string{"DATABASE_URL=MAIN_DATABASE_URL"},
+		SvcSecretName: "web-secrets",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	env := asDeployment(t, workload).Spec.Template.Spec.Containers[0].Env
+	if env[0].Name != "DATABASE_URL" || env[0].ValueFrom.SecretKeyRef.Key != "MAIN_DATABASE_URL" {
+		t.Errorf("aliased ref wired wrong: %+v", env[0])
+	}
+}
+
+func TestBuildService_NodeSelector_SingleServer(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:    "web",
+		Image:   "nginx",
+		Servers: []string{"worker-1"},
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dep := asDeployment(t, workload)
+	if dep.Spec.Template.Spec.NodeSelector[utils.LabelNvoiRole] != "worker-1" {
+		t.Errorf("nodeSelector = %v", dep.Spec.Template.Spec.NodeSelector)
+	}
+}
+
+func TestBuildService_MultiServerAffinity(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:    "web",
+		Image:   "nginx",
+		Servers: []string{"worker-1", "worker-2"},
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dep := asDeployment(t, workload)
+	aff := dep.Spec.Template.Spec.Affinity
+	if aff == nil || aff.NodeAffinity == nil {
+		t.Fatal("nodeAffinity missing for multi-server")
+	}
+	terms := aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || len(terms[0].MatchExpressions) != 1 {
+		t.Fatalf("match expressions = %+v", terms)
+	}
+	if len(terms[0].MatchExpressions[0].Values) != 2 {
+		t.Errorf("values = %v", terms[0].MatchExpressions[0].Values)
+	}
+	if len(dep.Spec.Template.Spec.TopologySpreadConstraints) != 1 {
+		t.Error("topologySpreadConstraints required for multi-server even distribution")
+	}
+}
+
+func TestBuildService_DefaultServerIsMaster(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:  "web",
+		Image: "nginx",
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dep := asDeployment(t, workload)
+	if dep.Spec.Template.Spec.NodeSelector[utils.LabelNvoiRole] != "master" {
+		t.Errorf("default server should pin to master, got %v", dep.Spec.Template.Spec.NodeSelector)
+	}
+}
+
+func TestBuildService_NamedVolumes(t *testing.T) {
+	workload, _, _, err := BuildService(ServiceSpec{
+		Name:    "web",
+		Image:   "nginx",
+		Volumes: []string{"cache:/cache"},
+	}, mustNames(t), nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dep := asDeployment(t, workload)
+	vols := dep.Spec.Template.Spec.Volumes
+	if len(vols) != 1 {
+		t.Fatalf("volumes = %v", vols)
+	}
+	if vols[0].HostPath == nil {
+		t.Errorf("named volume must use HostPath: %+v", vols[0])
+	}
+	mounts := dep.Spec.Template.Spec.Containers[0].VolumeMounts
+	if len(mounts) != 1 || mounts[0].MountPath != "/cache" {
+		t.Errorf("mounts = %+v", mounts)
 	}
 }
 
 func TestParseSecretRef_Plain(t *testing.T) {
-	envName, secretKey := ParseSecretRef("RAILS_MASTER_KEY")
-	if envName != "RAILS_MASTER_KEY" {
-		t.Errorf("envName = %q, want RAILS_MASTER_KEY", envName)
-	}
-	if secretKey != "RAILS_MASTER_KEY" {
-		t.Errorf("secretKey = %q, want RAILS_MASTER_KEY", secretKey)
+	env, key := ParseSecretRef("API_KEY")
+	if env != "API_KEY" || key != "API_KEY" {
+		t.Errorf("plain: env=%q key=%q", env, key)
 	}
 }
 
-func TestParseSecretRef_Alias(t *testing.T) {
-	envName, secretKey := ParseSecretRef("POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB")
-	if envName != "POSTGRES_PASSWORD" {
-		t.Errorf("envName = %q, want POSTGRES_PASSWORD", envName)
-	}
-	if secretKey != "POSTGRES_PASSWORD_DB" {
-		t.Errorf("secretKey = %q, want POSTGRES_PASSWORD_DB", secretKey)
+func TestParseSecretRef_Aliased(t *testing.T) {
+	env, key := ParseSecretRef("DB_URL=MAIN_DATABASE_URL")
+	if env != "DB_URL" || key != "MAIN_DATABASE_URL" {
+		t.Errorf("aliased: env=%q key=%q", env, key)
 	}
 }
 
-func TestSecretAliasInYAML(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:          "db",
-		Image:         "postgres:17",
-		SvcSecrets:    []string{"POSTGRES_PASSWORD=POSTGRES_PASSWORD_DB", "PLAIN_KEY"},
-		SvcSecretName: "db-secrets",
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, nil)
+// Sanity: the typed objects we build carry the managed-by label so orphan
+// detection can find them via NvoiSelector.
+func TestBuildService_LabelsIncludeManagedBy(t *testing.T) {
+	workload, svc, _, err := BuildService(ServiceSpec{Name: "web", Image: "nginx"}, mustNames(t), nil)
 	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
+		t.Fatalf("build: %v", err)
 	}
-
-	docs := splitDocs(yamlStr)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	dep := asDeployment(t, workload)
+	if dep.Labels[utils.LabelAppManagedBy] != utils.LabelManagedBy {
+		t.Errorf("deployment missing managed-by: %v", dep.Labels)
 	}
-
-	envVars := dep.Spec.Template.Spec.Containers[0].Env
-	for _, ev := range envVars {
-		if ev.ValueFrom == nil || ev.ValueFrom.SecretKeyRef == nil {
-			continue
-		}
-		ref := ev.ValueFrom.SecretKeyRef
-		switch ev.Name {
-		case "POSTGRES_PASSWORD":
-			if ref.Key != "POSTGRES_PASSWORD_DB" {
-				t.Errorf("alias: env POSTGRES_PASSWORD should ref key POSTGRES_PASSWORD_DB, got %q", ref.Key)
-			}
-		case "PLAIN_KEY":
-			if ref.Key != "PLAIN_KEY" {
-				t.Errorf("plain: env PLAIN_KEY should ref key PLAIN_KEY, got %q", ref.Key)
-			}
-		default:
-			// skip non-secret env vars
-		}
+	if svc.Labels[utils.LabelAppManagedBy] != utils.LabelManagedBy {
+		t.Errorf("service missing managed-by: %v", svc.Labels)
 	}
-}
-
-func TestHealthCheck(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:       "web",
-		Image:      "myapp:latest",
-		Port:       3000,
-		HealthPath: "/up",
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, nil)
-	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
-
-	docs := splitDocs(yamlStr)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
-	}
-
-	c := dep.Spec.Template.Spec.Containers[0]
-	if c.ReadinessProbe == nil {
-		t.Fatal("expected readinessProbe, got nil")
-	}
-	probe := c.ReadinessProbe
-	if probe.HTTPGet == nil {
-		t.Fatal("expected HTTPGet probe, got nil")
-	}
-	if probe.HTTPGet.Path != "/up" {
-		t.Errorf("expected probe path /up, got %q", probe.HTTPGet.Path)
-	}
-	if probe.HTTPGet.Port.IntValue() != 3000 {
-		t.Errorf("expected probe port 3000, got %d", probe.HTTPGet.Port.IntValue())
-	}
-}
-
-func TestNodeSelector(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:    "db",
-		Image:   "postgres:17",
-		Port:    5432,
-		Servers: []string{"master"},
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, nil)
-	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
-
-	docs := splitDocs(yamlStr)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
-	}
-
-	nodeSelector := dep.Spec.Template.Spec.NodeSelector
-	if nodeSelector == nil {
-		t.Fatal("expected nodeSelector, got nil")
-	}
-	if nodeSelector[utils.LabelNvoiRole] != "master" {
-		t.Errorf("expected nodeSelector[%q]=master, got %q", utils.LabelNvoiRole, nodeSelector[utils.LabelNvoiRole])
-	}
-}
-
-func TestMultiServerAffinity(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:    "web",
-		Image:   "nginx",
-		Port:    80,
-		Servers: []string{"worker-1", "worker-2"},
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, nil)
-	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
-
-	docs := splitDocs(yamlStr)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
-	}
-
-	podSpec := dep.Spec.Template.Spec
-
-	// Should NOT have nodeSelector (that's single-server only)
-	if podSpec.NodeSelector != nil {
-		t.Errorf("multi-server should not use nodeSelector, got: %v", podSpec.NodeSelector)
-	}
-
-	// Should have nodeAffinity with In operator
-	if podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil {
-		t.Fatal("expected nodeAffinity for multi-server placement")
-	}
-	terms := podSpec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-	if len(terms) != 1 {
-		t.Fatalf("expected 1 term, got %d", len(terms))
-	}
-	exprs := terms[0].MatchExpressions
-	if len(exprs) != 1 {
-		t.Fatalf("expected 1 expression, got %d", len(exprs))
-	}
-	if exprs[0].Key != utils.LabelNvoiRole {
-		t.Errorf("expected key %q, got %q", utils.LabelNvoiRole, exprs[0].Key)
-	}
-	if exprs[0].Operator != corev1.NodeSelectorOpIn {
-		t.Errorf("expected operator In, got %v", exprs[0].Operator)
-	}
-	if len(exprs[0].Values) != 2 || exprs[0].Values[0] != "worker-1" || exprs[0].Values[1] != "worker-2" {
-		t.Errorf("expected values [worker-1, worker-2], got %v", exprs[0].Values)
-	}
-
-	// Should have topologySpreadConstraints
-	if len(podSpec.TopologySpreadConstraints) != 1 {
-		t.Fatalf("expected 1 topology spread constraint, got %d", len(podSpec.TopologySpreadConstraints))
-	}
-	tsc := podSpec.TopologySpreadConstraints[0]
-	if tsc.MaxSkew != 1 {
-		t.Errorf("expected maxSkew=1, got %d", tsc.MaxSkew)
-	}
-	if tsc.TopologyKey != utils.LabelNvoiRole {
-		t.Errorf("expected topologyKey %q, got %q", utils.LabelNvoiRole, tsc.TopologyKey)
-	}
-}
-
-func TestDefaultServerIsMaster(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:  "web",
-		Image: "nginx",
-		Port:  80,
-		// No Servers set — should default to master
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, nil)
-	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
-
-	docs := splitDocs(yamlStr)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
-	}
-
-	ns := dep.Spec.Template.Spec.NodeSelector
-	if ns == nil || ns[utils.LabelNvoiRole] != "master" {
-		t.Errorf("empty servers should default to master, got: %v", ns)
-	}
-}
-
-func TestNamedVolumes(t *testing.T) {
-	names := mustNames(t)
-	spec := ServiceSpec{
-		Name:    "db",
-		Image:   "postgres:17",
-		Port:    5432,
-		Volumes: []string{"pgdata:/var/lib/postgresql/data"},
-	}
-	managedVolPaths := map[string]string{
-		"pgdata": "/mnt/data/nvoi-myapp-production-pgdata",
-	}
-
-	yamlStr, _, err := GenerateYAML(spec, names, managedVolPaths)
-	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
-
-	docs := splitDocs(yamlStr)
-	var dep appsv1.Deployment
-	if err := sigsyaml.Unmarshal([]byte(docs[0]), &dep); err != nil {
-		t.Fatalf("unmarshal Deployment: %v", err)
-	}
-
-	podSpec := dep.Spec.Template.Spec
-
-	// Check volume
-	if len(podSpec.Volumes) != 1 {
-		t.Fatalf("expected 1 volume, got %d", len(podSpec.Volumes))
-	}
-	vol := podSpec.Volumes[0]
-	if vol.HostPath == nil {
-		t.Fatal("expected hostPath volume, got nil")
-	}
-	if vol.HostPath.Path != "/mnt/data/nvoi-myapp-production-pgdata" {
-		t.Errorf("expected hostPath=/mnt/data/nvoi-myapp-production-pgdata, got %q", vol.HostPath.Path)
-	}
-
-	// Check volumeMount
-	c := podSpec.Containers[0]
-	if len(c.VolumeMounts) != 1 {
-		t.Fatalf("expected 1 volumeMount, got %d", len(c.VolumeMounts))
-	}
-	mount := c.VolumeMounts[0]
-	if mount.MountPath != "/var/lib/postgresql/data" {
-		t.Errorf("expected mountPath=/var/lib/postgresql/data, got %q", mount.MountPath)
-	}
-	if mount.Name != vol.Name {
-		t.Errorf("expected volumeMount name %q to match volume name %q", mount.Name, vol.Name)
+	if dep.Spec.Template.Labels[utils.LabelAppName] == "" {
+		t.Error("pod template missing app.kubernetes.io/name")
 	}
 }

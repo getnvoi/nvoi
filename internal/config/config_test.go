@@ -6,40 +6,6 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func TestDatabaseNames(t *testing.T) {
-	cfg := &AppConfig{
-		Database: map[string]DatabaseDef{
-			"main":      {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"},
-			"analytics": {Kind: "postgres", Image: "postgres:17", Volume: "analytics-data"},
-		},
-	}
-	names := cfg.DatabaseNames()
-	if len(names) != 2 {
-		t.Fatalf("len = %d, want 2", len(names))
-	}
-	if names[0] != "analytics" || names[1] != "main" {
-		t.Fatalf("names = %v, want [analytics main]", names)
-	}
-}
-
-func TestDatabaseNames_Empty(t *testing.T) {
-	cfg := &AppConfig{}
-	names := cfg.DatabaseNames()
-	if len(names) != 0 {
-		t.Fatalf("len = %d, want 0", len(names))
-	}
-}
-
-func TestDatabaseNames_Nil(t *testing.T) {
-	var cfg *AppConfig
-	names := cfg.DatabaseNames()
-	if names != nil {
-		t.Fatalf("got %v, want nil", names)
-	}
-}
-
-// ── Resolve tests ─────────────────────────────────────────────────────────────
-
 func TestResolve_VolumeMountPaths(t *testing.T) {
 	cfg := &AppConfig{
 		App: "myapp",
@@ -69,129 +35,21 @@ func TestResolve_VolumeMountPaths(t *testing.T) {
 	}
 }
 
-func TestResolve_DatabaseNames(t *testing.T) {
-	cfg := &AppConfig{
-		App: "myapp",
-		Env: "production",
-		Volumes: map[string]VolumeDef{
-			"pgdata":    {Size: 20, Server: "master"},
-			"mysqldata": {Size: 30, Server: "worker"},
-		},
-		Database: map[string]DatabaseDef{
-			"main":      {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"},
-			"analytics": {Kind: "mysql", Image: "mysql:8", Volume: "mysqldata"},
-		},
-	}
+func TestResolve_FirewallNames(t *testing.T) {
+	cfg := &AppConfig{App: "myapp", Env: "production"}
 	if err := cfg.Resolve(); err != nil {
 		t.Fatal(err)
 	}
-
-	tests := []struct {
-		dbName           string
-		wantService      string
-		wantSecret       string
-		wantBackupCron   string
-		wantBackupBucket string
-		wantVolumePath   string
-	}{
-		{
-			dbName:           "main",
-			wantService:      "main-db",
-			wantSecret:       "main-db-credentials",
-			wantBackupCron:   "main-db-backup",
-			wantBackupBucket: "main-db-backups",
-			wantVolumePath:   "/mnt/data/nvoi-myapp-production-pgdata",
-		},
-		{
-			dbName:           "analytics",
-			wantService:      "analytics-db",
-			wantSecret:       "analytics-db-credentials",
-			wantBackupCron:   "analytics-db-backup",
-			wantBackupBucket: "analytics-db-backups",
-			wantVolumePath:   "/mnt/data/nvoi-myapp-production-mysqldata",
-		},
+	if cfg.MasterFirewall != "nvoi-myapp-production-master-fw" {
+		t.Errorf("MasterFirewall = %q", cfg.MasterFirewall)
 	}
-
-	for _, tt := range tests {
-		db := cfg.Database[tt.dbName]
-		if db.ServiceName != tt.wantService {
-			t.Errorf("Database[%q].ServiceName = %q, want %q", tt.dbName, db.ServiceName, tt.wantService)
-		}
-		if db.SecretName != tt.wantSecret {
-			t.Errorf("Database[%q].SecretName = %q, want %q", tt.dbName, db.SecretName, tt.wantSecret)
-		}
-		if db.BackupCronName != tt.wantBackupCron {
-			t.Errorf("Database[%q].BackupCronName = %q, want %q", tt.dbName, db.BackupCronName, tt.wantBackupCron)
-		}
-		if db.BackupBucket != tt.wantBackupBucket {
-			t.Errorf("Database[%q].BackupBucket = %q, want %q", tt.dbName, db.BackupBucket, tt.wantBackupBucket)
-		}
-		if db.VolumeMountPath != tt.wantVolumePath {
-			t.Errorf("Database[%q].VolumeMountPath = %q, want %q", tt.dbName, db.VolumeMountPath, tt.wantVolumePath)
-		}
+	if cfg.WorkerFirewall != "nvoi-myapp-production-worker-fw" {
+		t.Errorf("WorkerFirewall = %q", cfg.WorkerFirewall)
 	}
 }
 
-func TestResolve_DatabaseVolumeMountPath_MatchesVolumeConfig(t *testing.T) {
-	// The critical invariant: database's VolumeMountPath MUST equal
-	// the referenced volume's MountPath. This is the bug we're preventing.
-	cfg := &AppConfig{
-		App: "myapp",
-		Env: "production",
-		Volumes: map[string]VolumeDef{
-			"pgdata": {Size: 20, Server: "master"},
-		},
-		Database: map[string]DatabaseDef{
-			"main": {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"},
-		},
-	}
-	if err := cfg.Resolve(); err != nil {
-		t.Fatal(err)
-	}
-
-	db := cfg.Database["main"]
-	vol := cfg.Volumes["pgdata"]
-
-	if db.VolumeMountPath != vol.MountPath {
-		t.Fatalf("INVARIANT VIOLATION: Database[main].VolumeMountPath = %q, but Volumes[pgdata].MountPath = %q — these MUST match",
-			db.VolumeMountPath, vol.MountPath)
-	}
-}
-
-func TestResolve_ConsistentWithUtilsFunctions(t *testing.T) {
-	// Resolve() must produce the same values as the utils derivation functions.
-	// If either changes, this test catches the divergence.
-	cfg := &AppConfig{
-		App: "myapp",
-		Env: "production",
-		Volumes: map[string]VolumeDef{
-			"pgdata": {Size: 20, Server: "master"},
-		},
-		Database: map[string]DatabaseDef{
-			"main": {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"},
-		},
-	}
-	if err := cfg.Resolve(); err != nil {
-		t.Fatal(err)
-	}
-
-	db := cfg.Database["main"]
-	if db.ServiceName != utils.DatabaseServiceName("main") {
-		t.Errorf("ServiceName = %q, utils.DatabaseServiceName = %q", db.ServiceName, utils.DatabaseServiceName("main"))
-	}
-	if db.SecretName != utils.DatabaseSecretName("main") {
-		t.Errorf("SecretName = %q, utils.DatabaseSecretName = %q", db.SecretName, utils.DatabaseSecretName("main"))
-	}
-	if db.BackupCronName != utils.DatabaseBackupCronName("main") {
-		t.Errorf("BackupCronName = %q, utils.DatabaseBackupCronName = %q", db.BackupCronName, utils.DatabaseBackupCronName("main"))
-	}
-	if db.BackupBucket != utils.DatabaseBackupBucket("main") {
-		t.Errorf("BackupBucket = %q, utils.DatabaseBackupBucket = %q", db.BackupBucket, utils.DatabaseBackupBucket("main"))
-	}
-}
-
-func TestResolve_NoDatabaseNoVolume(t *testing.T) {
-	// Resolve on config with no volumes and no databases should succeed.
+func TestResolve_EmptyConfig(t *testing.T) {
+	// Resolve on config with no volumes should succeed.
 	cfg := &AppConfig{
 		App: "myapp",
 		Env: "production",
@@ -208,15 +66,12 @@ func TestResolve_MissingAppEnv(t *testing.T) {
 	}
 }
 
-// ── Secrets provider YAML parsing ────────────────────────────────────────────
-
-func TestParseAppConfig_SecretsProvider(t *testing.T) {
+func TestParseAppConfig_CoreShape(t *testing.T) {
 	yaml := `
 app: myapp
 env: prod
 providers:
   compute: hetzner
-  secrets: doppler
 servers:
   master:
     type: cx23
@@ -230,31 +85,31 @@ services:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if cfg.Providers.Secrets != "doppler" {
-		t.Errorf("Providers.Secrets = %q, want doppler", cfg.Providers.Secrets)
+	if cfg.App != "myapp" || cfg.Env != "prod" {
+		t.Errorf("app/env = %q/%q", cfg.App, cfg.Env)
+	}
+	if cfg.Providers.Compute != "hetzner" {
+		t.Errorf("Providers.Compute = %q", cfg.Providers.Compute)
 	}
 }
 
-func TestParseAppConfig_NoSecretsProvider(t *testing.T) {
-	yaml := `
-app: myapp
-env: prod
-providers:
-  compute: hetzner
-servers:
-  master:
-    type: cx23
-    region: fsn1
-    role: master
-services:
-  web:
-    image: nginx
-`
-	cfg, err := ParseAppConfig([]byte(yaml))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+func TestStorageNames(t *testing.T) {
+	cfg := &AppConfig{
+		Storage: map[string]StorageDef{
+			"assets":  {},
+			"uploads": {},
+		},
 	}
-	if cfg.Providers.Secrets != "" {
-		t.Fatalf("Providers.Secrets should be empty, got %q", cfg.Providers.Secrets)
+	names := cfg.StorageNames()
+	if len(names) != 2 {
+		t.Fatalf("got %d names, want 2", len(names))
+	}
+}
+
+func TestStorageNames_Empty(t *testing.T) {
+	cfg := &AppConfig{}
+	names := cfg.StorageNames()
+	if len(names) != 0 {
+		t.Fatalf("got %d names, want 0", len(names))
 	}
 }

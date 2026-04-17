@@ -2,309 +2,207 @@ package kube
 
 import (
 	"context"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestTimeoutDiagnostics_ProbeFailure(t *testing.T) {
-	origTimeout := rolloutTimeout
-	rolloutTimeout = 10 * time.Millisecond
-	defer func() { rolloutTimeout = origTimeout }()
-
-	// Pod is Running but not Ready — readiness probe failing. Never becomes ready.
-	probeFailingJSON := `{
-		"items": [{
-			"metadata": {"name": "bugsink-abc"},
-			"status": {
-				"phase": "Running",
-				"containerStatuses": [{
-					"ready": false,
-					"restartCount": 0,
-					"state": {"running": {}}
-				}]
-			}
-		}, {
-			"metadata": {"name": "bugsink-def"},
-			"status": {
-				"phase": "Running",
-				"containerStatuses": [{
-					"ready": false,
-					"restartCount": 0,
-					"state": {"running": {}}
-				}]
-			}
-		}]
-	}`
-
-	eventsJSON := `{
-		"items": [{
-			"type": "Warning",
-			"reason": "Unhealthy",
-			"message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
-			"count": 42
-		}]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(probeFailingJSON)}},
-		{Prefix: "get events", Result: testutil.MockResult{Output: []byte(eventsJSON)}},
-		{Prefix: "logs", Result: testutil.MockResult{Output: []byte("django.db.utils.OperationalError: could not connect to server")}},
+func TestPodReady_AllReady(t *testing.T) {
+	pod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Ready: true}, {Ready: true},
+			},
+		},
 	}
+	if !podReady(pod) {
+		t.Error("all-ready running pod must be ready")
+	}
+}
 
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "bugsink", "deployment", true, emitter)
+func TestPodReady_OneContainerNotReady(t *testing.T) {
+	pod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Ready: true}, {Ready: false},
+			},
+		},
+	}
+	if podReady(pod) {
+		t.Error("one-not-ready pod must not be ready")
+	}
+}
+
+func TestPodReady_Pending(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodPending}}
+	if podReady(pod) {
+		t.Error("Pending pod must not be ready")
+	}
+}
+
+func TestPodReady_SucceededIsReady(t *testing.T) {
+	pod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+		},
+	}
+	if !podReady(pod) {
+		t.Error("Succeeded with all-ready containers must be ready")
+	}
+}
+
+func TestPodReady_NoContainerStatuses(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	if podReady(pod) {
+		t.Error("no container statuses must not count as ready")
+	}
+}
+
+func TestRecentEvents_FiltersWarnings(t *testing.T) {
+	warnEvent := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "evt1", Namespace: "ns"},
+		InvolvedObject: corev1.ObjectReference{
+			Kind: "Pod", Name: "web-abc", Namespace: "ns",
+		},
+		Type:    corev1.EventTypeWarning,
+		Reason:  "Unhealthy",
+		Message: "Readiness probe failed",
+	}
+	c := newTestClient(warnEvent)
+
+	got := c.recentEvents(context.Background(), "ns", "web-abc")
+	if len(got) != 1 {
+		t.Fatalf("events = %d, want 1", len(got))
+	}
+	if got[0].Message != "Readiness probe failed" {
+		t.Errorf("message = %q", got[0].Message)
+	}
+}
+
+func TestRecentEvents_NoEvents(t *testing.T) {
+	c := newTestClient()
+	got := c.recentEvents(context.Background(), "ns", "web-abc")
+	if len(got) != 0 {
+		t.Errorf("events = %d, want 0", len(got))
+	}
+}
+
+func TestTimeoutDiagnostics_IncludesPodPhase(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "web-abc",
+			Namespace: "ns",
+			Labels:    map[string]string{"app.kubernetes.io/name": "web"},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Ready: false,
+				State: corev1.ContainerState{
+					Waiting: &corev1.ContainerStateWaiting{
+						Reason: "ImagePullBackOff", Message: "image not found",
+					},
+				},
+			}},
+		},
+	}
+	c := newTestClient(pod)
+
+	err := c.timeoutDiagnostics(context.Background(), "ns", "web", "deployment", PodSelector("web"), "0/1 ready")
 	if err == nil {
-		t.Fatal("expected timeout error, got nil")
+		t.Fatal("timeoutDiagnostics must always return an error")
 	}
 	msg := err.Error()
-
-	// Must contain the service name and "timed out"
-	if !strings.Contains(msg, "bugsink") {
-		t.Fatalf("expected error to contain service name 'bugsink', got:\n%s", msg)
-	}
-	if !strings.Contains(msg, "timed out") {
-		t.Fatalf("expected error to contain 'timed out', got:\n%s", msg)
-	}
-	// Must show the pod state diagnosis
-	if !strings.Contains(msg, "readiness probe failing") {
-		t.Fatalf("expected error to mention 'readiness probe failing', got:\n%s", msg)
-	}
-	// Must include events
-	if !strings.Contains(msg, "503") {
-		t.Fatalf("expected error to include event details (503), got:\n%s", msg)
-	}
-	// Must include logs
-	if !strings.Contains(msg, "could not connect to server") {
-		t.Fatalf("expected error to include logs, got:\n%s", msg)
-	}
-	// During polling, status line should show probe failure with event detail
-	found := false
-	for _, m := range emitter.messages {
-		if strings.Contains(m, "probe failing") && strings.Contains(m, "503") {
-			found = true
-			break
+	for _, want := range []string{"timed out", "web-abc", "ImagePullBackOff", "image not found"} {
+		if !contains(msg, want) {
+			t.Errorf("error missing %q: %s", want, msg)
 		}
 	}
-	if !found {
-		t.Fatalf("expected progress message with 'probe failing' and event detail (503), got: %v", emitter.messages)
-	}
 }
 
-func TestTimeoutDiagnostics_Pending(t *testing.T) {
-	origTimeout := rolloutTimeout
-	rolloutTimeout = 10 * time.Millisecond
-	defer func() { rolloutTimeout = origTimeout }()
-
-	// Pod stuck in Pending with no container statuses (scheduling issue).
-	pendingJSON := `{
-		"items": [{
-			"metadata": {"name": "web-abc"},
-			"status": {
-				"phase": "Pending",
-				"conditions": [
-					{"type": "PodScheduled", "status": "True", "reason": "", "message": ""}
-				],
-				"containerStatuses": []
-			}
-		}]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(pendingJSON)}},
-		{Prefix: "get events", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
-		{Prefix: "logs", Result: testutil.MockResult{Output: []byte("")}},
+func TestTimeoutDiagnostics_RunningButUnready_FlagsProbe(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-abc", Namespace: "ns",
+			Labels: map[string]string{"app.kubernetes.io/name": "web"},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Ready: false,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
 	}
+	c := newTestClient(pod)
 
-	emitter := &testEmitter{}
-	err := WaitRollout(context.Background(), ssh, "default", "web", "deployment", false, emitter)
+	err := c.timeoutDiagnostics(context.Background(), "ns", "web", "deployment", PodSelector("web"), "0/1 ready")
 	if err == nil {
-		t.Fatal("expected timeout error, got nil")
+		t.Fatal("expected error")
 	}
-	msg := err.Error()
-
-	if !strings.Contains(msg, "timed out") {
-		t.Fatalf("expected 'timed out', got:\n%s", msg)
-	}
-	if !strings.Contains(msg, "Pending") {
-		t.Fatalf("expected phase 'Pending' in diagnostics, got:\n%s", msg)
+	if !contains(err.Error(), "readiness probe failing") {
+		t.Errorf("expected probe-failing hint, got: %s", err.Error())
 	}
 }
 
-func TestTimeoutDiagnostics_TerminatedWithRestarts(t *testing.T) {
-	origTimeout := rolloutTimeout
-	rolloutTimeout = 10 * time.Millisecond
-	defer func() { rolloutTimeout = origTimeout }()
-
-	// Pod terminated with exit code but somehow not caught by fast-fail
-	// (e.g. restartCount=0, then pod terminates again during timeout window)
-	terminatedJSON := `{
-		"items": [{
-			"metadata": {"name": "api-abc"},
-			"status": {
-				"phase": "Running",
-				"containerStatuses": [{
-					"ready": false,
-					"restartCount": 3,
-					"state": {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 5m0s restarting"}}
-				}]
-			}
-		}]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		// Polling phase: return empty so it keeps polling until timeout
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
-		// Diagnostics phase will also match "get pods" — but MockSSH returns
-		// the same prefix match. We need the diagnostics query to see the crashed pod.
-	}
-
-	// For this test, directly test the timeoutDiagnostics function
-	ssh2 := testutil.NewMockSSH(nil)
-	ssh2.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(terminatedJSON)}},
-		{Prefix: "get events", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
-		{Prefix: "logs", Result: testutil.MockResult{Output: []byte("panic: runtime error: nil pointer")}},
-	}
-
-	err := timeoutDiagnostics(context.Background(), ssh2, "default", "api", "deployment", "app.kubernetes.io/name=api", "0/1 ready (CrashLoopBackOff)")
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	msg := err.Error()
-
-	if !strings.Contains(msg, "timed out") {
-		t.Fatalf("expected 'timed out', got:\n%s", msg)
-	}
-	if !strings.Contains(msg, "CrashLoopBackOff") {
-		t.Fatalf("expected 'CrashLoopBackOff' in diagnostics, got:\n%s", msg)
-	}
-	if !strings.Contains(msg, "restarts: 3") {
-		t.Fatalf("expected 'restarts: 3', got:\n%s", msg)
-	}
-	if !strings.Contains(msg, "nil pointer") {
-		t.Fatalf("expected logs in diagnostics, got:\n%s", msg)
-	}
-}
-
-func TestTimeoutDiagnostics_SSHFailure(t *testing.T) {
-	// When SSH fails during diagnostics, still return a useful error (just less detail)
-	err := timeoutDiagnostics(
-		context.Background(),
-		testutil.NewMockSSH(nil), // no prefixes configured — all commands fail
-		"default", "web", "deployment",
-		"app.kubernetes.io/name=web", "0/2 ready",
-	)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "timed out") {
-		t.Fatalf("expected 'timed out' even on SSH failure, got:\n%s", msg)
-	}
-	if !strings.Contains(msg, "0/2 ready") {
-		t.Fatalf("expected last status in error, got:\n%s", msg)
-	}
-}
-
-func TestPodReady(t *testing.T) {
-	tests := []struct {
-		name string
-		pod  PodItem
-		want bool
-	}{
-		{
-			name: "running and ready",
-			pod: PodItem{
-				Status: PodStatus{
-					Phase: "Running",
-					ContainerStatuses: []ContainerStatus{
-						{Ready: true, State: ContainerState{Running: &struct{}{}}},
+func TestTimeoutDiagnostics_Terminated_ShowsExitCode(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web-abc", Namespace: "ns",
+			Labels: map[string]string{"app.kubernetes.io/name": "web"},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Ready:        false,
+				RestartCount: 3,
+				State: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{
+						ExitCode: 137, Reason: "OOMKilled",
 					},
 				},
-			},
-			want: true,
-		},
-		{
-			name: "running not ready",
-			pod: PodItem{
-				Status: PodStatus{
-					Phase: "Running",
-					ContainerStatuses: []ContainerStatus{
-						{Ready: false, State: ContainerState{Running: &struct{}{}}},
-					},
-				},
-			},
-			want: false,
-		},
-		{
-			name: "pending",
-			pod: PodItem{
-				Status: PodStatus{
-					Phase:             "Pending",
-					ContainerStatuses: []ContainerStatus{},
-				},
-			},
-			want: false,
-		},
-		{
-			name: "succeeded",
-			pod: PodItem{
-				Status: PodStatus{
-					Phase: "Succeeded",
-					ContainerStatuses: []ContainerStatus{
-						{Ready: true},
-					},
-				},
-			},
-			want: true,
+			}},
 		},
 	}
+	c := newTestClient(pod)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := podReady(tt.pod)
-			if got != tt.want {
-				t.Fatalf("podReady() = %v, want %v", got, tt.want)
-			}
-		})
+	err := c.timeoutDiagnostics(context.Background(), "ns", "web", "deployment", PodSelector("web"), "0/1 ready")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !contains(msg, "exit 137") || !contains(msg, "OOMKilled") {
+		t.Errorf("expected exit+reason, got: %s", msg)
+	}
+	if !contains(msg, "restarts: 3") {
+		t.Errorf("expected restart count, got: %s", msg)
 	}
 }
 
-func TestRecentEvents(t *testing.T) {
-	eventsJSON := `{
-		"items": [
-			{"type": "Warning", "reason": "Unhealthy", "message": "Readiness probe failed: connection refused", "count": 5},
-			{"type": "Warning", "reason": "BackOff", "message": "Back-off pulling image", "count": 1}
-		]
-	}`
-
-	ssh := testutil.NewMockSSH(nil)
-	ssh.Prefixes = []testutil.MockPrefix{
-		{Prefix: "get events", Result: testutil.MockResult{Output: []byte(eventsJSON)}},
-	}
-
-	events := recentEvents(context.Background(), ssh, "default", "web-abc")
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events, got %d", len(events))
-	}
-	if events[0].Reason != "Unhealthy" {
-		t.Fatalf("expected first event reason 'Unhealthy', got %q", events[0].Reason)
-	}
-	if events[0].Count != 5 {
-		t.Fatalf("expected first event count 5, got %d", events[0].Count)
+func TestIndent(t *testing.T) {
+	got := indent("a\nb\nc", "> ")
+	want := "> a\n> b\n> c"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestRecentEvents_SSHFailure(t *testing.T) {
-	ssh := testutil.NewMockSSH(nil) // no prefixes — all commands return nil
-	events := recentEvents(context.Background(), ssh, "default", "web-abc")
-	if events != nil {
-		t.Fatalf("expected nil events on SSH failure, got %v", events)
+func TestDedup(t *testing.T) {
+	got := dedup([]string{"a", "b", "a", "c", "b"})
+	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Errorf("dedup = %v", got)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := truncate("hello world", 5); got != "hello..." {
+		t.Errorf("truncate short = %q", got)
+	}
+	if got := truncate("short", 100); got != "short" {
+		t.Errorf("truncate no-op = %q", got)
 	}
 }

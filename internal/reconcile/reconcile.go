@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/getnvoi/nvoi/internal/packages"
+	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
 // Deploy reconciles live infrastructure to match the YAML config.
@@ -29,7 +29,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	}
 
 	// Master is now guaranteed to exist. Establish a single SSH connection
-	// for all remaining operations.
+	// for all remaining operations, plus a kube client over the same tunnel.
 	master, _, _, err := dc.Cluster.Master(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve master after server setup: %w", err)
@@ -41,23 +41,32 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	defer ssh.Close()
 	dc.Cluster.MasterSSH = ssh
 
+	kc, err := kube.New(ctx, ssh)
+	if err != nil {
+		return fmt.Errorf("establish master kube client: %w", err)
+	}
+	defer kc.Close()
+	dc.Cluster.MasterKube = kc
+
+	// Ensure the app namespace exists exactly once, up front — every
+	// downstream k8s write (per-service secrets, workloads, ingress, crons)
+	// assumes it's there. Without this, the first writer races and fails
+	// with "namespaces not found".
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	if err := kc.EnsureNamespace(ctx, names.KubeNamespace()); err != nil {
+		return fmt.Errorf("ensure namespace: %w", err)
+	}
+
 	if err := Firewall(ctx, dc, live, cfg); err != nil {
 		return err
 	}
 	if err := Volumes(ctx, dc, live, cfg); err != nil {
 		return err
 	}
-	if err := Build(ctx, dc, cfg); err != nil {
-		return err
-	}
 	secretValues, err := Secrets(ctx, dc, live, cfg)
-	if err != nil {
-		return err
-	}
-
-	// Packages (database, etc.) — after volumes/secrets, before services.
-	// Returns env vars available as $VAR resolution sources.
-	packageEnvVars, err := packages.ReconcileAll(ctx, dc, cfg)
 	if err != nil {
 		return err
 	}
@@ -68,7 +77,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	}
 
 	// Build unified sources for $VAR resolution and per-service secret storage.
-	sources := mergeSources(secretValues, packageEnvVars, storageCreds)
+	sources := mergeSources(secretValues, storageCreds)
 
 	if err := Services(ctx, dc, live, cfg, sources); err != nil {
 		return err
@@ -79,6 +88,16 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 
 	// Workloads have moved. Now safe to drain + delete orphan servers.
 	if err := ServersRemoveOrphans(ctx, dc, live, cfg); err != nil {
+		return err
+	}
+
+	// Orphan firewalls swept AFTER ServersRemoveOrphans: DeleteServer
+	// detached each firewall as part of its teardown contract, so by the
+	// time we reach here any firewall that fell out of the desired set has
+	// zero attached resources and DeleteFirewall succeeds. Running this
+	// earlier — the previous inline placement inside Firewall() — meant
+	// Hetzner correctly rejected delete with resource_in_use.
+	if err := FirewallRemoveOrphans(ctx, dc, live, cfg); err != nil {
 		return err
 	}
 

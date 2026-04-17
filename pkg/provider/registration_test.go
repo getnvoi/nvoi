@@ -5,11 +5,8 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 
-	// Blank imports — same as cmd/api/main.go. If any are missing there,
+	// Blank imports — same as cmd/cli/main.go. If any are missing there,
 	// this test reminds you to add them.
-	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
-	_ "github.com/getnvoi/nvoi/pkg/provider/build/github"
-	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
 	_ "github.com/getnvoi/nvoi/pkg/provider/compute/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/compute/hetzner"
 	_ "github.com/getnvoi/nvoi/pkg/provider/compute/scaleway"
@@ -20,9 +17,9 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
 )
 
-// TestAllProvidersRegistered verifies that every provider name the API might
+// TestAllProvidersRegistered verifies that every provider name core might
 // receive can be resolved. If this test fails, a blank import is missing from
-// cmd/api/main.go (or the provider's init() broke).
+// cmd/cli/main.go (or the provider's init() broke).
 func TestAllProvidersRegistered(t *testing.T) {
 	// Credentials are intentionally invalid — we're testing registration, not auth.
 	// ResolveX will fail on credential validation, not on "unknown provider".
@@ -49,14 +46,6 @@ func TestAllProvidersRegistered(t *testing.T) {
 		_, err := provider.ResolveBucket(name, map[string]string{})
 		if err != nil && contains(err.Error(), "unsupported") {
 			t.Errorf("bucket provider %q not registered", name)
-		}
-	}
-
-	build := []string{"local", "daytona", "github"}
-	for _, name := range build {
-		_, err := provider.ResolveBuild(name, map[string]string{})
-		if err != nil && contains(err.Error(), "unsupported") {
-			t.Errorf("build provider %q not registered", name)
 		}
 	}
 }

@@ -18,10 +18,11 @@ import (
 
 // Client manages R2 buckets via Cloudflare API + S3-compatible operations.
 type Client struct {
-	api       *utils.HTTPClient
-	apiKey    string
-	accountID string
-	creds     *provider.BucketCredentials
+	api                *utils.HTTPClient
+	apiKey             string
+	accountID          string
+	creds              *provider.BucketCredentials
+	s3EndpointOverride string // set only by tests; empty = real R2 endpoint
 }
 
 // New creates a Cloudflare R2 bucket provider.
@@ -32,6 +33,17 @@ func New(creds map[string]string) *Client {
 		apiKey:    apiKey,
 		accountID: creds["account_id"],
 	}
+}
+
+// APIClient returns the underlying HTTP client for tests to override BaseURL.
+// Production callers must not depend on this accessor.
+func (c *Client) APIClient() *utils.HTTPClient { return c.api }
+
+// SetS3EndpointOverride replaces the R2 S3-compatible endpoint. Tests only.
+// Production callers must not call this.
+func (c *Client) SetS3EndpointOverride(url string) {
+	c.s3EndpointOverride = url
+	c.creds = nil // invalidate cache so next Credentials() rebuilds
 }
 
 func (c *Client) ValidateCredentials(ctx context.Context) error {
@@ -114,8 +126,12 @@ func (c *Client) Credentials(ctx context.Context) (provider.BucketCredentials, e
 		return provider.BucketCredentials{}, fmt.Errorf("cloudflare credentials: %w", err)
 	}
 	hash := sha256.Sum256([]byte(c.apiKey))
+	endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com", c.accountID)
+	if c.s3EndpointOverride != "" {
+		endpoint = c.s3EndpointOverride
+	}
 	c.creds = &provider.BucketCredentials{
-		Endpoint:        fmt.Sprintf("https://%s.r2.cloudflarestorage.com", c.accountID),
+		Endpoint:        endpoint,
 		AccessKeyID:     tokenID,
 		SecretAccessKey: hex.EncodeToString(hash[:]),
 		Region:          "auto",

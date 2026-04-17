@@ -4,48 +4,63 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func init() {
-	provider.RegisterCompute("cron-test", provider.CredentialSchema{Name: "cron-test"}, func(creds map[string]string) provider.ComputeProvider {
-		return &testutil.MockCompute{
-			Servers: []*provider.Server{{
-				ID: "1", Name: "nvoi-myapp-prod-master", Status: "running",
-				IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
-			}},
-			Volumes: []*provider.Volume{{
-				Name: "nvoi-myapp-prod-pgdata",
-			}},
-		}
-	})
+	hz := testutil.NewHetznerFake(nil)
+	hz.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	hz.SeedVolume("nvoi-myapp-prod-pgdata", 20, "nvoi-myapp-prod-master")
+	hz.Register("cron-test")
 }
 
-func testCronCluster(ssh *testutil.MockSSH) Cluster {
+func testCronCluster(kc *kube.Client) Cluster {
 	return Cluster{
 		AppName: "myapp", Env: "prod",
 		Provider: "cron-test", Credentials: map[string]string{},
-		Output: &testutil.MockOutput{},
+		Output:     &testutil.MockOutput{},
+		MasterKube: kc,
 		SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-			return ssh, nil
+			return nil, nil
 		},
+	}
+}
+
+func TestCronSet_AppliesCronJob(t *testing.T) {
+	kc := testKube()
+	err := CronSet(context.Background(), CronSetRequest{
+		Cluster:  testCronCluster(kc),
+		Name:     "backup",
+		Image:    "busybox",
+		Schedule: "0 1 * * *",
+	})
+	if err != nil {
+		t.Fatalf("CronSet: %v", err)
+	}
+	got, err := kc.Clientset().BatchV1().CronJobs("nvoi-myapp-prod").Get(context.Background(), "backup", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("cronjob not applied: %v", err)
+	}
+	if got.Spec.Schedule != "0 1 * * *" {
+		t.Errorf("schedule = %q", got.Spec.Schedule)
 	}
 }
 
 func TestCronSet_SvcSecretsInManifest(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "replace -f", Result: testutil.MockResult{Output: []byte("not found"), Err: context.DeadlineExceeded}},
-			{Prefix: "apply --server-side --force-conflicts -f", Result: testutil.MockResult{}},
-		},
-	}
-
+	kc := testKube()
 	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:    testCronCluster(mock),
+		Cluster:    testCronCluster(kc),
 		Name:       "backup",
 		Image:      "busybox",
 		Schedule:   "0 1 * * *",
@@ -54,29 +69,29 @@ func TestCronSet_SvcSecretsInManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CronSet: %v", err)
 	}
-	if len(mock.Uploads) == 0 {
-		t.Fatal("expected manifest upload")
+	cj, err := kc.Clientset().BatchV1().CronJobs("nvoi-myapp-prod").Get(context.Background(), "backup", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	content := string(mock.Uploads[0].Content)
-	if !strings.Contains(content, "STORAGE_BACKUPS_ENDPOINT") {
-		t.Fatalf("manifest missing per-cron secret ref: %s", content)
+	env := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env
+	if len(env) != 2 {
+		t.Fatalf("env count = %d, want 2", len(env))
 	}
-	if !strings.Contains(content, "backup-secrets") {
-		t.Fatalf("manifest should reference backup-secrets, got: %s", content)
+	foundEndpoint := false
+	for _, e := range env {
+		if e.Name == "STORAGE_BACKUPS_ENDPOINT" && e.ValueFrom.SecretKeyRef.Name == "backup-secrets" {
+			foundEndpoint = true
+		}
+	}
+	if !foundEndpoint {
+		t.Errorf("per-cron secret ref not wired: %+v", env)
 	}
 }
 
 func TestCronSet_ResolvesNamedManagedVolumes(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "replace -f", Result: testutil.MockResult{Output: []byte("not found"), Err: context.DeadlineExceeded}},
-			{Prefix: "apply --server-side --force-conflicts -f", Result: testutil.MockResult{}},
-		},
-	}
-
+	kc := testKube()
 	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:  testCronCluster(mock),
+		Cluster:  testCronCluster(kc),
 		Name:     "backup",
 		Image:    "busybox",
 		Schedule: "0 1 * * *",
@@ -85,56 +100,104 @@ func TestCronSet_ResolvesNamedManagedVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CronSet: %v", err)
 	}
-	if len(mock.Uploads) == 0 {
-		t.Fatal("expected manifest upload")
+	cj, err := kc.Clientset().BatchV1().CronJobs("nvoi-myapp-prod").Get(context.Background(), "backup", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(mock.Uploads[0].Content), "/mnt/data/nvoi-myapp-prod-pgdata") {
-		t.Fatalf("manifest should use managed volume mount path, got: %s", string(mock.Uploads[0].Content))
+	vols := cj.Spec.JobTemplate.Spec.Template.Spec.Volumes
+	if len(vols) != 1 || vols[0].HostPath == nil {
+		t.Fatalf("volumes = %+v", vols)
+	}
+	if vols[0].HostPath.Path != "/mnt/data/nvoi-myapp-prod-pgdata" {
+		t.Errorf("hostPath = %q, want /mnt/data/nvoi-myapp-prod-pgdata", vols[0].HostPath.Path)
 	}
 }
 
+// withJobStatus installs a reactor that mutates any created/fetched Job's
+// status to the given values. Lets WaitForJob's first poll see the terminal
+// state without needing a background goroutine.
+func withJobStatus(kc *kube.Client, succeeded, failed int32) {
+	cs := kc.Clientset().(*k8sfake.Clientset)
+	cs.PrependReactor("create", "jobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ca, ok := action.(k8stesting.CreateAction)
+		if !ok {
+			return false, nil, nil
+		}
+		j := ca.GetObject().(*batchv1.Job).DeepCopy()
+		j.Status.Succeeded = succeeded
+		j.Status.Failed = failed
+		return false, j, nil // false → let the tracker also record it
+	})
+	cs.PrependReactor("get", "jobs", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GetAction)
+		if !ok {
+			return false, nil, nil
+		}
+		got, err := cs.Tracker().Get(batchv1.SchemeGroupVersion.WithResource("jobs"), ga.GetNamespace(), ga.GetName())
+		if err != nil {
+			return false, nil, err
+		}
+		j := got.(*batchv1.Job).DeepCopy()
+		j.Status.Succeeded = succeeded
+		j.Status.Failed = failed
+		return true, j, nil
+	})
+}
+
 func TestCronRun_Success(t *testing.T) {
-	succeededJob := `{"status":{"succeeded":1,"failed":0}}`
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create job", Result: testutil.MockResult{}},
-			{Prefix: "get job", Result: testutil.MockResult{Output: []byte(succeededJob)}},
-			{Prefix: "logs", Result: testutil.MockResult{Output: []byte("backup complete\n")}},
+	existing := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "db-backup", Namespace: "nvoi-myapp-prod"},
+		Spec: batchv1.CronJobSpec{
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{{Name: "b", Image: "busybox"}},
+						},
+					},
+				},
+			},
 		},
 	}
+	kc := testKube(existing)
+	withJobStatus(kc, 1, 0)
 
-	c := testCronCluster(mock)
-	c.MasterSSH = mock
+	kube.SetTestTiming(time.Millisecond, time.Millisecond)
 
-	err := CronRun(context.Background(), CronRunRequest{Cluster: c, Name: "db-backup"})
+	err := CronRun(context.Background(), CronRunRequest{Cluster: testCronCluster(kc), Name: "db-backup"})
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
-	found := false
-	for _, call := range mock.Calls {
-		if strings.Contains(call, "create job") && strings.Contains(call, "--from=cronjob/db-backup") {
-			found = true
-		}
+	jobs, _ := kc.Clientset().BatchV1().Jobs("nvoi-myapp-prod").List(context.Background(), metav1.ListOptions{})
+	if len(jobs.Items) == 0 {
+		t.Fatal("CronRun did not create a job")
 	}
-	if !found {
-		t.Errorf("expected create job --from=cronjob/db-backup, calls: %v", mock.Calls)
+	if !strings.HasPrefix(jobs.Items[0].Name, "db-backup-run-") {
+		t.Errorf("job name = %q, want prefix db-backup-run-", jobs.Items[0].Name)
 	}
 }
 
 func TestCronRun_JobFailed(t *testing.T) {
-	failedJob := `{"status":{"succeeded":0,"failed":1}}`
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create job", Result: testutil.MockResult{}},
-			{Prefix: "get job", Result: testutil.MockResult{Output: []byte(failedJob)}},
-			{Prefix: "logs", Result: testutil.MockResult{Output: []byte("pg_dump: connection refused\n")}},
+	existing := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "db-backup", Namespace: "nvoi-myapp-prod"},
+		Spec: batchv1.CronJobSpec{
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{{Name: "b", Image: "busybox"}},
+						},
+					},
+				},
+			},
 		},
 	}
+	kc := testKube(existing)
+	withJobStatus(kc, 0, 1)
 
-	c := testCronCluster(mock)
-	c.MasterSSH = mock
+	kube.SetTestTiming(time.Millisecond, time.Millisecond)
 
-	err := CronRun(context.Background(), CronRunRequest{Cluster: c, Name: "db-backup"})
+	err := CronRun(context.Background(), CronRunRequest{Cluster: testCronCluster(kc), Name: "db-backup"})
 	if err == nil {
 		t.Fatal("expected error for failed job")
 	}
@@ -144,17 +207,31 @@ func TestCronRun_JobFailed(t *testing.T) {
 }
 
 func TestCronDelete_IdempotentWhenMissing(t *testing.T) {
-	mock := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "delete cronjob/backup --ignore-not-found", Result: testutil.MockResult{}},
-		},
+	kc := testKube()
+	err := CronDelete(context.Background(), CronDeleteRequest{
+		Cluster: testCronCluster(kc),
+		Name:    "missing",
+	})
+	if err != nil {
+		t.Fatalf("idempotent delete: %v", err)
 	}
+}
+
+func TestCronDelete_RemovesExisting(t *testing.T) {
+	existing := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: "nvoi-myapp-prod"},
+	}
+	kc := testKube(existing)
 
 	err := CronDelete(context.Background(), CronDeleteRequest{
-		Cluster: testCronCluster(mock),
+		Cluster: testCronCluster(kc),
 		Name:    "backup",
 	})
 	if err != nil {
-		t.Fatalf("CronDelete: %v", err)
+		t.Fatalf("delete: %v", err)
+	}
+	_, err = kc.Clientset().BatchV1().CronJobs("nvoi-myapp-prod").Get(context.Background(), "backup", metav1.GetOptions{})
+	if err == nil {
+		t.Error("cronjob should be gone")
 	}
 }

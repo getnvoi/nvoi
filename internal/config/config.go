@@ -1,10 +1,9 @@
-// Package config holds shared types used by reconcile, packages, and the CLI.
+// Package config holds shared types used by reconcile and the CLI.
 // No logic — just data structures.
 package config
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	app "github.com/getnvoi/nvoi/pkg/core"
@@ -13,24 +12,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DatabaseCredentials holds resolved database credentials for a single database.
-type DatabaseCredentials struct {
-	User     string
-	Password string
-	DBName   string
-}
-
 // DeployContext holds everything needed to execute against a cluster.
 type DeployContext struct {
-	Cluster       app.Cluster
-	DNS           app.ProviderRef
-	Storage       app.ProviderRef
-	Builder       string
-	BuildCreds    map[string]string
-	GitUsername   string
-	GitToken      string
-	DatabaseCreds map[string]*DatabaseCredentials
-	Creds         provider.CredentialSource // single source for all credential resolution at runtime
+	Cluster app.Cluster
+	DNS     app.ProviderRef
+	Storage app.ProviderRef
+	Creds   provider.CredentialSource // single source for all credential resolution at runtime
 }
 
 // LiveState represents what's currently deployed.
@@ -46,41 +33,30 @@ type LiveState struct {
 }
 
 type AppConfig struct {
-	App       string                 `yaml:"app"`
-	Env       string                 `yaml:"env"`
-	Providers ProvidersDef           `yaml:"providers"`
-	Servers   map[string]ServerDef   `yaml:"servers"`
-	Firewall  []string               `yaml:"-"`
-	Volumes   map[string]VolumeDef   `yaml:"volumes,omitempty"`
-	Database  map[string]DatabaseDef `yaml:"database,omitempty"`
-	Build     map[string]string      `yaml:"build,omitempty"`
-	Secrets   []string               `yaml:"secrets,omitempty"`
-	Storage   map[string]StorageDef  `yaml:"storage,omitempty"`
-	Services  map[string]ServiceDef  `yaml:"services"`
-	Crons     map[string]CronDef     `yaml:"crons,omitempty"`
-	Domains   map[string][]string    `yaml:"domains,omitempty"`
-	ACMEEmail string                 `yaml:"acme_email,omitempty"`
+	App       string                `yaml:"app"`
+	Env       string                `yaml:"env"`
+	Providers ProvidersDef          `yaml:"providers"`
+	Servers   map[string]ServerDef  `yaml:"servers"`
+	Firewall  []string              `yaml:"-"`
+	Volumes   map[string]VolumeDef  `yaml:"volumes,omitempty"`
+	Secrets   []string              `yaml:"secrets,omitempty"`
+	Storage   map[string]StorageDef `yaml:"storage,omitempty"`
+	Services  map[string]ServiceDef `yaml:"services"`
+	Crons     map[string]CronDef    `yaml:"crons,omitempty"`
+	Domains   map[string][]string   `yaml:"domains,omitempty"`
+	ACMEEmail string                `yaml:"acme_email,omitempty"`
 
 	// Resolved firewall names — populated by Resolve()
 	MasterFirewall string `yaml:"-"`
 	WorkerFirewall string `yaml:"-"`
 }
 
-// StorageNames returns all storage names: user-declared + database backup buckets.
-// This is the single source of truth for "what storage exists."
+// StorageNames returns all user-declared storage bucket names.
 func (c *AppConfig) StorageNames() []string {
-	seen := map[string]bool{}
+	names := make([]string, 0, len(c.Storage))
 	for name := range c.Storage {
-		seen[name] = true
-	}
-	for _, db := range c.Database {
-		seen[db.BackupBucket] = true
-	}
-	names := make([]string, 0, len(seen))
-	for name := range seen {
 		names = append(names, name)
 	}
-	sort.Strings(names)
 	return names
 }
 
@@ -112,36 +88,7 @@ func (c *AppConfig) ServiceSecrets() map[string][]string {
 	return m
 }
 
-// DatabaseNames returns the names of all configured databases.
-func (c *AppConfig) DatabaseNames() []string {
-	if c == nil {
-		return nil
-	}
-	names := make([]string, 0, len(c.Database))
-	for n := range c.Database {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
-}
-
-type DatabaseDef struct {
-	Kind   string    `yaml:"kind"`
-	Image  string    `yaml:"image"`
-	Volume string    `yaml:"volume"`
-	Backup BackupDef `yaml:"backup,omitempty"`
-
-	// Resolved names — populated by Resolve(), never derived inline.
-	// Single source of truth for all database resource identifiers.
-	ServiceName      string `yaml:"-"` // {name}-db
-	SecretName       string `yaml:"-"` // {name}-db-credentials
-	BackupCronName   string `yaml:"-"` // {name}-db-backup
-	BackupBucket     string `yaml:"-"` // {name}-db-backups
-	BackupCredSecret string `yaml:"-"` // {name}-db-backup-secrets
-	VolumeMountPath  string `yaml:"-"` // from cfg.Volumes[Volume].MountPath
-}
-
-// Resolve populates all computed fields on VolumeDef and DatabaseDef.
+// Resolve populates all computed fields on VolumeDef and firewall names.
 // Called once after ValidateConfig. Internal code trusts resolved values.
 // Derivation functions live in pkg/utils/naming.go — single source of truth.
 func (c *AppConfig) Resolve() error {
@@ -160,33 +107,13 @@ func (c *AppConfig) Resolve() error {
 	c.MasterFirewall = names.MasterFirewall()
 	c.WorkerFirewall = names.WorkerFirewall()
 
-	// Database resource names — from utils single-source functions.
-	for dbName, db := range c.Database {
-		db.ServiceName = utils.DatabaseServiceName(dbName)
-		db.SecretName = utils.DatabaseSecretName(dbName)
-		db.BackupCronName = utils.DatabaseBackupCronName(dbName)
-		db.BackupBucket = utils.DatabaseBackupBucket(dbName)
-		db.BackupCredSecret = utils.DatabaseBackupCredsSecret(dbName)
-		if vol, ok := c.Volumes[db.Volume]; ok {
-			db.VolumeMountPath = vol.MountPath
-		}
-		c.Database[dbName] = db
-	}
-
 	return nil
-}
-
-type BackupDef struct {
-	Schedule string `yaml:"schedule,omitempty"` // default: "0 */6 * * *"
-	Retain   int    `yaml:"retain,omitempty"`   // default: 7
 }
 
 type ProvidersDef struct {
 	Compute string `yaml:"compute"`
 	DNS     string `yaml:"dns,omitempty"`
 	Storage string `yaml:"storage,omitempty"`
-	Build   string `yaml:"build,omitempty"`
-	Secrets string `yaml:"secrets,omitempty"` // doppler | awssm | infisical — empty = env-only
 }
 
 type ServerDef struct {
@@ -209,23 +136,22 @@ type StorageDef struct {
 }
 
 type ServiceDef struct {
-	Image    string   `yaml:"image,omitempty"`
-	Build    string   `yaml:"build,omitempty"`
-	Port     int      `yaml:"port,omitempty"`
-	Replicas int      `yaml:"replicas,omitempty"`
-	Command  string   `yaml:"command,omitempty"`
-	Health   string   `yaml:"health,omitempty"`
-	Server   string   `yaml:"server,omitempty"`
-	Servers  []string `yaml:"servers,omitempty"`
-	Env      []string `yaml:"env,omitempty"`
-	Secrets  []string `yaml:"secrets,omitempty"`
-	Storage  []string `yaml:"storage,omitempty"`
-	Volumes  []string `yaml:"volumes,omitempty"`
+	Image     string   `yaml:"image,omitempty"`
+	Port      int      `yaml:"port,omitempty"`
+	Replicas  int      `yaml:"replicas,omitempty"`
+	Command   string   `yaml:"command,omitempty"`
+	Health    string   `yaml:"health,omitempty"`
+	Server    string   `yaml:"server,omitempty"`
+	Servers   []string `yaml:"servers,omitempty"`
+	Env       []string `yaml:"env,omitempty"`
+	Secrets   []string `yaml:"secrets,omitempty"`
+	Storage   []string `yaml:"storage,omitempty"`
+	Volumes   []string `yaml:"volumes,omitempty"`
+	DependsOn []string `yaml:"depends_on,omitempty"` // other services that must be Ready before this one is applied
 }
 
 type CronDef struct {
 	Image    string   `yaml:"image,omitempty"`
-	Build    string   `yaml:"build,omitempty"`
 	Schedule string   `yaml:"schedule"`
 	Command  string   `yaml:"command,omitempty"`
 	Server   string   `yaml:"server,omitempty"`

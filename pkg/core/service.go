@@ -3,12 +3,10 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -34,28 +32,18 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return ErrInput("--image is required")
 	}
 
-	master, names, prov, err := req.Cluster.Master(ctx)
+	_, names, prov, err := req.Cluster.Master(ctx)
 	if err != nil {
 		return err
 	}
 
-	addr := master.IPv4 + ":22"
-	connectFn := req.Cluster.SSHFunc
-	if connectFn == nil {
-		connectFn = func(ctx context.Context, addr string) (utils.SSHClient, error) {
-			return infra.ConnectSSH(ctx, addr, utils.DefaultUser, req.SSHKey)
-		}
-	}
-	ssh, err := connectFn(ctx, addr)
+	kc, _, cleanup, err := req.Cluster.Kube(ctx)
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
+	defer cleanup()
 
 	ns := names.KubeNamespace()
-	if err := kube.EnsureNamespace(ctx, ssh, ns); err != nil {
-		return err
-	}
 
 	// Resolve volumes — named volumes must exist as provider volumes
 	managedVolPaths := map[string]string{}
@@ -110,12 +98,14 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 
 	out.Command("service", "set", req.Name)
 
-	yaml, _, err := kube.GenerateYAML(spec, names, managedVolPaths)
+	workload, svc, _, err := kube.BuildService(spec, names, managedVolPaths)
 	if err != nil {
-		return fmt.Errorf("generate manifest: %w", err)
+		return err
 	}
-
-	if err := kube.Apply(ctx, ssh, ns, yaml); err != nil {
+	if err := kc.Apply(ctx, ns, workload); err != nil {
+		return err
+	}
+	if err := kc.Apply(ctx, ns, svc); err != nil {
 		return err
 	}
 	out.Success("applied")
@@ -132,14 +122,14 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	out := req.Log()
 	out.Command("service", "delete", req.Name)
 
-	ssh, names, err := req.Cluster.SSH(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx)
 	if errors.Is(err, ErrNoMaster) {
 		return ErrNoMaster
 	}
 	if err != nil {
 		return err
 	}
-	defer ssh.Close()
+	defer cleanup()
 
-	return kube.DeleteByName(ctx, ssh, names.KubeNamespace(), req.Name)
+	return kc.DeleteByName(ctx, names.KubeNamespace(), req.Name)
 }

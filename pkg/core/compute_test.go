@@ -20,29 +20,26 @@ func TestFindMaster_Found(t *testing.T) {
 		t.Fatalf("NewNames: %v", err)
 	}
 
-	want := &provider.Server{
-		ID:        "123",
-		Name:      "nvoi-myapp-prod-master",
-		Status:    provider.ServerRunning,
-		IPv4:      "1.2.3.4",
-		PrivateIP: "10.0.1.1",
-	}
-	mock := &testutil.MockCompute{
-		Servers: []*provider.Server{want},
+	hz := testutil.NewHetznerFake(t)
+	hz.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	hz.Register("find-master-found")
+	prov, err := provider.ResolveCompute("find-master-found", map[string]string{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
 	}
 
-	got, err := FindMaster(ctx, mock, names)
+	got, err := FindMaster(ctx, prov, names)
 	if err != nil {
 		t.Fatalf("FindMaster: unexpected error: %v", err)
 	}
-	if got.Name != want.Name {
-		t.Errorf("Name = %q, want %q", got.Name, want.Name)
+	if got.Name != "nvoi-myapp-prod-master" {
+		t.Errorf("Name = %q, want nvoi-myapp-prod-master", got.Name)
 	}
-	if got.IPv4 != want.IPv4 {
-		t.Errorf("IPv4 = %q, want %q", got.IPv4, want.IPv4)
+	if got.IPv4 != "1.2.3.4" {
+		t.Errorf("IPv4 = %q, want 1.2.3.4", got.IPv4)
 	}
-	if got.PrivateIP != want.PrivateIP {
-		t.Errorf("PrivateIP = %q, want %q", got.PrivateIP, want.PrivateIP)
+	if got.PrivateIP != "10.0.1.1" {
+		t.Errorf("PrivateIP = %q, want 10.0.1.1", got.PrivateIP)
 	}
 }
 
@@ -53,11 +50,14 @@ func TestFindMaster_NotFound(t *testing.T) {
 		t.Fatalf("NewNames: %v", err)
 	}
 
-	mock := &testutil.MockCompute{
-		Servers: []*provider.Server{},
+	hz := testutil.NewHetznerFake(t)
+	hz.Register("find-master-notfound")
+	prov, err := provider.ResolveCompute("find-master-notfound", map[string]string{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
 	}
 
-	_, err = FindMaster(ctx, mock, names)
+	_, err = FindMaster(ctx, prov, names)
 	if err == nil {
 		t.Fatal("FindMaster: expected error, got nil")
 	}
@@ -138,15 +138,11 @@ func TestComputeSet_ReconnectsSSHAfterDocker(t *testing.T) {
 
 	sshKey, _, _ := utils.GenerateEd25519Key()
 	provName := "reconnect-test"
-	mock := &testutil.MockCompute{
-		Servers: []*provider.Server{{
-			ID: "1", Name: "nvoi-myapp-prod-master", Status: provider.ServerRunning,
-			IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
-		}},
-	}
-	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
-		return mock
-	})
+	hz := testutil.NewHetznerFake(t)
+	hz.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	hz.SeedFirewall("nvoi-myapp-prod-master-fw")
+	hz.SeedNetwork("nvoi-myapp-prod-net")
+	hz.Register(provName)
 
 	cluster := Cluster{
 		AppName: "myapp", Env: "prod",
@@ -210,15 +206,11 @@ func TestMasterSSH_SetAfterComputeSet(t *testing.T) {
 	// Verify that MasterSSH is NOT set by ComputeSet — it's set later by the reconcile loop.
 	sshKey, _, _ := utils.GenerateEd25519Key()
 	provName := "masterssh-test"
-	mock := &testutil.MockCompute{
-		Servers: []*provider.Server{{
-			ID: "1", Name: "nvoi-myapp-prod-master", Status: provider.ServerRunning,
-			IPv4: "1.2.3.4", PrivateIP: "10.0.1.1",
-		}},
-	}
-	provider.RegisterCompute(provName, provider.CredentialSchema{Name: provName}, func(creds map[string]string) provider.ComputeProvider {
-		return mock
-	})
+	hz := testutil.NewHetznerFake(t)
+	hz.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	hz.SeedFirewall("nvoi-myapp-prod-master-fw")
+	hz.SeedNetwork("nvoi-myapp-prod-net")
+	hz.Register(provName)
 
 	cluster := Cluster{
 		AppName: "myapp", Env: "prod",

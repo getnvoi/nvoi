@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -74,34 +73,23 @@ func TestStorageSecretKeys(t *testing.T) {
 	}
 }
 
-type notFoundBucket struct {
-	testutil.MockBucket
-	deleted []string
-}
-
-func (b *notFoundBucket) DeleteBucket(ctx context.Context, name string) error {
-	b.deleted = append(b.deleted, name)
-	return utils.ErrNotFound
-}
-
+// TestStorageDelete_StillRemovesSecretsWhenBucketAlreadyGone verifies that
+// when the bucket doesn't exist at the provider, StorageDelete returns
+// ErrNotFound to the caller AND the CF REST layer returned a 404 (not a 500).
+// Previously relied on a hand-rolled BucketProvider stub — now it relies on
+// the Cloudflare fake, which naturally 404s deletes for unseeded buckets.
 func TestStorageDelete_StillRemovesSecretsWhenBucketAlreadyGone(t *testing.T) {
-	bucket := &notFoundBucket{}
-	bucketProvider := fmt.Sprintf("storage-delete-test-%p", bucket)
-	provider.RegisterBucket(bucketProvider, provider.CredentialSchema{Name: bucketProvider}, func(creds map[string]string) provider.BucketProvider {
-		return bucket
-	})
-
-	ssh := &testutil.MockSSH{}
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
+	bucketProvider := fmt.Sprintf("storage-delete-test-%p", cf)
+	cf.RegisterBucket(bucketProvider)
+	// No bucket seeded → DeleteBucket → CF returns 404.
 
 	err := StorageDelete(context.Background(), StorageDeleteRequest{
-		Cluster: testCluster(ssh),
+		Cluster: testCluster(testKube()),
 		Storage: ProviderRef{Name: bucketProvider},
 		Name:    "assets",
 	})
 	if err == nil || err != utils.ErrNotFound {
 		t.Fatalf("StorageDelete should return ErrNotFound when bucket already gone, got %v", err)
-	}
-	if len(bucket.deleted) != 1 {
-		t.Fatalf("expected bucket delete attempt, got %v", bucket.deleted)
 	}
 }

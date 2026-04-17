@@ -7,14 +7,13 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/getnvoi/nvoi/internal/testutil"
-	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 func TestServersAdd_FreshDeploy(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
+	activeHetzner.Reset() // fresh deploy — no pre-existing servers at provider
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{
@@ -33,17 +32,18 @@ func TestServersAdd_FreshDeploy(t *testing.T) {
 func TestServersAdd_AlreadyConverged(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
-	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 
+	// Master already exists at the provider (convergeDC seeds it). ServersAdd
+	// must be idempotent: no new server created, nothing deleted.
 	if err := ServersAdd(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !log.has("ensure-server:" + n.Server("master")) {
-		t.Error("ensure-server should still be called (idempotent)")
+	if log.count("ensure-server:") != 0 {
+		t.Errorf("idempotent reconcile must not create anything: %v", log.all())
 	}
 	if log.count("delete-server:") != 0 {
 		t.Errorf("ServersAdd should never delete: %v", log.all())
@@ -60,7 +60,7 @@ func TestServersRemoveOrphans(t *testing.T) {
 	}
 	live := &config.LiveState{Servers: []string{"master", "old-worker"}}
 	// Orphan server exists at the provider
-	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "2", Name: n.Server("old-worker"), IPv4: "5.6.7.8"})
+	activeHetzner.SeedServer(n.Server("old-worker"), "5.6.7.8", "")
 
 	if err := ServersRemoveOrphans(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -105,8 +105,12 @@ func TestServersAdd_ScaleUp(t *testing.T) {
 	if err := ServersAdd(context.Background(), dc, nil, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// Workers are brand new — expect two creates (master is pre-seeded).
 	if !log.has("ensure-server:" + n.Server("worker-2")) {
 		t.Error("worker-2 not added on scale-up")
+	}
+	if !log.has("ensure-server:" + n.Server("worker-1")) {
+		t.Error("worker-1 not added on scale-up")
 	}
 	if log.count("delete-server:") != 0 {
 		t.Errorf("scale-up should not delete: %v", log.all())
@@ -139,7 +143,6 @@ func TestServersAdd_DiskMismatch_Error(t *testing.T) {
 func TestServersAdd_DiskMatchesLive_OK(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
-	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{
@@ -151,18 +154,21 @@ func TestServersAdd_DiskMatchesLive_OK(t *testing.T) {
 		ServerDisk: map[string]int{"master": 50},
 	}
 
+	// Master already seeded at provider. Disk matches → no-op reconcile.
 	if err := ServersAdd(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("same disk should pass: %v", err)
 	}
-	if !log.has("ensure-server:" + n.Server("master")) {
-		t.Error("master not ensured")
+	if log.count("ensure-server:") != 0 {
+		t.Errorf("idempotent reconcile must not create anything: %v", log.all())
+	}
+	if log.count("delete-server:") != 0 {
+		t.Errorf("must not delete: %v", log.all())
 	}
 }
 
 func TestServersAdd_DiskOmittedOnExistingServer_OK(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
-	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{
@@ -174,19 +180,18 @@ func TestServersAdd_DiskOmittedOnExistingServer_OK(t *testing.T) {
 		ServerDisk: map[string]int{"master": 50},
 	}
 
-	// Disk omitted (0) — no check, passes through
+	// Disk omitted (0) — no check, passes through. Master already seeded.
 	if err := ServersAdd(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("omitted disk on existing server should pass: %v", err)
 	}
-	if !log.has("ensure-server:" + n.Server("master")) {
-		t.Error("master not ensured")
+	if log.count("ensure-server:") != 0 {
+		t.Errorf("idempotent reconcile must not create anything: %v", log.all())
 	}
 }
 
 func TestServersAdd_ProviderDidNotReportDisk_OK(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
-	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{
@@ -198,12 +203,12 @@ func TestServersAdd_ProviderDidNotReportDisk_OK(t *testing.T) {
 		ServerDisk: map[string]int{}, // provider didn't report disk
 	}
 
-	// Can't validate what we can't see — passes through
+	// Can't validate what we can't see — passes through. Master already seeded.
 	if err := ServersAdd(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unknown live disk should pass: %v", err)
 	}
-	if !log.has("ensure-server:" + n.Server("master")) {
-		t.Error("master not ensured")
+	if log.count("ensure-server:") != 0 {
+		t.Errorf("idempotent reconcile must not create anything: %v", log.all())
 	}
 }
 
@@ -211,6 +216,7 @@ func TestServersAdd_DiskOnNewServer_OK(t *testing.T) {
 	log := &opLog{}
 	dc := convergeDC(log, convergeMock())
 	n := testNames()
+	activeHetzner.Reset() // fresh create — no pre-existing servers
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{
@@ -236,10 +242,8 @@ func TestServersRemoveOrphans_ScaleDown(t *testing.T) {
 	}
 	live := &config.LiveState{Servers: []string{"master", "worker-1", "worker-2"}}
 	// Orphan servers exist at the provider
-	activeMock.Servers = append(activeMock.Servers,
-		&provider.Server{ID: "2", Name: n.Server("worker-1"), IPv4: "5.6.7.8"},
-		&provider.Server{ID: "3", Name: n.Server("worker-2"), IPv4: "9.10.11.12"},
-	)
+	activeHetzner.SeedServer(n.Server("worker-1"), "5.6.7.8", "")
+	activeHetzner.SeedServer(n.Server("worker-2"), "9.10.11.12", "")
 
 	if err := ServersRemoveOrphans(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -285,7 +289,7 @@ func TestServerReplacement_AddBeforeRemove(t *testing.T) {
 	// (services would be reconciled here, moving workloads to worker-2)
 
 	// Phase 2: remove orphans — orphan server exists at provider
-	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "4", Name: n.Server("worker-1"), IPv4: "5.6.7.8"})
+	activeHetzner.SeedServer(n.Server("worker-1"), "5.6.7.8", "")
 	if err := ServersRemoveOrphans(context.Background(), dc, live, cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -295,28 +299,24 @@ func TestServerReplacement_AddBeforeRemove(t *testing.T) {
 }
 
 func TestServersRemoveOrphans_DrainFailOnReadyNode_BlocksDelete(t *testing.T) {
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "apply", Result: testutil.MockResult{}},
-			{Prefix: "replace", Result: testutil.MockResult{}},
-			// Node exists and is Ready
-			{Prefix: "get node", Result: testutil.MockResult{Output: []byte("nvoi-myapp-prod-old-worker   Ready")}},
-			// Drain fails
-			{Prefix: "drain", Result: testutil.MockResult{Err: fmt.Errorf("eviction timeout")}},
-			// Ready check returns True — node is alive
-			{Prefix: "jsonpath", Result: testutil.MockResult{Output: []byte("'True'")}},
-		},
-	}
 	log := &opLog{}
-	dc := convergeDC(log, ssh)
+	dc := convergeDC(log, convergeMock())
+	kf := kfFor(dc)
 	n := testNames()
+
+	// Seed a Ready Node + a Pod on it, then install a reactor that rejects
+	// evictions. DrainAndRemoveNode fails with the node still Ready → the
+	// reconciler must NOT call ComputeDelete.
+	seedReadyNode(t, kf, n.Server("old-worker"))
+	seedPodOnNode(t, kf, "ns", "pod-a", n.Server("old-worker"))
+	failEvictions(kf, fmt.Errorf("eviction timeout"))
+
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 	live := &config.LiveState{Servers: []string{"master", "old-worker"}}
-	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "2", Name: n.Server("old-worker"), IPv4: "5.6.7.8"})
+	activeHetzner.SeedServer(n.Server("old-worker"), "5.6.7.8", "")
 
 	err := ServersRemoveOrphans(context.Background(), dc, live, cfg)
 	if err == nil {
@@ -328,35 +328,24 @@ func TestServersRemoveOrphans_DrainFailOnReadyNode_BlocksDelete(t *testing.T) {
 }
 
 func TestServersRemoveOrphans_DrainFailOnNotReadyNode_ProceedsWithDelete(t *testing.T) {
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "apply", Result: testutil.MockResult{}},
-			{Prefix: "replace", Result: testutil.MockResult{}},
-			// Node exists
-			{Prefix: "get node", Result: testutil.MockResult{Output: []byte("nvoi-myapp-prod-old-worker   NotReady")}},
-			// Drain fails (node unreachable)
-			{Prefix: "drain", Result: testutil.MockResult{Err: fmt.Errorf("timeout")}},
-			// Ready check returns False — node is dead
-			{Prefix: "jsonpath", Result: testutil.MockResult{Output: []byte("'False'")}},
-			// Force delete node succeeds
-			{Prefix: "delete node", Result: testutil.MockResult{}},
-			// ListServers for ComputeDelete existence check
-			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
-			{Prefix: "delete deployment", Result: testutil.MockResult{}},
-			{Prefix: "delete statefulset", Result: testutil.MockResult{}},
-			{Prefix: "delete service/", Result: testutil.MockResult{}},
-		},
-	}
 	log := &opLog{}
-	dc := convergeDC(log, ssh)
+	dc := convergeDC(log, convergeMock())
+	kf := kfFor(dc)
 	n := testNames()
+
+	// Seed a NotReady Node + a Pod on it + failing evictions. DrainAndRemoveNode
+	// sees the eviction failure on a NotReady node and force-removes the node.
+	// The reconciler then proceeds with ComputeDelete at the provider.
+	seedNotReadyNode(t, kf, n.Server("old-worker"))
+	seedPodOnNode(t, kf, "ns", "pod-a", n.Server("old-worker"))
+	failEvictions(kf, fmt.Errorf("node unreachable"))
+
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 	live := &config.LiveState{Servers: []string{"master", "old-worker"}}
-	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "2", Name: n.Server("old-worker"), IPv4: "5.6.7.8"})
+	activeHetzner.SeedServer(n.Server("old-worker"), "5.6.7.8", "")
 
 	err := ServersRemoveOrphans(context.Background(), dc, live, cfg)
 	if err != nil {
@@ -368,28 +357,17 @@ func TestServersRemoveOrphans_DrainFailOnNotReadyNode_ProceedsWithDelete(t *test
 }
 
 func TestServersRemoveOrphans_NodeNotInCluster_ProceedsWithDelete(t *testing.T) {
-	ssh := &testutil.MockSSH{
-		Prefixes: []testutil.MockPrefix{
-			{Prefix: "create namespace", Result: testutil.MockResult{}},
-			{Prefix: "apply", Result: testutil.MockResult{}},
-			{Prefix: "replace", Result: testutil.MockResult{}},
-			// Node doesn't exist in cluster
-			{Prefix: "get node", Result: testutil.MockResult{Err: fmt.Errorf("not found")}},
-			{Prefix: "get pods", Result: testutil.MockResult{Output: []byte(`{"items":[]}`)}},
-			{Prefix: "delete deployment", Result: testutil.MockResult{}},
-			{Prefix: "delete statefulset", Result: testutil.MockResult{}},
-			{Prefix: "delete service/", Result: testutil.MockResult{}},
-		},
-	}
+	// No Node seeded in the fake — DrainAndRemoveNode is a no-op, reconciler
+	// proceeds straight to ComputeDelete.
 	log := &opLog{}
-	dc := convergeDC(log, ssh)
+	dc := convergeDC(log, convergeMock())
 	n := testNames()
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 	live := &config.LiveState{Servers: []string{"master", "old-worker"}}
-	activeMock.Servers = append(activeMock.Servers, &provider.Server{ID: "2", Name: n.Server("old-worker"), IPv4: "5.6.7.8"})
+	activeHetzner.SeedServer(n.Server("old-worker"), "5.6.7.8", "")
 
 	err := ServersRemoveOrphans(context.Background(), dc, live, cfg)
 	if err != nil {

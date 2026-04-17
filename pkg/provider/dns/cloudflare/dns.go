@@ -28,6 +28,10 @@ func NewDNS(creds map[string]string) *DNSClient {
 	}
 }
 
+// APIClient returns the underlying HTTP client for tests to override BaseURL.
+// Production callers must not depend on this accessor.
+func (d *DNSClient) APIClient() *utils.HTTPClient { return d.api }
+
 func (d *DNSClient) ValidateCredentials(ctx context.Context) error {
 	if d.zoneID == "" {
 		return fmt.Errorf("cloudflare dns: zone_id is required")

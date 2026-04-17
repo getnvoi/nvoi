@@ -267,55 +267,6 @@ func TestStorageEnvPrefix(t *testing.T) {
 	}
 }
 
-func TestResolveDBName(t *testing.T) {
-	t.Run("flag overrides", func(t *testing.T) {
-		got, err := ResolveDBName("custom", []string{"analytics", "logs"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != "custom" {
-			t.Errorf("got %q, want %q", got, "custom")
-		}
-	})
-	t.Run("single database", func(t *testing.T) {
-		got, err := ResolveDBName("", []string{"analytics"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != "analytics" {
-			t.Errorf("got %q, want %q", got, "analytics")
-		}
-	})
-	t.Run("multiple databases errors", func(t *testing.T) {
-		_, err := ResolveDBName("", []string{"analytics", "logs"})
-		if err == nil {
-			t.Fatal("expected error for multiple databases without --name")
-		}
-		if !strings.Contains(err.Error(), "specify --name") {
-			t.Errorf("error = %q, want mention of --name", err.Error())
-		}
-		// Error lists names sorted.
-		if !strings.Contains(err.Error(), "analytics, logs") {
-			t.Errorf("error = %q, want sorted names", err.Error())
-		}
-	})
-	t.Run("no databases errors", func(t *testing.T) {
-		_, err := ResolveDBName("", nil)
-		if err == nil {
-			t.Fatal("expected error for no databases")
-		}
-		if !strings.Contains(err.Error(), "no databases configured") {
-			t.Errorf("error = %q, want 'no databases configured'", err.Error())
-		}
-	})
-	t.Run("empty slice errors", func(t *testing.T) {
-		_, err := ResolveDBName("", []string{})
-		if err == nil {
-			t.Fatal("expected error for empty slice")
-		}
-	})
-}
-
 func TestRegistryAddr(t *testing.T) {
 	tests := []struct {
 		name string

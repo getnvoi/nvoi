@@ -8,9 +8,21 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
-	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// isKubeconfigMissing returns true when err originates from kube.Client
+// failing to fetch /home/deploy/.kube/config. This means k3s hasn't
+// finished installing yet — we're mid-first-deploy, not an active cluster
+// with a corrupt kubeconfig.
+func isKubeconfigMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, ".kube/config") &&
+		strings.Contains(msg, "No such file or directory")
+}
 
 // DescribeLive queries the cluster and provider for current state.
 // Returns (nil, nil) on first deploy (no servers exist).
@@ -33,6 +45,13 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		}
 		if len(servers) == 0 {
 			return nil, nil // first deploy — nothing exists
+		}
+		if isKubeconfigMissing(err) {
+			// Servers exist at the provider but k3s hasn't been installed
+			// yet (prior deploy aborted mid-provisioning). No cluster
+			// state to describe — return an empty live state so
+			// ServersAdd can resume provisioning on the existing server.
+			return &config.LiveState{Domains: map[string][]string{}, ServerDisk: map[string]int{}}, nil
 		}
 		return nil, fmt.Errorf("servers exist but cluster state unreadable — cannot detect orphans: %w", err)
 	}
@@ -108,12 +127,12 @@ func drainNode(ctx context.Context, dc *config.DeployContext, name string) error
 	if err != nil {
 		return fmt.Errorf("drain %s: %w", name, err)
 	}
-	ssh := dc.Cluster.MasterSSH
-	if ssh == nil {
-		return fmt.Errorf("drain %s: no master SSH connection", name)
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
+		return fmt.Errorf("drain %s: no master kube client", name)
 	}
 	dc.Cluster.Log().Command("node", "drain", names.Server(name))
-	return kube.DrainAndRemoveNode(ctx, ssh, names.Server(name))
+	return kc.DrainAndRemoveNode(ctx, names.Server(name))
 }
 
 func clusterWith(dc *config.DeployContext, creds map[string]string) app.Cluster {
@@ -164,25 +183,6 @@ func ResolveServers(cfg *config.AppConfig, servers []string, server string, moun
 		}
 	}
 	return nil
-}
-
-func resolveImageRef(ctx context.Context, dc *config.DeployContext, image, buildRef string) (string, error) {
-	if buildRef != "" {
-		ref, err := app.BuildLatest(ctx, app.BuildLatestRequest{Cluster: dc.Cluster, Name: buildRef})
-		if err != nil {
-			return "", fmt.Errorf("resolve build %q: %w", buildRef, err)
-		}
-		return ref, nil
-	}
-	return image, nil
-}
-
-func buildTargetStrings(build map[string]string) []string {
-	var targets []string
-	for _, name := range utils.SortedKeys(build) {
-		targets = append(targets, name+":"+build[name])
-	}
-	return targets
 }
 
 func toSet(items []string) map[string]bool {

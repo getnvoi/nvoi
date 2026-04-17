@@ -2,37 +2,33 @@ package kube
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/utils"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // timeoutDiagnostics gathers pod state, events, and logs when rollout times out.
-// Returns a rich error with actionable information instead of the bare "poll: timeout exceeded".
-func timeoutDiagnostics(ctx context.Context, ssh utils.SSHClient, ns, name, kind, selector, lastStatus string) error {
+// Returns a rich error with actionable information instead of the bare
+// "poll: timeout exceeded".
+func (c *Client) timeoutDiagnostics(ctx context.Context, ns, name, kind, selector, lastStatus string) error {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("%s: timed out (%s)", name, lastStatus))
 
-	// Re-query pods one final time for current state
-	cmd := kctl(ns, fmt.Sprintf("get pods -l %s -o json", selector))
-	out, err := ssh.Run(ctx, cmd)
+	pods, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return errors.New(b.String())
 	}
-	var pods podList
-	if err := json.Unmarshal(out, &pods); err != nil {
-		return errors.New(b.String())
-	}
 
-	for _, pod := range pods.Items {
+	for i := range pods.Items {
+		pod := &pods.Items[i]
 		if podReady(pod) {
 			continue
 		}
 
-		b.WriteString(fmt.Sprintf("\n\npod %s (phase: %s):", pod.Metadata.Name, pod.Status.Phase))
+		b.WriteString(fmt.Sprintf("\n\npod %s (phase: %s):", pod.Name, pod.Status.Phase))
 
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Ready {
@@ -56,9 +52,7 @@ func timeoutDiagnostics(ctx context.Context, ssh utils.SSHClient, ns, name, kind
 			}
 		}
 
-		// Fetch Warning events — shows probe failure details, scheduling issues, etc.
-		events := recentEvents(ctx, ssh, ns, pod.Metadata.Name)
-		for _, ev := range events {
+		for _, ev := range c.recentEvents(ctx, ns, pod.Name) {
 			msg := ev.Message
 			if ev.Count > 1 {
 				msg += fmt.Sprintf(" (x%d)", ev.Count)
@@ -67,8 +61,7 @@ func timeoutDiagnostics(ctx context.Context, ssh utils.SSHClient, ns, name, kind
 		}
 	}
 
-	// Fetch workload logs
-	logs := RecentLogs(ctx, ssh, ns, name, kind, 30)
+	logs := c.RecentLogs(ctx, ns, name, kind, 30)
 	if logs != "" {
 		b.WriteString("\n\nlogs:\n")
 		b.WriteString(indent(logs, "  "))
@@ -78,8 +71,8 @@ func timeoutDiagnostics(ctx context.Context, ssh utils.SSHClient, ns, name, kind
 }
 
 // podReady returns true if all containers in the pod are Ready.
-func podReady(pod PodItem) bool {
-	if pod.Status.Phase != "Running" && pod.Status.Phase != "Succeeded" {
+func podReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodSucceeded {
 		return false
 	}
 	if len(pod.Status.ContainerStatuses) == 0 {
@@ -93,16 +86,14 @@ func podReady(pod PodItem) bool {
 	return true
 }
 
-// recentEvents fetches Warning events for a specific pod.
-func recentEvents(ctx context.Context, ssh utils.SSHClient, ns, podName string) []EventItem {
-	cmd := kctl(ns, fmt.Sprintf("get events --field-selector involvedObject.name=%s,type=Warning -o json", podName))
-	out, err := ssh.Run(ctx, cmd)
+// recentEvents fetches Warning events for a specific pod via the typed
+// Events API.
+func (c *Client) recentEvents(ctx context.Context, ns, podName string) []corev1.Event {
+	list, err := c.cs.CoreV1().Events(ns).List(ctx, metav1.ListOptions{
+		FieldSelector: fmt.Sprintf("involvedObject.name=%s,type=Warning", podName),
+	})
 	if err != nil {
 		return nil
 	}
-	var events EventList
-	if err := json.Unmarshal(out, &events); err != nil {
-		return nil
-	}
-	return events.Items
+	return list.Items
 }

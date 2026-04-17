@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/testutil"
@@ -13,7 +14,7 @@ func TestEnsureSwap_AlreadyActive(t *testing.T) {
 		"swapon --show --noheadings": {Output: []byte("/swapfile file 1024M 0B -2\n")},
 	})
 
-	err := EnsureSwap(context.Background(), mock)
+	err := EnsureSwap(context.Background(), mock, io.Discard)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestEnsureSwap_CreatesSwap(t *testing.T) {
 		},
 	}
 
-	err := EnsureSwap(context.Background(), mock)
+	err := EnsureSwap(context.Background(), mock, io.Discard)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestEnsureSwap_SmallDisk(t *testing.T) {
 		},
 	}
 
-	err := EnsureSwap(context.Background(), mock)
+	err := EnsureSwap(context.Background(), mock, io.Discard)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestEnsureSwap_DfFails_NoError(t *testing.T) {
 		"df --output=size / | tail -1": {Err: fmt.Errorf("df failed")},
 	})
 
-	err := EnsureSwap(context.Background(), mock)
+	err := EnsureSwap(context.Background(), mock, io.Discard)
 	if err != nil {
 		t.Fatalf("df failure should not be fatal, got: %v", err)
 	}

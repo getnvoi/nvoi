@@ -41,10 +41,23 @@ func InstallK3sMaster(ctx context.Context, ssh utils.SSHClient, node Node, w io.
 		return err
 	}
 
-	// Install k3s server
+	// Install k3s server.
+	//
+	// We run k3s as a thin substrate: kube-apiserver + containerd + CoreDNS +
+	// flannel + local-path-provisioner. Two of k3s's bundled add-ons are
+	// disabled here:
+	//
+	//   --disable traefik    — nvoi runs Caddy in-cluster as the ingress
+	//                          controller (see pkg/kube/caddy.go). Letting
+	//                          k3s install Traefik would race with Caddy
+	//                          for hostPort :80/:443 on the master node.
+	//
+	//   --disable servicelb  — k3s's built-in LoadBalancer (klipper-lb) is
+	//                          unused: Caddy binds hostPort directly, no
+	//                          Service of type LoadBalancer in our model.
 	fmt.Fprintln(w, "installing k3s server...")
 	cmd := fmt.Sprintf(
-		`curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server --write-kubeconfig-mode 644 --node-ip %s --advertise-address %s --tls-san %s --tls-san %s --cluster-cidr %s --service-cidr %s --flannel-backend vxlan --flannel-iface %s' sh -`,
+		`curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server --disable traefik --disable servicelb --write-kubeconfig-mode 644 --node-ip %s --advertise-address %s --tls-san %s --tls-san %s --cluster-cidr %s --service-cidr %s --flannel-backend vxlan --flannel-iface %s' sh -`,
 		node.PrivateIP, node.PrivateIP, node.PrivateIP, node.PublicIP, utils.K3sClusterCIDR, utils.K3sServiceCIDR, privateIface,
 	)
 	if err := ssh.RunStream(ctx, cmd, w, w); err != nil {

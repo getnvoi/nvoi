@@ -2,11 +2,36 @@ package reconcile
 
 import (
 	"context"
-	"strings"
 	"testing"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/getnvoi/nvoi/internal/config"
 )
+
+const testNS = "nvoi-myapp-prod"
+
+func getSecret(t *testing.T, dc *config.DeployContext, name string) *corev1.Secret {
+	t.Helper()
+	sec, err := kfFor(dc).Typed.CoreV1().Secrets(testNS).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret %q: %v", name, err)
+	}
+	return sec
+}
+
+func getDeployment(t *testing.T, dc *config.DeployContext, name string) *appsv1.Deployment {
+	t.Helper()
+	dep, err := kfFor(dc).Typed.AppsV1().Deployments(testNS).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment %q: %v", name, err)
+	}
+	return dep
+}
 
 func TestServices_FreshDeploy(t *testing.T) {
 	ssh := convergeMock()
@@ -20,14 +45,27 @@ func TestServices_FreshDeploy(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !sshContains(ssh, "replace", "apply") {
-		t.Errorf("expected kubectl apply/replace: %v", ssh.Calls)
+	if !kfFor(dc).HasDeployment(testNS, "web") {
+		t.Error("web deployment not applied")
+	}
+	if !kfFor(dc).HasService(testNS, "web") {
+		t.Error("web service not applied")
 	}
 }
 
 func TestServices_OrphanRemoved(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
+
+	// Pre-populate the fake with the orphan so Services can find it and delete.
+	kf := kfFor(dc)
+	existing := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "old-api", Namespace: testNS},
+	}
+	if _, err := kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(), existing, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
@@ -38,14 +76,29 @@ func TestServices_OrphanRemoved(t *testing.T) {
 	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !sshCallMatches(ssh, "old-api", "delete") {
-		t.Errorf("orphan old-api not deleted: %v", ssh.Calls)
+	if kf.HasDeployment(testNS, "old-api") {
+		t.Error("orphan old-api should have been deleted")
+	}
+	if !kf.HasDeployment(testNS, "web") {
+		t.Error("desired web deployment should exist")
 	}
 }
 
 func TestServices_AlreadyConverged(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
+	kf := kfFor(dc)
+
+	// Pre-populate the fake with the desired resource.
+	one := int32(1)
+	existing := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: testNS},
+		Spec:       appsv1.DeploymentSpec{Replicas: &one},
+	}
+	if _, err := kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(), existing, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
@@ -56,16 +109,27 @@ func TestServices_AlreadyConverged(t *testing.T) {
 	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, call := range ssh.Calls {
-		if strings.Contains(call, "delete deployment") || strings.Contains(call, "delete statefulset") {
-			t.Errorf("converged should have no deletes: %s", call)
-		}
+	// Still present — not nuked.
+	if !kf.HasDeployment(testNS, "web") {
+		t.Error("converged web should not be deleted")
 	}
 }
 
 func TestServices_CompleteReplacement(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
+	kf := kfFor(dc)
+
+	// Pre-populate orphans.
+	for _, name := range []string{"old-web", "old-worker"} {
+		_, err := kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(),
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS}},
+			metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
@@ -76,34 +140,13 @@ func TestServices_CompleteReplacement(t *testing.T) {
 	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !sshCallMatches(ssh, "old-web", "delete") {
-		t.Error("old-web not deleted")
+	for _, name := range []string{"old-web", "old-worker"} {
+		if kf.HasDeployment(testNS, name) {
+			t.Errorf("orphan %q should have been deleted", name)
+		}
 	}
-	if !sshCallMatches(ssh, "old-worker", "delete") {
-		t.Error("old-worker not deleted")
-	}
-}
-
-func TestServices_DatabasePackageManagedNotOrphaned(t *testing.T) {
-	ssh := convergeMock()
-	dc := testDC(ssh)
-	cfg := &config.AppConfig{
-		App: "myapp", Env: "prod",
-		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Volumes:  map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master"}},
-		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
-		Database: map[string]config.DatabaseDef{"main": {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"}},
-	}
-	cfg.Resolve()
-	// main-db is in live (created by database package) but not in cfg.Services.
-	// It must NOT be deleted — it's protected.
-	live := &config.LiveState{Services: []string{"web", "main-db"}}
-
-	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sshCallMatches(ssh, "main-db", "delete") {
-		t.Error("main-db should NOT be deleted — it's managed by the database package")
+	if !kf.HasDeployment(testNS, "new-api") {
+		t.Error("desired new-api not applied")
 	}
 }
 
@@ -120,45 +163,16 @@ func TestServices_EveryServiceGetsRolloutWait(t *testing.T) {
 		},
 	}
 
+	// AutoReadyPods satisfies WaitRollout for every service.
 	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// All 3 services are sorted alphabetically: api, web, worker.
-	// Each must get a "get pods" call for rollout wait — not just the last.
-	podChecks := 0
-	for _, call := range ssh.Calls {
-		if strings.Contains(call, "get pods") && strings.Contains(call, "-o json") {
-			podChecks++
+	// All three deployments must exist — only way all three WaitRollouts
+	// returned nil is if each one saw a ready pod.
+	for _, name := range []string{"api", "web", "worker"} {
+		if !kfFor(dc).HasDeployment(testNS, name) {
+			t.Errorf("%s not applied", name)
 		}
-	}
-	// At minimum 3 pod checks (one per service). May be more due to stability re-checks.
-	if podChecks < 3 {
-		t.Errorf("expected at least 3 rollout pod checks (one per service), got %d — calls: %v", podChecks, ssh.Calls)
-	}
-}
-
-func TestServices_DatabaseProtected(t *testing.T) {
-	ssh := convergeMock()
-	dc := testDC(ssh)
-	cfg := &config.AppConfig{
-		App: "myapp", Env: "prod",
-		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
-		Volumes:  map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master"}},
-		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
-		Database: map[string]config.DatabaseDef{"main": {Kind: "postgres", Image: "postgres:17", Volume: "pgdata"}},
-	}
-	cfg.Resolve()
-	live := &config.LiveState{Services: []string{"web", "main-db", "stale-worker"}}
-
-	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sshCallMatches(ssh, "main-db", "delete") {
-		t.Error("main-db should not be deleted")
-	}
-	if !sshCallMatches(ssh, "stale-worker", "delete") {
-		t.Error("stale-worker should be deleted")
 	}
 }
 
@@ -177,9 +191,9 @@ func TestServices_PerServiceSecretCreated(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should upsert WEB_SECRET into web-secrets k8s Secret
-	if !uploadContains(ssh, "s3cret") {
-		t.Error("WEB_SECRET value not upserted into per-service secret")
+	sec := getSecret(t, dc, "web-secrets")
+	if string(sec.Data["WEB_SECRET"]) != "s3cret" {
+		t.Errorf("WEB_SECRET = %q, want s3cret", string(sec.Data["WEB_SECRET"]))
 	}
 }
 
@@ -198,9 +212,9 @@ func TestServices_PerServiceSecretWithDollarVar(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Resolved value should be upserted into web-secrets
-	if !uploadContains(ssh, "postgresql://host/db") {
-		t.Error("resolved DATABASE_URL not upserted into per-service secret")
+	sec := getSecret(t, dc, "web-secrets")
+	if string(sec.Data["DATABASE_URL"]) != "postgresql://host/db" {
+		t.Errorf("DATABASE_URL = %q", string(sec.Data["DATABASE_URL"]))
 	}
 }
 
@@ -219,8 +233,9 @@ func TestServices_PerServiceSecretComposed(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !uploadContains(ssh, "admin:secret") {
-		t.Error("composed value not upserted into per-service secret")
+	sec := getSecret(t, dc, "web-secrets")
+	if string(sec.Data["CREATE_SUPERUSER"]) != "admin:secret" {
+		t.Errorf("composed = %q", string(sec.Data["CREATE_SUPERUSER"]))
 	}
 }
 
@@ -239,8 +254,9 @@ func TestServices_PerServiceSecretAliasedWithDollar(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !uploadContains(ssh, "keyval") {
-		t.Error("aliased secret value not upserted into per-service secret")
+	sec := getSecret(t, dc, "web-secrets")
+	if string(sec.Data["SECRET_KEY"]) != "keyval" {
+		t.Errorf("aliased = %q", string(sec.Data["SECRET_KEY"]))
 	}
 }
 
@@ -259,9 +275,15 @@ func TestServices_EnvWithDollarResolved(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// The resolved value should appear in the uploaded YAML manifest
-	if !uploadContains(ssh, "https://example.com/api") {
-		t.Error("resolved env var not in manifest")
+	dep := getDeployment(t, dc, "web")
+	var found bool
+	for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "BASE_URL" && e.Value == "https://example.com/api" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("resolved env missing: %+v", dep.Spec.Template.Spec.Containers[0].Env)
 	}
 }
 
@@ -279,14 +301,33 @@ func TestServices_EnvLiteral(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !uploadContains(ssh, "bar") {
-		t.Error("literal env var not in manifest")
+	dep := getDeployment(t, dc, "web")
+	var found bool
+	for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "FOO" && e.Value == "bar" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("literal env missing: %+v", dep.Spec.Template.Spec.Containers[0].Env)
 	}
 }
 
 func TestServices_NoSecretsDeletesPerServiceSecret(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
+	kf := kfFor(dc)
+
+	// Pre-populate a stale per-service secret.
+	_, err := kf.Typed.CoreV1().Secrets(testNS).Create(context.Background(),
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "web-secrets", Namespace: testNS},
+			Data:       map[string][]byte{"OLD": []byte("x")},
+		}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
@@ -296,15 +337,24 @@ func TestServices_NoSecretsDeletesPerServiceSecret(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// With no secrets: field, the per-service secret should be deleted
-	if !sshCallMatches(ssh, "web-secrets", "delete secret") {
-		t.Error("expected web-secrets to be deleted when service has no secrets")
+	if kf.HasSecret(testNS, "web-secrets") {
+		t.Error("web-secrets should have been deleted when service declares no secrets")
 	}
 }
 
 func TestServices_OrphanServiceDeletesItsSecret(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
+	kf := kfFor(dc)
+
+	// Pre-populate orphan + its secret.
+	_, _ = kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(),
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "old-api", Namespace: testNS}},
+		metav1.CreateOptions{})
+	_, _ = kf.Typed.CoreV1().Secrets(testNS).Create(context.Background(),
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "old-api-secrets", Namespace: testNS}},
+		metav1.CreateOptions{})
+
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
@@ -315,9 +365,8 @@ func TestServices_OrphanServiceDeletesItsSecret(t *testing.T) {
 	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// old-api is orphaned — its per-service secret should be cleaned up
-	if !sshCallMatches(ssh, "old-api-secrets", "delete secret") {
-		t.Error("orphan old-api's per-service secret not cleaned up")
+	if kf.HasSecret(testNS, "old-api-secrets") {
+		t.Error("orphan old-api-secrets not cleaned up")
 	}
 }
 
@@ -340,12 +389,83 @@ func TestServices_StorageCredsInPerServiceSecret(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Storage credentials should be upserted into web-secrets
-	if !uploadContains(ssh, "AKID") {
-		t.Error("storage access key not in per-service secret")
+	sec := getSecret(t, dc, "web-secrets")
+	if string(sec.Data["STORAGE_ASSETS_ACCESS_KEY_ID"]) != "AKID" {
+		t.Errorf("access key missing: %q", string(sec.Data["STORAGE_ASSETS_ACCESS_KEY_ID"]))
 	}
-	if !uploadContains(ssh, "SECRET") {
-		t.Error("storage secret key not in per-service secret")
+	if string(sec.Data["STORAGE_ASSETS_SECRET_ACCESS_KEY"]) != "SECRET" {
+		t.Errorf("secret key missing: %q", string(sec.Data["STORAGE_ASSETS_SECRET_ACCESS_KEY"]))
+	}
+}
+
+func TestServices_AppliesInDependencyOrder(t *testing.T) {
+	// api depends_on postgres — alphabetically api < postgres, but topsort
+	// must place postgres first so its Service DNS is registered before
+	// api's pod starts. Assert apply order by reading the fake clientset's
+	// action log.
+	log := &opLog{}
+	dc := convergeDC(log, convergeMock())
+	kf := kfFor(dc)
+
+	// Seed the provider-side volume so ServiceSet's "named volume exists at
+	// provider" check passes — mirrors a real deploy where Volumes()
+	// reconciler ran before Services().
+	n := testNames()
+	activeHetzner.SeedVolume(n.Volume("pgdata"), 20, "nvoi-myapp-prod-master")
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Volumes: map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master", MountPath: "/mnt/data/nvoi-myapp-prod-pgdata"}},
+		Services: map[string]config.ServiceDef{
+			"api":      {Image: "api:v1", Port: 8080, DependsOn: []string{"postgres"}},
+			"postgres": {Image: "postgres:17", Port: 5432, Volumes: []string{"pgdata:/var/lib/postgresql/data"}},
+		},
+	}
+
+	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Walk the recorded actions; capture the name of each workload as it
+	// was first created (deployments + statefulsets). Order matters.
+	var order []string
+	seen := map[string]bool{}
+	for _, a := range kf.Typed.Actions() {
+		if a.GetVerb() != "create" {
+			continue
+		}
+		res := a.GetResource().Resource
+		if res != "deployments" && res != "statefulsets" {
+			continue
+		}
+		obj, ok := a.(interface{ GetObject() runtime.Object })
+		if !ok {
+			continue
+		}
+		accessor, err := meta.Accessor(obj.GetObject())
+		if err != nil || seen[accessor.GetName()] {
+			continue
+		}
+		seen[accessor.GetName()] = true
+		order = append(order, accessor.GetName())
+	}
+
+	pgIdx := -1
+	apiIdx := -1
+	for i, n := range order {
+		if n == "postgres" {
+			pgIdx = i
+		}
+		if n == "api" {
+			apiIdx = i
+		}
+	}
+	if pgIdx < 0 || apiIdx < 0 {
+		t.Fatalf("both workloads should be applied, order=%v", order)
+	}
+	if pgIdx >= apiIdx {
+		t.Errorf("postgres (idx %d) must be applied before api (idx %d): %v", pgIdx, apiIdx, order)
 	}
 }
 
@@ -362,8 +482,8 @@ func TestServices_NoAutoInjection(t *testing.T) {
 	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Source values should NOT be auto-injected if service doesn't reference them
-	if uploadContains(ssh, "MAIN_DATABASE_URL") {
-		t.Error("source values should not be auto-injected — service must declare them explicitly")
+	// No per-service secret because no secrets declared; no env ref either.
+	if kfFor(dc).HasSecret(testNS, "web-secrets") {
+		t.Error("web-secrets should not exist when no secrets declared")
 	}
 }
