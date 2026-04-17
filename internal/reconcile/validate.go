@@ -128,6 +128,19 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if err := validateSecretRefs("services."+name+".secrets", svc.Secrets); err != nil {
 			return err
 		}
+		for _, dep := range svc.DependsOn {
+			if dep == name {
+				return fmt.Errorf("services.%s.depends_on: cannot depend on itself", name)
+			}
+			if _, ok := cfg.Services[dep]; !ok {
+				return fmt.Errorf("services.%s.depends_on: %q is not a defined service", name, dep)
+			}
+		}
+	}
+
+	// Detect dependency cycles across all services.
+	if cyc := findDependencyCycle(cfg.Services); cyc != "" {
+		return fmt.Errorf("services: depends_on cycle detected: %s", cyc)
 	}
 
 	// ── Crons ─────────────────────────────────────────────────────────────

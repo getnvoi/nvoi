@@ -6,7 +6,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/getnvoi/nvoi/internal/config"
 )
@@ -393,6 +395,77 @@ func TestServices_StorageCredsInPerServiceSecret(t *testing.T) {
 	}
 	if string(sec.Data["STORAGE_ASSETS_SECRET_ACCESS_KEY"]) != "SECRET" {
 		t.Errorf("secret key missing: %q", string(sec.Data["STORAGE_ASSETS_SECRET_ACCESS_KEY"]))
+	}
+}
+
+func TestServices_AppliesInDependencyOrder(t *testing.T) {
+	// api depends_on postgres — alphabetically api < postgres, but topsort
+	// must place postgres first so its Service DNS is registered before
+	// api's pod starts. Assert apply order by reading the fake clientset's
+	// action log.
+	log := &opLog{}
+	dc := convergeDC(log, convergeMock())
+	kf := kfFor(dc)
+
+	// Seed the provider-side volume so ServiceSet's "named volume exists at
+	// provider" check passes — mirrors a real deploy where Volumes()
+	// reconciler ran before Services().
+	n := testNames()
+	activeHetzner.SeedVolume(n.Volume("pgdata"), 20, "nvoi-myapp-prod-master")
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Volumes: map[string]config.VolumeDef{"pgdata": {Size: 20, Server: "master", MountPath: "/mnt/data/nvoi-myapp-prod-pgdata"}},
+		Services: map[string]config.ServiceDef{
+			"api":      {Image: "api:v1", Port: 8080, DependsOn: []string{"postgres"}},
+			"postgres": {Image: "postgres:17", Port: 5432, Volumes: []string{"pgdata:/var/lib/postgresql/data"}},
+		},
+	}
+
+	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Walk the recorded actions; capture the name of each workload as it
+	// was first created (deployments + statefulsets). Order matters.
+	var order []string
+	seen := map[string]bool{}
+	for _, a := range kf.Typed.Actions() {
+		if a.GetVerb() != "create" {
+			continue
+		}
+		res := a.GetResource().Resource
+		if res != "deployments" && res != "statefulsets" {
+			continue
+		}
+		obj, ok := a.(interface{ GetObject() runtime.Object })
+		if !ok {
+			continue
+		}
+		accessor, err := meta.Accessor(obj.GetObject())
+		if err != nil || seen[accessor.GetName()] {
+			continue
+		}
+		seen[accessor.GetName()] = true
+		order = append(order, accessor.GetName())
+	}
+
+	pgIdx := -1
+	apiIdx := -1
+	for i, n := range order {
+		if n == "postgres" {
+			pgIdx = i
+		}
+		if n == "api" {
+			apiIdx = i
+		}
+	}
+	if pgIdx < 0 || apiIdx < 0 {
+		t.Fatalf("both workloads should be applied, order=%v", order)
+	}
+	if pgIdx >= apiIdx {
+		t.Errorf("postgres (idx %d) must be applied before api (idx %d): %v", pgIdx, apiIdx, order)
 	}
 }
 

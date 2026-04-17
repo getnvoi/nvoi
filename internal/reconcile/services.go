@@ -13,7 +13,10 @@ import (
 func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, sources map[string]string) error {
 	names, _ := dc.Cluster.Names()
 
-	svcNames := utils.SortedKeys(cfg.Services)
+	// Services are applied + waited in dependency order: any service listed
+	// in another's depends_on is fully Ready before its dependents are
+	// applied. Eliminates DNS-not-yet-registered races at pod startup.
+	svcNames := topoSortServices(cfg.Services)
 	for _, name := range svcNames {
 		svc := cfg.Services[name]
 		servers := ResolveServers(cfg, svc.Servers, svc.Server, svc.Volumes)

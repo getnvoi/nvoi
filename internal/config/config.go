@@ -136,17 +136,18 @@ type StorageDef struct {
 }
 
 type ServiceDef struct {
-	Image    string   `yaml:"image,omitempty"`
-	Port     int      `yaml:"port,omitempty"`
-	Replicas int      `yaml:"replicas,omitempty"`
-	Command  string   `yaml:"command,omitempty"`
-	Health   string   `yaml:"health,omitempty"`
-	Server   string   `yaml:"server,omitempty"`
-	Servers  []string `yaml:"servers,omitempty"`
-	Env      []string `yaml:"env,omitempty"`
-	Secrets  []string `yaml:"secrets,omitempty"`
-	Storage  []string `yaml:"storage,omitempty"`
-	Volumes  []string `yaml:"volumes,omitempty"`
+	Image     string   `yaml:"image,omitempty"`
+	Port      int      `yaml:"port,omitempty"`
+	Replicas  int      `yaml:"replicas,omitempty"`
+	Command   string   `yaml:"command,omitempty"`
+	Health    string   `yaml:"health,omitempty"`
+	Server    string   `yaml:"server,omitempty"`
+	Servers   []string `yaml:"servers,omitempty"`
+	Env       []string `yaml:"env,omitempty"`
+	Secrets   []string `yaml:"secrets,omitempty"`
+	Storage   []string `yaml:"storage,omitempty"`
+	Volumes   []string `yaml:"volumes,omitempty"`
+	DependsOn []string `yaml:"depends_on,omitempty"` // other services that must be Ready before this one is applied
 }
 
 type CronDef struct {
