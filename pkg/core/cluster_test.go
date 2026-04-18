@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -38,13 +39,13 @@ func TestBorrowedSSH_CloseIsNoop(t *testing.T) {
 	}
 }
 
-func TestSSH_MasterSSHSet_ReturnsBorrowed(t *testing.T) {
+func TestSSH_NodeShellSet_ReturnsBorrowed(t *testing.T) {
 	mock := &testutil.MockSSH{}
 	c := clusterWithSSHFunc(nil)
-	c.MasterSSH = mock
+	c.NodeShell = mock
 
 	ctx := context.Background()
-	ssh, names, err := c.SSH(ctx)
+	ssh, names, err := c.SSH(ctx, nil)
 	if err != nil {
 		t.Fatalf("SSH(): %v", err)
 	}
@@ -52,7 +53,7 @@ func TestSSH_MasterSSHSet_ReturnsBorrowed(t *testing.T) {
 		t.Fatal("expected names")
 	}
 	if _, ok := ssh.(borrowedSSH); !ok {
-		t.Error("with MasterSSH set, SSH() should return borrowedSSH")
+		t.Error("with NodeShell set, SSH() should return borrowedSSH")
 	}
 	// Close should be a no-op
 	ssh.Close()
@@ -61,54 +62,37 @@ func TestSSH_MasterSSHSet_ReturnsBorrowed(t *testing.T) {
 	}
 }
 
-func TestSSH_MasterSSHSet_NeverConnects(t *testing.T) {
+func TestSSH_NodeShellSet_NeverConnects(t *testing.T) {
 	mock := &testutil.MockSSH{}
 	var connectCount int32
 	c := clusterWithSSHFunc(func(ctx context.Context, addr string) (utils.SSHClient, error) {
 		atomic.AddInt32(&connectCount, 1)
 		return &testutil.MockSSH{}, nil
 	})
-	c.MasterSSH = mock
+	c.NodeShell = mock
 
 	ctx := context.Background()
-	_, _, _ = c.SSH(ctx)
-	_, _, _ = c.SSH(ctx)
-	_, _, _ = c.SSH(ctx)
+	_, _, _ = c.SSH(ctx, nil)
+	_, _, _ = c.SSH(ctx, nil)
+	_, _, _ = c.SSH(ctx, nil)
 
 	if atomic.LoadInt32(&connectCount) != 0 {
-		t.Errorf("with MasterSSH set, connect should never be called, got %d", connectCount)
+		t.Errorf("with NodeShell set, connect should never be called, got %d", connectCount)
 	}
 }
 
-func TestSSH_NoMasterSSH_ConnectsFresh(t *testing.T) {
-	var connectCount int32
-	mock := &testutil.MockSSH{}
-
-	c := clusterWithSSHFunc(func(ctx context.Context, addr string) (utils.SSHClient, error) {
-		atomic.AddInt32(&connectCount, 1)
-		return mock, nil
-	})
-
-	ctx := context.Background()
-	ssh1, _, err := c.SSH(ctx)
-	if err != nil {
-		t.Fatalf("SSH() #1: %v", err)
+// TestSSH_NoNodeShell_NoProvider_Errors locks the on-demand contract:
+// Cluster.SSH() with NodeShell nil resolves via infra.NodeShell. Without
+// a Provider set, ResolveInfra fails and SSH() surfaces the error.
+func TestSSH_NoNodeShell_NoProvider_Errors(t *testing.T) {
+	c := clusterWithSSHFunc(nil)
+	c.Provider = "" // intentional: no infra provider → on-demand resolve fails
+	_, _, err := c.SSH(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error when NodeShell nil + Provider unset")
 	}
-	ssh2, _, err := c.SSH(ctx)
-	if err != nil {
-		t.Fatalf("SSH() #2: %v", err)
-	}
-
-	if atomic.LoadInt32(&connectCount) != 2 {
-		t.Errorf("without MasterSSH, each call should connect fresh, got %d", connectCount)
-	}
-
-	// Without MasterSSH, connections should NOT be borrowedSSH
-	if _, ok := ssh1.(borrowedSSH); ok {
-		t.Error("ssh1 should not be borrowedSSH")
-	}
-	if _, ok := ssh2.(borrowedSSH); ok {
-		t.Error("ssh2 should not be borrowedSSH")
+	if !strings.Contains(err.Error(), "infra provider") {
+		t.Errorf("error should mention 'infra provider', got: %v", err)
 	}
 }
 

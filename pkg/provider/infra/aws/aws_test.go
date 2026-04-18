@@ -333,25 +333,25 @@ func TestDeref32(t *testing.T) {
 	}
 }
 
-// ── ResolveCompute ────────────────────────────────────────────────────────────
+// ── ResolveInfra ────────────────────────────────────────────────────────────
 
-func TestResolveCompute(t *testing.T) {
+func TestResolveInfra(t *testing.T) {
 	// init() in register.go registers "aws" — verify it resolves with valid creds.
 	creds := map[string]string{
 		"access_key_id":     "AKIAIOSFODNN7EXAMPLE",
 		"secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		"region":            "us-east-1",
 	}
-	p, err := provider.ResolveCompute("aws", creds)
+	p, err := provider.ResolveInfra("aws", creds)
 	if err != nil {
-		t.Fatalf("ResolveCompute with valid creds: %v", err)
+		t.Fatalf("ResolveInfra with valid creds: %v", err)
 	}
 	if p == nil {
-		t.Fatal("ResolveCompute returned nil provider")
+		t.Fatal("ResolveInfra returned nil provider")
 	}
 }
 
-func TestResolveCompute_MissingCredentials(t *testing.T) {
+func TestResolveInfra_MissingCredentials(t *testing.T) {
 	tests := []struct {
 		name  string
 		creds map[string]string
@@ -376,7 +376,7 @@ func TestResolveCompute_MissingCredentials(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := provider.ResolveCompute("aws", tt.creds)
+			_, err := provider.ResolveInfra("aws", tt.creds)
 			if err == nil {
 				t.Fatal("expected error for missing credentials")
 			}

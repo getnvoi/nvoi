@@ -10,7 +10,7 @@ var Schema = provider.CredentialSchema{
 }
 
 func init() {
-	provider.RegisterCompute("hetzner", Schema, func(creds map[string]string) provider.ComputeProvider {
+	provider.RegisterInfra("hetzner", Schema, func(creds map[string]string) provider.InfraProvider {
 		return New(creds["token"])
 	})
 }

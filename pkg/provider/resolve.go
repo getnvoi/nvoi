@@ -97,11 +97,10 @@ func (s CredentialSchema) Validate(creds map[string]string) error {
 }
 
 // ── Registries ─────────────────────────────────────────────────────────────────
-
-type computeEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) ComputeProvider
-}
+//
+// ComputeProvider / RegisterCompute / ResolveCompute were deleted in C10
+// (refactor #47). InfraProvider replaces ComputeProvider; the registry
+// for it lives in infra.go.
 
 type bucketEntry struct {
 	schema  CredentialSchema
@@ -119,15 +118,11 @@ type secretsEntry struct {
 }
 
 var (
-	computeProviders = map[string]computeEntry{}
 	dnsProviders     = map[string]dnsEntry{}
 	bucketProviders  = map[string]bucketEntry{}
 	secretsProviders = map[string]secretsEntry{}
 )
 
-func RegisterCompute(name string, schema CredentialSchema, factory func(creds map[string]string) ComputeProvider) {
-	computeProviders[name] = computeEntry{schema: schema, factory: factory}
-}
 func RegisterDNS(name string, schema CredentialSchema, factory func(creds map[string]string) DNSProvider) {
 	dnsProviders[name] = dnsEntry{schema: schema, factory: factory}
 }
@@ -141,8 +136,8 @@ func RegisterSecrets(name string, schema CredentialSchema, factory func(creds ma
 // GetSchema returns the credential schema for any provider kind + name.
 func GetSchema(kind, name string) (CredentialSchema, error) {
 	switch kind {
-	case "compute":
-		return GetComputeSchema(name)
+	case "infra":
+		return GetInfraSchema(name)
 	case "dns":
 		return GetDNSSchema(name)
 	case "storage":
@@ -152,29 +147,6 @@ func GetSchema(kind, name string) (CredentialSchema, error) {
 	default:
 		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
 	}
-}
-
-func GetComputeSchema(name string) (CredentialSchema, error) {
-	entry, ok := computeProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported compute provider: %q", name)
-	}
-	return entry.schema, nil
-}
-
-// ── Resolve ────────────────────────────────────────────────────────────────────
-
-// ResolveCompute creates a compute provider with pre-resolved credentials.
-// Credentials must already be fully resolved (flag → env fallback done by caller).
-func ResolveCompute(name string, creds map[string]string) (ComputeProvider, error) {
-	entry, ok := computeProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported compute provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
 }
 
 func GetDNSSchema(name string) (CredentialSchema, error) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
@@ -13,6 +14,7 @@ func newExecCmd(rt *runtime) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return app.Exec(cmd.Context(), app.ExecRequest{
 				Cluster: rt.dc.Cluster,
+				Cfg:     config.NewView(rt.cfg),
 				Service: args[0],
 				Command: args[1:],
 			})

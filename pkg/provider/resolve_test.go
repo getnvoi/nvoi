@@ -5,48 +5,52 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// stubCompute is a minimal ComputeProvider for testing registration/resolution.
-type stubCompute struct{}
+// stubInfra is the minimal InfraProvider used by registry tests. It
+// satisfies the interface so RegisterInfra/ResolveInfra can be exercised
+// without spinning a real provider. The methods all return zero values —
+// these tests check the registry plumbing, not orchestration semantics.
+type stubInfra struct{}
 
-func (stubCompute) ValidateCredentials(context.Context) error { return nil }
-func (stubCompute) ArchForType(string) string                 { return "amd64" }
-func (stubCompute) EnsureServer(context.Context, CreateServerRequest) (*Server, error) {
+func (stubInfra) Connect(context.Context, *BootstrapContext) (*kube.Client, error) {
 	return nil, nil
 }
-func (stubCompute) DeleteServer(context.Context, DeleteServerRequest) error { return nil }
-func (stubCompute) ListServers(context.Context, map[string]string) ([]*Server, error) {
+func (stubInfra) Bootstrap(context.Context, *BootstrapContext) (*kube.Client, error) {
 	return nil, nil
 }
-func (stubCompute) DeleteFirewall(context.Context, string) error          { return nil }
-func (stubCompute) DeleteNetwork(context.Context, string) error           { return nil }
-func (stubCompute) ListAllFirewalls(context.Context) ([]*Firewall, error) { return nil, nil }
-func (stubCompute) ListAllNetworks(context.Context) ([]*Network, error)   { return nil, nil }
-func (stubCompute) EnsureVolume(context.Context, CreateVolumeRequest) (*Volume, error) {
+func (stubInfra) LiveSnapshot(context.Context, *BootstrapContext) (*LiveSnapshot, error) {
 	return nil, nil
 }
-func (stubCompute) DetachVolume(context.Context, string) error { return nil }
-func (stubCompute) DeleteVolume(context.Context, string) error { return nil }
-func (stubCompute) ListVolumes(context.Context, map[string]string) ([]*Volume, error) {
+func (stubInfra) TeardownOrphans(context.Context, *BootstrapContext) error {
+	return nil
+}
+func (stubInfra) Teardown(context.Context, *BootstrapContext, bool) error { return nil }
+func (stubInfra) IngressBinding(context.Context, *BootstrapContext, ServiceTarget) (IngressBinding, error) {
+	return IngressBinding{}, nil
+}
+func (stubInfra) HasPublicIngress() bool                                 { return false }
+func (stubInfra) ConsumesBlocks() []string                               { return nil }
+func (stubInfra) ValidateConfig(ProviderConfigView) error                { return nil }
+func (stubInfra) ListResources(context.Context) ([]ResourceGroup, error) { return nil, nil }
+func (stubInfra) NodeShell(context.Context, *BootstrapContext) (utils.SSHClient, error) {
 	return nil, nil
 }
-func (stubCompute) GetPrivateIP(context.Context, string) (string, error)                { return "", nil }
-func (stubCompute) ResizeVolume(context.Context, string, int) error                     { return nil }
-func (stubCompute) ResolveDevicePath(vol *Volume) string                                { return vol.DevicePath }
-func (stubCompute) ListResources(context.Context) ([]ResourceGroup, error)              { return nil, nil }
-func (stubCompute) ReconcileFirewallRules(context.Context, string, PortAllowList) error { return nil }
-func (stubCompute) GetFirewallRules(context.Context, string) (PortAllowList, error)     { return nil, nil }
+func (stubInfra) ValidateCredentials(context.Context) error { return nil }
+func (stubInfra) Close() error                              { return nil }
 
 func init() {
-	RegisterCompute("test-compute", CredentialSchema{
-		Name: "test-compute",
+	RegisterInfra("test-infra", CredentialSchema{
+		Name: "test-infra",
 		Fields: []CredentialField{
 			{Key: "token", Required: true, EnvVar: "TEST_TOKEN", Flag: "token"},
 			{Key: "region", Required: false, EnvVar: "TEST_REGION", Flag: "region"},
 		},
-	}, func(creds map[string]string) ComputeProvider {
-		return stubCompute{}
+	}, func(creds map[string]string) InfraProvider {
+		return stubInfra{}
 	})
 }
 
@@ -81,8 +85,8 @@ func TestCredentialSchemaValidate(t *testing.T) {
 	}
 }
 
-func TestResolveComputeValid(t *testing.T) {
-	p, err := ResolveCompute("test-compute", map[string]string{"token": "abc123"})
+func TestResolveInfraValid(t *testing.T) {
+	p, err := ResolveInfra("test-infra", map[string]string{"token": "abc123"})
 	if err != nil {
 		t.Fatalf("valid creds: got error %v, want nil", err)
 	}
@@ -91,8 +95,8 @@ func TestResolveComputeValid(t *testing.T) {
 	}
 }
 
-func TestResolveComputeInvalidCreds(t *testing.T) {
-	_, err := ResolveCompute("test-compute", map[string]string{})
+func TestResolveInfraInvalidCreds(t *testing.T) {
+	_, err := ResolveInfra("test-infra", map[string]string{})
 	if err == nil {
 		t.Fatal("invalid creds: got nil, want error")
 	}
@@ -101,8 +105,8 @@ func TestResolveComputeInvalidCreds(t *testing.T) {
 	}
 }
 
-func TestResolveComputeUnknownProvider(t *testing.T) {
-	_, err := ResolveCompute("no-such-provider", map[string]string{"token": "abc"})
+func TestResolveInfraUnknownProvider(t *testing.T) {
+	_, err := ResolveInfra("no-such-provider", map[string]string{"token": "abc"})
 	if err == nil {
 		t.Fatal("unknown provider: got nil, want error")
 	}

@@ -1,4 +1,4 @@
-// Package scaleway implements provider.ComputeProvider against the Scaleway API.
+// Package scaleway implements provider.InfraProvider against the Scaleway API.
 // Uses UUID strings for all resource IDs. Security groups map to the firewall abstraction.
 // VPC private networks are region-scoped; instances are zone-scoped.
 package scaleway
@@ -21,6 +21,10 @@ type Client struct {
 	secretKey string
 	projectID string
 	zone      string // e.g. "fr-par-1"
+
+	// shell caches the SSH connection across Bootstrap → NodeShell →
+	// end-of-deploy. See infra.go for the cache lifecycle.
+	shell utils.SSHClient
 }
 
 // New creates a Scaleway compute client from a credentials map.
@@ -198,4 +202,4 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 	return groups, nil
 }
 
-var _ provider.ComputeProvider = (*Client)(nil)
+// Compile-time satisfaction lives in infra.go (var _ provider.InfraProvider).

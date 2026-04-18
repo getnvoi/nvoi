@@ -12,7 +12,7 @@ func TestSecrets_FreshDeploy(t *testing.T) {
 	dc := testDCWithCreds(convergeMock(), "DB_PASS", "s3cret", "API_KEY", "key123")
 	cfg := &config.AppConfig{Secrets: []string{"DB_PASS", "API_KEY"}}
 
-	vals, err := Secrets(context.Background(), dc, nil, cfg)
+	vals, err := Secrets(context.Background(), dc, cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestSecrets_ReturnsValues_NoK8sWrite(t *testing.T) {
 	dc := testDCWithCreds(ssh, "DB_PASS", "s3cret")
 	cfg := &config.AppConfig{Secrets: []string{"DB_PASS"}}
 
-	vals, err := Secrets(context.Background(), dc, nil, cfg)
+	vals, err := Secrets(context.Background(), dc, cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestSecrets_MissingFromSource(t *testing.T) {
 	dc := testDCWithCreds(convergeMock())
 	cfg := &config.AppConfig{Secrets: []string{"MISSING"}}
 
-	_, err := Secrets(context.Background(), dc, nil, cfg)
+	_, err := Secrets(context.Background(), dc, cfg)
 	if err == nil || !strings.Contains(err.Error(), "MISSING") {
 		t.Fatalf("expected error for missing secret, got: %v", err)
 	}
@@ -55,10 +55,9 @@ func TestSecrets_MissingFromSource(t *testing.T) {
 
 func TestSecrets_AlreadyConverged(t *testing.T) {
 	dc := testDCWithCreds(convergeMock(), "DB_PASS", "s3cret")
-	live := &config.LiveState{}
 	cfg := &config.AppConfig{Secrets: []string{"DB_PASS"}}
 
-	vals, err := Secrets(context.Background(), dc, live, cfg)
+	vals, err := Secrets(context.Background(), dc, cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +74,7 @@ func TestSecrets_CollectsPerServiceKeys(t *testing.T) {
 		},
 	}
 
-	vals, err := Secrets(context.Background(), dc, nil, cfg)
+	vals, err := Secrets(context.Background(), dc, cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +94,7 @@ func TestSecrets_SkipsEntriesWithEquals(t *testing.T) {
 		},
 	}
 
-	vals, err := Secrets(context.Background(), dc, nil, cfg)
+	vals, err := Secrets(context.Background(), dc, cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,7 +117,7 @@ func TestSecrets_MissingPerServiceKey_SkippedAtCollection(t *testing.T) {
 		},
 	}
 
-	vals, err := Secrets(context.Background(), dc, nil, cfg)
+	vals, err := Secrets(context.Background(), dc, cfg)
 	if err != nil {
 		t.Fatalf("Secrets should not error on missing per-service key: %v", err)
 	}
@@ -133,7 +132,7 @@ func TestSecrets_MissingGlobalKey_Errors(t *testing.T) {
 		Secrets: []string{"GLOBAL_MISSING"},
 	}
 
-	_, err := Secrets(context.Background(), dc, nil, cfg)
+	_, err := Secrets(context.Background(), dc, cfg)
 	if err == nil || !strings.Contains(err.Error(), "GLOBAL_MISSING") {
 		t.Fatalf("expected error for missing global secret, got: %v", err)
 	}

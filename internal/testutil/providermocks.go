@@ -65,8 +65,8 @@ import (
 	"sync"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
-	hetznerimpl "github.com/getnvoi/nvoi/pkg/provider/compute/hetzner"
 	cloudflaredns "github.com/getnvoi/nvoi/pkg/provider/dns/cloudflare"
+	hetznerimpl "github.com/getnvoi/nvoi/pkg/provider/infra/hetzner"
 	cloudflarestorage "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
 )
 
@@ -237,11 +237,11 @@ func NewHetznerFake(t Cleanup) *HetznerFake {
 	return f
 }
 
-// Register binds this fake to a named compute provider. Real hetzner.Client,
-// pointed at f.URL. Overrides any prior registration of the same name.
+// Register binds this fake to the infra registry under the given name.
+// Real hetzner.Client pointed at f.URL. Overrides any prior registration.
 func (f *HetznerFake) Register(name string) {
 	schema := provider.CredentialSchema{Name: name}
-	provider.RegisterCompute(name, schema, func(creds map[string]string) provider.ComputeProvider {
+	provider.RegisterInfra(name, schema, func(creds map[string]string) provider.InfraProvider {
 		c := hetznerimpl.New("test-token")
 		c.APIClient().BaseURL = f.URL
 		return c

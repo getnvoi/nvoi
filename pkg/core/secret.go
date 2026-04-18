@@ -1,6 +1,10 @@
 package core
 
-import "context"
+import (
+	"context"
+
+	"github.com/getnvoi/nvoi/pkg/provider"
+)
 
 // SecretListRequest returns configured secret names.
 // Config is the source of truth — no k8s scanning.
@@ -15,12 +19,13 @@ func SecretList(_ context.Context, req SecretListRequest) ([]string, error) {
 // SecretRevealRequest reads a secret value from per-service k8s Secrets.
 type SecretRevealRequest struct {
 	Cluster
+	Cfg          provider.ProviderConfigView
 	Key          string
 	ServiceNames []string // services/crons that might hold this key
 }
 
 func SecretReveal(ctx context.Context, req SecretRevealRequest) (string, error) {
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return "", err
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/config"
@@ -129,7 +128,7 @@ func testDC(ssh *testutil.MockSSH) *config.DeployContext {
 	return dc
 }
 
-// testDCWithKube wires MasterSSH and MasterKube together for tests that need
+// testDCWithKube wires NodeShell and MasterKube together for tests that need
 // to inspect or pre-populate the kube tracker.
 func testDCWithKube(ssh *testutil.MockSSH, kf *kubefake.KubeFake) *config.DeployContext {
 	sshKey, _, _ := utils.GenerateEd25519Key()
@@ -139,7 +138,7 @@ func testDCWithKube(ssh *testutil.MockSSH, kf *kubefake.KubeFake) *config.Deploy
 			Provider: "test-compute", Credentials: map[string]string{},
 			SSHKey:     sshKey,
 			Output:     &testutil.MockOutput{},
-			MasterSSH:  ssh,
+			NodeShell:  ssh,
 			MasterKube: kf.Client,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
@@ -176,7 +175,7 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 			Provider: "test-reconcile", Credentials: map[string]string{},
 			SSHKey:     sshKey,
 			Output:     &testutil.MockOutput{},
-			MasterSSH:  ssh,
+			NodeShell:  ssh,
 			MasterKube: kf.Client,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
@@ -209,7 +208,7 @@ func testNames() *utils.Names {
 func validCfg() *config.AppConfig {
 	return &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: "test-compute"},
+		Providers: config.ProvidersDef{Infra: "test-compute"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Services:  map[string]config.ServiceDef{"web": {Image: "nginx"}},
 	}
@@ -248,104 +247,8 @@ func uploadContains(ssh *testutil.MockSSH, substr string) bool {
 	return false
 }
 
-// ── DescribeLive tests ───────────────────────────────────────────────────────
-
-func TestDescribeLive_ComputeListError_NotTreatedAsFirstDeploy(t *testing.T) {
-	// If ComputeList fails (provider API down, bad credentials), DescribeLive
-	// must NOT return (nil, nil) — that means "first deploy" and would cause
-	// duplicate server creation. It must return an error.
-	fake := testutil.NewHetznerFake(t)
-	fake.Register("test-reconcile-listerr")
-	fake.FailListServers(fmt.Errorf("API unreachable"))
-
-	sshKey, _, _ := utils.GenerateEd25519Key()
-	dc := &config.DeployContext{
-		Cluster: app.Cluster{
-			AppName: "myapp", Env: "prod",
-			Provider: "test-reconcile-listerr", Credentials: map[string]string{},
-			SSHKey: sshKey,
-			Output: &testutil.MockOutput{},
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return nil, fmt.Errorf("no SSH")
-			},
-		},
-	}
-
-	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
-	if err == nil {
-		t.Fatal("expected error when ComputeList fails, got nil — would be misinterpreted as first deploy")
-	}
-	if live != nil {
-		t.Error("live state should be nil on error")
-	}
-}
-
-func TestDescribeLive_FirstDeploy_NoServers(t *testing.T) {
-	// When ComputeList succeeds with zero servers and Describe fails (no master),
-	// that's a genuine first deploy — (nil, nil) is correct.
-	fake := testutil.NewHetznerFake(t)
-	fake.Register("test-reconcile-empty")
-
-	sshKey, _, _ := utils.GenerateEd25519Key()
-	dc := &config.DeployContext{
-		Cluster: app.Cluster{
-			AppName: "myapp", Env: "prod",
-			Provider: "test-reconcile-empty", Credentials: map[string]string{},
-			SSHKey: sshKey,
-			Output: &testutil.MockOutput{},
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return nil, fmt.Errorf("no master")
-			},
-		},
-	}
-
-	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
-	if err != nil {
-		t.Fatalf("first deploy should return nil error, got: %v", err)
-	}
-	if live != nil {
-		t.Error("first deploy should return nil live state")
-	}
-}
-
-func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
-	fake := testutil.NewHetznerFake(t)
-	fake.Register("test-reconcile-sorted")
-	// Seed in reverse alphabetical order — DescribeLive must still return sorted.
-	fake.SeedServer("nvoi-myapp-prod-worker-2", "1.2.3.6", "10.0.1.3")
-	fake.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
-	fake.SeedServer("nvoi-myapp-prod-worker-1", "1.2.3.5", "10.0.1.2")
-
-	ssh := convergeMock()
-	kf := kubefake.NewKubeFake()
-	sshKey, _, _ := utils.GenerateEd25519Key()
-	dc := &config.DeployContext{
-		Cluster: app.Cluster{
-			AppName: "myapp", Env: "prod",
-			Provider: "test-reconcile-sorted", Credentials: map[string]string{},
-			SSHKey:     sshKey,
-			Output:     &testutil.MockOutput{},
-			MasterSSH:  ssh,
-			MasterKube: kf.Client,
-			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
-				return ssh, nil
-			},
-		},
-	}
-
-	live, err := DescribeLive(context.Background(), dc, &config.AppConfig{App: "myapp", Env: "prod"})
-	if err != nil {
-		t.Fatalf("DescribeLive: %v", err)
-	}
-	if live == nil {
-		t.Fatal("expected non-nil live state")
-	}
-
-	// Servers must be sorted regardless of provider return order.
-	for i := 1; i < len(live.Servers); i++ {
-		if live.Servers[i] < live.Servers[i-1] {
-			t.Errorf("servers not sorted: %v", live.Servers)
-			break
-		}
-	}
-}
+// DescribeLive tests deleted in D3 — DescribeLive itself no longer
+// exists. Live-state lookup is now done per-step (Services / Crons
+// query kube directly, TeardownOrphans calls infra.LiveSnapshot
+// internally). The "first deploy", "API down", and "sorted" semantics
+// are exercised by the per-step paths.

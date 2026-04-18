@@ -43,7 +43,7 @@ func TestRegistries_AppliesDockerConfigJSONSecret(t *testing.T) {
 		},
 	}
 
-	if err := Registries(context.Background(), dc, nil, cfg); err != nil {
+	if err := Registries(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("Registries: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestRegistries_LiteralCredsPassThrough(t *testing.T) {
 			"registry.example.com": {Username: "ci", Password: "plaintext"},
 		},
 	}
-	if err := Registries(context.Background(), dc, nil, cfg); err != nil {
+	if err := Registries(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("Registries: %v", err)
 	}
 	sec := fetchPullSecret(t, dc)
@@ -118,7 +118,7 @@ func TestRegistries_MissingEnvVar_HardError(t *testing.T) {
 			"docker.io": {Username: "$DOCKER_USERNAME", Password: "$DOCKER_PASSWORD"},
 		},
 	}
-	err := Registries(context.Background(), dc, nil, cfg)
+	err := Registries(context.Background(), dc, cfg)
 	if err == nil {
 		t.Fatal("expected error for unresolved $VAR, got nil")
 	}
@@ -156,7 +156,7 @@ func TestRegistries_EmptyBlock_DeletesOrphanSecret(t *testing.T) {
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		// Registry intentionally omitted.
 	}
-	if err := Registries(context.Background(), dc, nil, cfg); err != nil {
+	if err := Registries(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("Registries: %v", err)
 	}
 	if sec := fetchPullSecret(t, dc); sec != nil {
@@ -172,7 +172,7 @@ func TestRegistries_EmptyBlock_NoPriorSecret_NoOp(t *testing.T) {
 		App: "myapp", Env: "prod",
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
-	if err := Registries(context.Background(), dc, nil, cfg); err != nil {
+	if err := Registries(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("no-op must not error, got: %v", err)
 	}
 }

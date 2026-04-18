@@ -1,6 +1,30 @@
-# CLAUDE.md — pkg/provider/compute
+# CLAUDE.md — pkg/provider/infra
 
-Compute providers manage servers, firewalls, networks, and volumes. All three implementations (Hetzner, AWS, Scaleway) must follow the same behavioral contract regardless of API differences.
+InfraProvider implementations. All three IaaS backends (Hetzner, AWS, Scaleway) follow the same shape: each owns its convergence end-to-end via `Bootstrap` and exposes the InfraProvider surface (`pkg/provider/infra.go`). Future non-IaaS backends (Daytona via #48, managed-k8s, etc.) live alongside in this directory.
+
+## InfraProvider impl pattern
+
+Every backend's `infra.go` implements:
+
+```
+Bootstrap(ctx, dc) (*kube.Client, error)        // converge → tail-call Connect; WRITE contract
+Connect(ctx, dc) (*kube.Client, error)          // read-only attach; used by Cluster.Kube on-demand
+LiveSnapshot(ctx, dc) (*LiveSnapshot, error)    // provider-side resource list, consumed internally by TeardownOrphans
+TeardownOrphans(ctx, dc) error                  // diff-based orphan removal; provider does its own LiveSnapshot lookup
+Teardown(ctx, dc, deleteVolumes) error          // hard nuke for bin/destroy
+IngressBinding(ctx, dc, svc) (IngressBinding, error)
+HasPublicIngress() bool
+ConsumesBlocks() []string                       // YAML blocks the validator allows
+ValidateConfig(cfg) error                       // provider-specific invariants
+ListResources(ctx) ([]ResourceGroup, error)
+NodeShell(ctx, dc) (utils.SSHClient, error)     // (nil, nil) for backends without host shell
+ValidateCredentials(ctx) error
+Close() error                                   // releases cached SSH
+```
+
+For IaaS backends, `Bootstrap` orchestrates: servers (masters first, then workers — k3s install/join + node label per server) → firewalls (per-role set) → volumes (create + SSH-mount) → master SSH dial → kube tunnel via `kube.New(ssh)`. The cached SSH from Bootstrap is returned by `NodeShell` (avoids a duplicate dial) and released by `Close`.
+
+Per-package private helpers (`provisionServer`, `applyFirewall`, `provisionVolume`, `drainAndDeleteServer`, `unmountAndDeleteVolume`, `sweepFirewalls`, `dialSSH`) are duplicated across hetzner/aws/scaleway pending consolidation into a future `pkg/provider/provisioning` sub-package. Tracked as a follow-up; doesn't block #47.
 
 ## DeleteServer contract
 

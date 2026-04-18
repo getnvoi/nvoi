@@ -6,15 +6,25 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	"github.com/getnvoi/nvoi/internal/reconcile"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// Teardown nukes external provider resources. Kubernetes resources (services,
-// crons, ingress, secrets) live on the cluster and die with the servers.
-// K8s resource management is reconcile's job, not teardown's.
-// Best-effort: continues through all resources, collects and returns all errors.
+// Teardown nukes external provider resources. Kubernetes resources
+// (services, crons, ingress, secrets) live on the cluster and die with
+// the servers — k8s resource management is reconcile's job, not
+// teardown's.
+//
+// Order:
+//
+//  1. DNS records (external, at the DNS provider — must run first so
+//     stale records don't outlive their targets while we're nuking).
+//  2. Storage buckets (only with --delete-storage; preserved by default).
+//  3. infra.Teardown — the provider does servers / firewalls / volumes
+//     (gated by --delete-volumes) / network in the right order.
+//
+// Best-effort: each step's errors are collected and surfaced together.
 func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
 	if err := cfg.Resolve(); err != nil {
 		return err
@@ -26,15 +36,29 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}
 	}
 
-	// DNS records — external, at the DNS provider
-	for _, svcName := range utils.SortedKeys(cfg.Domains) {
-		collect(app.DNSDelete(ctx, app.DNSDeleteRequest{
-			Cluster: dc.Cluster, DNS: dc.DNS,
-			Service: svcName, Domains: cfg.Domains[svcName],
-		}))
+	// DNS records — external, at the DNS provider. Direct call here
+	// (no app.DNSDelete wrapper any more — that was deleted in C10
+	// alongside the rest of the dead pkg/core wrappers). Each unroute is
+	// idempotent at the provider; missing records are not an error.
+	if dc.DNS.Name != "" && len(cfg.Domains) > 0 {
+		dns, err := provider.ResolveDNS(dc.DNS.Name, dc.DNS.Creds)
+		if err != nil {
+			collect(fmt.Errorf("resolve dns provider: %w", err))
+		} else {
+			for _, svcName := range utils.SortedKeys(cfg.Domains) {
+				dc.Cluster.Log().Command("dns", "delete", svcName)
+				for _, domain := range cfg.Domains[svcName] {
+					if err := dns.Unroute(ctx, domain); err != nil {
+						collect(fmt.Errorf("dns unroute %s: %w", domain, err))
+					} else {
+						dc.Cluster.Log().Success(fmt.Sprintf("%s deleted", domain))
+					}
+				}
+			}
+		}
 	}
 
-	// Storage buckets — external, preserved by default
+	// Storage buckets — external, preserved by default.
 	if deleteStorage {
 		for _, name := range utils.SortedKeys(cfg.Storage) {
 			collect(app.StorageEmpty(ctx, app.StorageEmptyRequest{
@@ -45,36 +69,17 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}
 	}
 
-	// Volumes — external, preserved by default
-	if deleteVolumes {
-		for _, name := range utils.SortedKeys(cfg.Volumes) {
-			collect(app.VolumeDelete(ctx, app.VolumeDeleteRequest{Cluster: dc.Cluster, Name: name}))
-		}
+	// Infra — servers, firewalls, optional volumes, network. Provider
+	// owns the order (workers before master, firewall sweep AFTER server
+	// detachment, etc.) per its DeleteServer contract.
+	bctx := config.BootstrapContext(dc, cfg)
+	prov, err := provider.ResolveInfra(bctx.ProviderName, dc.Cluster.Credentials)
+	if err != nil {
+		collect(fmt.Errorf("resolve infra provider: %w", err))
+	} else {
+		defer func() { _ = prov.Close() }()
+		collect(prov.Teardown(ctx, bctx, deleteVolumes))
 	}
-
-	// Servers — workers first, then master
-	masters, workers := reconcile.SplitServers(cfg.Servers)
-	for _, s := range workers {
-		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
-	}
-	for _, s := range masters {
-		collect(app.ComputeDelete(ctx, app.ComputeDeleteRequest{Cluster: dc.Cluster, Name: s.Name}))
-	}
-
-	// Firewalls — nuke all matching our prefix (desired=nil = delete everything)
-	names, _ := utils.NewNames(cfg.App, cfg.Env)
-	if names != nil {
-		for _, err := range app.FirewallRemoveOrphans(ctx, app.FirewallRemoveOrphansRequest{
-			Cluster: dc.Cluster,
-			Prefix:  names.Base() + "-",
-			Desired: nil,
-		}) {
-			collect(err)
-		}
-	}
-
-	// Network — always nuked
-	collect(app.NetworkDelete(ctx, app.NetworkDeleteRequest{Cluster: dc.Cluster}))
 
 	if len(errs) > 0 {
 		return fmt.Errorf("teardown completed with %d error(s):\n  %s", len(errs), strings.Join(errs, "\n  "))

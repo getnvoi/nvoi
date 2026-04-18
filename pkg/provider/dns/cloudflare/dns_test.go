@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 func testDNSClient(t *testing.T, handler http.Handler) *DNSClient {
@@ -17,9 +19,9 @@ func testDNSClient(t *testing.T, handler http.Handler) *DNSClient {
 	return c
 }
 
-func TestListARecords(t *testing.T) {
+func TestListBindings(t *testing.T) {
 	mux := http.NewServeMux()
-	// ListARecords queries both A and AAAA records
+	// ListBindings queries both A and AAAA records
 	mux.HandleFunc("/zones/zone123/dns_records", func(w http.ResponseWriter, r *http.Request) {
 		rtype := r.URL.Query().Get("type")
 		switch rtype {
@@ -42,31 +44,31 @@ func TestListARecords(t *testing.T) {
 
 	c := testDNSClient(t, mux)
 
-	records, err := c.ListARecords(context.Background())
+	bindings, err := c.ListBindings(context.Background())
 	if err != nil {
-		t.Fatalf("ListARecords: %v", err)
+		t.Fatalf("ListBindings: %v", err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("expected 2 records, got %d", len(records))
+	if len(bindings) != 2 {
+		t.Fatalf("expected 2 bindings, got %d", len(bindings))
 	}
-	if records[0].Domain != "app.example.com" {
-		t.Errorf("records[0].Domain = %q, want %q", records[0].Domain, "app.example.com")
+	if bindings[0].Domain != "app.example.com" {
+		t.Errorf("bindings[0].Domain = %q, want %q", bindings[0].Domain, "app.example.com")
 	}
-	if records[0].IP != "1.2.3.4" {
-		t.Errorf("records[0].IP = %q, want %q", records[0].IP, "1.2.3.4")
+	if bindings[0].Target != "1.2.3.4" {
+		t.Errorf("bindings[0].Target = %q, want %q", bindings[0].Target, "1.2.3.4")
 	}
-	if records[0].Type != "A" {
-		t.Errorf("records[0].Type = %q, want %q", records[0].Type, "A")
+	if bindings[0].Type != "A" {
+		t.Errorf("bindings[0].Type = %q, want %q", bindings[0].Type, "A")
 	}
-	if records[1].Domain != "api.example.com" {
-		t.Errorf("records[1].Domain = %q, want %q", records[1].Domain, "api.example.com")
+	if bindings[1].Domain != "api.example.com" {
+		t.Errorf("bindings[1].Domain = %q, want %q", bindings[1].Domain, "api.example.com")
 	}
-	if records[1].IP != "5.6.7.8" {
-		t.Errorf("records[1].IP = %q, want %q", records[1].IP, "5.6.7.8")
+	if bindings[1].Target != "5.6.7.8" {
+		t.Errorf("bindings[1].Target = %q, want %q", bindings[1].Target, "5.6.7.8")
 	}
 }
 
-func TestEnsureARecord_Creates(t *testing.T) {
+func TestRouteTo_Creates(t *testing.T) {
 	var createdRecord cfDNSRecord
 	mux := http.NewServeMux()
 	mux.HandleFunc("/zones/zone123/dns_records", func(w http.ResponseWriter, r *http.Request) {
@@ -87,8 +89,9 @@ func TestEnsureARecord_Creates(t *testing.T) {
 
 	c := testDNSClient(t, mux)
 
-	if err := c.EnsureARecord(context.Background(), "app.example.com", "9.8.7.6", false); err != nil {
-		t.Fatalf("EnsureARecord: %v", err)
+	binding := provider.IngressBinding{DNSType: "A", DNSTarget: "9.8.7.6"}
+	if err := c.RouteTo(context.Background(), "app.example.com", binding); err != nil {
+		t.Fatalf("RouteTo: %v", err)
 	}
 	if createdRecord.Content != "9.8.7.6" {
 		t.Errorf("created record content = %q, want %q", createdRecord.Content, "9.8.7.6")
@@ -101,7 +104,7 @@ func TestEnsureARecord_Creates(t *testing.T) {
 	}
 }
 
-func TestEnsureARecord_AlreadyCorrect(t *testing.T) {
+func TestRouteTo_AlreadyCorrect(t *testing.T) {
 	requestCount := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/zones/zone123/dns_records", func(w http.ResponseWriter, r *http.Request) {
@@ -122,10 +125,36 @@ func TestEnsureARecord_AlreadyCorrect(t *testing.T) {
 
 	c := testDNSClient(t, mux)
 
-	if err := c.EnsureARecord(context.Background(), "app.example.com", "1.2.3.4", false); err != nil {
-		t.Fatalf("EnsureARecord: %v", err)
+	binding := provider.IngressBinding{DNSType: "A", DNSTarget: "1.2.3.4"}
+	if err := c.RouteTo(context.Background(), "app.example.com", binding); err != nil {
+		t.Fatalf("RouteTo: %v", err)
 	}
 	if requestCount != 1 {
 		t.Errorf("expected 1 request (GET only), got %d", requestCount)
 	}
+}
+
+// TestRouteTo_RejectsCNAME locks the v1 contract: CNAME bindings are
+// reserved for the managed-k8s / tunnel-provider work (#48 / #49) and
+// must surface a clear, traceable error today rather than silently
+// fall through to A-record upsert with a hostname target.
+func TestRouteTo_RejectsCNAME(t *testing.T) {
+	c := testDNSClient(t, http.NewServeMux())
+	binding := provider.IngressBinding{DNSType: "CNAME", DNSTarget: "lb.aws.com"}
+	err := c.RouteTo(context.Background(), "api.example.com", binding)
+	if err == nil {
+		t.Fatal("expected error for CNAME binding")
+	}
+	if got := err.Error(); !contains(got, "CNAME") || !contains(got, "#48") {
+		t.Errorf("error message should mention CNAME and #48, got: %q", got)
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

@@ -11,8 +11,9 @@ The foundational engine for reconciling cloud infrastructure + Kubernetes worklo
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic, no UUIDs — the naming convention finds everything.
 - **Reconcile vs teardown.** Reconcile converges on a diff. Teardown is a hard nuke of external provider resources; k8s dies with the servers. Volumes and storage preserved by default (`--delete-volumes` / `--delete-storage` to nuke).
 - **Two-layer core.** Layer 1: provider infra (servers, firewall, volumes, DNS, buckets). Layer 2: k8s manifests (services, crons, ingress, secrets). Bound by deterministic naming. Nothing else.
-- **SSH transport + typed kube client.** One SSH connection per deploy (`MasterSSH`), one `*kube.Client` tunneled through it (`MasterKube`), shared across every reconcile step.
-- **Credentials flow through one `CredentialSource`.** Default `EnvSource` reads `os.Getenv`. When `providers.secrets` is set to `doppler | awssm | infisical`, source switches to `SecretsSource` and every credential (compute, DNS, storage, SSH key, service `$VAR`) fetches from the backend's direct API — no shell-outs.
+- **InfraProvider owns its convergence — split contract: Connect (read-only) vs Bootstrap (writes).** Every infra backend (Hetzner / AWS / Scaleway today, Daytona / managed-k8s tomorrow) implements one interface (`pkg/provider/infra.go::InfraProvider`). `reconcile.Deploy` calls `infra.Bootstrap` (drift reconciled, missing resources created). Every other CLI command (`logs`, `exec`, `describe`, `cron run`, `resources`, `ssh`) routes through `Cluster.Kube` / `Cluster.SSH` to `infra.Connect` / `infra.NodeShell` — read-only attach, no provider mutations. Reconcile never branches on provider name.
+- **SSH transport + typed kube client.** When the provider has a host shell (every IaaS), it returns one via `infra.NodeShell` — cached on `Cluster.NodeShell`. The kube client `infra.Bootstrap` (or `infra.Connect`) returns is cached on `Cluster.MasterKube`. Both shared across every reconcile step.
+- **Credentials flow through one `CredentialSource`.** Default `EnvSource` reads `os.Getenv`. When `providers.secrets` is set to `doppler | awssm | infisical`, source switches to `SecretsSource` and every credential (infra, DNS, storage, SSH key, service `$VAR`) fetches from the backend's direct API — no shell-outs.
 
 ## Build & Test
 
@@ -70,7 +71,7 @@ app: myapp
 env: production
 
 providers:
-  compute: hetzner          # hetzner | aws | scaleway
+  infra: hetzner            # hetzner | aws | scaleway (was: providers.compute, removed in #47)
   dns: cloudflare           # cloudflare | aws | scaleway
   storage: cloudflare       # cloudflare | aws | scaleway
   secrets: infisical        # optional — doppler | awssm | infisical (see Credential resolution)
@@ -124,7 +125,7 @@ domains:
 
 `ValidateConfig()` runs before touching infrastructure:
 
-- `app` and `env` required; `providers.compute` required.
+- `app` and `env` required; `providers.infra` required (the legacy `providers.compute` key was removed in #47 — use `providers.infra`).
 - At least one server, exactly one master, all have type/region/role. `disk` optional (creation-only, not resizable). Hetzner + `disk` = hard error (fixed per server type).
 - Volumes: size > 0, server exists. `server` / `servers` mutually exclusive. Multiple servers + volume = error.
 - Services/crons: `image` required (unless `build:`), referenced `storage`/`volumes` exist. Volume mounts `name:/path`, volume must be on the same server as the workload.
@@ -170,9 +171,9 @@ internal/
 
 pkg/
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
-    cluster.go             Cluster (MasterSSH, MasterKube, DeployHash), ProviderRef, Connect(), SSH(), Kube()
-    compute.go service.go dns.go storage.go secret.go volume.go cron.go
-    firewall.go ingress.go (trivial; Ingress lives in internal/reconcile)
+    cluster.go             Cluster (Provider, Credentials, NodeShell, MasterKube, DeployHash); SSH() / Kube() borrow accessors
+    service.go cron.go     ServiceSet / CronSet — kube workload appliers (KnownVolumes from caller)
+    storage.go secret.go   StorageSet / Secret resolution (no provider lookup)
     describe.go resources.go logs.go exec.go ssh.go wait.go
     build.go               BuildService + BuildRunner interface (DockerRunner in prod, fake in tests)
   kube/                    Typed Kubernetes client over SSH tunnel
@@ -187,9 +188,12 @@ pkg/
     rollout.go diagnostics.go streaming.go
   infra/                   SSH (golang.org/x/crypto/ssh + SFTP), k3s, swap, volume mounting
   provider/                Provider interfaces + per-domain implementations — see pkg/provider/CLAUDE.md
-    compute.go dns.go bucket.go secrets.go resolve.go
+    infra.go               InfraProvider interface (Bootstrap → *kube.Client) + BootstrapContext + LiveSnapshot + IngressBinding
+    dns.go                 DNSProvider — RouteTo / Unroute / ListBindings (polymorphic over A/AAAA/CNAME)
+    bucket.go secrets.go   BucketProvider / SecretsProvider
+    types.go resolve.go    Server/Volume/Firewall/Network types + RegisterX/ResolveX registries
     s3ops/ hetznerbase/ awsbase/ cfbase/ scwbase/
-    compute/{hetzner,aws,scaleway}/    — see pkg/provider/compute/CLAUDE.md
+    infra/{hetzner,aws,scaleway}/      — see pkg/provider/infra/CLAUDE.md
     dns/{cloudflare,aws,scaleway}/
     storage/{cloudflare,aws,scaleway}/
     secrets/{doppler,awssm,infisical}/ — direct-API credential backends
@@ -202,7 +206,7 @@ pkg/
 - `internal/reconcile/CLAUDE.md` — reconcile flow, step notes, edge cases
 - `internal/render/CLAUDE.md` — renderers (TUI / Plain / JSON)
 - `pkg/provider/CLAUDE.md` — provider interface + registration pattern, credential resolution
-- `pkg/provider/compute/CLAUDE.md` — DeleteServer contract shared across compute providers
+- `pkg/provider/infra/CLAUDE.md` — InfraProvider impl pattern + DeleteServer contract shared across all backends
 
 ### SSH + Kube model
 
@@ -213,7 +217,14 @@ pkg/
 - `*kube.Client` (`pkg/kube/client.go`) — typed Kubernetes client. Tunnels through `utils.SSHClient` to the apiserver. `NewForTest(cs)` wraps client-go's typed fake clientset. `Client.ExecFunc` is an injectable hook so tests capture pod-shell calls (Caddy admin API, cert/HTTPS waits) without an SPDY connection.
 - `kubefake.KubeFake` — Client + the typed fake for reconcile-level assertions. `kf.SetExec(fn)` overrides the Exec hook.
 
-**Connection lifecycle:** One SSH + one kube client per deploy. Set once after `ServersAdd()` (see `internal/reconcile/CLAUDE.md`), shared via `borrowedSSH` / no-op cleanup. `ComputeSet` uses separate per-server connections for provisioning (swap, k3s install/join). CLI dispatch path connects on-demand and closes after.
+**Connection lifecycle:** One SSH + one kube client per command. The InfraProvider owns both, with two distinct entry points:
+- `infra.Bootstrap(ctx, dc) → *kube.Client` (write) — provisions infra (servers + firewall + volumes + k3s install) and tail-calls `Connect`. `reconcile.Deploy` only.
+- `infra.Connect(ctx, dc) → *kube.Client` (read-only) — looks up existing infra, dials SSH, builds the kube tunnel. Returns `provider.ErrNotBootstrapped` when nothing's there. `Cluster.Kube` (CLI dispatch path) calls this; cost ≤500ms on existing clusters.
+- `infra.NodeShell(ctx, dc) → utils.SSHClient` returns the same SSH (cached) for `nvoi ssh`. Providers without a host shell return `(nil, nil)` and the CLI errors with an actionable message.
+- `infra.Close()` releases the cached SSH at end of command.
+- Reconcile stores both on `dc.Cluster.NodeShell` / `dc.Cluster.MasterKube` and shares them via `borrowedSSH` / no-op cleanup across every step.
+
+**On-demand contract.** `Cluster.Kube(ctx, cfg)` and `Cluster.SSH(ctx, cfg)` route to `infra.Connect` / `infra.NodeShell` when their fields are nil. Tests NEVER pre-inject `Cluster.MasterKube` or `Cluster.NodeShell` — the on-demand path is mandatory coverage. CI gate: `grep -rE 'Cluster\.MasterKube\s*=|Cluster\.NodeShell\s*=' cmd/ pkg/core/ | grep '_test\.go'` returns zero hits.
 
 SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guidance. Stale known hosts auto-cleared on server creation.
 
@@ -221,10 +232,12 @@ SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guida
 
 | Kind | YAML key | Interface | Implementations |
 |------|----------|-----------|----------------|
-| Compute | `providers.compute` | `ComputeProvider` | hetzner, aws, scaleway |
+| Infra | `providers.infra` | `InfraProvider` | hetzner, aws, scaleway (Daytona via #48) |
 | DNS | `providers.dns` | `DNSProvider` | cloudflare, aws, scaleway |
 | Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
 | Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
+
+**InfraProvider contract** (`pkg/provider/infra.go`): every backend yields a `*kube.Client` via `Bootstrap` (write — converges drift) or `Connect` (read-only — attach to existing infra). Reconcile branches on none of: provider name, IngressBinding type, NodeShell-or-not, ConsumesBlocks. Adding a new backend = implementing the interface; zero reconcile changes.
 
 ## Credential resolution
 
@@ -237,13 +250,13 @@ Every credential — provider tokens, SSH key, service `$VAR` — goes through `
 
 Scalar (`secrets: infisical`) matches the other provider keys; struct form (`secrets: {kind: ...}`) also accepted for future per-backend knobs.
 
-**Strict mode when a backend is declared:** the backend IS the source. The only escape hatch is the backend's own bootstrap creds (e.g. `INFISICAL_CLIENT_ID`+`INFISICAL_CLIENT_SECRET`+`INFISICAL_PROJECT_SLUG`) read from env. Everything else — compute / DNS / storage creds, SSH private key, service `$VAR` — resolves through the backend. Misconfigured backend → hard error at startup via `ValidateCredentials`.
+**Strict mode when a backend is declared:** the backend IS the source. The only escape hatch is the backend's own bootstrap creds (e.g. `INFISICAL_CLIENT_ID`+`INFISICAL_CLIENT_SECRET`+`INFISICAL_PROJECT_SLUG`) read from env. Everything else — infra / DNS / storage creds, SSH private key, service `$VAR` — resolves through the backend. Misconfigured backend → hard error at startup via `ValidateCredentials`.
 
 **Adapters are direct-API, never shell-outs** (Kamal shells out to vendor CLIs; nvoi calls the REST/SDK directly). See `pkg/provider/CLAUDE.md` for the registration pattern.
 
 | Credential | Env mode | Backend mode |
 |---|---|---|
-| Compute / DNS / Storage | env (schema `EnvVar`) | backend.Get(`EnvVar`) |
+| Infra / DNS / Storage | env (schema `EnvVar`) | backend.Get(`EnvVar`) |
 | Service `$VAR` in `secrets:` | env | backend.Get(`VAR`) |
 | SSH private key | `SSH_PRIVATE_KEY` → `SSH_KEY_PATH` → `~/.ssh/id_ed25519` → `~/.ssh/id_rsa` | `source.Get("SSH_PRIVATE_KEY")` → `SSH_KEY_PATH` → disk fallback |
 | Backend's own creds | — | env (bootstrap) |

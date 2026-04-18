@@ -11,7 +11,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, sources map[string]string) error {
+func Services(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, sources map[string]string) error {
 	names, _ := dc.Cluster.Names()
 
 	// Pull-secret name only when the user declared private registries.
@@ -66,12 +66,14 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			return err
 		}
 		if err := app.ServiceSet(ctx, app.ServiceSetRequest{
-			Cluster: dc.Cluster, Name: name, Image: resolvedImage,
+			Cluster: dc.Cluster, Cfg: config.NewView(cfg),
+			Name: name, Image: resolvedImage,
 			Port: svc.Port, Command: svc.Command, Replicas: replicas,
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
 			Volumes:    svc.Volumes, HealthPath: svc.Health, Servers: servers,
 			PullSecretName: pullSecret,
+			KnownVolumes:   knownVolumes(cfg),
 		}); err != nil {
 			return err
 		}
@@ -80,23 +82,32 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			kind = "statefulset"
 		}
 		if err := app.WaitRollout(ctx, app.WaitRolloutRequest{
-			Cluster: dc.Cluster, Service: name,
+			Cluster: dc.Cluster, Cfg: config.NewView(cfg),
+			Service:      name,
 			WorkloadKind: kind, HasHealthCheck: svc.Health != "",
 		}); err != nil {
 			return err
 		}
 	}
 
-	if live != nil {
-		desired := toSet(svcNames)
-		for _, name := range live.Services {
-			if !desired[name] {
-				if err := app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
-					dc.Cluster.Log().Warning(fmt.Sprintf("orphan service %s not removed: %s", name, err))
-				}
-				deleteServiceSecret(ctx, dc, names, name)
-			}
+	// Orphan workloads — query kube directly. Names present in the
+	// namespace but absent from cfg get ServiceDelete'd. (Pre-D3 this
+	// data came from the global DescribeLive's res.Workloads; now each
+	// step does its own lookup, no global state.)
+	live, err := dc.Cluster.MasterKube.ListWorkloadNames(ctx, names.KubeNamespace())
+	if err != nil {
+		dc.Cluster.Log().Warning(fmt.Sprintf("list workloads for orphan sweep: %s", err))
+		return nil
+	}
+	desired := toSet(svcNames)
+	for _, name := range live {
+		if desired[name] {
+			continue
 		}
+		if err := app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Cfg: config.NewView(cfg), Name: name}); err != nil {
+			dc.Cluster.Log().Warning(fmt.Sprintf("orphan service %s not removed: %s", name, err))
+		}
+		deleteServiceSecret(ctx, dc, names, name)
 	}
 	return nil
 }

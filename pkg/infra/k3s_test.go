@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
+	testutil "github.com/getnvoi/nvoi/internal/testutil/sshmock"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 

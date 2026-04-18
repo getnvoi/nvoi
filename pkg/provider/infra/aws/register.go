@@ -2,7 +2,9 @@ package aws
 
 import "github.com/getnvoi/nvoi/pkg/provider"
 
-var ComputeSchema = provider.CredentialSchema{
+// Schema is the AWS credential schema. Renamed from ComputeSchema in
+// C10 — the "compute" name predated the InfraProvider rename.
+var Schema = provider.CredentialSchema{
 	Name: "aws",
 	Fields: []provider.CredentialField{
 		{Key: "access_key_id", Required: true, EnvVar: "AWS_ACCESS_KEY_ID", Flag: "access-key-id"},
@@ -12,7 +14,7 @@ var ComputeSchema = provider.CredentialSchema{
 }
 
 func init() {
-	provider.RegisterCompute("aws", ComputeSchema, func(creds map[string]string) provider.ComputeProvider {
+	provider.RegisterInfra("aws", Schema, func(creds map[string]string) provider.InfraProvider {
 		return New(creds)
 	})
 }

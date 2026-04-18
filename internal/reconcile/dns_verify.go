@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -22,16 +23,27 @@ var dnsGracePeriod = 3 * time.Second
 func verifyDNSPropagation(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) {
 	out := dc.Cluster.Log()
 
-	ssh := dc.Cluster.MasterSSH
+	ssh := dc.Cluster.NodeShell
 	if ssh == nil {
 		return
 	}
 
-	master, _, _, err := dc.Cluster.Master(ctx)
+	// Get the public endpoint via InfraProvider.IngressBinding — same
+	// source the DNS step routes domains to. For IaaS providers this is
+	// the master IPv4; for managed-k8s it'd be a load-balancer hostname
+	// (we'd skip the resolve check then since DNSType wouldn't be "A").
+	bctx := config.BootstrapContext(dc, cfg)
+	infra, err := provider.ResolveInfra(bctx.ProviderName, dc.Cluster.Credentials)
 	if err != nil {
 		return
 	}
-	expectedIP := master.IPv4
+	defer func() { _ = infra.Close() }()
+
+	binding, err := infra.IngressBinding(ctx, bctx, provider.ServiceTarget{})
+	if err != nil || binding.DNSType != "A" {
+		return // CNAME / managed targets — skip propagation check
+	}
+	expectedIP := binding.DNSTarget
 
 	// Short grace period for DNS propagation.
 	select {

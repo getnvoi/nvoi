@@ -10,11 +10,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 type CronSetRequest struct {
 	Cluster
+	Cfg            provider.ProviderConfigView // forwards to Cluster.Kube for on-demand connect
 	Name           string
 	Image          string
 	Command        string
@@ -24,17 +26,23 @@ type CronSetRequest struct {
 	Schedule       string
 	Servers        []string
 	PullSecretName string // optional imagePullSecrets target; empty = pull as anonymous
+
+	// KnownVolumes is the set of provider-managed volume short-names the
+	// caller has verified exist at the provider (mirror of the same field
+	// on ServiceSetRequest). Reconcile.Crons populates from
+	// infra.LiveSnapshot.Volumes.
+	KnownVolumes []string
 }
 
 func CronSet(ctx context.Context, req CronSetRequest) error {
 	out := req.Log()
 
-	_, names, prov, err := req.Cluster.Master(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
 
-	kc, _, cleanup, err := req.Cluster.Kube(ctx)
+	kc, _, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return err
 	}
@@ -42,26 +50,21 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 
 	ns := names.KubeNamespace()
 
+	knownSet := make(map[string]bool, len(req.KnownVolumes))
+	for _, v := range req.KnownVolumes {
+		knownSet[v] = true
+	}
 	managedVolPaths := map[string]string{}
-	vols, _ := prov.ListVolumes(ctx, names.Labels())
 	for _, mount := range req.Volumes {
 		source, _, named, ok := utils.ParseVolumeMount(mount)
 		if !ok {
 			return ErrInputf("invalid volume mount %q", mount)
 		}
 		if named {
-			volName := names.Volume(source)
-			found := false
-			for _, v := range vols {
-				if v.Name == volName {
-					managedVolPaths[source] = names.VolumeMountPath(source)
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !knownSet[source] {
 				return ErrNotFound("volume", source)
 			}
+			managedVolPaths[source] = names.VolumeMountPath(source)
 		}
 	}
 
@@ -100,13 +103,14 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 
 type CronRunRequest struct {
 	Cluster
+	Cfg  provider.ProviderConfigView
 	Name string
 }
 
 func CronRun(ctx context.Context, req CronRunRequest) error {
 	out := req.Log()
 
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return err
 	}
@@ -138,6 +142,7 @@ func CronRun(ctx context.Context, req CronRunRequest) error {
 
 type CronDeleteRequest struct {
 	Cluster
+	Cfg  provider.ProviderConfigView
 	Name string
 }
 
@@ -145,7 +150,7 @@ func CronDelete(ctx context.Context, req CronDeleteRequest) error {
 	out := req.Log()
 	out.Command("cron", "delete", req.Name)
 
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if errors.Is(err, ErrNoMaster) {
 		return ErrNoMaster
 	}

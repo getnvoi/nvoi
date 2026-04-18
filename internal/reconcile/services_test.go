@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 const testNS = "nvoi-myapp-prod"
@@ -42,7 +43,7 @@ func TestServices_FreshDeploy(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !kfFor(dc).HasDeployment(testNS, "web") {
@@ -57,10 +58,14 @@ func TestServices_OrphanRemoved(t *testing.T) {
 	ssh := convergeMock()
 	dc := testDC(ssh)
 
-	// Pre-populate the fake with the orphan so Services can find it and delete.
+	// Pre-populate the fake with the orphan so Services can find it and
+	// delete. nvoi labels required — ListWorkloadNames filters by them.
 	kf := kfFor(dc)
 	existing := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "old-api", Namespace: testNS},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "old-api", Namespace: testNS,
+			Labels: map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+		},
 	}
 	if _, err := kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(), existing, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
@@ -71,9 +76,7 @@ func TestServices_OrphanRemoved(t *testing.T) {
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
-	live := &config.LiveState{Services: []string{"web", "old-api"}}
-
-	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if kf.HasDeployment(testNS, "old-api") {
@@ -104,9 +107,7 @@ func TestServices_AlreadyConverged(t *testing.T) {
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
-	live := &config.LiveState{Services: []string{"web"}}
-
-	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Still present — not nuked.
@@ -120,10 +121,13 @@ func TestServices_CompleteReplacement(t *testing.T) {
 	dc := testDC(ssh)
 	kf := kfFor(dc)
 
-	// Pre-populate orphans.
+	// Pre-populate orphans (with nvoi labels — ListWorkloadNames filters).
 	for _, name := range []string{"old-web", "old-worker"} {
 		_, err := kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(),
-			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS}},
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: testNS,
+				Labels: map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+			}},
 			metav1.CreateOptions{})
 		if err != nil {
 			t.Fatal(err)
@@ -135,9 +139,7 @@ func TestServices_CompleteReplacement(t *testing.T) {
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Services: map[string]config.ServiceDef{"new-api": {Image: "api:v2", Port: 8080}},
 	}
-	live := &config.LiveState{Services: []string{"old-web", "old-worker"}}
-
-	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, name := range []string{"old-web", "old-worker"} {
@@ -164,7 +166,7 @@ func TestServices_EveryServiceGetsRolloutWait(t *testing.T) {
 	}
 
 	// AutoReadyPods satisfies WaitRollout for every service.
-	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// All three deployments must exist — only way all three WaitRollouts
@@ -188,7 +190,7 @@ func TestServices_PerServiceSecretCreated(t *testing.T) {
 	}
 	sources := map[string]string{"WEB_SECRET": "s3cret"}
 
-	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
+	if err := Services(context.Background(), dc, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	sec := getSecret(t, dc, "web-secrets")
@@ -209,7 +211,7 @@ func TestServices_PerServiceSecretWithDollarVar(t *testing.T) {
 	}
 	sources := map[string]string{"MAIN_DATABASE_URL": "postgresql://host/db"}
 
-	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
+	if err := Services(context.Background(), dc, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	sec := getSecret(t, dc, "web-secrets")
@@ -230,7 +232,7 @@ func TestServices_PerServiceSecretComposed(t *testing.T) {
 	}
 	sources := map[string]string{"DB_USER": "admin", "DB_PASS": "secret"}
 
-	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
+	if err := Services(context.Background(), dc, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	sec := getSecret(t, dc, "web-secrets")
@@ -251,7 +253,7 @@ func TestServices_PerServiceSecretAliasedWithDollar(t *testing.T) {
 	}
 	sources := map[string]string{"BUGSINK_SECRET_KEY": "keyval"}
 
-	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
+	if err := Services(context.Background(), dc, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	sec := getSecret(t, dc, "web-secrets")
@@ -272,7 +274,7 @@ func TestServices_EnvWithDollarResolved(t *testing.T) {
 	}
 	sources := map[string]string{"HOST": "example.com"}
 
-	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
+	if err := Services(context.Background(), dc, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	dep := getDeployment(t, dc, "web")
@@ -298,7 +300,7 @@ func TestServices_EnvLiteral(t *testing.T) {
 		},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	dep := getDeployment(t, dc, "web")
@@ -334,7 +336,7 @@ func TestServices_NoSecretsDeletesPerServiceSecret(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if kf.HasSecret(testNS, "web-secrets") {
@@ -347,9 +349,12 @@ func TestServices_OrphanServiceDeletesItsSecret(t *testing.T) {
 	dc := testDC(ssh)
 	kf := kfFor(dc)
 
-	// Pre-populate orphan + its secret.
+	// Pre-populate orphan + its secret (nvoi labels for orphan listing).
 	_, _ = kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(),
-		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "old-api", Namespace: testNS}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+			Name: "old-api", Namespace: testNS,
+			Labels: map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+		}},
 		metav1.CreateOptions{})
 	_, _ = kf.Typed.CoreV1().Secrets(testNS).Create(context.Background(),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "old-api-secrets", Namespace: testNS}},
@@ -360,9 +365,7 @@ func TestServices_OrphanServiceDeletesItsSecret(t *testing.T) {
 		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 	}
-	live := &config.LiveState{Services: []string{"web", "old-api"}}
-
-	if err := Services(context.Background(), dc, live, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if kf.HasSecret(testNS, "old-api-secrets") {
@@ -386,7 +389,7 @@ func TestServices_StorageCredsInPerServiceSecret(t *testing.T) {
 		"STORAGE_ASSETS_SECRET_ACCESS_KEY": "SECRET",
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
+	if err := Services(context.Background(), dc, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	sec := getSecret(t, dc, "web-secrets")
@@ -423,7 +426,7 @@ func TestServices_AppliesInDependencyOrder(t *testing.T) {
 		},
 	}
 
-	if err := Services(context.Background(), dc, nil, cfg, nil); err != nil {
+	if err := Services(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -479,7 +482,7 @@ func TestServices_NoAutoInjection(t *testing.T) {
 	}
 	sources := map[string]string{"MAIN_DATABASE_URL": "postgresql://host/db"}
 
-	if err := Services(context.Background(), dc, nil, cfg, sources); err != nil {
+	if err := Services(context.Background(), dc, cfg, sources); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// No per-service secret because no secrets declared; no env ref either.

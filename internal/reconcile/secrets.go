@@ -50,7 +50,7 @@ func collectSecretKeys(cfg *config.AppConfig) []string {
 // Secrets resolves secret values from dc.Creds and returns them for downstream
 // $VAR resolution. No k8s writes — secrets reach the cluster only via
 // per-service k8s Secrets in the Services/Crons reconcilers.
-func Secrets(_ context.Context, dc *config.DeployContext, _ *config.LiveState, cfg *config.AppConfig) (map[string]string, error) {
+func Secrets(_ context.Context, dc *config.DeployContext, cfg *config.AppConfig) (map[string]string, error) {
 	allKeys := collectSecretKeys(cfg)
 	secretValues := make(map[string]string, len(allKeys))
 

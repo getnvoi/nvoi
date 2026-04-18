@@ -15,26 +15,29 @@ Reconcile manages provider infra AND k8s resources. Teardown only touches extern
 Deploy(ctx, dc, cfg)
   → ValidateConfig(cfg)
   → cfg.Resolve()                           — populate VolumeDef.MountPath, firewall names
+  → sync Cluster.Provider from cfg.Providers.Infra (legacy callers)
   → dc.Cluster.DeployHash = now.UTC().Format("20060102-150405")
   → Build(ctx, dc, cfg)                     — LOCAL docker login/build/push for services.X.build; PRE-infra
-  → live = DescribeLive(ctx, dc, cfg)
-  → ServersAdd(ctx, dc, live, cfg)          — create desired; orphans NOT removed yet
-  → establish MasterSSH + MasterKube
+  → infra = provider.ResolveInfra(...)      — single provider instance for the whole deploy; defer Close()
+  → kc = infra.Bootstrap(ctx, bctx)         — provisions servers + firewall + volumes; returns *kube.Client
+  → ns = infra.NodeShell(ctx, bctx)          — optional SSH for `nvoi ssh`; nil for sandbox/managed
   → kc.EnsureNamespace(app-ns)
-  → Registries(ctx, dc, live, cfg)          — resolve `registry:` creds → dockerconfigjson Secret (or orphan-delete)
-  → Firewall(ctx, dc, live, cfg)            — desired per-role set; orphans NOT removed yet
-  → Volumes(ctx, dc, live, cfg)
-  → secretValues = Secrets(ctx, dc, live, cfg)
-  → storageCreds = Storage(ctx, dc, live, cfg)
+  → Registries(ctx, dc, cfg)                — resolve `registry:` creds → dockerconfigjson Secret
+  → secretValues = Secrets(ctx, dc, cfg)
+  → storageCreds = Storage(ctx, dc, cfg)
   → sources = mergeSources(secretValues, storageCreds)
-  → Services(ctx, dc, live, cfg, sources)
-  → Crons(ctx, dc, live, cfg, sources)
-  → ServersRemoveOrphans(ctx, dc, live, cfg) — drain (Eviction API) + delete AFTER workloads moved
-  → FirewallRemoveOrphans(ctx, dc, live, cfg) — sweep AFTER servers detached firewalls
-  → DNS(ctx, dc, live, cfg)
-  → verifyDNSPropagation(ctx, dc, cfg)       — warn-only, before ACME
-  → Ingress(ctx, dc, live, cfg)              — Caddy admin-API hot-reload + per-domain cert/HTTPS waits
+  → Services(ctx, dc, cfg, sources)         — kc.ListWorkloadNames for orphan sweep, KnownVolumes from cfg
+  → Crons(ctx, dc, cfg, sources)            — kc.ListCronJobNames for orphan sweep
+  → infra.TeardownOrphans(ctx, bctx)        — drain orphan servers + sweep orphan firewalls + orphan volume delete
+  → IF infra.HasPublicIngress() && len(cfg.Domains) > 0:
+       RouteDomains(ctx, dc, cfg, infra, bctx) — dns.RouteTo(domain, infra.IngressBinding(svc))
+       verifyDNSPropagation(ctx, dc, cfg)        — warn-only, before ACME
+       Ingress(ctx, dc, cfg)                     — Caddy admin-API hot-reload + per-domain cert/HTTPS waits
 ```
+
+**Zero per-provider branching.** Adding a new infra backend = implementing
+`pkg/provider/infra.go::InfraProvider`. Reconcile branches on three gates
+only: `HasPublicIngress()`, `NodeShell != nil`, `ConsumesBlocks()`.
 
 ## Convergence pattern
 
@@ -61,24 +64,16 @@ Single-service builds serialize; multi-service builds run via `BuildParallel`. O
 
 Image tag resolution (Kamal-style, adapted): host inferred when `image:` has no host and exactly one `registry:` entry is declared; ambiguous with multiple registries; bare shortnames rejected under `build:`. User tag (if any) preserved AND suffixed with `dc.Cluster.DeployHash` → guarantees a new `image:` string every deploy so the rollout controller always restarts pods. Digest-pinned references pass through unmodified. Logic in `image.go`.
 
-### Servers split (Add / RemoveOrphans)
+### Infra (Bootstrap / LiveSnapshot / TeardownOrphans / Teardown)
 
-`servers.go`. Zero-downtime server replacement requires:
+Owned entirely by the InfraProvider — `internal/reconcile/{servers,firewall,volumes}.go` were deleted in #47-C6. The orchestration lives in `pkg/provider/infra/{hetzner,aws,scaleway}/infra.go`.
 
-1. `ServersAdd` early — new servers exist and are k3s-joined before Services/Crons move workloads.
-2. `ServersRemoveOrphans` late — drains old servers via `kc.DrainAndRemoveNode` (Eviction API, force-remove on NotReady) ONLY after Services/Crons have re-landed workloads elsewhere.
+- `infra.Bootstrap`: provisions servers (masters then workers, swap + k3s install/join + node label), firewalls (per-role set), volumes (create + SSH-mount). Returns the `*kube.Client` tunneled through the master SSH it dialed. Caches the SSH on the receiver so `infra.NodeShell` returns the same connection.
+- `infra.LiveSnapshot`: reads provider-side state (servers, volumes, firewalls) for orphan detection. Called internally by `infra.TeardownOrphans`; not invoked from reconcile.
+- `infra.TeardownOrphans`: drains orphan servers (via `Cluster.MasterKube.DrainAndRemoveNode`), sweeps orphan firewalls AFTER server detachment (Hetzner rejects `DeleteFirewall` on attached resources — `DeleteServer`'s contract detaches first), best-effort orphan volume delete (warn-on-fail).
+- `infra.Teardown`: hard nuke for `bin/destroy`. Workers → master → firewalls → network. With `--delete-volumes`, volumes nuked first; otherwise detached on server delete and preserved.
 
-`ComputeSet` is the per-server orchestrator: `EnsureServer` → resolve private IP → clear stale known host → poll SSH until `Connect` succeeds → `EnsureSwap` (proportional to actual disk, 5% clamped 512 MiB – 2 GiB) → `InstallK3sMaster` or `JoinK3sWorker` → `LabelNode` via kube client. k3s ships its own containerd; no Docker daemon is installed on hosts.
-
-### Firewall split (desired set / RemoveOrphans)
-
-`firewall.go`. Firewall reconcile is split the same way for a different reason: a cloud provider's `DeleteFirewall` fails while the firewall is still attached to a server (Hetzner returns `resource_in_use`). `DeleteServer`'s contract detaches each firewall before termination, so the orphan sweep only succeeds AFTER `ServersRemoveOrphans` has run. Running the sweep inline inside `Firewall()` used to silently leave orphan firewalls behind.
-
-`Firewall()` itself reconciles the desired per-role set (master-fw, worker-fw) and never resets rules on a pre-existing firewall (`ensureFirewall` is existence-only; rules are managed by `ReconcileFirewallRules`).
-
-### Volumes
-
-`volumes.go`. A volume is pinned to a physical server via `server:` in the config. Any workload mounting it is auto-pinned to the same server; cross-server mount = hard validate error. Volume-mounting service → StatefulSet (not Deployment). `VolumeSet` creates at the provider, then SSH-mounts (mkfs.xfs if unformatted, fstab entry, mountpoint verify). Orphans unmounted and deleted.
+A volume is pinned to a physical server via `server:` in the config. Cross-server mount = hard validate error. Volume-mounting service → StatefulSet (not Deployment).
 
 ### Registries
 
@@ -104,13 +99,13 @@ Every Deployment / StatefulSet / CronJob gets `nvoi/deploy-hash: <hash>` stamped
 
 Orphan services / crons → `ServiceDelete` / `CronDelete`. Orphan key cleanup inside `{name}-secrets` is per-key.
 
-### DNS
+### DNS (RouteDomains)
 
-`dns.go`. Pure provider API — no SSH. Creates A records pointing to the master's IPv4 (needs `Cluster.Master()` resolved). Orphan detection is per-service: a service that had domains in `live` but is gone from config → its records deleted.
+`reconcile.go::RouteDomains`. Pure provider API — no SSH. For each `(service, domain)` pair, calls `infra.IngressBinding(svc)` to learn how the provider exposes the service (IaaS: `{DNSType:"A", DNSTarget: master.IPv4}`; managed-k8s would return CNAME), then `dns.RouteTo(domain, binding)` writes the appropriate record. Orphan detection is per-service: a service that had domains in `live.Domains` but is gone from config → `dns.Unroute(domain)`. CNAME bindings rejected in v1 (tracked in #48 / #49).
 
 ### verifyDNSPropagation
 
-`dns_verify.go`. Warn-only preflight before ACME. Resolves each configured domain against public DNS; if the answer doesn't match the master IP yet, emits a warning so the operator knows the next step may legitimately wait on propagation. Never fails the deploy.
+`dns_verify.go`. Warn-only preflight before ACME. Reads expected target from `infra.IngressBinding` (skips the check entirely for non-A bindings — propagation only meaningful for IPv4/IPv6 targets). Resolves each configured domain against the master node's resolver via SSH; if the answer doesn't match, emits a warning so the operator knows the next step may legitimately wait on propagation. Never fails the deploy.
 
 ### Ingress (Caddy, not Traefik)
 
@@ -136,6 +131,16 @@ Flow:
 
 ## Testing
 
-Reconcile tests use `convergeDC(log, convergeMock())` — see `helpers_test.go`. Wires a `MockSSH` + `KubeFake`, registers HetznerFake/CloudflareFake httptest-backed provider fakes, and registers each fake in `kubeFakes` keyed by `dc` so tests assert via `kfFor(dc)`.
+Reconcile tests use `convergeDC(log, convergeMock())` — see `helpers_test.go`. Wires a `MockSSH` + `KubeFake`, registers HetznerFake httptest-backed provider fake, and registers each fake in `kubeFakes` keyed by `dc` so tests assert via `kfFor(dc)`. The pre-injected `Cluster.MasterKube = kf.Client` is propagated through `BootstrapContext.MasterKube` so `infra.Bootstrap` returns the KubeFake instead of dialing a real tunnel — tests exercise the full Deploy() path end-to-end without an SSH-tunneled apiserver.
+
+`reconcile_test.go` (the invariant suite) covers the load-bearing properties of #47:
+
+- **First deploy**: `ensure-server` op fires, namespace ensured.
+- **Idempotency**: Deploy + Deploy = no duplicate `ensure-server` ops.
+- **Orphan handling**: worker dropped from cfg gets drained + deleted AFTER master ensure.
+- **Validation gate**: missing `providers.infra` errors before any provider op.
+- **No `providers.compute` alias**: legacy YAML rejected at validation time.
+
+Each test asserts an OUTCOME (final fake state, ordering position) — not a command sequence — so assertions stay valid as orchestration evolves.
 
 Mock governance rules are in the repo-root `CLAUDE.md` — provider-mock types live in `internal/testutil/providermocks.go`, no per-test provider-interface mocks, ops asserted via `fake.Has(...)` / `Count` / `IndexOf`. Every test in this package obeys those rules.

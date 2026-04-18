@@ -29,7 +29,7 @@ import (
 // the first pod's first image pull. The secret is namespaced — same
 // namespace as the workloads — so kubelet's standard imagePullSecrets
 // lookup just works without any cluster-wide RBAC dance.
-func Registries(ctx context.Context, dc *config.DeployContext, _ *config.LiveState, cfg *config.AppConfig) error {
+func Registries(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
 	out := dc.Cluster.Log()
 	names, err := dc.Cluster.Names()
 	if err != nil {

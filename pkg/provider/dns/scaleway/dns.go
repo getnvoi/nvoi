@@ -37,28 +37,23 @@ func (d *DNSClient) ValidateCredentials(ctx context.Context) error {
 	return nil
 }
 
-func (d *DNSClient) EnsureARecord(ctx context.Context, domain, ip string, proxied bool) error {
-	name := provider.RecordName(domain, d.zone)
-	rtype := provider.RecordType(ip)
-
-	return d.patchRecords(ctx, patchRequest{
-		ReturnAllRecords: false,
-		Changes: []change{{
-			Set: &changeSet{
-				Name: name,
-				Type: rtype,
-				Records: []recordData{{
-					Name: name,
-					Data: ip,
-					Type: rtype,
-					TTL:  300,
-				}},
-			},
-		}},
-	})
+// RouteTo dispatches to A/AAAA upsert based on the binding hint. CNAME
+// is reserved for the managed-k8s / tunnel-provider work (#48 / #49)
+// and rejected here in v1.
+func (d *DNSClient) RouteTo(ctx context.Context, domain string, binding provider.IngressBinding) error {
+	switch binding.DNSType {
+	case "A", "AAAA", "":
+		return d.ensureAddress(ctx, domain, binding.DNSTarget)
+	case "CNAME":
+		return fmt.Errorf("scaleway dns: CNAME target %q for %s not supported in v1 — tracked in #48 (managed-k8s) / #49 (tunnel providers)", binding.DNSTarget, domain)
+	default:
+		return fmt.Errorf("scaleway dns: unsupported DNSType %q (want A | AAAA | CNAME)", binding.DNSType)
+	}
 }
 
-func (d *DNSClient) DeleteARecord(ctx context.Context, domain string) error {
+// Unroute removes every A/AAAA record for domain. Idempotent — the
+// Scaleway PATCH API tolerates deletes against absent records.
+func (d *DNSClient) Unroute(ctx context.Context, domain string) error {
 	name := provider.RecordName(domain, d.zone)
 	var changes []change
 	for _, rtype := range []string{"A", "AAAA"} {
@@ -72,8 +67,9 @@ func (d *DNSClient) DeleteARecord(ctx context.Context, domain string) error {
 	})
 }
 
-func (d *DNSClient) ListARecords(ctx context.Context) ([]provider.DNSRecord, error) {
-	var out []provider.DNSRecord
+// ListBindings returns every A/AAAA record in the configured zone.
+func (d *DNSClient) ListBindings(ctx context.Context) ([]provider.DNSBinding, error) {
+	var out []provider.DNSBinding
 	for _, rtype := range []string{"A", "AAAA"} {
 		records, err := d.listRecords(ctx, "", rtype)
 		if err != nil {
@@ -84,10 +80,33 @@ func (d *DNSClient) ListARecords(ctx context.Context) ([]provider.DNSRecord, err
 			if r.Name != "" && r.Name != "@" {
 				domain = r.Name + "." + d.zone
 			}
-			out = append(out, provider.DNSRecord{Domain: domain, IP: r.Data, Type: r.Type})
+			out = append(out, provider.DNSBinding{Domain: domain, Target: r.Data, Type: r.Type})
 		}
 	}
 	return out, nil
+}
+
+// ensureAddress is the internal A/AAAA upsert used by RouteTo. Record
+// type auto-detected from target IP literal.
+func (d *DNSClient) ensureAddress(ctx context.Context, domain, target string) error {
+	name := provider.RecordName(domain, d.zone)
+	rtype := provider.RecordType(target)
+
+	return d.patchRecords(ctx, patchRequest{
+		ReturnAllRecords: false,
+		Changes: []change{{
+			Set: &changeSet{
+				Name: name,
+				Type: rtype,
+				Records: []recordData{{
+					Name: name,
+					Data: target,
+					Type: rtype,
+					TTL:  300,
+				}},
+			},
+		}},
+	})
 }
 
 // ── API types ────────────────────────────────────────────────────────────────────
@@ -144,13 +163,13 @@ func (d *DNSClient) patchRecords(ctx context.Context, req patchRequest) error {
 }
 
 func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
-	records, err := d.ListARecords(ctx)
+	bindings, err := d.ListBindings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	g := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "IP"}}
-	for _, r := range records {
-		g.Rows = append(g.Rows, []string{r.Type, r.Domain, r.IP})
+	g := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "Target"}}
+	for _, b := range bindings {
+		g.Rows = append(g.Rows, []string{b.Type, b.Domain, b.Target})
 	}
 	return []provider.ResourceGroup{g}, nil
 }

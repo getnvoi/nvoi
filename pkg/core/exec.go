@@ -4,10 +4,12 @@ import (
 	"context"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 type ExecRequest struct {
 	Cluster
+	Cfg     provider.ProviderConfigView
 	Service string
 	Command []string
 }
@@ -15,7 +17,7 @@ type ExecRequest struct {
 // Exec runs a command in the first pod of a service. Streams stdout+stderr
 // to the request's Output writer; no shell quoting, no kubectl wrapper.
 func Exec(ctx context.Context, req ExecRequest) error {
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return err
 	}

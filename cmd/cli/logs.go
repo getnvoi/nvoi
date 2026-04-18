@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 )
@@ -18,6 +19,7 @@ func newLogsCmd(rt *runtime) *cobra.Command {
 			timestamps, _ := cmd.Flags().GetBool("timestamps")
 			return app.Logs(cmd.Context(), app.LogsRequest{
 				Cluster:    rt.dc.Cluster,
+				Cfg:        config.NewView(rt.cfg),
 				Service:    args[0],
 				Follow:     follow,
 				Tail:       tail,

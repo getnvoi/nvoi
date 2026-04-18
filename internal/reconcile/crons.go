@@ -10,7 +10,7 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig, sources map[string]string) error {
+func Crons(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, sources map[string]string) error {
 	names, _ := dc.Cluster.Names()
 
 	pullSecret := ""
@@ -47,27 +47,35 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 		}
 
 		if err := app.CronSet(ctx, app.CronSetRequest{
-			Cluster: dc.Cluster, Name: name, Image: cron.Image,
+			Cluster: dc.Cluster, Cfg: config.NewView(cfg),
+			Name: name, Image: cron.Image,
 			Command:    cron.Command,
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
 			Volumes:    cron.Volumes,
 			Schedule:   cron.Schedule, Servers: servers,
 			PullSecretName: pullSecret,
+			KnownVolumes:   knownVolumes(cfg),
 		}); err != nil {
 			return err
 		}
 	}
-	if live != nil {
-		desired := toSet(cronNames)
-		for _, name := range live.Crons {
-			if !desired[name] {
-				if err := app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
-					dc.Cluster.Log().Warning(fmt.Sprintf("orphan cron %s not removed: %s", name, err))
-				}
-				deleteServiceSecret(ctx, dc, names, name)
-			}
+
+	// Orphan cronjobs — query kube directly. Same pattern as Services.
+	live, err := dc.Cluster.MasterKube.ListCronJobNames(ctx, names.KubeNamespace())
+	if err != nil {
+		dc.Cluster.Log().Warning(fmt.Sprintf("list cronjobs for orphan sweep: %s", err))
+		return nil
+	}
+	desired := toSet(cronNames)
+	for _, name := range live {
+		if desired[name] {
+			continue
 		}
+		if err := app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Cfg: config.NewView(cfg), Name: name}); err != nil {
+			dc.Cluster.Log().Warning(fmt.Sprintf("orphan cron %s not removed: %s", name, err))
+		}
+		deleteServiceSecret(ctx, dc, names, name)
 	}
 	return nil
 }

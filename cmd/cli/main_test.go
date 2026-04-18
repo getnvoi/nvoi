@@ -26,7 +26,7 @@ func TestMissingConfig(t *testing.T) {
 func TestDeploy_ValidationError(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "nvoi.yaml")
-	// Config with app+env but no providers.compute — ValidateConfig rejects it.
+	// Config with app+env but no providers.infra — ValidateConfig rejects it.
 	if err := os.WriteFile(cfgPath, []byte("app: test\nenv: dev\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestDeploy_ValidationError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "providers.compute is required") {
+	if !strings.Contains(err.Error(), "providers.infra is required") {
 		t.Fatalf("error = %q, want validation error from deploy path", err.Error())
 	}
 }
