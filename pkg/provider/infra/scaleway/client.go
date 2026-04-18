@@ -21,6 +21,10 @@ type Client struct {
 	secretKey string
 	projectID string
 	zone      string // e.g. "fr-par-1"
+
+	// shell caches the SSH connection across Bootstrap → NodeShell →
+	// end-of-deploy. See infra.go for the cache lifecycle.
+	shell utils.SSHClient
 }
 
 // New creates a Scaleway compute client from a credentials map.
