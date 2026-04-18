@@ -141,6 +141,8 @@ func RegisterSecrets(name string, schema CredentialSchema, factory func(creds ma
 // GetSchema returns the credential schema for any provider kind + name.
 func GetSchema(kind, name string) (CredentialSchema, error) {
 	switch kind {
+	case "infra":
+		return GetInfraSchema(name)
 	case "compute":
 		return GetComputeSchema(name)
 	case "dns":
