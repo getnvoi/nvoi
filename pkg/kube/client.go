@@ -71,13 +71,33 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// NewFromConfig builds a Client from a pre-constructed *rest.Config. This is
+// the shared core every constructor funnels through — it owns nothing except
+// the typed clientset, has no SSH tunnel, and Close() is a no-op until a
+// caller (e.g. New) attaches a cleanup via setCleanup.
+//
+// Use this directly when the cluster's apiserver is reachable without an SSH
+// tunnel: managed Kubernetes (GKE/EKS/AKS), Talos, or any provider that hands
+// back a kubeconfig pointing at a public endpoint. SSH-tunneled callers go
+// through New(ctx, ssh) which builds the rest.Config and then delegates here.
+func NewFromConfig(cfg *rest.Config) (*Client, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil rest.Config")
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes clientset: %w", err)
+	}
+	return &Client{cs: cs, cfg: cfg}, nil
+}
+
 // New builds a Client by:
 //  1. SFTP-fetching the deploy-user kubeconfig from the master,
 //  2. Opening an SSH-tunneled TCP listener on a free localhost port,
 //  3. Rewriting kubeconfig.server to point at the tunnel,
 //  4. Setting TLSClientConfig.ServerName to the original apiserver host so
 //     cert validation still works against the SAN list,
-//  5. Building the typed clientset.
+//  5. Delegating to NewFromConfig and attaching the tunnel cleanup.
 //
 // Caller must call Close() when done with the client.
 func New(ctx context.Context, ssh utils.SSHClient) (*Client, error) {
@@ -103,20 +123,15 @@ func New(ctx context.Context, ssh utils.SSHClient) (*Client, error) {
 		return nil, err
 	}
 
-	cs, err := kubernetes.NewForConfig(cfg)
+	c, err := NewFromConfig(cfg)
 	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("kubernetes clientset: %w", err)
+		return nil, err
 	}
-
-	c := &Client{
-		cs:       cs,
-		cfg:      cfg,
-		cleanup:  cleanup,
-		apiHost:  apiHost,
-		tunnel:   tunnel,
-		masterIP: hostOnly(apiHost),
-	}
+	c.cleanup = cleanup
+	c.apiHost = apiHost
+	c.tunnel = tunnel
+	c.masterIP = hostOnly(apiHost)
 	return c, nil
 }
 
