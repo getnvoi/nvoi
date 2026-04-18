@@ -14,10 +14,10 @@ import (
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 
-	// Compute
-	_ "github.com/getnvoi/nvoi/pkg/provider/compute/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/compute/hetzner"
-	_ "github.com/getnvoi/nvoi/pkg/provider/compute/scaleway"
+	// Infra
+	_ "github.com/getnvoi/nvoi/pkg/provider/infra/aws"
+	_ "github.com/getnvoi/nvoi/pkg/provider/infra/hetzner"
+	_ "github.com/getnvoi/nvoi/pkg/provider/infra/scaleway"
 	// DNS
 	_ "github.com/getnvoi/nvoi/pkg/provider/dns/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/dns/cloudflare"

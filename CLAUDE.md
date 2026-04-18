@@ -189,7 +189,7 @@ pkg/
   provider/                Provider interfaces + per-domain implementations — see pkg/provider/CLAUDE.md
     compute.go dns.go bucket.go secrets.go resolve.go
     s3ops/ hetznerbase/ awsbase/ cfbase/ scwbase/
-    compute/{hetzner,aws,scaleway}/    — see pkg/provider/compute/CLAUDE.md
+    infra/{hetzner,aws,scaleway}/      — see pkg/provider/infra/CLAUDE.md
     dns/{cloudflare,aws,scaleway}/
     storage/{cloudflare,aws,scaleway}/
     secrets/{doppler,awssm,infisical}/ — direct-API credential backends
@@ -202,7 +202,7 @@ pkg/
 - `internal/reconcile/CLAUDE.md` — reconcile flow, step notes, edge cases
 - `internal/render/CLAUDE.md` — renderers (TUI / Plain / JSON)
 - `pkg/provider/CLAUDE.md` — provider interface + registration pattern, credential resolution
-- `pkg/provider/compute/CLAUDE.md` — DeleteServer contract shared across compute providers
+- `pkg/provider/infra/CLAUDE.md` — DeleteServer contract shared across infra providers
 
 ### SSH + Kube model
 

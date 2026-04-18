@@ -1,4 +1,4 @@
-# CLAUDE.md — pkg/provider/compute
+# CLAUDE.md — pkg/provider/infra
 
 Compute providers manage servers, firewalls, networks, and volumes. All three implementations (Hetzner, AWS, Scaleway) must follow the same behavioral contract regardless of API differences.
 

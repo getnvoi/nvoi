@@ -65,8 +65,8 @@ import (
 	"sync"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
-	hetznerimpl "github.com/getnvoi/nvoi/pkg/provider/compute/hetzner"
 	cloudflaredns "github.com/getnvoi/nvoi/pkg/provider/dns/cloudflare"
+	hetznerimpl "github.com/getnvoi/nvoi/pkg/provider/infra/hetzner"
 	cloudflarestorage "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
 )
 

@@ -7,12 +7,12 @@ import (
 
 	// Blank imports — same as cmd/cli/main.go. If any are missing there,
 	// this test reminds you to add them.
-	_ "github.com/getnvoi/nvoi/pkg/provider/compute/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/compute/hetzner"
-	_ "github.com/getnvoi/nvoi/pkg/provider/compute/scaleway"
 	_ "github.com/getnvoi/nvoi/pkg/provider/dns/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/dns/cloudflare"
 	_ "github.com/getnvoi/nvoi/pkg/provider/dns/scaleway"
+	_ "github.com/getnvoi/nvoi/pkg/provider/infra/aws"
+	_ "github.com/getnvoi/nvoi/pkg/provider/infra/hetzner"
+	_ "github.com/getnvoi/nvoi/pkg/provider/infra/scaleway"
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
 )
