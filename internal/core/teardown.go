@@ -36,12 +36,26 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}
 	}
 
-	// DNS records — external, at the DNS provider.
-	for _, svcName := range utils.SortedKeys(cfg.Domains) {
-		collect(app.DNSDelete(ctx, app.DNSDeleteRequest{
-			Cluster: dc.Cluster, DNS: dc.DNS,
-			Service: svcName, Domains: cfg.Domains[svcName],
-		}))
+	// DNS records — external, at the DNS provider. Direct call here
+	// (no app.DNSDelete wrapper any more — that was deleted in C10
+	// alongside the rest of the dead pkg/core wrappers). Each unroute is
+	// idempotent at the provider; missing records are not an error.
+	if dc.DNS.Name != "" && len(cfg.Domains) > 0 {
+		dns, err := provider.ResolveDNS(dc.DNS.Name, dc.DNS.Creds)
+		if err != nil {
+			collect(fmt.Errorf("resolve dns provider: %w", err))
+		} else {
+			for _, svcName := range utils.SortedKeys(cfg.Domains) {
+				dc.Cluster.Log().Command("dns", "delete", svcName)
+				for _, domain := range cfg.Domains[svcName] {
+					if err := dns.Unroute(ctx, domain); err != nil {
+						collect(fmt.Errorf("dns unroute %s: %w", domain, err))
+					} else {
+						dc.Cluster.Log().Success(fmt.Sprintf("%s deleted", domain))
+					}
+				}
+			}
+		}
 	}
 
 	// Storage buckets — external, preserved by default.

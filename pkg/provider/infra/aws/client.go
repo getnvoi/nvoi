@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/provider/awsbase"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -85,4 +84,4 @@ func tagSpec(resourceType ec2types.ResourceType, name string, labels map[string]
 	}
 }
 
-var _ provider.ComputeProvider = (*Client)(nil)
+// Compile-time satisfaction lives in infra.go (var _ provider.InfraProvider).

@@ -91,11 +91,12 @@ func TestCronSet_SvcSecretsInManifest(t *testing.T) {
 func TestCronSet_ResolvesNamedManagedVolumes(t *testing.T) {
 	kc := testKube()
 	err := CronSet(context.Background(), CronSetRequest{
-		Cluster:  testCronCluster(kc),
-		Name:     "backup",
-		Image:    "busybox",
-		Schedule: "0 1 * * *",
-		Volumes:  []string{"pgdata:/data"},
+		Cluster:      testCronCluster(kc),
+		Name:         "backup",
+		Image:        "busybox",
+		Schedule:     "0 1 * * *",
+		Volumes:      []string{"pgdata:/data"},
+		KnownVolumes: []string{"pgdata"}, // caller's responsibility post-#47
 	})
 	if err != nil {
 		t.Fatalf("CronSet: %v", err)

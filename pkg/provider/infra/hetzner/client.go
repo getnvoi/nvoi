@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/provider/hetznerbase"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
@@ -50,4 +49,4 @@ func (c *Client) ArchForType(t string) string {
 	return "amd64"
 }
 
-var _ provider.ComputeProvider = (*Client)(nil)
+// Compile-time satisfaction lives in infra.go (var _ provider.InfraProvider).

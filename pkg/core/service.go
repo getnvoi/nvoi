@@ -24,6 +24,13 @@ type ServiceSetRequest struct {
 	HealthPath     string
 	Servers        []string
 	PullSecretName string // optional imagePullSecrets target; empty = pull as anonymous
+
+	// KnownVolumes is the set of provider-managed volume short-names
+	// (config keys, NOT prefixed names) the caller has already verified
+	// exist at the provider. ServiceSet validates that every named volume
+	// mount references one of these — no provider call here, the caller
+	// (reconcile.Services) populates it from infra.LiveSnapshot.Volumes.
+	KnownVolumes []string
 }
 
 func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
@@ -33,7 +40,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return ErrInput("--image is required")
 	}
 
-	_, names, prov, err := req.Cluster.Master(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
@@ -46,29 +53,26 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 
 	ns := names.KubeNamespace()
 
-	// Resolve volumes — named volumes must exist as provider volumes
+	// Resolve volumes — named volumes must be in the caller's KnownVolumes
+	// list (populated from infra.LiveSnapshot). The provider isn't asked
+	// here; that lookup is the reconciler's job.
+	knownSet := make(map[string]bool, len(req.KnownVolumes))
+	for _, v := range req.KnownVolumes {
+		knownSet[v] = true
+	}
 	managedVolPaths := map[string]string{}
 	managed := false
-	vols, _ := prov.ListVolumes(ctx, names.Labels())
 	for _, mount := range req.Volumes {
 		source, _, named, ok := utils.ParseVolumeMount(mount)
 		if !ok {
 			return ErrInputf("invalid volume mount %q", mount)
 		}
 		if named {
-			volName := names.Volume(source)
-			found := false
-			for _, v := range vols {
-				if v.Name == volName {
-					managedVolPaths[source] = names.VolumeMountPath(source)
-					managed = true
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !knownSet[source] {
 				return ErrNotFound("volume", source)
 			}
+			managedVolPaths[source] = names.VolumeMountPath(source)
+			managed = true
 		}
 	}
 

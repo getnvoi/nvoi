@@ -72,6 +72,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			SvcSecrets: svcSecretRefs,
 			Volumes:    svc.Volumes, HealthPath: svc.Health, Servers: servers,
 			PullSecretName: pullSecret,
+			KnownVolumes:   knownVolumes(live, cfg),
 		}); err != nil {
 			return err
 		}

@@ -2,7 +2,9 @@ package scaleway
 
 import "github.com/getnvoi/nvoi/pkg/provider"
 
-var ComputeSchema = provider.CredentialSchema{
+// Schema is the Scaleway credential schema. Renamed from ComputeSchema
+// in C10 — the "compute" name predated the InfraProvider rename.
+var Schema = provider.CredentialSchema{
 	Name: "scaleway",
 	Fields: []provider.CredentialField{
 		{Key: "secret_key", Required: true, EnvVar: "SCW_SECRET_KEY", Flag: "secret-key"},
@@ -11,14 +13,7 @@ var ComputeSchema = provider.CredentialSchema{
 }
 
 func init() {
-	// Both registries point at the same *Client during the InfraProvider
-	// rollout. RegisterCompute keeps reconcile / pkg/core's legacy path
-	// working until C6 swaps it out. RegisterCompute is removed in C10.
-	factory := func(creds map[string]string) *Client { return New(creds) }
-	provider.RegisterCompute("scaleway", ComputeSchema, func(creds map[string]string) provider.ComputeProvider {
-		return factory(creds)
-	})
-	provider.RegisterInfra("scaleway", ComputeSchema, func(creds map[string]string) provider.InfraProvider {
-		return factory(creds)
+	provider.RegisterInfra("scaleway", Schema, func(creds map[string]string) provider.InfraProvider {
+		return New(creds)
 	})
 }

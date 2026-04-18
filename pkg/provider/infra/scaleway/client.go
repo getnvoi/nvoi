@@ -1,4 +1,4 @@
-// Package scaleway implements provider.ComputeProvider against the Scaleway API.
+// Package scaleway implements provider.InfraProvider against the Scaleway API.
 // Uses UUID strings for all resource IDs. Security groups map to the firewall abstraction.
 // VPC private networks are region-scoped; instances are zone-scoped.
 package scaleway
@@ -202,4 +202,4 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 	return groups, nil
 }
 
-var _ provider.ComputeProvider = (*Client)(nil)
+// Compile-time satisfaction lives in infra.go (var _ provider.InfraProvider).

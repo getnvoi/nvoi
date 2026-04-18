@@ -16,7 +16,7 @@ func newResourcesCmd(rt *runtime) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			j, _ := cmd.Flags().GetBool("json")
 			groups, err := app.Resources(cmd.Context(), app.ResourcesRequest{
-				Compute: app.ProviderRef{Name: rt.dc.Cluster.Provider, Creds: rt.dc.Cluster.Credentials},
+				Infra:   app.ProviderRef{Name: rt.dc.Cluster.Provider, Creds: rt.dc.Cluster.Credentials},
 				DNS:     rt.dc.DNS,
 				Storage: rt.dc.Storage,
 			})

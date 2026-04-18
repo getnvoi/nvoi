@@ -121,6 +121,29 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	return state, nil
 }
 
+// knownVolumes returns the union of provider-managed volume short-names
+// the caller's pkg/core wrappers (ServiceSet/CronSet) can trust to exist.
+// Source: live.Volumes (snapshot from infra) + cfg.Volumes (about to be
+// created by Bootstrap if not yet present). The union covers the
+// already-converged case AND the first-deploy case where the volume is
+// in cfg but not yet in live.
+func knownVolumes(live *config.LiveState, cfg *config.AppConfig) []string {
+	seen := make(map[string]bool)
+	if live != nil {
+		for _, v := range live.Volumes {
+			seen[v] = true
+		}
+	}
+	for name := range cfg.Volumes {
+		seen[name] = true
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	return out
+}
+
 // liveFromSnapshot builds a LiveState skeleton from the provider snapshot.
 // Returns a populated struct with empty kube-side fields ready to merge.
 func liveFromSnapshot(snap *provider.LiveSnapshot) *config.LiveState {

@@ -2,14 +2,20 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
-	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// ErrNoMaster is returned by CLI dispatch helpers (Service/CronDelete)
+// when the cluster has been torn down — there's no master to reach for
+// kube tunnel. Callers (and the renderer in internal/render/delete.go)
+// treat this as idempotent success: "cluster gone, nothing to delete."
+var ErrNoMaster = errors.New("no master server found")
 
 // borrowedSSH wraps a shared connection with a no-op Close.
 // Callers defer ssh.Close() — when the connection is shared (NodeShell),
@@ -105,54 +111,22 @@ func (c *Cluster) Names() (*utils.Names, error) {
 	return utils.NewNames(c.AppName, c.Env)
 }
 
-// Compute resolves the compute provider.
-func (c *Cluster) Compute() (provider.ComputeProvider, error) {
-	return provider.ResolveCompute(c.Provider, c.Credentials)
-}
-
-// Master finds the master server via provider API.
-func (c *Cluster) Master(ctx context.Context) (*provider.Server, *utils.Names, provider.ComputeProvider, error) {
+// SSH returns the borrowed SSH client to the host node. Caller owns the
+// reference but must NOT Close it (no-op). Returns an error if NodeShell
+// is nil — the CLI dispatch path is responsible for resolving the
+// InfraProvider and populating NodeShell BEFORE calling this (see
+// cmd/cli/ssh.go's nil-check). Reconcile populates NodeShell during
+// Deploy. No on-demand fallback any more — the InfraProvider's
+// NodeShell method is the single dialer.
+func (c *Cluster) SSH(ctx context.Context) (utils.SSHClient, *utils.Names, error) {
+	if c.NodeShell == nil {
+		return nil, nil, fmt.Errorf("no node shell available — caller must populate Cluster.NodeShell via infra.NodeShell before SSH()")
+	}
 	names, err := c.Names()
 	if err != nil {
-		return nil, nil, nil, err
-	}
-	prov, err := c.Compute()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	master, err := FindMaster(ctx, prov, names)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return master, names, prov, nil
-}
-
-// SSH returns an SSH client to the host node.
-//
-// When NodeShell is set (reconcile path): returns a borrowed reference
-// with no-op Close. The connection is owned by the reconciler.
-//
-// When NodeShell is nil (API dispatch): connects fresh via connect().
-// Caller owns the connection and must close it.
-func (c *Cluster) SSH(ctx context.Context) (utils.SSHClient, *utils.Names, error) {
-	if c.NodeShell != nil {
-		names, err := c.Names()
-		if err != nil {
-			return nil, nil, err
-		}
-		return borrowedSSH{c.NodeShell}, names, nil
-	}
-
-	// On-demand: find master, connect, caller owns connection.
-	master, names, _, err := c.Master(ctx)
-	if err != nil {
 		return nil, nil, err
 	}
-	conn, err := c.Connect(ctx, master.IPv4+":22")
-	if err != nil {
-		return nil, nil, err
-	}
-	return conn, names, nil
+	return borrowedSSH{c.NodeShell}, names, nil
 }
 
 // Connect opens an SSH connection using SSHFunc or the default infra.ConnectSSH.

@@ -10,16 +10,7 @@ var Schema = provider.CredentialSchema{
 }
 
 func init() {
-	// Both registries point at the same *Client during the InfraProvider
-	// rollout. RegisterCompute keeps reconcile / pkg/core's legacy path
-	// working until C6 swaps it out; RegisterInfra is the new surface that
-	// downstream code switches to. RegisterCompute is removed in C10
-	// alongside the ComputeProvider interface deletion.
-	factory := func(creds map[string]string) *Client { return New(creds["token"]) }
-	provider.RegisterCompute("hetzner", Schema, func(creds map[string]string) provider.ComputeProvider {
-		return factory(creds)
-	})
 	provider.RegisterInfra("hetzner", Schema, func(creds map[string]string) provider.InfraProvider {
-		return factory(creds)
+		return New(creds["token"])
 	})
 }

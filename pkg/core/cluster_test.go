@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -80,35 +81,20 @@ func TestSSH_NodeShellSet_NeverConnects(t *testing.T) {
 	}
 }
 
-func TestSSH_NoNodeShell_ConnectsFresh(t *testing.T) {
-	var connectCount int32
-	mock := &testutil.MockSSH{}
-
-	c := clusterWithSSHFunc(func(ctx context.Context, addr string) (utils.SSHClient, error) {
-		atomic.AddInt32(&connectCount, 1)
-		return mock, nil
-	})
-
-	ctx := context.Background()
-	ssh1, _, err := c.SSH(ctx)
-	if err != nil {
-		t.Fatalf("SSH() #1: %v", err)
+// TestSSH_NoNodeShell_Errors locks the C10 contract: Cluster.SSH() no
+// longer has an on-demand fallback. The CLI dispatch path is responsible
+// for resolving the InfraProvider and populating NodeShell BEFORE calling
+// SSH(); reconcile populates it during Deploy. Pre-#47 this would have
+// silently dialed via SSHFunc — that's now an error so misuse surfaces.
+func TestSSH_NoNodeShell_Errors(t *testing.T) {
+	c := clusterWithSSHFunc(nil)
+	// NodeShell intentionally nil.
+	_, _, err := c.SSH(context.Background())
+	if err == nil {
+		t.Fatal("expected error when NodeShell is nil")
 	}
-	ssh2, _, err := c.SSH(ctx)
-	if err != nil {
-		t.Fatalf("SSH() #2: %v", err)
-	}
-
-	if atomic.LoadInt32(&connectCount) != 2 {
-		t.Errorf("without NodeShell, each call should connect fresh, got %d", connectCount)
-	}
-
-	// Without NodeShell, connections should NOT be borrowedSSH
-	if _, ok := ssh1.(borrowedSSH); ok {
-		t.Error("ssh1 should not be borrowedSSH")
-	}
-	if _, ok := ssh2.(borrowedSSH); ok {
-		t.Error("ssh2 should not be borrowedSSH")
+	if !strings.Contains(err.Error(), "no node shell available") {
+		t.Errorf("error should mention 'no node shell available', got: %v", err)
 	}
 }
 

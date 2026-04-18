@@ -54,6 +54,7 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 			Volumes:    cron.Volumes,
 			Schedule:   cron.Schedule, Servers: servers,
 			PullSecretName: pullSecret,
+			KnownVolumes:   knownVolumes(live, cfg),
 		}); err != nil {
 			return err
 		}

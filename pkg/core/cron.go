@@ -24,12 +24,18 @@ type CronSetRequest struct {
 	Schedule       string
 	Servers        []string
 	PullSecretName string // optional imagePullSecrets target; empty = pull as anonymous
+
+	// KnownVolumes is the set of provider-managed volume short-names the
+	// caller has verified exist at the provider (mirror of the same field
+	// on ServiceSetRequest). Reconcile.Crons populates from
+	// infra.LiveSnapshot.Volumes.
+	KnownVolumes []string
 }
 
 func CronSet(ctx context.Context, req CronSetRequest) error {
 	out := req.Log()
 
-	_, names, prov, err := req.Cluster.Master(ctx)
+	names, err := req.Cluster.Names()
 	if err != nil {
 		return err
 	}
@@ -42,26 +48,21 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 
 	ns := names.KubeNamespace()
 
+	knownSet := make(map[string]bool, len(req.KnownVolumes))
+	for _, v := range req.KnownVolumes {
+		knownSet[v] = true
+	}
 	managedVolPaths := map[string]string{}
-	vols, _ := prov.ListVolumes(ctx, names.Labels())
 	for _, mount := range req.Volumes {
 		source, _, named, ok := utils.ParseVolumeMount(mount)
 		if !ok {
 			return ErrInputf("invalid volume mount %q", mount)
 		}
 		if named {
-			volName := names.Volume(source)
-			found := false
-			for _, v := range vols {
-				if v.Name == volName {
-					managedVolPaths[source] = names.VolumeMountPath(source)
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !knownSet[source] {
 				return ErrNotFound("volume", source)
 			}
+			managedVolPaths[source] = names.VolumeMountPath(source)
 		}
 	}
 
