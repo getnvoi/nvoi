@@ -240,3 +240,34 @@ func TestInvariant_NoProviderBranching(t *testing.T) {
 	// invariant is intentional.
 	t.Skip("static check — see acceptance criterion #6 in issue #47; CI grep gate enforces")
 }
+
+// TestInvariant_DeployDoesReconcileDrift is the counterpart to the
+// CLI dispatch drift test (cmd/cli/dispatch_test.go::
+// TestDispatch_DriftScenario_DoesNotReconcile): `nvoi logs` must NOT
+// touch firewalls; `nvoi deploy` MUST reconcile firewall drift. The
+// Connect-vs-Bootstrap split's whole point is that drift handling
+// happens HERE (Bootstrap's write contract) and nowhere else.
+//
+// Test: cfg declares a firewall (`default`); HetznerFake has the master
+// pre-seeded but no firewall. Running Deploy must issue the
+// firewall: rule-reconcile op (Bootstrap's applyFirewall path) — proving
+// drift IS reconciled on the deploy path.
+func TestInvariant_DeployDoesReconcileDrift(t *testing.T) {
+	var log opLog
+	ssh := convergeMock()
+	dc := convergeDC(&log, ssh)
+
+	cfg := minimalCfg()
+	cfg.Firewall = []string{"default"} // triggers applyFirewall in Bootstrap
+
+	if err := Deploy(context.Background(), dc, cfg); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	// firewall: rule-reconcile must have fired — Bootstrap's
+	// applyFirewall path. Counterpart to TestDispatch_DriftScenario
+	// which asserts this NEVER fires on read commands.
+	if n := log.count("firewall:"); n == 0 {
+		t.Errorf("Deploy must reconcile firewall drift (write contract); got 0 firewall: ops")
+	}
+}

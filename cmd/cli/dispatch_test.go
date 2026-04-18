@@ -214,3 +214,84 @@ func TestDispatch_SSH_NoWrites(t *testing.T) {
 	assertLookupHappened(t, fake)
 	assertNoWrites(t, fake)
 }
+
+// TestDispatch_NotBootstrapped_FailsClean locks the "no infra found"
+// path: with an empty HetznerFake (no master pre-seeded), Connect's
+// findMaster returns provider.ErrNotBootstrapped. Cluster.Kube wraps it
+// with "run nvoi deploy first." The dispatch command surfaces this
+// actionable error instead of attempting Bootstrap (which would silently
+// provision infrastructure on a read command — the bug class D2's
+// Connect/Bootstrap split prevents).
+func TestDispatch_NotBootstrapped_FailsClean(t *testing.T) {
+	provName := "dispatch-empty"
+	fake := testutil.NewHetznerFake(t)
+	// No SeedServer — fake is empty.
+	fake.Register(provName)
+	cluster := dispatchCluster(provName)
+	cfg := minimalDispatchCfg(provName)
+
+	err := app.Logs(context.Background(), app.LogsRequest{
+		Cluster: cluster,
+		Cfg:     config.NewView(cfg),
+		Service: "web",
+	})
+	if err == nil {
+		t.Fatal("expected error when infra is absent")
+	}
+	if !contains(err.Error(), "nvoi deploy") {
+		t.Errorf("error should point user at `nvoi deploy`, got: %v", err)
+	}
+	if n := fake.Count("ensure-server:"); n != 0 {
+		t.Errorf("dispatch on empty cluster must not create servers; got %d ensure-server ops", n)
+	}
+}
+
+// TestDispatch_DriftScenario_DoesNotReconcile is the load-bearing one.
+// Simulates the production failure that motivated the Connect/Bootstrap
+// split: a pre-seeded master exists with manually-modified firewall
+// state. Running `nvoi logs` must NOT touch firewalls (no
+// reconcileServerFirewall, no attach-firewall, no detach-firewall,
+// no firewall: rule-reconcile). If any of those fire, the user just
+// got their cluster firewall silently mutated by a read command.
+func TestDispatch_DriftScenario_DoesNotReconcile(t *testing.T) {
+	provName := "dispatch-drift"
+	fake := testutil.NewHetznerFake(t)
+	fake.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
+	// Seed an existing firewall — name doesn't match what cfg would
+	// produce. If Connect were to call EnsureServer's firewall
+	// reconciler, we'd see attach/detach ops in the log.
+	fake.SeedFirewall("manually-added-firewall")
+	fake.Register(provName)
+	cluster := dispatchCluster(provName)
+	cfg := minimalDispatchCfg(provName)
+
+	_ = app.Logs(context.Background(), app.LogsRequest{
+		Cluster: cluster,
+		Cfg:     config.NewView(cfg),
+		Service: "web",
+	})
+
+	// Specific drift-related write ops MUST be zero — not just the
+	// generic "no writes" assertion (which assertNoWrites already
+	// covers). Naming them here makes the regression message clear if
+	// someone re-introduces drift reconciliation in Connect.
+	for _, prefix := range []string{
+		"firewall:",        // ReconcileFirewallRules
+		"attach-firewall:", // reconcileServerFirewall reattach
+		"detach-firewall:", // reconcileServerFirewall detach
+		"delete-firewall:", // sweep
+	} {
+		if n := fake.Count(prefix); n != 0 {
+			t.Errorf("nvoi logs caused %d firewall mutation(s) %q — read commands must not reconcile drift", n, prefix)
+		}
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
