@@ -67,6 +67,42 @@ func (c *Client) setCachedShell(s utils.SSHClient) {
 // All orchestration is owned by this package — no pkg/core delegation.
 // This is the architectural shape #47 mandates: providers own their
 // convergence end-to-end. The reconciler treats Bootstrap as opaque.
+// Connect attaches to existing Hetzner infra. READ-ONLY: looks up the
+// master via labels, dials SSH, builds the kube tunnel. Returns
+// ErrNotBootstrapped when no master server matches the cluster labels
+// (callers distinguish via errors.Is). No EnsureServer / EnsureFirewall
+// / EnsureVolume calls — drift is NEVER reconciled here. Drift
+// reconciliation lives in Bootstrap.
+func (c *Client) Connect(ctx context.Context, dc *provider.BootstrapContext) (*kube.Client, error) {
+	// Test scaffolding pre-injects MasterKube (KubeFake) so the invariant
+	// suite can exercise the full path without an SSH-tunneled apiserver.
+	if dc.MasterKube != nil {
+		return dc.MasterKube, nil
+	}
+
+	master, err := c.findMaster(ctx, dc)
+	if err != nil {
+		return nil, err
+	}
+
+	shell, err := c.dialSSH(ctx, dc, master.IPv4+":22")
+	if err != nil {
+		return nil, fmt.Errorf("hetzner.Connect dial master %s: %w", master.IPv4, err)
+	}
+	c.setCachedShell(shell)
+
+	kc, err := kube.New(ctx, shell)
+	if err != nil {
+		return nil, fmt.Errorf("hetzner.Connect kube tunnel: %w", err)
+	}
+	return kc, nil
+}
+
+// Bootstrap converges Hetzner infra to the desired state, then tail-
+// calls Connect to attach. WRITE: creates missing servers/firewall/
+// volumes, reconciles firewall attachments, applies firewall rules,
+// installs k3s. Idempotent (existing resources are lookup-only) but
+// drift IS reconciled. Distinct from Connect, which never mutates.
 func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (*kube.Client, error) {
 	cfg := dc.Cfg
 
@@ -78,17 +114,22 @@ func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (
 		if err != nil {
 			return nil, err
 		}
-		// Capture master SSH on first iteration (masters come first); workers
-		// reuse it for k3s join. Closed via Close() at end of deploy.
+		// Hold master SSH so workers can reuse it for k3s join. Worker
+		// per-iteration shells close immediately after join.
 		if s.Role != "worker" && masterShell == nil {
 			masterShell = shell
 		} else if shell != masterShell {
-			// Worker per-iteration shells are short-lived — close once we're done.
 			_ = shell.Close()
 		}
 	}
+	// Master shell from provisioning is throwaway — Connect (called below)
+	// re-dials and caches the canonical shell. The extra dial is ~100ms
+	// on production Hetzner; mock SSH is free in tests.
+	if masterShell != nil {
+		_ = masterShell.Close()
+	}
 
-	// Firewalls — same shape as legacy reconcile.Firewall step.
+	// Firewalls — write contract: rules reconciled, drift removed.
 	if rules := cfg.FirewallRules(); len(rules) > 0 {
 		publicRules, err := provider.ResolveFirewallArgs(ctx, rules)
 		if err != nil {
@@ -117,33 +158,9 @@ func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (
 		}
 	}
 
-	// Cache the master SSH as NodeShell. If masterShell is somehow nil
-	// (no master in the loop above — would have failed earlier), find +
-	// dial fresh. Build *kube.Client tunneled through it.
-	if masterShell == nil {
-		master, err := c.findMaster(ctx, dc)
-		if err != nil {
-			return nil, fmt.Errorf("hetzner.Bootstrap: %w", err)
-		}
-		masterShell, err = c.dialSSH(ctx, dc, master.IPv4+":22")
-		if err != nil {
-			return nil, fmt.Errorf("hetzner.Bootstrap dial master %s: %w", master.IPv4, err)
-		}
-	}
-	c.setCachedShell(masterShell)
-
-	// Test scaffolding pre-injects MasterKube (KubeFake from convergeDC)
-	// so the equivalence/invariant suite can exercise the full Deploy
-	// path without an SSH-tunneled apiserver. Production deploys leave
-	// it nil and we build the real tunneled client below.
-	if dc.MasterKube != nil {
-		return dc.MasterKube, nil
-	}
-	kc, err := kube.New(ctx, masterShell)
-	if err != nil {
-		return nil, fmt.Errorf("hetzner.Bootstrap kube tunnel: %w", err)
-	}
-	return kc, nil
+	// Tail-call: same dial + kube-tunnel logic Connect uses on the CLI
+	// dispatch path. Single source of truth for the attach half.
+	return c.Connect(ctx, dc)
 }
 
 // provisionServer is the per-server orchestration that used to live in
@@ -722,7 +739,7 @@ func (c *Client) NodeShell(ctx context.Context, dc *provider.BootstrapContext) (
 	if err != nil {
 		return nil, fmt.Errorf("hetzner.NodeShell: %w", err)
 	}
-	conn, err := infra.ConnectSSH(ctx, master.IPv4+":22", utils.DefaultUser, dc.SSHKey)
+	conn, err := c.dialSSH(ctx, dc, master.IPv4+":22")
 	if err != nil {
 		return nil, fmt.Errorf("hetzner.NodeShell dial %s: %w", master.IPv4, err)
 	}
@@ -743,11 +760,12 @@ func (c *Client) Close() error {
 	return s.Close()
 }
 
-// findMaster locates the master server by cluster labels using the
-// existing ListServers + GetPrivateIP surface. Replaces pkg/core's
-// FindMaster, which depended on the doomed ComputeProvider interface.
-// Private to the package — IngressBinding / NodeShell are the only
-// callers.
+// findMaster locates the master server by cluster labels. Returns
+// (master, nil) on hit, (nil, provider.ErrNotBootstrapped) when no
+// matching server exists, (nil, wrappedErr) on API failure. Callers
+// use errors.Is(err, provider.ErrNotBootstrapped) to distinguish
+// "cluster absent" from "lookup failed" — same pattern as os.IsNotExist
+// / sql.ErrNoRows.
 func (c *Client) findMaster(ctx context.Context, dc *provider.BootstrapContext) (*provider.Server, error) {
 	names, err := utils.NewNames(dc.App, dc.Env)
 	if err != nil {
@@ -760,7 +778,7 @@ func (c *Client) findMaster(ctx context.Context, dc *provider.BootstrapContext) 
 		return nil, fmt.Errorf("find master: %w", err)
 	}
 	if len(masters) == 0 {
-		return nil, fmt.Errorf("no master server found for %s/%s", dc.App, dc.Env)
+		return nil, provider.ErrNotBootstrapped
 	}
 	master := masters[0]
 	if master.PrivateIP == "" {

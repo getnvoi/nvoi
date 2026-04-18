@@ -16,6 +16,9 @@ import (
 // these tests check the registry plumbing, not orchestration semantics.
 type stubInfra struct{}
 
+func (stubInfra) Connect(context.Context, *BootstrapContext) (*kube.Client, error) {
+	return nil, nil
+}
 func (stubInfra) Bootstrap(context.Context, *BootstrapContext) (*kube.Client, error) {
 	return nil, nil
 }

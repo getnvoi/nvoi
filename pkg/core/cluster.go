@@ -140,6 +140,9 @@ func (c *Cluster) SSH(ctx context.Context, cfg provider.ProviderConfigView) (uti
 	}
 	shell, err := infraProv.NodeShell(ctx, bctx)
 	if err != nil {
+		if errors.Is(err, provider.ErrNotBootstrapped) {
+			return nil, nil, fmt.Errorf("no infra found for %s/%s — run `nvoi deploy` to provision", c.AppName, c.Env)
+		}
 		return nil, nil, fmt.Errorf("infra.NodeShell: %w", err)
 	}
 	if shell == nil {
@@ -171,10 +174,12 @@ func (c *Cluster) Connect(ctx context.Context, addr string) (utils.SSHClient, er
 // and a no-op cleanup. The reconciler owns Close().
 //
 // When MasterKube is nil (CLI dispatch): resolves the InfraProvider and
-// calls Bootstrap — the single dialer. Bootstrap is idempotent on an
-// existing cluster (≤500ms: lookup + SSH dial + kube tunnel build). The
-// returned cleanup closes the kube tunnel; the cached SSH on the
-// provider is released by infra.Close() at end of command.
+// calls Connect — the READ-ONLY attach primitive. Connect must NOT
+// mutate provider state (no EnsureServer, no firewall reconcile, no
+// volume create). If infra is absent, returns ErrNotBootstrapped wrapped
+// with a "run nvoi deploy first" message. Drift reconciliation is
+// reconcile.Deploy's job, which calls Bootstrap explicitly — never the
+// dispatch path.
 //
 // cfg is the provider-facing view of the YAML; CLI passes
 // `config.NewView(rt.cfg)`, reconcile passes the same.
@@ -191,9 +196,12 @@ func (c *Cluster) Kube(ctx context.Context, cfg provider.ProviderConfigView) (*k
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("resolve infra provider: %w", err)
 	}
-	kc, err := infraProv.Bootstrap(ctx, bctx)
+	kc, err := infraProv.Connect(ctx, bctx)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("infra.Bootstrap: %w", err)
+		if errors.Is(err, provider.ErrNotBootstrapped) {
+			return nil, nil, nil, fmt.Errorf("no infra found for %s/%s — run `nvoi deploy` to provision", c.AppName, c.Env)
+		}
+		return nil, nil, nil, fmt.Errorf("infra.Connect: %w", err)
 	}
 	cleanup := func() {
 		_ = kc.Close()

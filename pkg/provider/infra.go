@@ -17,6 +17,13 @@ import (
 // Production providers must never return this once the refactor completes.
 var ErrNotImplemented = errors.New("infra provider: not implemented")
 
+// ErrNotBootstrapped is returned by Connect / NodeShell when the
+// provider can't find the infra it expects (no master server, no
+// sandbox, no managed cluster). CLI dispatch surfaces this with
+// "run nvoi deploy first." Distinct from ErrNotImplemented (the
+// provider works, the cluster doesn't exist yet).
+var ErrNotBootstrapped = errors.New("infra not provisioned — run `nvoi deploy` first")
+
 // InfraProvider is the narrow contract every infrastructure backend
 // satisfies. The single load-bearing promise: Bootstrap returns a working
 // *kube.Client. Everything else is either gated capability (NodeShell,
@@ -34,11 +41,25 @@ var ErrNotImplemented = errors.New("infra provider: not implemented")
 // methods became no-ops or fiction. This interface keeps only what every
 // backend genuinely owes the reconciler.
 type InfraProvider interface {
+	// Connect attaches to existing infra and returns a working kube
+	// client. READ-ONLY contract — MUST NOT create, update, or delete
+	// any provider resource. If infra is absent, returns
+	// ErrNotBootstrapped. Cost target: 1 lookup per resource type +
+	// 1 SSH dial + 1 kubeconfig fetch (≤500ms on existing Hetzner).
+	//
+	// Called by: Cluster.Kube / Cluster.SSH on-demand path — every CLI
+	// command except `nvoi deploy` / `nvoi teardown`.
+	Connect(ctx context.Context, dc *BootstrapContext) (*kube.Client, error)
+
 	// Bootstrap converges the provider's own resources to whatever shape
-	// is required to yield a working kube client. For IaaS, that's
-	// firewalls + network + servers + k3s install + volumes + SSH. For
-	// managed k8s, it's an authn handshake. For sandbox backends, a
-	// sandbox upsert. Caller treats this as opaque. Idempotent.
+	// is required to yield a working kube client, then tail-calls
+	// Connect. For IaaS, that's firewalls + network + servers + k3s
+	// install + volumes + SSH. For managed k8s, it's an authn handshake.
+	// For sandbox backends, a sandbox upsert. WRITE contract — drift is
+	// reconciled, missing resources created, firewall rules applied.
+	// Idempotent but not read-only.
+	//
+	// Called by: reconcile.Deploy only.
 	Bootstrap(ctx context.Context, dc *BootstrapContext) (*kube.Client, error)
 
 	// LiveSnapshot returns the provider's view of live infra resources

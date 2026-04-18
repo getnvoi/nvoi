@@ -64,6 +64,9 @@ func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (
 			_ = shell.Close()
 		}
 	}
+	if masterShell != nil {
+		_ = masterShell.Close()
+	}
 
 	if rules := cfg.FirewallRules(); len(rules) > 0 {
 		publicRules, err := provider.ResolveFirewallArgs(ctx, rules)
@@ -92,24 +95,30 @@ func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (
 		}
 	}
 
-	if masterShell == nil {
-		master, err := c.findMaster(ctx, dc)
-		if err != nil {
-			return nil, fmt.Errorf("aws.Bootstrap: %w", err)
-		}
-		masterShell, err = c.dialSSH(ctx, dc, master.IPv4+":22")
-		if err != nil {
-			return nil, fmt.Errorf("aws.Bootstrap dial master %s: %w", master.IPv4, err)
-		}
-	}
-	c.setCachedShell(masterShell)
+	return c.Connect(ctx, dc)
+}
 
+// Connect attaches to existing AWS infra. READ-ONLY: lookup master by
+// tag, dial SSH, build kube tunnel. Returns provider.ErrNotBootstrapped
+// when no master found (callers distinguish via errors.Is). No
+// EnsureServer / EnsureFirewall / EnsureVolume here — drift
+// reconciliation is Bootstrap's job, not Connect's.
+func (c *Client) Connect(ctx context.Context, dc *provider.BootstrapContext) (*kube.Client, error) {
 	if dc.MasterKube != nil {
 		return dc.MasterKube, nil
 	}
-	kc, err := kube.New(ctx, masterShell)
+	master, err := c.findMaster(ctx, dc)
 	if err != nil {
-		return nil, fmt.Errorf("aws.Bootstrap kube tunnel: %w", err)
+		return nil, err
+	}
+	shell, err := c.dialSSH(ctx, dc, master.IPv4+":22")
+	if err != nil {
+		return nil, fmt.Errorf("aws.Connect dial master %s: %w", master.IPv4, err)
+	}
+	c.setCachedShell(shell)
+	kc, err := kube.New(ctx, shell)
+	if err != nil {
+		return nil, fmt.Errorf("aws.Connect kube tunnel: %w", err)
 	}
 	return kc, nil
 }
@@ -657,8 +666,9 @@ func (c *Client) Close() error {
 	return s.Close()
 }
 
-// findMaster locates the master EC2 instance by tag. Replaces pkg/core's
-// FindMaster (which depends on the doomed ComputeProvider interface).
+// findMaster locates the master EC2 instance by tag. Returns
+// (master, nil) on hit, (nil, provider.ErrNotBootstrapped) when absent,
+// (nil, wrappedErr) on API failure. Callers distinguish via errors.Is.
 func (c *Client) findMaster(ctx context.Context, dc *provider.BootstrapContext) (*provider.Server, error) {
 	names, err := utils.NewNames(dc.App, dc.Env)
 	if err != nil {
@@ -671,7 +681,7 @@ func (c *Client) findMaster(ctx context.Context, dc *provider.BootstrapContext) 
 		return nil, fmt.Errorf("find master: %w", err)
 	}
 	if len(masters) == 0 {
-		return nil, fmt.Errorf("no master server found for %s/%s", dc.App, dc.Env)
+		return nil, provider.ErrNotBootstrapped
 	}
 	master := masters[0]
 	if master.PrivateIP == "" {

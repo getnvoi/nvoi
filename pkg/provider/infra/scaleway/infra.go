@@ -82,25 +82,34 @@ func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (
 			return nil, err
 		}
 	}
-
-	if masterShell == nil {
-		master, err := c.findMaster(ctx, dc)
-		if err != nil {
-			return nil, fmt.Errorf("scaleway.Bootstrap: %w", err)
-		}
-		masterShell, err = c.dialSSH(ctx, dc, master.IPv4+":22")
-		if err != nil {
-			return nil, fmt.Errorf("scaleway.Bootstrap dial master %s: %w", master.IPv4, err)
-		}
+	if masterShell != nil {
+		_ = masterShell.Close()
 	}
-	c.setCachedShell(masterShell)
 
+	return c.Connect(ctx, dc)
+}
+
+// Connect attaches to existing Scaleway infra. READ-ONLY: lookup
+// master by label, dial SSH, build kube tunnel. Returns
+// provider.ErrNotBootstrapped when no master found (callers distinguish
+// via errors.Is). No EnsureServer / EnsureFirewall / EnsureVolume — drift
+// reconciliation is Bootstrap's job.
+func (c *Client) Connect(ctx context.Context, dc *provider.BootstrapContext) (*kube.Client, error) {
 	if dc.MasterKube != nil {
 		return dc.MasterKube, nil
 	}
-	kc, err := kube.New(ctx, masterShell)
+	master, err := c.findMaster(ctx, dc)
 	if err != nil {
-		return nil, fmt.Errorf("scaleway.Bootstrap kube tunnel: %w", err)
+		return nil, err
+	}
+	shell, err := c.dialSSH(ctx, dc, master.IPv4+":22")
+	if err != nil {
+		return nil, fmt.Errorf("scaleway.Connect dial master %s: %w", master.IPv4, err)
+	}
+	c.setCachedShell(shell)
+	kc, err := kube.New(ctx, shell)
+	if err != nil {
+		return nil, fmt.Errorf("scaleway.Connect kube tunnel: %w", err)
 	}
 	return kc, nil
 }
@@ -636,8 +645,9 @@ func (c *Client) Close() error {
 	return s.Close()
 }
 
-// findMaster locates the master Scaleway instance by label. Replaces
-// pkg/core's FindMaster.
+// findMaster locates the master Scaleway instance by label. Returns
+// (master, nil) on hit, (nil, provider.ErrNotBootstrapped) when absent,
+// (nil, wrappedErr) on API failure. Callers distinguish via errors.Is.
 func (c *Client) findMaster(ctx context.Context, dc *provider.BootstrapContext) (*provider.Server, error) {
 	names, err := utils.NewNames(dc.App, dc.Env)
 	if err != nil {
@@ -650,7 +660,7 @@ func (c *Client) findMaster(ctx context.Context, dc *provider.BootstrapContext) 
 		return nil, fmt.Errorf("find master: %w", err)
 	}
 	if len(masters) == 0 {
-		return nil, fmt.Errorf("no master server found for %s/%s", dc.App, dc.Env)
+		return nil, provider.ErrNotBootstrapped
 	}
 	master := masters[0]
 	if master.PrivateIP == "" {
