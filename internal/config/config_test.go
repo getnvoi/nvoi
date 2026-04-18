@@ -71,7 +71,7 @@ func TestParseAppConfig_CoreShape(t *testing.T) {
 app: myapp
 env: prod
 providers:
-  compute: hetzner
+  infra: hetzner
 servers:
   master:
     type: cx23
@@ -88,8 +88,8 @@ services:
 	if cfg.App != "myapp" || cfg.Env != "prod" {
 		t.Errorf("app/env = %q/%q", cfg.App, cfg.Env)
 	}
-	if cfg.Providers.Compute != "hetzner" {
-		t.Errorf("Providers.Compute = %q", cfg.Providers.Compute)
+	if cfg.Providers.Infra != "hetzner" {
+		t.Errorf("Providers.Infra = %q", cfg.Providers.Infra)
 	}
 }
 

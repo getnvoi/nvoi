@@ -35,11 +35,10 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	// Validator may have migrated providers.compute → providers.infra.
-	// Sync onto Cluster.Provider so legacy pkg/core helpers (DNSSet,
-	// Storage, Service.Master()) that resolve the provider via Cluster
-	// see the right name. Removed in C10 alongside Cluster.Compute() /
-	// Cluster.Master().
+	// Sync cfg.Providers.Infra onto Cluster.Provider so legacy pkg/core
+	// helpers (DNSSet, Storage, Service.Master()) that resolve the
+	// provider via Cluster see the right name. Removed in C10 alongside
+	// Cluster.Compute() / Cluster.Master().
 	if dc.Cluster.Provider == "" {
 		dc.Cluster.Provider = cfg.Providers.Infra
 	}

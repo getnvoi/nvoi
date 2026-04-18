@@ -220,7 +220,7 @@ func TestBuildDeployContext_EnvOnlyMode(t *testing.T) {
 	cfg := &config.AppConfig{
 		App: "app", Env: "prod",
 		Providers: config.ProvidersDef{
-			Compute: "hetzner", DNS: "cloudflare", Storage: "cloudflare",
+			Infra: "hetzner", DNS: "cloudflare", Storage: "cloudflare",
 		},
 	}
 

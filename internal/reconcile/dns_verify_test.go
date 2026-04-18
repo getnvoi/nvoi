@@ -38,7 +38,7 @@ func TestVerifyDNSPropagation_ResolvesViaSSH(t *testing.T) {
 	out := dc.Cluster.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: "test-compute"},
+		Providers: config.ProvidersDef{Infra: "test-compute"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains:   map[string][]string{"web": {"myapp.com"}},
 	}
@@ -71,7 +71,7 @@ func TestVerifyDNSPropagation_WarnsWhenNotResolved(t *testing.T) {
 	out := dc.Cluster.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: "test-compute"},
+		Providers: config.ProvidersDef{Infra: "test-compute"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains:   map[string][]string{"web": {"myapp.com"}},
 	}
@@ -94,7 +94,7 @@ func TestVerifyDNSPropagation_WarnsWhenWrongIP(t *testing.T) {
 	out := dc.Cluster.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: "test-compute"},
+		Providers: config.ProvidersDef{Infra: "test-compute"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains:   map[string][]string{"web": {"myapp.com"}},
 	}
@@ -118,7 +118,7 @@ func TestVerifyDNSPropagation_MultipleDomains(t *testing.T) {
 	out := dc.Cluster.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: "test-compute"},
+		Providers: config.ProvidersDef{Infra: "test-compute"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains:   map[string][]string{"web": {"myapp.com", "www.myapp.com"}},
 	}
@@ -139,7 +139,7 @@ func TestVerifyDNSPropagation_NoNodeShell_Noop(t *testing.T) {
 	out := dc.Cluster.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: "test-compute"},
+		Providers: config.ProvidersDef{Infra: "test-compute"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains:   map[string][]string{"web": {"myapp.com"}},
 	}
@@ -163,7 +163,7 @@ func TestVerifyDNSPropagation_NoMasterServer_Noop(t *testing.T) {
 	out := dc.Cluster.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: provName},
+		Providers: config.ProvidersDef{Infra: provName},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Domains:   map[string][]string{"web": {"myapp.com"}},
 	}

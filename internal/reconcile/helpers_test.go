@@ -209,7 +209,7 @@ func testNames() *utils.Names {
 func validCfg() *config.AppConfig {
 	return &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: "test-compute"},
+		Providers: config.ProvidersDef{Infra: "test-compute"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Services:  map[string]config.ServiceDef{"web": {Image: "nginx"}},
 	}

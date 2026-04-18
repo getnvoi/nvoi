@@ -89,11 +89,10 @@ func (v *View) DomainsByService() map[string][]string {
 // BootstrapContext builds the provider.BootstrapContext the reconciler
 // hands to InfraProvider methods. ProviderName falls back through:
 //
-//  1. dc.Cluster.Provider — already populated by the cmd/ boundary from
-//     cfg.Providers.Infra / .Compute.
-//  2. cfg.Providers.Infra — primary source if Cluster.Provider is unset.
-//  3. cfg.Providers.Compute — legacy alias still accepted during the
-//     staged rollout. C8 hard-removes it.
+//  1. dc.Cluster.Provider — populated by the cmd/ boundary from
+//     cfg.Providers.Infra.
+//  2. cfg.Providers.Infra — primary source if Cluster.Provider is unset
+//     (test scaffolding skips the cmd/ boundary).
 //
 // The cascade lets tests set Provider directly on Cluster without
 // populating cfg.Providers, while production wires both through cmd/.
@@ -101,9 +100,6 @@ func BootstrapContext(dc *DeployContext, cfg *AppConfig) *provider.BootstrapCont
 	name := dc.Cluster.Provider
 	if name == "" {
 		name = cfg.Providers.Infra
-	}
-	if name == "" {
-		name = cfg.Providers.Compute
 	}
 	bctx := &provider.BootstrapContext{
 		App:          dc.Cluster.AppName,

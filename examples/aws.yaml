@@ -2,7 +2,7 @@ app: dummy-rails
 env: production
 
 providers:
-  compute: aws
+  infra: aws
   dns: cloudflare
   storage: aws
   build: daytona

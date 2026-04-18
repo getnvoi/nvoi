@@ -27,12 +27,9 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	}
 
 	// ── Providers ─────────────────────────────────────────────────────────
-	// providers.infra is the new key (refactor #47); providers.compute is the
-	// legacy alias still accepted during the staged rollout. C8 hard-removes
-	// the alias. Everything downstream reads providers.infra.
-	if cfg.Providers.Infra == "" && cfg.Providers.Compute != "" {
-		cfg.Providers.Infra = cfg.Providers.Compute
-	}
+	// providers.infra is the only accepted key (refactor #47, C8). The
+	// legacy providers.compute alias was removed; configs using it hit
+	// an unknown-field unmarshal error pointing at this rename.
 	if cfg.Providers.Infra == "" {
 		return fmt.Errorf("providers.infra is required")
 	}

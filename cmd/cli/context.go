@@ -20,7 +20,7 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 		return nil, err
 	}
 
-	computeCreds, _ := resolveProviderCreds(source, "compute", cfg.Providers.Compute)
+	infraCreds, _ := resolveProviderCreds(source, "infra", cfg.Providers.Infra)
 	sshKey, _ := resolveSSHKey(source)
 	dnsCreds, _ := resolveProviderCreds(source, "dns", cfg.Providers.DNS)
 	storageCreds, _ := resolveProviderCreds(source, "storage", cfg.Providers.Storage)
@@ -29,8 +29,8 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 		Cluster: app.Cluster{
 			AppName:     cfg.App,
 			Env:         cfg.Env,
-			Provider:    cfg.Providers.Compute,
-			Credentials: computeCreds,
+			Provider:    cfg.Providers.Infra,
+			Credentials: infraCreds,
 			SSHKey:      sshKey,
 			Output:      out,
 		},

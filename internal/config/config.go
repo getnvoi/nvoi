@@ -36,7 +36,7 @@ type AppConfig struct {
 	App       string                 `yaml:"app"`
 	Env       string                 `yaml:"env"`
 	Providers ProvidersDef           `yaml:"providers"`
-	Servers   map[string]ServerDef   `yaml:"servers"`
+	Servers   map[string]ServerDef   `yaml:"servers,omitempty"`
 	Firewall  []string               `yaml:"-"`
 	Volumes   map[string]VolumeDef   `yaml:"volumes,omitempty"`
 	Secrets   []string               `yaml:"secrets,omitempty"`
@@ -47,9 +47,26 @@ type AppConfig struct {
 	Domains   map[string][]string    `yaml:"domains,omitempty"`
 	ACMEEmail string                 `yaml:"acme_email,omitempty"`
 
+	// Sandbox is the forward-compat stub for InfraProvider implementations
+	// that consume a "sandbox:" YAML block (Daytona via #48, future
+	// sandbox-style backends). IaaS providers ignore it. The current type
+	// is intentionally a placeholder — #48 fills in the real shape when
+	// daytona/infra.go lands.
+	Sandbox *SandboxBlock `yaml:"sandbox,omitempty"`
+
 	// Resolved firewall names — populated by Resolve()
 	MasterFirewall string `yaml:"-"`
 	WorkerFirewall string `yaml:"-"`
+}
+
+// SandboxBlock is the placeholder for the "sandbox:" YAML block #48
+// (Daytona) consumes. Defined here so the validator's ConsumesBlocks
+// gating compiles; #48 fills in the real fields (snapshot, region,
+// auto-stop, …). IaaS providers reject `sandbox:` via ConsumesBlocks.
+type SandboxBlock struct {
+	Snapshot string `yaml:"snapshot,omitempty"`
+	Region   string `yaml:"region,omitempty"`
+	// Future: AutoStopMinutes int, etc. — added by #48.
 }
 
 // RegistryDef holds credentials for a single private container registry.
@@ -127,11 +144,10 @@ func (c *AppConfig) Resolve() error {
 }
 
 type ProvidersDef struct {
-	// Infra is the new key (per refactor #47); Compute is the legacy
-	// alias still accepted by the YAML parser during the staged rollout.
-	// C8 makes Infra exclusive (no alias, no backward compat).
-	Infra   string      `yaml:"infra,omitempty"`
-	Compute string      `yaml:"compute,omitempty"`
+	// Infra is the infra provider key (refactor #47). The legacy
+	// `providers.compute` field was removed in C8 — configs using it
+	// hit an unknown-field unmarshal error with a pointer to this rename.
+	Infra   string      `yaml:"infra"`
 	DNS     string      `yaml:"dns,omitempty"`
 	Storage string      `yaml:"storage,omitempty"`
 	Secrets *SecretsDef `yaml:"secrets,omitempty"`

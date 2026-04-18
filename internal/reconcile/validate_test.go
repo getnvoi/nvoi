@@ -21,7 +21,6 @@ func TestValidateConfig_MissingApp(t *testing.T) {
 
 func TestValidateConfig_MissingInfra(t *testing.T) {
 	cfg := validCfg()
-	cfg.Providers.Compute = "" // no Infra either → validator rejects
 	cfg.Providers.Infra = ""
 	assertValidationError(t, cfg, "providers.infra is required")
 }
@@ -332,14 +331,14 @@ func TestValidateConfig_NegativeDisk(t *testing.T) {
 
 func TestValidateConfig_DiskWithHetzner(t *testing.T) {
 	cfg := validCfg()
-	cfg.Providers.Compute = "hetzner"
+	cfg.Providers.Infra = "hetzner"
 	cfg.Servers["master"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "master", Disk: 100}
 	assertValidationError(t, cfg, "hetzner does not support custom root disk sizes")
 }
 
 func TestValidateConfig_DiskWithScaleway(t *testing.T) {
 	cfg := validCfg()
-	cfg.Providers.Compute = "scaleway"
+	cfg.Providers.Infra = "scaleway"
 	cfg.Servers["master"] = config.ServerDef{Type: "DEV1-M", Region: "fr-par-1", Role: "master", Disk: 50}
 	if err := ValidateConfig(cfg); err != nil {
 		t.Fatalf("disk with scaleway should be valid: %v", err)
@@ -348,7 +347,7 @@ func TestValidateConfig_DiskWithScaleway(t *testing.T) {
 
 func TestValidateConfig_DiskWithAWS(t *testing.T) {
 	cfg := validCfg()
-	cfg.Providers.Compute = "aws"
+	cfg.Providers.Infra = "aws"
 	cfg.Servers["master"] = config.ServerDef{Type: "t3.medium", Region: "us-east-1", Role: "master", Disk: 100}
 	if err := ValidateConfig(cfg); err != nil {
 		t.Fatalf("disk with aws should be valid: %v", err)
@@ -357,7 +356,7 @@ func TestValidateConfig_DiskWithAWS(t *testing.T) {
 
 func TestValidateConfig_DiskOmitted(t *testing.T) {
 	cfg := validCfg()
-	cfg.Providers.Compute = "hetzner"
+	cfg.Providers.Infra = "hetzner"
 	// Disk is 0 (omitted) — should pass even for Hetzner
 	if err := ValidateConfig(cfg); err != nil {
 		t.Fatalf("omitted disk should be valid: %v", err)
@@ -520,7 +519,7 @@ func TestValidateConfig_BuildValid(t *testing.T) {
 func validCfgForTest() *config.AppConfig {
 	return &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Compute: "hetzner"},
+		Providers: config.ProvidersDef{Infra: "hetzner"},
 		Servers: map[string]config.ServerDef{
 			"master": {Type: "cax11", Region: "nbg1", Role: "master"},
 		},

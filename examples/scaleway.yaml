@@ -2,7 +2,7 @@ app: dummy-rails
 env: production
 
 providers:
-  compute: scaleway
+  infra: scaleway
   dns: cloudflare
   storage: cloudflare
   build: daytona
