@@ -22,12 +22,24 @@ provider.RegisterX("name", CredentialSchema{...}, func(creds map[string]string) 
 
 ## Provider-owned operations
 
-- **`InfraProvider.Bootstrap(ctx, dc) (*kube.Client, error)`** — the load-bearing primitive. Each backend converges its infra to whatever shape produces a working kube client (IaaS: provision servers + firewall + volumes + k3s; managed: authn handshake; sandbox: container upsert).
+- **`InfraProvider.Connect(ctx, dc) (*kube.Client, error)`** — READ-ONLY attach. Looks up existing infra, dials SSH, builds the kube tunnel. Returns `provider.ErrNotBootstrapped` when no infra is found (callers distinguish via `errors.Is`). MUST NOT mutate any provider resource. Cost target: ≤500 ms on an existing Hetzner cluster. Called by `Cluster.Kube` on the CLI dispatch path (every `nvoi` command except `deploy` / `teardown`).
+- **`InfraProvider.Bootstrap(ctx, dc) (*kube.Client, error)`** — WRITE. Converges infra to the desired state (creates missing servers, reconciles firewall rules, applies node labels, installs k3s) and tail-calls `Connect`. Idempotent on existing resources but drift IS reconciled. Called only by `reconcile.Deploy`.
 - **`InfraProvider.NodeShell(ctx, dc) (utils.SSHClient, error)`** — host shell for `nvoi ssh`. Returns `(nil, nil)` for backends without one (managed k8s); CLI feature-gates on nil.
 - **`InfraProvider.IngressBinding(ctx, dc, svc) (IngressBinding, error)`** — DNS hint + target. IaaS: `{DNSType:"A", DNSTarget: master.IPv4}`. Managed: `{DNSType:"CNAME", DNSTarget: lb.hostname}`. DNSProvider picks the actual record kind.
 - **`InfraProvider.HasPublicIngress() bool`** + **`ConsumesBlocks() []string`** — gates the validator + reconcile use to avoid per-provider branching.
 - **`ListResources(ctx) ([]ResourceGroup, error)`** on every provider interface — returns every resource the provider created. `resources` command renders whatever comes back.
 - **`RenderCloudInit(sshPublicKey, hostname)`** in `pkg/infra/` — cloud-init sets the hostname = k3s node name. Called from each IaaS provider's `provisionServer` helper.
+
+## On-demand connect contract
+
+`Cluster.Kube(ctx, cfg)` and `Cluster.SSH(ctx, cfg)` route to `infra.Connect` / `infra.NodeShell` when their fields (`MasterKube` / `NodeShell`) are nil. `Connect` is read-only (lookup + SSH dial + kube tunnel build); CLI dispatch pays ≤500 ms on existing clusters. Drift reconciliation lives in `Bootstrap` and only `reconcile.Deploy` calls it. Tests NEVER pre-inject `Cluster.MasterKube` or `Cluster.NodeShell` — the on-demand path is mandatory coverage. Acceptance gate:
+
+```
+grep -rE 'Cluster\{[^}]*MasterKube|Cluster\.MasterKube\s*=|Cluster\{[^}]*NodeShell|Cluster\.NodeShell\s*=' \
+    cmd/ pkg/core/ | grep '_test\.go'   # → zero hits
+```
+
+The Connect/Bootstrap split fixes the production failure class where `nvoi logs` could silently reconcile firewall drift and lock the user out — `cmd/cli/dispatch_test.go::TestDispatch_DriftScenario_DoesNotReconcile` locks the contract.
 
 ## Credential resolution
 

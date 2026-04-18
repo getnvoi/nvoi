@@ -11,8 +11,8 @@ The foundational engine for reconciling cloud infrastructure + Kubernetes worklo
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic, no UUIDs — the naming convention finds everything.
 - **Reconcile vs teardown.** Reconcile converges on a diff. Teardown is a hard nuke of external provider resources; k8s dies with the servers. Volumes and storage preserved by default (`--delete-volumes` / `--delete-storage` to nuke).
 - **Two-layer core.** Layer 1: provider infra (servers, firewall, volumes, DNS, buckets). Layer 2: k8s manifests (services, crons, ingress, secrets). Bound by deterministic naming. Nothing else.
-- **InfraProvider owns its convergence.** Every infra backend (Hetzner / AWS / Scaleway today, Daytona / managed-k8s tomorrow) implements one interface (`pkg/provider/infra.go::InfraProvider`). Reconcile calls `infra.Bootstrap(ctx, dc) → *kube.Client`, never branches on provider name.
-- **SSH transport + typed kube client.** When the provider has a host shell (every IaaS), it returns one via `infra.NodeShell` — cached on `Cluster.NodeShell`. The kube client `infra.Bootstrap` returns is cached on `Cluster.MasterKube`. Both shared across every reconcile step.
+- **InfraProvider owns its convergence — split contract: Connect (read-only) vs Bootstrap (writes).** Every infra backend (Hetzner / AWS / Scaleway today, Daytona / managed-k8s tomorrow) implements one interface (`pkg/provider/infra.go::InfraProvider`). `reconcile.Deploy` calls `infra.Bootstrap` (drift reconciled, missing resources created). Every other CLI command (`logs`, `exec`, `describe`, `cron run`, `resources`, `ssh`) routes through `Cluster.Kube` / `Cluster.SSH` to `infra.Connect` / `infra.NodeShell` — read-only attach, no provider mutations. Reconcile never branches on provider name.
+- **SSH transport + typed kube client.** When the provider has a host shell (every IaaS), it returns one via `infra.NodeShell` — cached on `Cluster.NodeShell`. The kube client `infra.Bootstrap` (or `infra.Connect`) returns is cached on `Cluster.MasterKube`. Both shared across every reconcile step.
 - **Credentials flow through one `CredentialSource`.** Default `EnvSource` reads `os.Getenv`. When `providers.secrets` is set to `doppler | awssm | infisical`, source switches to `SecretsSource` and every credential (infra, DNS, storage, SSH key, service `$VAR`) fetches from the backend's direct API — no shell-outs.
 
 ## Build & Test
@@ -218,11 +218,14 @@ pkg/
 - `*kube.Client` (`pkg/kube/client.go`) — typed Kubernetes client. Tunnels through `utils.SSHClient` to the apiserver. `NewForTest(cs)` wraps client-go's typed fake clientset. `Client.ExecFunc` is an injectable hook so tests capture pod-shell calls (Caddy admin API, cert/HTTPS waits) without an SPDY connection.
 - `kubefake.KubeFake` — Client + the typed fake for reconcile-level assertions. `kf.SetExec(fn)` overrides the Exec hook.
 
-**Connection lifecycle:** One SSH + one kube client per deploy. The InfraProvider owns both:
-- `infra.Bootstrap(ctx, dc) → *kube.Client` provisions infra (servers + firewall + volumes + k3s install) and returns the kube client tunneled through the master SSH it dialed.
+**Connection lifecycle:** One SSH + one kube client per command. The InfraProvider owns both, with two distinct entry points:
+- `infra.Bootstrap(ctx, dc) → *kube.Client` (write) — provisions infra (servers + firewall + volumes + k3s install) and tail-calls `Connect`. `reconcile.Deploy` only.
+- `infra.Connect(ctx, dc) → *kube.Client` (read-only) — looks up existing infra, dials SSH, builds the kube tunnel. Returns `provider.ErrNotBootstrapped` when nothing's there. `Cluster.Kube` (CLI dispatch path) calls this; cost ≤500ms on existing clusters.
 - `infra.NodeShell(ctx, dc) → utils.SSHClient` returns the same SSH (cached) for `nvoi ssh`. Providers without a host shell return `(nil, nil)` and the CLI errors with an actionable message.
-- `infra.Close()` releases the cached SSH at end of deploy.
+- `infra.Close()` releases the cached SSH at end of command.
 - Reconcile stores both on `dc.Cluster.NodeShell` / `dc.Cluster.MasterKube` and shares them via `borrowedSSH` / no-op cleanup across every step.
+
+**On-demand contract.** `Cluster.Kube(ctx, cfg)` and `Cluster.SSH(ctx, cfg)` route to `infra.Connect` / `infra.NodeShell` when their fields are nil. Tests NEVER pre-inject `Cluster.MasterKube` or `Cluster.NodeShell` — the on-demand path is mandatory coverage. CI gate: `grep -rE 'Cluster\.MasterKube\s*=|Cluster\.NodeShell\s*=' cmd/ pkg/core/ | grep '_test\.go'` returns zero hits.
 
 SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guidance. Stale known hosts auto-cleared on server creation.
 
@@ -235,7 +238,7 @@ SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guida
 | Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
 | Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
 
-**InfraProvider contract** (`pkg/provider/infra.go`): every backend yields a `*kube.Client` via `Bootstrap`. Reconcile branches on none of: provider name, IngressBinding type, NodeShell-or-not, ConsumesBlocks. Adding a new backend = implementing the interface; zero reconcile changes.
+**InfraProvider contract** (`pkg/provider/infra.go`): every backend yields a `*kube.Client` via `Bootstrap` (write — converges drift) or `Connect` (read-only — attach to existing infra). Reconcile branches on none of: provider name, IngressBinding type, NodeShell-or-not, ConsumesBlocks. Adding a new backend = implementing the interface; zero reconcile changes.
 
 ## Credential resolution
 
