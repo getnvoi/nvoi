@@ -7,9 +7,10 @@ InfraProvider implementations. All three IaaS backends (Hetzner, AWS, Scaleway) 
 Every backend's `infra.go` implements:
 
 ```
-Bootstrap(ctx, dc) (*kube.Client, error)        // converge → return kube client
-LiveSnapshot(ctx, dc) (*LiveSnapshot, error)    // provider-side state for orphan detection
-TeardownOrphans(ctx, dc, live) error            // diff-based orphan removal (drain + delete)
+Bootstrap(ctx, dc) (*kube.Client, error)        // converge → tail-call Connect; WRITE contract
+Connect(ctx, dc) (*kube.Client, error)          // read-only attach; used by Cluster.Kube on-demand
+LiveSnapshot(ctx, dc) (*LiveSnapshot, error)    // provider-side resource list, consumed internally by TeardownOrphans
+TeardownOrphans(ctx, dc) error                  // diff-based orphan removal; provider does its own LiveSnapshot lookup
 Teardown(ctx, dc, deleteVolumes) error          // hard nuke for bin/destroy
 IngressBinding(ctx, dc, svc) (IngressBinding, error)
 HasPublicIngress() bool

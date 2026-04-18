@@ -18,22 +18,21 @@ Deploy(ctx, dc, cfg)
   → sync Cluster.Provider from cfg.Providers.Infra (legacy callers)
   → dc.Cluster.DeployHash = now.UTC().Format("20060102-150405")
   → Build(ctx, dc, cfg)                     — LOCAL docker login/build/push for services.X.build; PRE-infra
-  → live = DescribeLive(ctx, dc, cfg)        — provider via infra.LiveSnapshot, kube via app.Describe
   → infra = provider.ResolveInfra(...)      — single provider instance for the whole deploy; defer Close()
   → kc = infra.Bootstrap(ctx, bctx)         — provisions servers + firewall + volumes; returns *kube.Client
   → ns = infra.NodeShell(ctx, bctx)          — optional SSH for `nvoi ssh`; nil for sandbox/managed
   → kc.EnsureNamespace(app-ns)
-  → Registries(ctx, dc, live, cfg)          — resolve `registry:` creds → dockerconfigjson Secret (or orphan-delete)
-  → secretValues = Secrets(ctx, dc, live, cfg)
-  → storageCreds = Storage(ctx, dc, live, cfg)
+  → Registries(ctx, dc, cfg)                — resolve `registry:` creds → dockerconfigjson Secret
+  → secretValues = Secrets(ctx, dc, cfg)
+  → storageCreds = Storage(ctx, dc, cfg)
   → sources = mergeSources(secretValues, storageCreds)
-  → Services(ctx, dc, live, cfg, sources)   — passes KnownVolumes from helpers.knownVolumes(live, cfg)
-  → Crons(ctx, dc, live, cfg, sources)      — same KnownVolumes
-  → infra.TeardownOrphans(ctx, bctx, snap)   — drain orphan servers + sweep orphan firewalls + orphan volume delete
+  → Services(ctx, dc, cfg, sources)         — kc.ListWorkloadNames for orphan sweep, KnownVolumes from cfg
+  → Crons(ctx, dc, cfg, sources)            — kc.ListCronJobNames for orphan sweep
+  → infra.TeardownOrphans(ctx, bctx)        — drain orphan servers + sweep orphan firewalls + orphan volume delete
   → IF infra.HasPublicIngress() && len(cfg.Domains) > 0:
-       RouteDomains(ctx, dc, cfg, live, infra, bctx) — dns.RouteTo(domain, infra.IngressBinding(svc))
+       RouteDomains(ctx, dc, cfg, infra, bctx) — dns.RouteTo(domain, infra.IngressBinding(svc))
        verifyDNSPropagation(ctx, dc, cfg)        — warn-only, before ACME
-       Ingress(ctx, dc, live, cfg)               — Caddy admin-API hot-reload + per-domain cert/HTTPS waits
+       Ingress(ctx, dc, cfg)                     — Caddy admin-API hot-reload + per-domain cert/HTTPS waits
 ```
 
 **Zero per-provider branching.** Adding a new infra backend = implementing
@@ -70,7 +69,7 @@ Image tag resolution (Kamal-style, adapted): host inferred when `image:` has no 
 Owned entirely by the InfraProvider — `internal/reconcile/{servers,firewall,volumes}.go` were deleted in #47-C6. The orchestration lives in `pkg/provider/infra/{hetzner,aws,scaleway}/infra.go`.
 
 - `infra.Bootstrap`: provisions servers (masters then workers, swap + k3s install/join + node label), firewalls (per-role set), volumes (create + SSH-mount). Returns the `*kube.Client` tunneled through the master SSH it dialed. Caches the SSH on the receiver so `infra.NodeShell` returns the same connection.
-- `infra.LiveSnapshot`: reads provider-side state (servers, volumes, firewalls) for orphan detection. Used by `DescribeLive` alongside `app.Describe` (kube-side state).
+- `infra.LiveSnapshot`: reads provider-side state (servers, volumes, firewalls) for orphan detection. Called internally by `infra.TeardownOrphans`; not invoked from reconcile.
 - `infra.TeardownOrphans`: drains orphan servers (via `Cluster.MasterKube.DrainAndRemoveNode`), sweeps orphan firewalls AFTER server detachment (Hetzner rejects `DeleteFirewall` on attached resources — `DeleteServer`'s contract detaches first), best-effort orphan volume delete (warn-on-fail).
 - `infra.Teardown`: hard nuke for `bin/destroy`. Workers → master → firewalls → network. With `--delete-volumes`, volumes nuked first; otherwise detached on server delete and preserved.
 

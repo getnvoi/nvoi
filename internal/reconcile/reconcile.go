@@ -11,9 +11,10 @@ import (
 
 // Deploy reconciles live infrastructure to match the YAML config.
 //
-// Linear flow per refactor #47 — zero per-provider branching, no
-// pre-deploy DescribeLive (each step looks up the live state it
-// actually needs from kube or its own provider):
+// Linear flow per refactor #47 — zero per-provider branching. Each
+// step that needs live state queries it directly: Services/Crons hit
+// kube via kc.ListWorkloadNames/ListCronJobNames, TeardownOrphans
+// hits the provider via infra.LiveSnapshot internally.
 //
 //  1. ValidateConfig + cfg.Resolve()
 //  2. Stamp DeployHash

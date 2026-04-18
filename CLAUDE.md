@@ -171,7 +171,6 @@ internal/
 
 pkg/
   core/                    Business logic. One file per domain. No cobra, no I/O, no stdout.
-    cluster.go             Cluster (MasterSSH, MasterKube, DeployHash), ProviderRef, Connect(), SSH(), Kube()
     cluster.go             Cluster (Provider, Credentials, NodeShell, MasterKube, DeployHash); SSH() / Kube() borrow accessors
     service.go cron.go     ServiceSet / CronSet — kube workload appliers (KnownVolumes from caller)
     storage.go secret.go   StorageSet / Secret resolution (no provider lookup)
