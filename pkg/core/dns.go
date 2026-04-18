@@ -2,11 +2,9 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
-	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // ── DNS ───────────────────────────────────────────────────────────────────────
@@ -18,7 +16,11 @@ type DNSSetRequest struct {
 	Domains []string
 }
 
-// DNSSet creates/updates DNS A records. DNS only — ingress is separate.
+// DNSSet routes domains to the master node via the configured DNS
+// provider. The IngressBinding is constructed inline (DNSType:"A",
+// DNSTarget:master.IPv4) — once C6 lands, the reconciler delegates to
+// infra.IngressBinding(svc) so managed-k8s providers can return CNAMEs
+// and we never assume the binding shape here.
 func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	out := req.Log()
 
@@ -35,9 +37,10 @@ func DNSSet(ctx context.Context, req DNSSetRequest) error {
 	ip := master.IPv4
 	out.Command("dns", "set", req.Service, "ip", ip, "domains", req.Domains)
 
+	binding := provider.IngressBinding{DNSType: "A", DNSTarget: ip}
 	for _, domain := range req.Domains {
 		out.Progress(fmt.Sprintf("ensuring %s → %s", domain, ip))
-		if err := dns.EnsureARecord(ctx, domain, ip, false); err != nil {
+		if err := dns.RouteTo(ctx, domain, binding); err != nil {
 			return fmt.Errorf("dns set %s: %w", domain, err)
 		}
 		out.Success(domain)
@@ -53,7 +56,9 @@ type DNSDeleteRequest struct {
 	Domains []string
 }
 
-// DNSDelete removes DNS A records.
+// DNSDelete removes DNS records for the given domains. Idempotent —
+// providers' Unroute returns nil for missing records (matches the old
+// "already deleted" UX without per-error inspection).
 func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	out := req.Log()
 	out.Command("dns", "delete", req.Service)
@@ -64,11 +69,7 @@ func DNSDelete(ctx context.Context, req DNSDeleteRequest) error {
 	}
 
 	for _, domain := range req.Domains {
-		if err := dns.DeleteARecord(ctx, domain); err != nil {
-			if errors.Is(err, utils.ErrNotFound) {
-				out.Success(fmt.Sprintf("%s already deleted", domain))
-				continue
-			}
+		if err := dns.Unroute(ctx, domain); err != nil {
 			return fmt.Errorf("dns delete %s: %w", domain, err)
 		}
 		out.Success(fmt.Sprintf("%s deleted", domain))
@@ -82,10 +83,10 @@ type DNSListRequest struct {
 	Output Output
 }
 
-func DNSList(ctx context.Context, req DNSListRequest) ([]provider.DNSRecord, error) {
+func DNSList(ctx context.Context, req DNSListRequest) ([]provider.DNSBinding, error) {
 	dns, err := provider.ResolveDNS(req.DNS.Name, req.DNS.Creds)
 	if err != nil {
 		return nil, err
 	}
-	return dns.ListARecords(ctx)
+	return dns.ListBindings(ctx)
 }
