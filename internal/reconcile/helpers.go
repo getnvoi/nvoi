@@ -8,6 +8,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -25,12 +26,26 @@ func isKubeconfigMissing(err error) bool {
 }
 
 // DescribeLive queries the cluster and provider for current state.
-// Returns (nil, nil) on first deploy (no servers exist).
-// Returns error if servers exist but cluster state can't be read — prevents
-// silent orphan accumulation from flaky SSH.
+// Returns (nil, nil) on first deploy (no provider-side resources).
+// Returns error if provider state exists but cluster state can't be read —
+// prevents silent orphan accumulation from flaky SSH.
+//
+// Provider-side state goes through infra.LiveSnapshot. Kube-side state
+// (workloads, crons, ingress) goes through app.Describe via the kube
+// tunnel. The two halves are merged into config.LiveState.
 func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) (*config.LiveState, error) {
-	// Check if any servers exist at the provider.
-	servers, listErr := app.ComputeList(ctx, app.ComputeListRequest{Cluster: dc.Cluster})
+	// Resolve infra provider once and ask it for its live view.
+	bctx := config.BootstrapContext(dc, cfg)
+	prov, providerErr := provider.ResolveInfra(bctx.ProviderName, dc.Cluster.Credentials)
+	var snap *provider.LiveSnapshot
+	if providerErr == nil {
+		s, err := prov.LiveSnapshot(ctx, bctx)
+		if err == nil {
+			snap = s
+		} else {
+			providerErr = err
+		}
+	}
 
 	res, err := app.Describe(ctx, app.DescribeRequest{
 		Cluster:        dc.Cluster,
@@ -38,26 +53,29 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		ServiceSecrets: cfg.ServiceSecrets(),
 	})
 	if err != nil {
-		if listErr != nil {
-			// Both calls failed — provider may be down or credentials wrong.
-			// Cannot distinguish "first deploy" from "API unreachable."
-			return nil, fmt.Errorf("cannot determine cluster state — provider list failed: %w", listErr)
+		if providerErr != nil {
+			// Both calls failed — cannot distinguish "first deploy" from "API unreachable."
+			return nil, fmt.Errorf("cannot determine cluster state — provider snapshot failed: %w", providerErr)
 		}
-		if len(servers) == 0 {
+		if snap == nil {
 			return nil, nil // first deploy — nothing exists
 		}
 		if isKubeconfigMissing(err) {
-			// Servers exist at the provider but k3s hasn't been installed
-			// yet (prior deploy aborted mid-provisioning). No cluster
-			// state to describe — return an empty live state so
-			// ServersAdd can resume provisioning on the existing server.
-			return &config.LiveState{Domains: map[string][]string{}, ServerDisk: map[string]int{}}, nil
+			// Provider resources exist but k3s hasn't been installed yet
+			// (prior deploy aborted mid-provisioning). Return a minimal
+			// live state populated from the snapshot so Bootstrap can
+			// resume.
+			return liveFromSnapshot(snap), nil
 		}
 		return nil, fmt.Errorf("servers exist but cluster state unreadable — cannot detect orphans: %w", err)
 	}
-	volumes, _ := app.VolumeList(ctx, app.VolumeListRequest{Cluster: dc.Cluster})
-	firewalls, _ := app.FirewallListAll(ctx, app.FirewallListAllRequest{Cluster: dc.Cluster})
 
+	state := liveFromSnapshot(snap)
+	if state.ServerDisk == nil {
+		state.ServerDisk = map[string]int{}
+	}
+
+	// Merge kube-side state.
 	names, _ := dc.Cluster.Names()
 	prefix := names.Base() + "-"
 	strip := func(s string) string {
@@ -67,17 +85,9 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		return s
 	}
 
-	state := &config.LiveState{Domains: map[string][]string{}, ServerDisk: map[string]int{}}
 	seen := map[string]bool{}
-	for _, s := range servers {
-		name := strip(s.Name)
-		if !seen[name] {
-			state.Servers = append(state.Servers, name)
-			seen[name] = true
-			if s.DiskGB > 0 {
-				state.ServerDisk[name] = s.DiskGB
-			}
-		}
+	for _, s := range state.Servers {
+		seen[s] = true
 	}
 	for _, n := range res.Nodes {
 		name := strip(n.Name)
@@ -92,24 +102,13 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	for _, c := range res.Crons {
 		state.Crons = append(state.Crons, c.Name)
 	}
-	for _, v := range volumes {
-		state.Volumes = append(state.Volumes, strip(v.Name))
-	}
 	for _, s := range res.Storage {
 		state.Storage = append(state.Storage, s.Name)
 	}
-	for _, fw := range firewalls {
-		if len(fw.Name) > len(prefix) && fw.Name[:len(prefix)] == prefix {
-			state.Firewalls = append(state.Firewalls, fw.Name)
-		}
-	}
-	// Secrets no longer tracked in live state — per-service secrets
-	// are managed by the Services/Crons reconcilers directly.
 	for _, i := range res.Ingress {
 		state.Domains[i.Service] = append(state.Domains[i.Service], i.Domain)
 	}
 
-	// Sort all lists for deterministic output and safe positional comparison.
 	sort.Strings(state.Servers)
 	sort.Strings(state.Firewalls)
 	sort.Strings(state.Services)
@@ -122,17 +121,20 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	return state, nil
 }
 
-func drainNode(ctx context.Context, dc *config.DeployContext, name string) error {
-	names, err := dc.Cluster.Names()
-	if err != nil {
-		return fmt.Errorf("drain %s: %w", name, err)
+// liveFromSnapshot builds a LiveState skeleton from the provider snapshot.
+// Returns a populated struct with empty kube-side fields ready to merge.
+func liveFromSnapshot(snap *provider.LiveSnapshot) *config.LiveState {
+	state := &config.LiveState{Domains: map[string][]string{}, ServerDisk: map[string]int{}}
+	if snap == nil {
+		return state
 	}
-	kc := dc.Cluster.MasterKube
-	if kc == nil {
-		return fmt.Errorf("drain %s: no master kube client", name)
+	state.Servers = append(state.Servers, snap.Servers...)
+	state.Volumes = append(state.Volumes, snap.Volumes...)
+	state.Firewalls = append(state.Firewalls, snap.Firewalls...)
+	for k, v := range snap.ServerDisk {
+		state.ServerDisk[k] = v
 	}
-	dc.Cluster.Log().Command("node", "drain", names.Server(name))
-	return kc.DrainAndRemoveNode(ctx, names.Server(name))
+	return state
 }
 
 func clusterWith(dc *config.DeployContext, creds map[string]string) app.Cluster {

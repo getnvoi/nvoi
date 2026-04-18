@@ -19,10 +19,11 @@ func TestValidateConfig_MissingApp(t *testing.T) {
 	assertValidationError(t, cfg, "app is required")
 }
 
-func TestValidateConfig_MissingCompute(t *testing.T) {
+func TestValidateConfig_MissingInfra(t *testing.T) {
 	cfg := validCfg()
-	cfg.Providers.Compute = ""
-	assertValidationError(t, cfg, "providers.compute is required")
+	cfg.Providers.Compute = "" // no Infra either → validator rejects
+	cfg.Providers.Infra = ""
+	assertValidationError(t, cfg, "providers.infra is required")
 }
 
 func TestValidateConfig_NoServers(t *testing.T) {

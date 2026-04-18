@@ -127,7 +127,11 @@ func (c *AppConfig) Resolve() error {
 }
 
 type ProvidersDef struct {
-	Compute string      `yaml:"compute"`
+	// Infra is the new key (per refactor #47); Compute is the legacy
+	// alias still accepted by the YAML parser during the staged rollout.
+	// C8 makes Infra exclusive (no alias, no backward compat).
+	Infra   string      `yaml:"infra,omitempty"`
+	Compute string      `yaml:"compute,omitempty"`
 	DNS     string      `yaml:"dns,omitempty"`
 	Storage string      `yaml:"storage,omitempty"`
 	Secrets *SecretsDef `yaml:"secrets,omitempty"`

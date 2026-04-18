@@ -27,8 +27,14 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	}
 
 	// ── Providers ─────────────────────────────────────────────────────────
-	if cfg.Providers.Compute == "" {
-		return fmt.Errorf("providers.compute is required")
+	// providers.infra is the new key (refactor #47); providers.compute is the
+	// legacy alias still accepted during the staged rollout. C8 hard-removes
+	// the alias. Everything downstream reads providers.infra.
+	if cfg.Providers.Infra == "" && cfg.Providers.Compute != "" {
+		cfg.Providers.Infra = cfg.Providers.Compute
+	}
+	if cfg.Providers.Infra == "" {
+		return fmt.Errorf("providers.infra is required")
 	}
 	if s := cfg.Providers.Secrets; s != nil {
 		if s.Kind == "" {
@@ -66,7 +72,7 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if srv.Disk < 0 {
 			return fmt.Errorf("servers.%s.disk must be >= 0", name)
 		}
-		if srv.Disk > 0 && cfg.Providers.Compute == "hetzner" {
+		if srv.Disk > 0 && cfg.Providers.Infra == "hetzner" {
 			return fmt.Errorf("servers.%s.disk: hetzner does not support custom root disk sizes — disk is fixed per server type", name)
 		}
 		if srv.Role == "master" {

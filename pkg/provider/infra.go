@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -134,23 +135,46 @@ type ServiceTarget struct {
 // need without coupling pkg/provider to internal/config or pkg/core.
 // Populated by the reconciler before calling Bootstrap.
 //
-// Cluster identity (App, Env) drives naming. Credentials are pre-resolved
-// (the reconciler ran them through CredentialSource at the cmd/ boundary).
-// SSHKey is the operator's private key bytes — providers that mint their
-// own SSH credentials (e.g. token-auth gateways) ignore it. DeployHash is
-// the per-deploy stamp inherited from cluster-wide state.
+// Cluster identity (App, Env) drives naming. ProviderName is the name the
+// provider was registered under (e.g. "hetzner" in production, "test-X"
+// under fakes); some downstream helpers re-resolve the provider via the
+// registry and need it. Credentials are pre-resolved (the reconciler ran
+// them through CredentialSource at the cmd/ boundary). SSHKey is the
+// operator's private key bytes — providers that mint their own SSH
+// credentials (token-auth gateways) ignore it. DeployHash is the per-
+// deploy stamp inherited from cluster-wide state.
 //
 // Output is the event sink — providers emit progress through it; never
 // stdout, never log. Cfg is opaque to pkg/provider; concrete providers
 // type-assert to whatever view they need from their own package.
 type BootstrapContext struct {
-	App         string
-	Env         string
-	Credentials map[string]string
-	SSHKey      []byte
-	DeployHash  string
-	Output      EventSink
-	Cfg         ProviderConfigView
+	App          string
+	Env          string
+	ProviderName string
+	Credentials  map[string]string
+	SSHKey       []byte
+	DeployHash   string
+	Output       EventSink
+	Cfg          ProviderConfigView
+
+	// SSHDial overrides the production infra.ConnectSSH dial. When non-nil,
+	// providers call this to open SSH connections (Bootstrap → master /
+	// Teardown → per-server unmount). Tests inject a closure returning a
+	// canned MockSSH; production leaves it nil and providers fall back to
+	// infra.ConnectSSH directly.
+	SSHDial func(ctx context.Context, addr string) (utils.SSHClient, error)
+
+	// MasterKube, when non-nil, is returned by Bootstrap instead of dialing
+	// the kube tunnel. Test scaffolding pre-injects a KubeFake here so
+	// invariant tests can exercise the full reconcile.Deploy path without
+	// the SSH-tunneled apiserver dance. Production leaves it nil; Bootstrap
+	// then builds a real *kube.Client over the master SSH connection.
+	//
+	// Mirror of the existing Cluster.MasterSSH / Cluster.MasterKube
+	// "borrowed reference" pattern in pkg/core/cluster.go: when the
+	// reconciler/test owns the connection, the provider returns it; when
+	// it's nil, the provider creates and returns a fresh one.
+	MasterKube *kube.Client
 }
 
 // LiveSnapshot is the orphan-detection input: what the provider sees in
@@ -202,9 +226,11 @@ type ServiceSpec struct {
 	Port int
 }
 
-// EventSink is the narrow output interface providers use. Mirrors the
-// methods on pkg/core.Output that providers actually call. Defined here
-// (not imported from pkg/core) to keep pkg/provider free of pkg/core.
+// EventSink is the output interface providers use. Identical-shape mirror
+// of pkg/core.Output (defined here so pkg/provider stays free of pkg/core).
+// Writer() is the streaming-output sink used by pkg/infra helpers
+// (k3s install, swap, volume mount) — providers route their progress
+// through it without owning a buffer.
 type EventSink interface {
 	Command(command, action, name string, extra ...any)
 	Progress(string)
@@ -212,6 +238,7 @@ type EventSink interface {
 	Warning(string)
 	Info(string)
 	Error(error)
+	Writer() io.Writer
 }
 
 // ── Registry ──────────────────────────────────────────────────────────────────
