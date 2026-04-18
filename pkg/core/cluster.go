@@ -8,6 +8,7 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/infra"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -111,22 +112,40 @@ func (c *Cluster) Names() (*utils.Names, error) {
 	return utils.NewNames(c.AppName, c.Env)
 }
 
-// SSH returns the borrowed SSH client to the host node. Caller owns the
-// reference but must NOT Close it (no-op). Returns an error if NodeShell
-// is nil — the CLI dispatch path is responsible for resolving the
-// InfraProvider and populating NodeShell BEFORE calling this (see
-// cmd/cli/ssh.go's nil-check). Reconcile populates NodeShell during
-// Deploy. No on-demand fallback any more — the InfraProvider's
-// NodeShell method is the single dialer.
-func (c *Cluster) SSH(ctx context.Context) (utils.SSHClient, *utils.Names, error) {
-	if c.NodeShell == nil {
-		return nil, nil, fmt.Errorf("no node shell available — caller must populate Cluster.NodeShell via infra.NodeShell before SSH()")
-	}
+// SSH returns an SSH client to the host node.
+//
+// When NodeShell is set (reconcile path): returns a borrowed reference
+// (no-op Close). The reconciler owns the connection.
+//
+// When NodeShell is nil (CLI dispatch): resolves the InfraProvider and
+// calls NodeShell — the single dialer for every backend. Returns
+// `(nil, _, err)` with an actionable message when the provider has no
+// node shell (managed-k8s / sandbox runtimes). Caller owns Close().
+//
+// cfg is the provider-facing view of the YAML; CLI passes
+// `config.NewView(rt.cfg)`, reconcile passes the same. Required because
+// `infra.NodeShell` may need it (e.g. label-filtered FindMaster).
+func (c *Cluster) SSH(ctx context.Context, cfg provider.ProviderConfigView) (utils.SSHClient, *utils.Names, error) {
 	names, err := c.Names()
 	if err != nil {
 		return nil, nil, err
 	}
-	return borrowedSSH{c.NodeShell}, names, nil
+	if c.NodeShell != nil {
+		return borrowedSSH{c.NodeShell}, names, nil
+	}
+	bctx := c.bootstrapContext(cfg)
+	infraProv, err := provider.ResolveInfra(c.Provider, c.Credentials)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve infra provider: %w", err)
+	}
+	shell, err := infraProv.NodeShell(ctx, bctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("infra.NodeShell: %w", err)
+	}
+	if shell == nil {
+		return nil, nil, fmt.Errorf("infra provider %q has no node shell — sandbox / managed-k8s providers don't expose host SSH", c.Provider)
+	}
+	return shell, names, nil
 }
 
 // Connect opens an SSH connection using SSHFunc or the default infra.ConnectSSH.
@@ -145,36 +164,64 @@ func (c *Cluster) Connect(ctx context.Context, addr string) (utils.SSHClient, er
 	return ssh, nil
 }
 
-// Kube returns a Kubernetes client to the master node alongside a cleanup
+// Kube returns a Kubernetes client to the host node alongside a cleanup
 // func the caller must defer.
 //
-// When MasterKube is set (reconcile path): returns a borrowed reference and
-// a no-op cleanup. The reconciler owns Close().
+// When MasterKube is set (reconcile path): returns a borrowed reference
+// and a no-op cleanup. The reconciler owns Close().
 //
-// When MasterKube is nil (CLI dispatch): finds the master, opens a fresh SSH
-// connection + tunnel, builds a Client. cleanup() closes the kube tunnel and
-// the underlying SSH connection.
-func (c *Cluster) Kube(ctx context.Context) (*kube.Client, *utils.Names, func(), error) {
-	if c.MasterKube != nil {
-		names, err := c.Names()
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		return c.MasterKube, names, func() {}, nil
-	}
-
-	ssh, names, err := c.SSH(ctx)
+// When MasterKube is nil (CLI dispatch): resolves the InfraProvider and
+// calls Bootstrap — the single dialer. Bootstrap is idempotent on an
+// existing cluster (≤500ms: lookup + SSH dial + kube tunnel build). The
+// returned cleanup closes the kube tunnel; the cached SSH on the
+// provider is released by infra.Close() at end of command.
+//
+// cfg is the provider-facing view of the YAML; CLI passes
+// `config.NewView(rt.cfg)`, reconcile passes the same.
+func (c *Cluster) Kube(ctx context.Context, cfg provider.ProviderConfigView) (*kube.Client, *utils.Names, func(), error) {
+	names, err := c.Names()
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	kc, err := kube.New(ctx, ssh)
+	if c.MasterKube != nil {
+		return c.MasterKube, names, func() {}, nil
+	}
+	bctx := c.bootstrapContext(cfg)
+	infraProv, err := provider.ResolveInfra(c.Provider, c.Credentials)
 	if err != nil {
-		ssh.Close()
-		return nil, nil, nil, fmt.Errorf("kube client: %w", err)
+		return nil, nil, nil, fmt.Errorf("resolve infra provider: %w", err)
+	}
+	kc, err := infraProv.Bootstrap(ctx, bctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("infra.Bootstrap: %w", err)
 	}
 	cleanup := func() {
 		_ = kc.Close()
-		_ = ssh.Close()
+		_ = infraProv.Close()
 	}
 	return kc, names, cleanup, nil
+}
+
+// bootstrapContext builds the BootstrapContext provider methods need
+// from the Cluster + view. Forwards SSHFunc as SSHDial so test mocks
+// intercept (mirror of internal/config.BootstrapContext).
+func (c *Cluster) bootstrapContext(cfg provider.ProviderConfigView) *provider.BootstrapContext {
+	bctx := &provider.BootstrapContext{
+		App:          c.AppName,
+		Env:          c.Env,
+		ProviderName: c.Provider,
+		Credentials:  c.Credentials,
+		SSHKey:       c.SSHKey,
+		DeployHash:   c.DeployHash,
+		Output:       c.Log(),
+		Cfg:          cfg,
+		MasterKube:   c.MasterKube,
+	}
+	if c.SSHFunc != nil {
+		ssh := c.SSHFunc
+		bctx.SSHDial = func(ctx context.Context, addr string) (utils.SSHClient, error) {
+			return ssh(ctx, addr)
+		}
+	}
+	return bctx
 }

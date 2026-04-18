@@ -10,11 +10,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 type CronSetRequest struct {
 	Cluster
+	Cfg            provider.ProviderConfigView // forwards to Cluster.Kube for on-demand connect
 	Name           string
 	Image          string
 	Command        string
@@ -40,7 +42,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 		return err
 	}
 
-	kc, _, cleanup, err := req.Cluster.Kube(ctx)
+	kc, _, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return err
 	}
@@ -101,13 +103,14 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 
 type CronRunRequest struct {
 	Cluster
+	Cfg  provider.ProviderConfigView
 	Name string
 }
 
 func CronRun(ctx context.Context, req CronRunRequest) error {
 	out := req.Log()
 
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return err
 	}
@@ -139,6 +142,7 @@ func CronRun(ctx context.Context, req CronRunRequest) error {
 
 type CronDeleteRequest struct {
 	Cluster
+	Cfg  provider.ProviderConfigView
 	Name string
 }
 
@@ -146,7 +150,7 @@ func CronDelete(ctx context.Context, req CronDeleteRequest) error {
 	out := req.Log()
 	out.Command("cron", "delete", req.Name)
 
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if errors.Is(err, ErrNoMaster) {
 		return ErrNoMaster
 	}

@@ -47,7 +47,8 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 		}
 
 		if err := app.CronSet(ctx, app.CronSetRequest{
-			Cluster: dc.Cluster, Name: name, Image: cron.Image,
+			Cluster: dc.Cluster, Cfg: config.NewView(cfg),
+			Name: name, Image: cron.Image,
 			Command:    cron.Command,
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
@@ -63,7 +64,7 @@ func Crons(ctx context.Context, dc *config.DeployContext, live *config.LiveState
 		desired := toSet(cronNames)
 		for _, name := range live.Crons {
 			if !desired[name] {
-				if err := app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
+				if err := app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Cfg: config.NewView(cfg), Name: name}); err != nil {
 					dc.Cluster.Log().Warning(fmt.Sprintf("orphan cron %s not removed: %s", name, err))
 				}
 				deleteServiceSecret(ctx, dc, names, name)

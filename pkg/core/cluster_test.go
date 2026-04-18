@@ -45,7 +45,7 @@ func TestSSH_NodeShellSet_ReturnsBorrowed(t *testing.T) {
 	c.NodeShell = mock
 
 	ctx := context.Background()
-	ssh, names, err := c.SSH(ctx)
+	ssh, names, err := c.SSH(ctx, nil)
 	if err != nil {
 		t.Fatalf("SSH(): %v", err)
 	}
@@ -72,29 +72,27 @@ func TestSSH_NodeShellSet_NeverConnects(t *testing.T) {
 	c.NodeShell = mock
 
 	ctx := context.Background()
-	_, _, _ = c.SSH(ctx)
-	_, _, _ = c.SSH(ctx)
-	_, _, _ = c.SSH(ctx)
+	_, _, _ = c.SSH(ctx, nil)
+	_, _, _ = c.SSH(ctx, nil)
+	_, _, _ = c.SSH(ctx, nil)
 
 	if atomic.LoadInt32(&connectCount) != 0 {
 		t.Errorf("with NodeShell set, connect should never be called, got %d", connectCount)
 	}
 }
 
-// TestSSH_NoNodeShell_Errors locks the C10 contract: Cluster.SSH() no
-// longer has an on-demand fallback. The CLI dispatch path is responsible
-// for resolving the InfraProvider and populating NodeShell BEFORE calling
-// SSH(); reconcile populates it during Deploy. Pre-#47 this would have
-// silently dialed via SSHFunc — that's now an error so misuse surfaces.
-func TestSSH_NoNodeShell_Errors(t *testing.T) {
+// TestSSH_NoNodeShell_NoProvider_Errors locks the on-demand contract:
+// Cluster.SSH() with NodeShell nil resolves via infra.NodeShell. Without
+// a Provider set, ResolveInfra fails and SSH() surfaces the error.
+func TestSSH_NoNodeShell_NoProvider_Errors(t *testing.T) {
 	c := clusterWithSSHFunc(nil)
-	// NodeShell intentionally nil.
-	_, _, err := c.SSH(context.Background())
+	c.Provider = "" // intentional: no infra provider → on-demand resolve fails
+	_, _, err := c.SSH(context.Background(), nil)
 	if err == nil {
-		t.Fatal("expected error when NodeShell is nil")
+		t.Fatal("expected error when NodeShell nil + Provider unset")
 	}
-	if !strings.Contains(err.Error(), "no node shell available") {
-		t.Errorf("error should mention 'no node shell available', got: %v", err)
+	if !strings.Contains(err.Error(), "infra provider") {
+		t.Errorf("error should mention 'infra provider', got: %v", err)
 	}
 }
 

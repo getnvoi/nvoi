@@ -1,11 +1,16 @@
 package core
 
-import "context"
+import (
+	"context"
+
+	"github.com/getnvoi/nvoi/pkg/provider"
+)
 
 // WaitRolloutRequest asks the cluster to wait for a specific service's
 // rollout to complete. Scoped to one service — doesn't block on unrelated pods.
 type WaitRolloutRequest struct {
 	Cluster
+	Cfg            provider.ProviderConfigView
 	Service        string // service name (deployment/statefulset name)
 	WorkloadKind   string // "deployment" or "statefulset"
 	HasHealthCheck bool   // true if the service has a readiness probe
@@ -16,7 +21,7 @@ type WaitRolloutRequest struct {
 // services without health checks.
 func WaitRollout(ctx context.Context, req WaitRolloutRequest) error {
 	out := req.Log()
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return err
 	}

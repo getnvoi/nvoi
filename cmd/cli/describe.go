@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
@@ -17,6 +18,7 @@ func newDescribeCmd(rt *runtime) *cobra.Command {
 			j, _ := cmd.Flags().GetBool("json")
 			req := app.DescribeRequest{
 				Cluster:        rt.dc.Cluster,
+				Cfg:            config.NewView(rt.cfg),
 				StorageNames:   rt.cfg.StorageNames(),
 				ServiceSecrets: rt.cfg.ServiceSecrets(),
 			}

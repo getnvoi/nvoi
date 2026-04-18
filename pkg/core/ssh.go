@@ -3,15 +3,18 @@ package core
 import (
 	"context"
 	"strings"
+
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 type SSHRequest struct {
 	Cluster
+	Cfg     provider.ProviderConfigView
 	Command []string
 }
 
 func SSH(ctx context.Context, req SSHRequest) error {
-	ssh, _, err := req.Cluster.SSH(ctx)
+	ssh, _, err := req.Cluster.SSH(ctx, req.Cfg)
 	if err != nil {
 		return err
 	}

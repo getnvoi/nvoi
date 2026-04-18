@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -18,8 +19,9 @@ import (
 
 type DescribeRequest struct {
 	Cluster
-	StorageNames   []string            // from cfg — config is the source of truth
-	ServiceSecrets map[string][]string // service/cron name → secret keys declared on it
+	Cfg            provider.ProviderConfigView // forwards to Cluster.Kube for on-demand connect
+	StorageNames   []string                    // from cfg — config is the source of truth
+	ServiceSecrets map[string][]string         // service/cron name → secret keys declared on it
 }
 
 type DescribeNode struct {
@@ -86,7 +88,7 @@ type DescribeResult struct {
 // ── Public ──────────────────────────────────────────────────────────────────────
 
 func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error) {
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +159,7 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 // DescribeJSON returns raw JSON for each kube resource type, preserving the
 // shape clients of the legacy command depended on.
 func DescribeJSON(ctx context.Context, req DescribeRequest) (map[string]json.RawMessage, error) {
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return nil, err
 	}

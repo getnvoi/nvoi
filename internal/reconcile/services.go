@@ -66,7 +66,8 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			return err
 		}
 		if err := app.ServiceSet(ctx, app.ServiceSetRequest{
-			Cluster: dc.Cluster, Name: name, Image: resolvedImage,
+			Cluster: dc.Cluster, Cfg: config.NewView(cfg),
+			Name: name, Image: resolvedImage,
 			Port: svc.Port, Command: svc.Command, Replicas: replicas,
 			EnvVars:    plainEnv,
 			SvcSecrets: svcSecretRefs,
@@ -81,7 +82,8 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 			kind = "statefulset"
 		}
 		if err := app.WaitRollout(ctx, app.WaitRolloutRequest{
-			Cluster: dc.Cluster, Service: name,
+			Cluster: dc.Cluster, Cfg: config.NewView(cfg),
+			Service:      name,
 			WorkloadKind: kind, HasHealthCheck: svc.Health != "",
 		}); err != nil {
 			return err
@@ -92,7 +94,7 @@ func Services(ctx context.Context, dc *config.DeployContext, live *config.LiveSt
 		desired := toSet(svcNames)
 		for _, name := range live.Services {
 			if !desired[name] {
-				if err := app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Name: name}); err != nil {
+				if err := app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Cfg: config.NewView(cfg), Name: name}); err != nil {
 					dc.Cluster.Log().Warning(fmt.Sprintf("orphan service %s not removed: %s", name, err))
 				}
 				deleteServiceSecret(ctx, dc, names, name)

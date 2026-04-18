@@ -49,6 +49,7 @@ func DescribeLive(ctx context.Context, dc *config.DeployContext, cfg *config.App
 
 	res, err := app.Describe(ctx, app.DescribeRequest{
 		Cluster:        dc.Cluster,
+		Cfg:            config.NewView(cfg),
 		StorageNames:   cfg.StorageNames(),
 		ServiceSecrets: cfg.ServiceSecrets(),
 	})

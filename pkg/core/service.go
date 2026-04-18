@@ -8,11 +8,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 type ServiceSetRequest struct {
 	Cluster
+	Cfg            provider.ProviderConfigView // forwards to Cluster.Kube for on-demand connect
 	Name           string
 	Image          string
 	Port           int
@@ -45,7 +47,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 		return err
 	}
 
-	kc, _, cleanup, err := req.Cluster.Kube(ctx)
+	kc, _, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if err != nil {
 		return err
 	}
@@ -122,6 +124,7 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 
 type ServiceDeleteRequest struct {
 	Cluster
+	Cfg  provider.ProviderConfigView
 	Name string
 }
 
@@ -129,7 +132,7 @@ func ServiceDelete(ctx context.Context, req ServiceDeleteRequest) error {
 	out := req.Log()
 	out.Command("service", "delete", req.Name)
 
-	kc, names, cleanup, err := req.Cluster.Kube(ctx)
+	kc, names, cleanup, err := req.Cluster.Kube(ctx, req.Cfg)
 	if errors.Is(err, ErrNoMaster) {
 		return ErrNoMaster
 	}
