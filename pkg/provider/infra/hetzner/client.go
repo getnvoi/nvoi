@@ -1,4 +1,4 @@
-// Package hetzner implements the compute provider for Hetzner Cloud.
+// Package hetzner implements the infra provider for Hetzner Cloud.
 package hetzner
 
 import (
@@ -14,6 +14,12 @@ import (
 type Client struct {
 	api   *utils.HTTPClient
 	token string
+
+	// shell caches the SSH connection Bootstrap (or NodeShell's cold path)
+	// dials to the master, so repeat NodeShell calls return the same
+	// connection and Close() can release it. Access via cachedShell /
+	// setCachedShell which take hetznerCacheMu.
+	shell utils.SSHClient
 }
 
 func New(token string) *Client {

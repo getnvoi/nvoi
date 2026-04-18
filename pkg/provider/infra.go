@@ -2,17 +2,25 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// ErrNotImplemented is returned by provider methods that aren't wired yet.
+// During the InfraProvider rollout, providers stage their interface
+// satisfaction by returning this from Bootstrap / TeardownOrphans /
+// Teardown / LiveSnapshot until the orchestration relocation lands.
+// Production providers must never return this once the refactor completes.
+var ErrNotImplemented = errors.New("infra provider: not implemented")
+
 // InfraProvider is the narrow contract every infrastructure backend
 // satisfies. The single load-bearing promise: Bootstrap returns a working
 // *kube.Client. Everything else is either gated capability (NodeShell,
-// IngressBinding) or provider-private bookkeeping (TeardownOrphans,
-// ConsumesBlocks, ValidateConfig).
+// IngressBinding) or provider-private bookkeeping (LiveSnapshot,
+// TeardownOrphans, Teardown, ConsumesBlocks, ValidateConfig).
 //
 // Adding a new infra backend = implementing this interface. Reconcile
 // never branches on "what kind of provider is this" — the gates above
@@ -32,6 +40,12 @@ type InfraProvider interface {
 	// sandbox upsert. Caller treats this as opaque. Idempotent.
 	Bootstrap(ctx context.Context, dc *BootstrapContext) (*kube.Client, error)
 
+	// LiveSnapshot returns the provider's view of live infra resources
+	// (servers, volumes, firewalls) for orphan-detection input. Returns
+	// nil when no resources exist (first deploy). Used by reconcile's
+	// DescribeLive to feed TeardownOrphans.
+	LiveSnapshot(ctx context.Context, dc *BootstrapContext) (*LiveSnapshot, error)
+
 	// TeardownOrphans removes infra no longer referenced by the desired
 	// state. IaaS: drain and delete orphan servers / firewalls / volumes.
 	// Single-unit providers (sandbox, managed-k8s without cluster-creation
@@ -39,13 +53,21 @@ type InfraProvider interface {
 	// have already moved off the resources marked for removal.
 	TeardownOrphans(ctx context.Context, dc *BootstrapContext, live *LiveSnapshot) error
 
+	// Teardown hard-nukes every provider resource owned by this cluster
+	// (matched by labels). Backs `nvoi teardown` / `bin/destroy`. When
+	// deleteVolumes is false, persistent volumes are detached but
+	// preserved (matches existing --delete-volumes contract). Network
+	// always destroyed; storage handled separately by the caller.
+	Teardown(ctx context.Context, dc *BootstrapContext, deleteVolumes bool) error
+
 	// IngressBinding resolves how external traffic reaches the given
 	// service. Called only when HasPublicIngress() is true AND no tunnel
 	// provider is configured. The return value flows directly into
-	// DNSProvider.RouteTo.
+	// DNSProvider.RouteTo. dc carries the cluster identity (App/Env)
+	// the provider needs to look up its own resources by label.
 	//   IaaS:    { DNSType: "A",     DNSTarget: master.IPv4 }
 	//   Managed: { DNSType: "CNAME", DNSTarget: lb.external.hostname }
-	IngressBinding(ctx context.Context, svc ServiceTarget) (IngressBinding, error)
+	IngressBinding(ctx context.Context, dc *BootstrapContext, svc ServiceTarget) (IngressBinding, error)
 
 	// HasPublicIngress reports whether this infra exposes a reachable
 	// public endpoint Caddy can bind to. IaaS with public IPs: true.
@@ -72,11 +94,23 @@ type InfraProvider interface {
 	// by `nvoi ssh`. Providers that don't expose node shell (managed k8s
 	// behind cloud authn) return (nil, nil). The CLI feature-gates on
 	// nil with an actionable error.
+	//
+	// On the deploy path, NodeShell is called after Bootstrap; SSH-tunneled
+	// providers may return the same connection Bootstrap dialed for the
+	// kube tunnel (cached on the receiver). On the dispatch path
+	// (`nvoi ssh` without a preceding deploy), Bootstrap hasn't run, so
+	// the provider dials fresh.
 	NodeShell(ctx context.Context, dc *BootstrapContext) (utils.SSHClient, error)
 
 	// ValidateCredentials probes the backend's API at startup so a
 	// misconfigured provider fails loudly before reconcile begins.
 	ValidateCredentials(ctx context.Context) error
+
+	// Close releases any provider-internal resources (cached SSH
+	// connections, HTTP transports holding sockets open, etc.). Idempotent.
+	// Called by the CLI at the end of every command that opened a
+	// provider — without it, SSH-tunneled providers leak file descriptors.
+	Close() error
 }
 
 // IngressBinding tells the DNS provider how to route a domain. The DNS

@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
+	testutil "github.com/getnvoi/nvoi/internal/testutil/sshmock"
 )
 
 func TestEnsureSwap_AlreadyActive(t *testing.T) {

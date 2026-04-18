@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/getnvoi/nvoi/internal/testutil"
+	testutil "github.com/getnvoi/nvoi/internal/testutil/sshmock"
 )
 
 func TestMountVolume_AlreadyMounted(t *testing.T) {
