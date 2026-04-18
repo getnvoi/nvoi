@@ -22,7 +22,7 @@ var dnsGracePeriod = 3 * time.Second
 func verifyDNSPropagation(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) {
 	out := dc.Cluster.Log()
 
-	ssh := dc.Cluster.MasterSSH
+	ssh := dc.Cluster.NodeShell
 	if ssh == nil {
 		return
 	}

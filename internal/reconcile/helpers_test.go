@@ -129,7 +129,7 @@ func testDC(ssh *testutil.MockSSH) *config.DeployContext {
 	return dc
 }
 
-// testDCWithKube wires MasterSSH and MasterKube together for tests that need
+// testDCWithKube wires NodeShell and MasterKube together for tests that need
 // to inspect or pre-populate the kube tracker.
 func testDCWithKube(ssh *testutil.MockSSH, kf *kubefake.KubeFake) *config.DeployContext {
 	sshKey, _, _ := utils.GenerateEd25519Key()
@@ -139,7 +139,7 @@ func testDCWithKube(ssh *testutil.MockSSH, kf *kubefake.KubeFake) *config.Deploy
 			Provider: "test-compute", Credentials: map[string]string{},
 			SSHKey:     sshKey,
 			Output:     &testutil.MockOutput{},
-			MasterSSH:  ssh,
+			NodeShell:  ssh,
 			MasterKube: kf.Client,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
@@ -176,7 +176,7 @@ func convergeDC(log *opLog, ssh *testutil.MockSSH) *config.DeployContext {
 			Provider: "test-reconcile", Credentials: map[string]string{},
 			SSHKey:     sshKey,
 			Output:     &testutil.MockOutput{},
-			MasterSSH:  ssh,
+			NodeShell:  ssh,
 			MasterKube: kf.Client,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
@@ -325,7 +325,7 @@ func TestDescribeLive_ReturnsSortedLists(t *testing.T) {
 			Provider: "test-reconcile-sorted", Credentials: map[string]string{},
 			SSHKey:     sshKey,
 			Output:     &testutil.MockOutput{},
-			MasterSSH:  ssh,
+			NodeShell:  ssh,
 			MasterKube: kf.Client,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil

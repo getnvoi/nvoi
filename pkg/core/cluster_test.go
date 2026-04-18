@@ -38,10 +38,10 @@ func TestBorrowedSSH_CloseIsNoop(t *testing.T) {
 	}
 }
 
-func TestSSH_MasterSSHSet_ReturnsBorrowed(t *testing.T) {
+func TestSSH_NodeShellSet_ReturnsBorrowed(t *testing.T) {
 	mock := &testutil.MockSSH{}
 	c := clusterWithSSHFunc(nil)
-	c.MasterSSH = mock
+	c.NodeShell = mock
 
 	ctx := context.Background()
 	ssh, names, err := c.SSH(ctx)
@@ -52,7 +52,7 @@ func TestSSH_MasterSSHSet_ReturnsBorrowed(t *testing.T) {
 		t.Fatal("expected names")
 	}
 	if _, ok := ssh.(borrowedSSH); !ok {
-		t.Error("with MasterSSH set, SSH() should return borrowedSSH")
+		t.Error("with NodeShell set, SSH() should return borrowedSSH")
 	}
 	// Close should be a no-op
 	ssh.Close()
@@ -61,14 +61,14 @@ func TestSSH_MasterSSHSet_ReturnsBorrowed(t *testing.T) {
 	}
 }
 
-func TestSSH_MasterSSHSet_NeverConnects(t *testing.T) {
+func TestSSH_NodeShellSet_NeverConnects(t *testing.T) {
 	mock := &testutil.MockSSH{}
 	var connectCount int32
 	c := clusterWithSSHFunc(func(ctx context.Context, addr string) (utils.SSHClient, error) {
 		atomic.AddInt32(&connectCount, 1)
 		return &testutil.MockSSH{}, nil
 	})
-	c.MasterSSH = mock
+	c.NodeShell = mock
 
 	ctx := context.Background()
 	_, _, _ = c.SSH(ctx)
@@ -76,11 +76,11 @@ func TestSSH_MasterSSHSet_NeverConnects(t *testing.T) {
 	_, _, _ = c.SSH(ctx)
 
 	if atomic.LoadInt32(&connectCount) != 0 {
-		t.Errorf("with MasterSSH set, connect should never be called, got %d", connectCount)
+		t.Errorf("with NodeShell set, connect should never be called, got %d", connectCount)
 	}
 }
 
-func TestSSH_NoMasterSSH_ConnectsFresh(t *testing.T) {
+func TestSSH_NoNodeShell_ConnectsFresh(t *testing.T) {
 	var connectCount int32
 	mock := &testutil.MockSSH{}
 
@@ -100,10 +100,10 @@ func TestSSH_NoMasterSSH_ConnectsFresh(t *testing.T) {
 	}
 
 	if atomic.LoadInt32(&connectCount) != 2 {
-		t.Errorf("without MasterSSH, each call should connect fresh, got %d", connectCount)
+		t.Errorf("without NodeShell, each call should connect fresh, got %d", connectCount)
 	}
 
-	// Without MasterSSH, connections should NOT be borrowedSSH
+	// Without NodeShell, connections should NOT be borrowedSSH
 	if _, ok := ssh1.(borrowedSSH); ok {
 		t.Error("ssh1 should not be borrowedSSH")
 	}

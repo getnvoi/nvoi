@@ -12,7 +12,7 @@ import (
 )
 
 // borrowedSSH wraps a shared connection with a no-op Close.
-// Callers defer ssh.Close() — when the connection is shared (MasterSSH),
+// Callers defer ssh.Close() — when the connection is shared (NodeShell),
 // those are harmless no-ops. The owner closes the real connection.
 type borrowedSSH struct {
 	utils.SSHClient
@@ -31,10 +31,14 @@ type ProviderRef struct {
 // Embedded by every request type.
 //
 // Two SSH modes:
-//   - MasterSSH set: reconcile path. Connection established once after Servers(),
-//     shared across all subsequent operations. SSH() returns a borrowed reference.
-//   - MasterSSH nil: on-demand path (API dispatch). SSH() connects fresh each call,
-//     caller owns the connection and must close it.
+//   - NodeShell set: reconcile path. Connection established once via the
+//     InfraProvider's NodeShell call after Bootstrap, shared across all
+//     subsequent operations. SSH() returns a borrowed reference.
+//   - NodeShell nil: on-demand path (API dispatch). SSH() connects fresh
+//     each call, caller owns the connection and must close it.
+//
+// (Pre-#47 this field was named MasterSSH — renamed when the
+// InfraProvider contract introduced providers without a host shell.)
 type Cluster struct {
 	AppName     string
 	Env         string
@@ -43,15 +47,18 @@ type Cluster struct {
 	SSHKey      []byte
 	Output      Output
 
-	// MasterSSH is the pre-established SSH connection to the master node.
-	// Set once after Servers() in reconcile. When set, SSH() returns a
-	// borrowed reference (no-op Close). When nil, SSH() connects on demand.
-	MasterSSH utils.SSHClient
+	// NodeShell is the pre-established SSH connection to the host node
+	// (master for IaaS, sandbox container for sandbox providers, nil for
+	// providers without a host shell like managed k8s). Set by the
+	// reconciler from infra.NodeShell after Bootstrap. When non-nil,
+	// SSH() returns a borrowed reference (no-op Close). When nil, SSH()
+	// connects on demand or fails if the provider has no node shell.
+	NodeShell utils.SSHClient
 
-	// MasterKube is the pre-established Kubernetes client over the master
-	// SSH tunnel. Mirrors MasterSSH: set once after MasterSSH in reconcile;
-	// Kube() returns a borrowed reference. When nil, Kube() builds a fresh
-	// client on demand and the caller owns Close().
+	// MasterKube is the pre-established Kubernetes client returned by
+	// infra.Bootstrap. Mirrors NodeShell: when set, Kube() returns a
+	// borrowed reference; when nil, Kube() builds a fresh client on
+	// demand and the caller owns Close().
 	MasterKube *kube.Client
 
 	// DeployHash is a per-deploy tag fragment. Set once at the top of
@@ -120,20 +127,20 @@ func (c *Cluster) Master(ctx context.Context) (*provider.Server, *utils.Names, p
 	return master, names, prov, nil
 }
 
-// SSH returns an SSH client to the master node.
+// SSH returns an SSH client to the host node.
 //
-// When MasterSSH is set (reconcile path): returns a borrowed reference with
-// no-op Close. The connection is owned by the reconciler.
+// When NodeShell is set (reconcile path): returns a borrowed reference
+// with no-op Close. The connection is owned by the reconciler.
 //
-// When MasterSSH is nil (API dispatch): connects fresh via connect().
+// When NodeShell is nil (API dispatch): connects fresh via connect().
 // Caller owns the connection and must close it.
 func (c *Cluster) SSH(ctx context.Context) (utils.SSHClient, *utils.Names, error) {
-	if c.MasterSSH != nil {
+	if c.NodeShell != nil {
 		names, err := c.Names()
 		if err != nil {
 			return nil, nil, err
 		}
-		return borrowedSSH{c.MasterSSH}, names, nil
+		return borrowedSSH{c.NodeShell}, names, nil
 	}
 
 	// On-demand: find master, connect, caller owns connection.

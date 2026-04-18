@@ -19,7 +19,7 @@ func dnsDC(ssh *testutil.MockSSH) *config.DeployContext {
 			Provider: "test-compute", Credentials: map[string]string{},
 			SSHKey:    sshKey,
 			Output:    &testutil.MockOutput{},
-			MasterSSH: ssh,
+			NodeShell: ssh,
 			SSHFunc: func(ctx context.Context, addr string) (utils.SSHClient, error) {
 				return ssh, nil
 			},
@@ -133,9 +133,9 @@ func TestVerifyDNSPropagation_MultipleDomains(t *testing.T) {
 	}
 }
 
-func TestVerifyDNSPropagation_NoMasterSSH_Noop(t *testing.T) {
+func TestVerifyDNSPropagation_NoNodeShell_Noop(t *testing.T) {
 	dc := dnsDC(nil)
-	dc.Cluster.MasterSSH = nil
+	dc.Cluster.NodeShell = nil
 	out := dc.Cluster.Output.(*testutil.MockOutput)
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",

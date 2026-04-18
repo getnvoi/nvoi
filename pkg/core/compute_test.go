@@ -185,8 +185,8 @@ func TestComputeSet_SilencesNoKnownHostOnFirstDeploy(t *testing.T) {
 	}
 }
 
-func TestMasterSSH_SetAfterComputeSet(t *testing.T) {
-	// Verify that MasterSSH is NOT set by ComputeSet — it's set later by the reconcile loop.
+func TestNodeShell_SetAfterComputeSet(t *testing.T) {
+	// Verify that NodeShell is NOT set by ComputeSet — it's set later by the reconcile loop.
 	sshKey, _, _ := utils.GenerateEd25519Key()
 	provName := "masterssh-test"
 	hz := testutil.NewHetznerFake(t)
@@ -225,8 +225,8 @@ func TestMasterSSH_SetAfterComputeSet(t *testing.T) {
 		Region:     "fsn1",
 	})
 
-	// MasterSSH must NOT be set by ComputeSet — reconcile.go sets it separately.
-	if cluster.MasterSSH != nil {
-		t.Error("ComputeSet should not set MasterSSH — that's the reconcile loop's job")
+	// NodeShell must NOT be set by ComputeSet — reconcile.go sets it separately.
+	if cluster.NodeShell != nil {
+		t.Error("ComputeSet should not set NodeShell — that's the reconcile loop's job")
 	}
 }

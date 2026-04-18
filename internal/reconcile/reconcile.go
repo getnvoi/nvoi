@@ -85,7 +85,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if ns, err := infra.NodeShell(ctx, bctx); err != nil {
 		return fmt.Errorf("infra.NodeShell: %w", err)
 	} else if ns != nil {
-		dc.Cluster.MasterSSH = ns
+		dc.Cluster.NodeShell = ns
 	}
 
 	// App-namespace must exist before any per-service secret / workload

@@ -170,7 +170,7 @@ type BootstrapContext struct {
 	// the SSH-tunneled apiserver dance. Production leaves it nil; Bootstrap
 	// then builds a real *kube.Client over the master SSH connection.
 	//
-	// Mirror of the existing Cluster.MasterSSH / Cluster.MasterKube
+	// Mirror of the existing Cluster.NodeShell / Cluster.MasterKube
 	// "borrowed reference" pattern in pkg/core/cluster.go: when the
 	// reconciler/test owns the connection, the provider returns it; when
 	// it's nil, the provider creates and returns a fresh one.
