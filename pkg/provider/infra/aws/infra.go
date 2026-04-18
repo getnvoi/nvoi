@@ -176,16 +176,21 @@ func (c *Client) LiveSnapshot(ctx context.Context, dc *provider.BootstrapContext
 
 // TeardownOrphans removes AWS resources in live but not in cfg. Same
 // ordering as Hetzner — drain orphans, sweep firewalls AFTER detachment,
-// best-effort orphan volume delete.
-func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapContext, live *provider.LiveSnapshot) error {
-	if live == nil {
-		return nil
-	}
+// best-effort orphan volume delete. Provider does its own LiveSnapshot
+// lookup (D3 dropped the live param from the interface).
+func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapContext) error {
 	cfg := dc.Cfg
 	out := dc.Output
 	names, err := utils.NewNames(dc.App, dc.Env)
 	if err != nil {
 		return err
+	}
+	live, err := c.LiveSnapshot(ctx, dc)
+	if err != nil {
+		return fmt.Errorf("aws.TeardownOrphans live: %w", err)
+	}
+	if live == nil {
+		return nil
 	}
 
 	desiredServers := serverNameSet(cfg.ServerDefs())

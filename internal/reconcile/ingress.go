@@ -30,7 +30,7 @@ import (
 //
 // No k8s Ingress resources are created or torn down — Caddy reads its config
 // from one place (the admin API), not from the cluster's Ingress objects.
-func Ingress(ctx context.Context, dc *config.DeployContext, _ *config.LiveState, cfg *config.AppConfig) error {
+func Ingress(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
 	out := dc.Cluster.Log()
 
 	kc := dc.Cluster.MasterKube

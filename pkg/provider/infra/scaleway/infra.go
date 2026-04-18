@@ -164,15 +164,19 @@ func (c *Client) LiveSnapshot(ctx context.Context, dc *provider.BootstrapContext
 	return snap, nil
 }
 
-func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapContext, live *provider.LiveSnapshot) error {
-	if live == nil {
-		return nil
-	}
+func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapContext) error {
 	cfg := dc.Cfg
 	out := dc.Output
 	names, err := utils.NewNames(dc.App, dc.Env)
 	if err != nil {
 		return err
+	}
+	live, err := c.LiveSnapshot(ctx, dc)
+	if err != nil {
+		return fmt.Errorf("scaleway.TeardownOrphans live: %w", err)
+	}
+	if live == nil {
+		return nil
 	}
 
 	desiredServers := serverNameSet(cfg.ServerDefs())

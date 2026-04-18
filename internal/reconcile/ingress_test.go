@@ -144,7 +144,7 @@ func TestIngress_FreshDeploy_AppliesCaddyAndReloadsConfig(t *testing.T) {
 		Domains:  map[string][]string{"web": {"myapp.com"}},
 	}
 
-	if err := Ingress(context.Background(), dc, nil, cfg); err != nil {
+	if err := Ingress(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("Ingress: %v", err)
 	}
 
@@ -199,7 +199,7 @@ func TestIngress_NoDomains_AdminOnlyConfig(t *testing.T) {
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 	}
 
-	if err := Ingress(context.Background(), dc, nil, cfg); err != nil {
+	if err := Ingress(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("Ingress: %v", err)
 	}
 	if atomic.LoadInt32(&rec.loadCnt) != 1 {
@@ -241,10 +241,10 @@ func TestIngress_Idempotent_SameConfigEachTime(t *testing.T) {
 		Domains:  map[string][]string{"web": {"myapp.com"}},
 	}
 
-	if err := Ingress(context.Background(), dc, nil, cfg); err != nil {
+	if err := Ingress(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if err := Ingress(context.Background(), dc, nil, cfg); err != nil {
+	if err := Ingress(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("second: %v", err)
 	}
 	loads := rec.reloadCalls()
@@ -268,7 +268,7 @@ func TestIngress_DomainRemoved_NotInNewConfig(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 		Domains:  map[string][]string{"web": {"myapp.com", "removed.com"}},
 	}
-	if err := Ingress(context.Background(), dc, nil, cfgBefore); err != nil {
+	if err := Ingress(context.Background(), dc, cfgBefore); err != nil {
 		t.Fatalf("before: %v", err)
 	}
 
@@ -278,8 +278,7 @@ func TestIngress_DomainRemoved_NotInNewConfig(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 		Domains:  map[string][]string{"web": {"myapp.com"}},
 	}
-	live := &config.LiveState{Domains: map[string][]string{"web": {"myapp.com", "removed.com"}}}
-	if err := Ingress(context.Background(), dc, live, cfgAfter); err != nil {
+	if err := Ingress(context.Background(), dc, cfgAfter); err != nil {
 		t.Fatalf("after: %v", err)
 	}
 
@@ -317,7 +316,7 @@ func TestIngress_CaddyRejectsConfig_FailsWithBody(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 		Domains:  map[string][]string{"web": {"myapp.com"}},
 	}
-	err := Ingress(context.Background(), dc, nil, cfg)
+	err := Ingress(context.Background(), dc, cfg)
 	if err == nil {
 		t.Fatal("expected error when Caddy rejects config")
 	}
@@ -349,7 +348,7 @@ func TestIngress_CertOrHTTPSTimeout_Warns_DoesNotFail(t *testing.T) {
 		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
 		Domains:  map[string][]string{"web": {"myapp.com"}},
 	}
-	if err := Ingress(context.Background(), dc, nil, cfg); err != nil {
+	if err := Ingress(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("cert/HTTPS timeout must not fail the deploy, got: %v", err)
 	}
 }

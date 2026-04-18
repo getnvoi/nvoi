@@ -73,7 +73,12 @@ type InfraProvider interface {
 	// Single-unit providers (sandbox, managed-k8s without cluster-creation
 	// ownership): no-op. Called after workload reconcile so live workloads
 	// have already moved off the resources marked for removal.
-	TeardownOrphans(ctx context.Context, dc *BootstrapContext, live *LiveSnapshot) error
+	//
+	// The provider does its OWN live-state lookup (no live param threaded
+	// through reconcile) — keeps reconcile free of provider-shape data
+	// types and lets each provider use whatever lookup is most efficient
+	// for its API.
+	TeardownOrphans(ctx context.Context, dc *BootstrapContext) error
 
 	// Teardown hard-nukes every provider resource owned by this cluster
 	// (matched by labels). Backs `nvoi teardown` / `bin/destroy`. When

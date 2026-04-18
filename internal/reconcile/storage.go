@@ -2,14 +2,22 @@ package reconcile
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveState, cfg *config.AppConfig) (map[string]string, error) {
+// Storage creates buckets and returns the merged credentials map.
+//
+// No orphan cleanup here — storage buckets hold user data, and the only
+// safe deletion path is the explicit `bin/destroy --delete-storage`
+// flag (which goes through internal/core/teardown.go, not reconcile).
+// Pre-D3 this step had an "orphan" loop that compared `live.Storage`
+// against cfg, but `live.Storage` was always derived from `cfg` itself
+// (DescribeLive seeded it from req.StorageNames) — the loop was
+// vacuous. Removed in D3 with the rest of DescribeLive.
+func Storage(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) (map[string]string, error) {
 	allCreds := map[string]string{}
 
 	for _, name := range utils.SortedKeys(cfg.Storage) {
@@ -23,23 +31,6 @@ func Storage(ctx context.Context, dc *config.DeployContext, live *config.LiveSta
 		}
 		for k, v := range creds {
 			allCreds[k] = v
-		}
-	}
-
-	if live != nil {
-		desired := toSet(utils.SortedKeys(cfg.Storage))
-		for _, name := range live.Storage {
-			if !desired[name] {
-				if err := app.StorageEmpty(ctx, app.StorageEmptyRequest{
-					Cluster: app.Cluster{AppName: dc.Cluster.AppName, Env: dc.Cluster.Env, Output: dc.Cluster.Output},
-					Storage: dc.Storage, Name: name,
-				}); err != nil {
-					dc.Cluster.Log().Warning(fmt.Sprintf("orphan storage %s not emptied: %s", name, err))
-				}
-				if err := app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name}); err != nil {
-					dc.Cluster.Log().Warning(fmt.Sprintf("orphan storage %s not removed: %s", name, err))
-				}
-			}
 		}
 	}
 	return allCreds, nil

@@ -454,15 +454,22 @@ func (c *Client) LiveSnapshot(ctx context.Context, dc *provider.BootstrapContext
 //     DeleteFirewall succeeds — Hetzner rejects with resource_in_use
 //     otherwise).
 //  3. Best-effort orphan volume delete (warn-on-fail; next deploy retries).
-func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapContext, live *provider.LiveSnapshot) error {
-	if live == nil {
-		return nil
-	}
+func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapContext) error {
 	cfg := dc.Cfg
 	out := dc.Output
 	names, err := utils.NewNames(dc.App, dc.Env)
 	if err != nil {
 		return err
+	}
+
+	// Provider does its own live-state lookup (D3 dropped the live param
+	// from the interface — keeps reconcile free of provider-shape data).
+	live, err := c.LiveSnapshot(ctx, dc)
+	if err != nil {
+		return fmt.Errorf("hetzner.TeardownOrphans live: %w", err)
+	}
+	if live == nil {
+		return nil
 	}
 
 	desiredServers := serverNameSet(cfg.ServerDefs())

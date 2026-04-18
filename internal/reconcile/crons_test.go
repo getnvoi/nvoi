@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func TestCrons_FreshDeploy(t *testing.T) {
@@ -19,7 +20,7 @@ func TestCrons_FreshDeploy(t *testing.T) {
 		Crons:   map[string]config.CronDef{"cleanup": {Image: "busybox", Schedule: "0 * * * *", Command: "echo hi"}},
 	}
 
-	if err := Crons(context.Background(), dc, nil, cfg, nil); err != nil {
+	if err := Crons(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !kfFor(dc).HasCronJob(testNS, "cleanup") {
@@ -32,9 +33,12 @@ func TestCrons_OrphanRemoved(t *testing.T) {
 	dc := testDC(ssh)
 	kf := kfFor(dc)
 
-	// Pre-populate orphan CronJob.
+	// Pre-populate orphan CronJob (nvoi labels for orphan listing).
 	_, err := kf.Typed.BatchV1().CronJobs(testNS).Create(context.Background(),
-		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "old-job", Namespace: testNS}},
+		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{
+			Name: "old-job", Namespace: testNS,
+			Labels: map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+		}},
 		metav1.CreateOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -45,9 +49,8 @@ func TestCrons_OrphanRemoved(t *testing.T) {
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Crons:   map[string]config.CronDef{"cleanup": {Image: "busybox", Schedule: "0 * * * *", Command: "echo hi"}},
 	}
-	live := &config.LiveState{Crons: []string{"cleanup", "old-job"}}
 
-	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
+	if err := Crons(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if kf.HasCronJob(testNS, "old-job") {
@@ -78,9 +81,8 @@ func TestCrons_AlreadyConverged(t *testing.T) {
 		Servers: map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
 		Crons:   map[string]config.CronDef{"cleanup": {Image: "busybox", Schedule: "0 * * * *", Command: "echo hi"}},
 	}
-	live := &config.LiveState{Crons: []string{"cleanup"}}
 
-	if err := Crons(context.Background(), dc, live, cfg, nil); err != nil {
+	if err := Crons(context.Background(), dc, cfg, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !kf.HasCronJob(testNS, "cleanup") {

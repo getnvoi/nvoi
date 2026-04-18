@@ -25,7 +25,7 @@ func (stubInfra) Bootstrap(context.Context, *BootstrapContext) (*kube.Client, er
 func (stubInfra) LiveSnapshot(context.Context, *BootstrapContext) (*LiveSnapshot, error) {
 	return nil, nil
 }
-func (stubInfra) TeardownOrphans(context.Context, *BootstrapContext, *LiveSnapshot) error {
+func (stubInfra) TeardownOrphans(context.Context, *BootstrapContext) error {
 	return nil
 }
 func (stubInfra) Teardown(context.Context, *BootstrapContext, bool) error { return nil }

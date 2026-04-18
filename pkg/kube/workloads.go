@@ -39,6 +39,49 @@ func (c *Client) GetServicePort(ctx context.Context, ns, name string) (int, erro
 	return int(svc.Spec.Ports[0].Port), nil
 }
 
+// ListWorkloadNames returns the deduplicated set of nvoi-managed
+// workload names in the namespace (Deployments + StatefulSets,
+// label-filtered to the nvoi selector). Used by reconcile.Services for
+// orphan detection — names present in kube but absent from cfg get
+// ServiceDelete'd.
+func (c *Client) ListWorkloadNames(ctx context.Context, ns string) ([]string, error) {
+	seen := make(map[string]bool)
+	deps, err := c.cs.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: NvoiSelector})
+	if err != nil {
+		return nil, fmt.Errorf("list deployments: %w", err)
+	}
+	for _, d := range deps.Items {
+		seen[d.Name] = true
+	}
+	ss, err := c.cs.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{LabelSelector: NvoiSelector})
+	if err != nil {
+		return nil, fmt.Errorf("list statefulsets: %w", err)
+	}
+	for _, s := range ss.Items {
+		seen[s.Name] = true
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+// ListCronJobNames returns the nvoi-managed CronJob names in the
+// namespace. Mirror of ListWorkloadNames for reconcile.Crons orphan
+// detection.
+func (c *Client) ListCronJobNames(ctx context.Context, ns string) ([]string, error) {
+	cjs, err := c.cs.BatchV1().CronJobs(ns).List(ctx, metav1.ListOptions{LabelSelector: NvoiSelector})
+	if err != nil {
+		return nil, fmt.Errorf("list cronjobs: %w", err)
+	}
+	out := make([]string, 0, len(cjs.Items))
+	for _, cj := range cjs.Items {
+		out = append(out, cj.Name)
+	}
+	return out, nil
+}
+
 // DeleteByName removes the Deployment, StatefulSet, and Service named `name`.
 // Idempotent — NotFound on any of them is treated as already-gone.
 func (c *Client) DeleteByName(ctx context.Context, ns, name string) error {
