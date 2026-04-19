@@ -22,6 +22,12 @@ type DescribeRequest struct {
 	Cfg            provider.ProviderConfigView // forwards to Cluster.Kube for on-demand connect
 	StorageNames   []string                    // from cfg — config is the source of truth
 	ServiceSecrets map[string][]string         // service/cron name → secret keys declared on it
+	// TunnelProvider is non-empty when providers.tunnel is set in nvoi.yaml.
+	// When set, Caddy ingress is skipped and tunnel agent pods are queried instead.
+	TunnelProvider string
+	// TunnelRoutes is the config-derived hostname→service routing table.
+	// Pre-built by the caller from cfg.Domains + cfg.Services.
+	TunnelRoutes []DescribeIngress
 }
 
 type DescribeNode struct {
@@ -73,6 +79,14 @@ type DescribeSecret struct {
 	Service string `json:"service"` // which service/cron owns this secret
 }
 
+// DescribeTunnel holds live state of the active tunnel provider.
+// Populated only when providers.tunnel is configured; nil otherwise.
+type DescribeTunnel struct {
+	Provider string            `json:"provider"`
+	Routes   []DescribeIngress `json:"routes"`
+	Agents   []DescribePod     `json:"agents"`
+}
+
 type DescribeResult struct {
 	Namespace string             `json:"namespace"`
 	Nodes     []DescribeNode     `json:"nodes"`
@@ -81,6 +95,7 @@ type DescribeResult struct {
 	Services  []DescribeService  `json:"services"`
 	Crons     []DescribeCron     `json:"crons"`
 	Ingress   []DescribeIngress  `json:"ingress"`
+	Tunnel    *DescribeTunnel    `json:"tunnel,omitempty"`
 	Secrets   []DescribeSecret   `json:"secrets"`
 	Storage   []StorageItem      `json:"storage"`
 }
@@ -118,18 +133,31 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		return result, ctx.Err()
 	}
 
-	// Ingress routes are sourced from Caddy's live admin API config.
-	// Caddy might not be running yet (first deploy in progress) — that's
-	// not an error for describe; the routes list just stays empty.
-	routes, err := kc.GetCaddyRoutes(ctx)
-	if err != nil {
-		return result, fmt.Errorf("describe ingress: %w", err)
-	}
-	for _, r := range routes {
-		for _, d := range r.Domains {
-			result.Ingress = append(result.Ingress, DescribeIngress{
-				Domain: d, Service: r.Service, Port: r.Port,
-			})
+	if req.TunnelProvider != "" {
+		// Tunnel path: Caddy is not running. Read agent pod health from the cluster.
+		agents, err := describeTunnelAgents(ctx, kc, ns)
+		if err != nil {
+			return result, fmt.Errorf("describe tunnel agents: %w", err)
+		}
+		result.Tunnel = &DescribeTunnel{
+			Provider: req.TunnelProvider,
+			Routes:   req.TunnelRoutes,
+			Agents:   agents,
+		}
+	} else {
+		// Caddy path: read routes from Caddy's live admin API config.
+		// Caddy might not be running yet (first deploy in progress) — that's
+		// not an error for describe; the routes list just stays empty.
+		routes, err := kc.GetCaddyRoutes(ctx)
+		if err != nil {
+			return result, fmt.Errorf("describe ingress: %w", err)
+		}
+		for _, r := range routes {
+			for _, d := range r.Domains {
+				result.Ingress = append(result.Ingress, DescribeIngress{
+					Domain: d, Service: r.Service, Port: r.Port,
+				})
+			}
 		}
 	}
 
@@ -343,6 +371,32 @@ func describePods(ctx context.Context, kc *kube.Client, ns string) []DescribePod
 		})
 	}
 	return out
+}
+
+func describeTunnelAgents(ctx context.Context, kc *kube.Client, ns string) ([]DescribePod, error) {
+	rawPods, err := kc.GetTunnelAgentPods(ctx, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DescribePod, 0, len(rawPods))
+	for _, p := range rawPods {
+		status := string(p.Status.Phase)
+		restarts := 0
+		for _, cs := range p.Status.ContainerStatuses {
+			restarts += int(cs.RestartCount)
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+				status = cs.State.Waiting.Reason
+			}
+		}
+		out = append(out, DescribePod{
+			Name:     p.Name,
+			Status:   status,
+			Node:     p.Spec.NodeName,
+			Restarts: restarts,
+			Age:      utils.HumanAge(p.CreationTimestamp.Format("2006-01-02T15:04:05Z")),
+		})
+	}
+	return out, nil
 }
 
 func describeServices(ctx context.Context, kc *kube.Client, ns string) []DescribeService {

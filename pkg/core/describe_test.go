@@ -251,6 +251,91 @@ func TestDescribeCrons_Idle(t *testing.T) {
 	}
 }
 
+func TestDescribeTunnelAgents(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	creation := metav1.NewTime(time.Now().Add(-time.Hour))
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "cloudflared-abc",
+			Namespace:         ns,
+			Labels:            map[string]string{"app.kubernetes.io/name": "cloudflared"},
+			CreationTimestamp: creation,
+		},
+		Spec: corev1.PodSpec{NodeName: "nvoi-myapp-prod-master"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{RestartCount: 2},
+			},
+		},
+	}
+	kc := newKC(pod)
+
+	agents, err := describeTunnelAgents(context.Background(), kc, ns)
+	if err != nil {
+		t.Fatalf("describeTunnelAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("len = %d, want 1", len(agents))
+	}
+	a := agents[0]
+	if a.Name != "cloudflared-abc" {
+		t.Errorf("Name = %q", a.Name)
+	}
+	if a.Status != "Running" {
+		t.Errorf("Status = %q", a.Status)
+	}
+	if a.Restarts != 2 {
+		t.Errorf("Restarts = %d", a.Restarts)
+	}
+	if a.Node != "nvoi-myapp-prod-master" {
+		t.Errorf("Node = %q", a.Node)
+	}
+}
+
+func TestDescribeTunnelAgents_Empty(t *testing.T) {
+	kc := newKC()
+	agents, err := describeTunnelAgents(context.Background(), kc, "nvoi-myapp-prod")
+	if err != nil {
+		t.Fatalf("describeTunnelAgents empty: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents, got %d", len(agents))
+	}
+}
+
+func TestDescribeTunnelAgents_WaitingPodStatus(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cloudflared-pending",
+			Namespace: ns,
+			Labels:    map[string]string{"app.kubernetes.io/name": "cloudflared"},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{State: corev1.ContainerState{
+					Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"},
+				}},
+			},
+		},
+	}
+	kc := newKC(pod)
+
+	agents, err := describeTunnelAgents(context.Background(), kc, ns)
+	if err != nil {
+		t.Fatalf("describeTunnelAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("len = %d, want 1", len(agents))
+	}
+	// Waiting reason takes priority over phase.
+	if agents[0].Status != "ImagePullBackOff" {
+		t.Errorf("Status = %q, want ImagePullBackOff", agents[0].Status)
+	}
+}
+
 func TestDescribeWorkloads_FiltersUnmanaged(t *testing.T) {
 	// An unlabeled deployment must not show up — only nvoi-managed workloads.
 	unlabeled := &appsv1.Deployment{

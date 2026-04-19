@@ -64,6 +64,92 @@ func TestPurgeTunnelAgents_PartialState_Idempotent(t *testing.T) {
 	}
 }
 
+func TestGetTunnelAgentPods_ReturnsCloudflaredPods(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cloudflared-abc123",
+			Namespace: ns,
+			Labels:    map[string]string{"app.kubernetes.io/name": CloudflareTunnelAgentName},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	cs := k8sfake.NewSimpleClientset(pod)
+	c := NewForTest(cs)
+
+	pods, err := c.GetTunnelAgentPods(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("GetTunnelAgentPods: %v", err)
+	}
+	if len(pods) != 1 {
+		t.Fatalf("len = %d, want 1", len(pods))
+	}
+	if pods[0].Name != "cloudflared-abc123" {
+		t.Errorf("Name = %q", pods[0].Name)
+	}
+}
+
+func TestGetTunnelAgentPods_ReturnsNgrokPods(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ngrok-xyz",
+			Namespace: ns,
+			Labels:    map[string]string{"app.kubernetes.io/name": NgrokTunnelAgentName},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	cs := k8sfake.NewSimpleClientset(pod)
+	c := NewForTest(cs)
+
+	pods, err := c.GetTunnelAgentPods(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("GetTunnelAgentPods ngrok: %v", err)
+	}
+	if len(pods) != 1 || pods[0].Name != "ngrok-xyz" {
+		t.Errorf("got %+v", pods)
+	}
+}
+
+func TestGetTunnelAgentPods_EmptyWhenNone(t *testing.T) {
+	cs := k8sfake.NewSimpleClientset()
+	c := NewForTest(cs)
+	pods, err := c.GetTunnelAgentPods(context.Background(), "nvoi-myapp-prod")
+	if err != nil {
+		t.Fatalf("GetTunnelAgentPods empty: %v", err)
+	}
+	if len(pods) != 0 {
+		t.Errorf("expected 0 pods, got %d", len(pods))
+	}
+}
+
+func TestGetTunnelAgentPods_FiltersUnrelatedPods(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	cs := k8sfake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "unrelated-pod", Namespace: ns,
+				Labels: map[string]string{"app.kubernetes.io/name": "some-other-app"},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "cloudflared-real", Namespace: ns,
+				Labels: map[string]string{"app.kubernetes.io/name": CloudflareTunnelAgentName},
+			},
+		},
+	)
+	c := NewForTest(cs)
+
+	pods, err := c.GetTunnelAgentPods(context.Background(), ns)
+	if err != nil {
+		t.Fatalf("GetTunnelAgentPods: %v", err)
+	}
+	if len(pods) != 1 || pods[0].Name != "cloudflared-real" {
+		t.Errorf("expected only cloudflared-real; got %+v", pods)
+	}
+}
+
 func TestPurgeCaddy_Empty_Idempotent(t *testing.T) {
 	cs := k8sfake.NewSimpleClientset()
 	c := NewForTest(cs)

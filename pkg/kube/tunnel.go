@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -40,4 +41,17 @@ func (c *Client) PurgeTunnelAgents(ctx context.Context, ns string) error {
 		return fmt.Errorf("purge configmap/%s: %w", NgrokTunnelConfigMapName, err)
 	}
 	return nil
+}
+
+// GetTunnelAgentPods returns all pods belonging to tunnel agent workloads
+// (cloudflared or ngrok) in the given namespace.
+// Returns an empty slice when no agent pods are present — not an error.
+func (c *Client) GetTunnelAgentPods(ctx context.Context, ns string) ([]corev1.Pod, error) {
+	sel := fmt.Sprintf("app.kubernetes.io/name in (%s,%s)",
+		CloudflareTunnelAgentName, NgrokTunnelAgentName)
+	list, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
 }
