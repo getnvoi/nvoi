@@ -356,3 +356,96 @@ func TestBuild_PreflightFailure_ShortCircuitsEverything(t *testing.T) {
 		t.Errorf("preflight failure must short-circuit login/build/push, got ops: %v", ops)
 	}
 }
+
+// ── masterServerType ────────────────────────────────────────────────────────
+
+// TestMasterServerType verifies the helper extracts the master server's type
+// string from cfg.Servers. reconcile.Deploy feeds this into
+// infra.ArchForType to derive the --platform flag.
+func TestMasterServerType(t *testing.T) {
+	cases := []struct {
+		name    string
+		servers map[string]config.ServerDef
+		want    string
+	}{
+		{
+			name: "single master",
+			servers: map[string]config.ServerDef{
+				"master": {Type: "cax11", Region: "nbg1", Role: "master"},
+			},
+			want: "cax11",
+		},
+		{
+			name: "master + worker",
+			servers: map[string]config.ServerDef{
+				"master":   {Type: "cx22", Region: "nbg1", Role: "master"},
+				"worker-1": {Type: "cx11", Region: "nbg1", Role: "worker"},
+			},
+			want: "cx22",
+		},
+		{
+			name:    "no servers",
+			servers: map[string]config.ServerDef{},
+			want:    "",
+		},
+		{
+			name: "workers only",
+			servers: map[string]config.ServerDef{
+				"worker-1": {Type: "cx11", Region: "nbg1", Role: "worker"},
+			},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.AppConfig{Servers: tc.servers}
+			got := masterServerType(cfg)
+			if got != tc.want {
+				t.Errorf("masterServerType = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuild_PlatformStampedOnBuildRecord verifies that the platform string
+// passed to Build() reaches the docker buildx invocation. This is the
+// cross-arch correctness invariant: an arm64 platform string for a cax11
+// target must not be silently replaced by the operator's host arch.
+func TestBuild_PlatformStampedOnBuildRecord(t *testing.T) {
+	runner := &captureRunner{}
+	cleanup := SetBuildRunnerForTest(runner)
+	defer cleanup()
+
+	tmp := t.TempDir()
+	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
+
+	dc := testDCWithCreds(convergeMock(),
+		"GITHUB_USER", "alice",
+		"GITHUB_TOKEN", "ghp_xyz",
+	)
+	dc.Cluster.DeployHash = "20260417-143022"
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Registry: map[string]config.RegistryDef{
+			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
+		},
+		Services: map[string]config.ServiceDef{
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
+		},
+	}
+
+	// arm64 simulates a cax11 target — verifies the platform is not
+	// silently replaced by the operator's host arch.
+	if err := Build(context.Background(), dc, cfg, "linux/arm64"); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, op := range runner.ops() {
+		if strings.HasPrefix(op, "build:") {
+			if !strings.HasSuffix(op, ":linux/arm64") {
+				t.Errorf("build record should end with :linux/arm64, got %q", op)
+			}
+			return
+		}
+	}
+	t.Fatal("no build op recorded")
+}

@@ -26,6 +26,31 @@ func testClient(t *testing.T, handler http.Handler) *Client {
 	return c
 }
 
+// ── ArchForType ────────────────────────────────────────────────────────────────
+
+func TestArchForType_Scaleway(t *testing.T) {
+	c := &Client{}
+	cases := []struct {
+		instanceType string
+		wantArch     string
+	}{
+		{"AMP2-C4", "arm64"},
+		{"amp2-c4", "arm64"}, // case-insensitive
+		{"COPARM1-4C-16G", "arm64"},
+		{"coparm1-4c-16g", "arm64"}, // case-insensitive
+		{"DEV1-S", "amd64"},
+		{"GP1-XS", "amd64"},
+		{"PRO2-XXS", "amd64"},
+		{"PLAY2-PICO", "amd64"},
+	}
+	for _, tc := range cases {
+		got := c.ArchForType(tc.instanceType)
+		if got != tc.wantArch {
+			t.Errorf("ArchForType(%q) = %q, want %q", tc.instanceType, got, tc.wantArch)
+		}
+	}
+}
+
 // ── Firewall rule reconciliation ────────────────────────────────────────────────
 
 func TestEnsureFirewall_ExistingReturnsID(t *testing.T) {
