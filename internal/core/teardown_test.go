@@ -28,13 +28,18 @@ import (
 // against. setupTeardown wires it to the merged OpLog of the Hetzner + CF
 // fakes (they share recording via the unified RecordFn indirection below).
 type opLog struct {
-	hz *testutil.HetznerFake
-	cf *testutil.CloudflareFake
+	shared *testutil.OpLog
+	hz     *testutil.HetznerFake
+	cf     *testutil.CloudflareFake
+	cft    *testutil.CloudflareTunnelFake
 }
 
 func newOpLog() *opLog { return &opLog{} }
 
 func (l *opLog) has(op string) bool {
+	if l.shared != nil {
+		return l.shared.Has(op)
+	}
 	if l.hz != nil && l.hz.Has(op) {
 		return true
 	}
@@ -45,6 +50,9 @@ func (l *opLog) has(op string) bool {
 }
 
 func (l *opLog) count(prefix string) int {
+	if l.shared != nil {
+		return l.shared.Count(prefix)
+	}
 	n := 0
 	if l.hz != nil {
 		n += l.hz.Count(prefix)
@@ -56,6 +64,9 @@ func (l *opLog) count(prefix string) int {
 }
 
 func (l *opLog) indexOf(op string) int {
+	if l.shared != nil {
+		return l.shared.IndexOf(op)
+	}
 	// Ordering tests need a single merged index space. Merge the two logs in
 	// their recorded order. Since the fakes run on independent HTTP servers,
 	// chronological ordering on a single test is preserved only within one
@@ -80,6 +91,9 @@ func (l *opLog) indexOf(op string) int {
 }
 
 func (l *opLog) all() []string {
+	if l.shared != nil {
+		return l.shared.All()
+	}
 	var merged []string
 	if l.cf != nil {
 		merged = append(merged, l.cf.All()...)
@@ -92,6 +106,10 @@ func (l *opLog) all() []string {
 
 // errorOn arms both fakes to return an error when the named op fires.
 func (l *opLog) errorOn(op string, err error) {
+	if l.shared != nil {
+		l.shared.ErrorOn(op, err)
+		return
+	}
 	if l.hz != nil {
 		l.hz.ErrorOn(op, err)
 	}
@@ -107,11 +125,14 @@ func (l *opLog) errorOn(op string, err error) {
 var (
 	activeHetzner *testutil.HetznerFake
 	activeCF      *testutil.CloudflareFake
+	activeCFT     *testutil.CloudflareTunnelFake
 )
 
 func setupTeardown(log *opLog) *config.DeployContext {
 	n := names()
+	shared := testutil.NewOpLog()
 	hz := testutil.NewHetznerFake(nil)
+	hz.OpLog = shared
 	hz.Register("test-teardown")
 	hz.SeedServer(n.Server("master"), "1.2.3.4", "10.0.1.1")
 	hz.SeedServer(n.Server("worker"), "5.6.7.8", "10.0.1.2")
@@ -126,6 +147,7 @@ func setupTeardown(log *opLog) *config.DeployContext {
 		ZoneDomain: "myapp.com",
 		AccountID:  "testacct",
 	})
+	cf.OpLog = shared
 	cf.RegisterDNS("test-teardown-dns")
 	cf.RegisterBucket("test-teardown-bucket")
 	// Seed DNS records for the two domains in fullConfig()
@@ -135,8 +157,10 @@ func setupTeardown(log *opLog) *config.DeployContext {
 	cf.SeedBucket(n.Bucket("assets"))
 	activeCF = cf
 
+	log.shared = shared
 	log.hz = hz
 	log.cf = cf
+	activeCFT = nil
 
 	sshKey, _, _ := utils.GenerateEd25519Key()
 
@@ -464,8 +488,10 @@ func TestTeardown_EmptyConfig_StillDeletesFirewallAndNetwork(t *testing.T) {
 // (per-test-global) instead of creating fresh ones — for tests that need a
 // mid-test reset without recreating HTTP servers.
 func setupTeardownKeepingFakes(log *opLog) *config.DeployContext {
+	log.shared = activeHetzner.OpLog
 	log.hz = activeHetzner
 	log.cf = activeCF
+	log.cft = activeCFT
 	sshKey, _, _ := utils.GenerateEd25519Key()
 	return &config.DeployContext{
 		Cluster: app.Cluster{
@@ -801,5 +827,79 @@ func TestTeardown_FullOrderDNS_Storage_Volumes_Workers_Masters_Firewall_Network(
 	}
 	if fw >= net {
 		t.Errorf("firewall (%d) not before network (%d)", fw, net)
+	}
+}
+
+func TestTeardown_TunnelDeleteRunsAfterInfraTeardown(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+
+	cft := testutil.NewCloudflareTunnelFake(t)
+	cft.OpLog = log.shared
+	cft.Register("test-teardown-tunnel")
+	cft.SeedTunnel("tunnel-1", n.Base(), "tok-tunnel-1")
+	activeCFT = cft
+	log.cft = cft
+
+	dc.Tunnel = app.ProviderRef{Name: "test-teardown-tunnel"}
+	cfg := fullConfig()
+	cfg.Providers.Tunnel = "cloudflare"
+
+	_ = Teardown(context.Background(), dc, cfg, false, false)
+
+	netIdx := log.indexOf("delete-network:" + n.Network())
+	connIdx := log.indexOf("delete-connections:tunnel-1")
+	tunnelIdx := log.indexOf("delete-tunnel:tunnel-1")
+
+	for label, idx := range map[string]int{
+		"network":            netIdx,
+		"delete-connections": connIdx,
+		"delete-tunnel":      tunnelIdx,
+	} {
+		if idx < 0 {
+			t.Fatalf("%s not found in ops: %v", label, log.all())
+		}
+	}
+	if netIdx >= connIdx {
+		t.Errorf("infra teardown (%d) must finish before tunnel connection delete (%d)", netIdx, connIdx)
+	}
+	if connIdx >= tunnelIdx {
+		t.Errorf("tunnel connections delete (%d) must happen before tunnel delete (%d)", connIdx, tunnelIdx)
+	}
+}
+
+func TestTeardown_NgrokDeletesConfiguredDomainsAfterInfraTeardown(t *testing.T) {
+	log := newOpLog()
+	dc := setupTeardown(log)
+	n := names()
+
+	ngf := testutil.NewNgrokFake(t)
+	ngf.OpLog = log.shared
+	ngf.Register("test-teardown-ngrok")
+	ngf.SeedDomain("rd-1", "myapp.com", "myapp.com.cname.ngrok.io")
+	ngf.SeedDomain("rd-2", "www.myapp.com", "www.myapp.com.cname.ngrok.io")
+
+	dc.Tunnel = app.ProviderRef{Name: "test-teardown-ngrok"}
+	cfg := fullConfig()
+	cfg.Providers.Tunnel = "ngrok"
+
+	_ = Teardown(context.Background(), dc, cfg, false, false)
+
+	netIdx := log.indexOf("delete-network:" + n.Network())
+	domainIdx := log.indexOf("delete-domain:myapp.com")
+	wwwIdx := log.indexOf("delete-domain:www.myapp.com")
+
+	for label, idx := range map[string]int{
+		"network":         netIdx,
+		"delete-domain":   domainIdx,
+		"delete-domain-2": wwwIdx,
+	} {
+		if idx < 0 {
+			t.Fatalf("%s not found in ops: %v", label, log.all())
+		}
+	}
+	if netIdx >= domainIdx || netIdx >= wwwIdx {
+		t.Errorf("infra teardown (%d) must finish before ngrok domain deletes (%d, %d)", netIdx, domainIdx, wwwIdx)
 	}
 }

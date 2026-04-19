@@ -26,8 +26,9 @@ type NgrokFake struct {
 
 type ngrokFakeDomain struct {
 	ID          string
-	Name        string
+	Domain      string
 	CNAMETarget string
+	Metadata    string
 }
 
 // NewNgrokFake creates a running ngrok fake.
@@ -55,10 +56,18 @@ func (f *NgrokFake) Register(name string) {
 }
 
 // SeedDomain inserts a reserved domain into the fake.
-func (f *NgrokFake) SeedDomain(id, name, cnameTarget string) *ngrokFakeDomain {
+func (f *NgrokFake) SeedDomain(id, domain, cnameTarget string) *ngrokFakeDomain {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	d := &ngrokFakeDomain{ID: id, Name: name, CNAMETarget: cnameTarget}
+	d := &ngrokFakeDomain{ID: id, Domain: domain, CNAMETarget: cnameTarget}
+	f.domains[id] = d
+	return d
+}
+
+func (f *NgrokFake) SeedDomainWithMetadata(id, domain, cnameTarget, metadata string) *ngrokFakeDomain {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d := &ngrokFakeDomain{ID: id, Domain: domain, CNAMETarget: cnameTarget, Metadata: metadata}
 	f.domains[id] = d
 	return d
 }
@@ -86,8 +95,9 @@ func (f *NgrokFake) handleList(w http.ResponseWriter) {
 	for _, d := range f.domains {
 		out = append(out, map[string]any{
 			"id":           d.ID,
-			"name":         d.Name,
+			"domain":       d.Domain,
 			"cname_target": d.CNAMETarget,
+			"metadata":     d.Metadata,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -96,10 +106,11 @@ func (f *NgrokFake) handleList(w http.ResponseWriter) {
 
 func (f *NgrokFake) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"`
+		Domain   string `json:"domain"`
+		Metadata string `json:"metadata"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	if err := f.Record("create-domain:" + body.Name); err != nil {
+	if err := f.Record("create-domain:" + body.Domain); err != nil {
 		w.WriteHeader(500)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error_code": 500, "msg": err.Error()})
 		return
@@ -107,14 +118,20 @@ func (f *NgrokFake) handleCreate(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.seqID++
 	id := fmt.Sprintf("rd-%d", f.seqID)
-	d := &ngrokFakeDomain{ID: id, Name: body.Name, CNAMETarget: body.Name + ".cname.ngrok.io"}
+	d := &ngrokFakeDomain{
+		ID:          id,
+		Domain:      body.Domain,
+		CNAMETarget: body.Domain + ".cname.ngrok.io",
+		Metadata:    body.Metadata,
+	}
 	f.domains[id] = d
 	f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":           id,
-		"name":         body.Name,
-		"cname_target": body.Name + ".cname.ngrok.io",
+		"domain":       body.Domain,
+		"cname_target": body.Domain + ".cname.ngrok.io",
+		"metadata":     body.Metadata,
 	})
 }
 
@@ -129,6 +146,6 @@ func (f *NgrokFake) handleDelete(w http.ResponseWriter, id string) {
 		w.WriteHeader(404)
 		return
 	}
-	_ = f.Record("delete-domain:" + d.Name)
+	_ = f.Record("delete-domain:" + d.Domain)
 	w.WriteHeader(204)
 }
