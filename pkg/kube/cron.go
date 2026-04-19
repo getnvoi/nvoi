@@ -32,13 +32,20 @@ type CronSpec struct {
 // The returned object is ready to pass to Client.Apply.
 func BuildCronJob(spec CronSpec, names *utils.Names, managedVolPaths map[string]string) (*batchv1.CronJob, error) {
 	ns := names.KubeNamespace()
-	labels := map[string]string{
+	// workloadLabels carries the hash for observability on the CronJob object.
+	// podLabels intentionally omits the hash — see generate.go for rationale.
+	podLabels := map[string]string{
+		utils.LabelAppName:      spec.Name,
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiService:  spec.Name,
+	}
+	workloadLabels := map[string]string{
 		utils.LabelAppName:      spec.Name,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
 		utils.LabelNvoiService:  spec.Name,
 	}
 	if spec.DeployHash != "" {
-		labels[utils.LabelNvoiDeployHash] = spec.DeployHash
+		workloadLabels[utils.LabelNvoiDeployHash] = spec.DeployHash
 	}
 
 	envVars := append([]corev1.EnvVar{}, spec.Env...)
@@ -83,13 +90,13 @@ func BuildCronJob(spec CronSpec, names *utils.Names, managedVolPaths map[string]
 
 	return &batchv1.CronJob{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "batch/v1", Kind: "CronJob"},
-		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: workloadLabels},
 		Spec: batchv1.CronJobSpec{
 			Schedule: spec.Schedule,
 			JobTemplate: batchv1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
-						ObjectMeta: metav1.ObjectMeta{Labels: labels},
+						ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 						Spec:       podSpec,
 					},
 				},
