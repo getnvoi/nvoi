@@ -2,6 +2,8 @@ package reconcile
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -270,5 +272,76 @@ func TestInvariant_DeployDoesReconcileDrift(t *testing.T) {
 	// which asserts this NEVER fires on read commands.
 	if n := log.count("firewall:"); n == 0 {
 		t.Errorf("Deploy must reconcile firewall drift (write contract); got 0 firewall: ops")
+	}
+}
+
+// TestInvariant_Deploy_BuildPlatform_DerivedFromServerType verifies the
+// full chain: server type in cfg → infra.ArchForType → --platform on
+// docker buildx. Two sub-cases to rule out a false-positive from a
+// hardcoded constant:
+//
+//   - cax11 (Hetzner ARM64 Ampere Altra) → linux/arm64
+//   - cx23  (Hetzner x86)               → linux/amd64
+func TestInvariant_Deploy_BuildPlatform_DerivedFromServerType(t *testing.T) {
+	cases := []struct {
+		serverType   string
+		wantPlatform string
+	}{
+		{"cax11", "linux/arm64"},
+		{"cx23", "linux/amd64"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.serverType, func(t *testing.T) {
+			runner := &captureRunner{}
+			cleanup := SetBuildRunnerForTest(runner)
+			defer cleanup()
+
+			// Temp build context so BuildService's Dockerfile stat-check passes.
+			apiCtx := t.TempDir()
+			if err := os.WriteFile(filepath.Join(apiCtx, "Dockerfile"), []byte("FROM alpine\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			var log opLog
+			dc := convergeDC(&log, convergeMock())
+			dc.Creds = testCreds("GITHUB_USER", "alice", "GITHUB_TOKEN", "ghp_xyz")
+
+			cfg := &config.AppConfig{
+				App: "myapp", Env: "prod",
+				Providers: config.ProvidersDef{Infra: "test-reconcile"},
+				Servers: map[string]config.ServerDef{
+					"master": {Type: tc.serverType, Region: "fsn1", Role: "master"},
+				},
+				Registry: map[string]config.RegistryDef{
+					"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
+				},
+				Services: map[string]config.ServiceDef{
+					"api": {
+						Image: "ghcr.io/org/api:v1",
+						Build: &config.BuildSpec{Context: apiCtx},
+					},
+				},
+			}
+
+			if err := Deploy(context.Background(), dc, cfg); err != nil {
+				t.Fatalf("Deploy: %v", err)
+			}
+
+			var gotPlatform string
+			for _, op := range runner.ops() {
+				if strings.HasPrefix(op, "build:") {
+					parts := strings.Split(op, ":")
+					gotPlatform = parts[len(parts)-1]
+					break
+				}
+			}
+			if gotPlatform == "" {
+				t.Fatal("no build op recorded — build service was not invoked")
+			}
+			if gotPlatform != tc.wantPlatform {
+				t.Errorf("server type %q → platform %q, want %q", tc.serverType, gotPlatform, tc.wantPlatform)
+			}
+		})
 	}
 }
