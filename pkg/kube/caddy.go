@@ -288,6 +288,25 @@ func parseCaddyDial(dial string) (service string, port int) {
 	return first[0], p
 }
 
+// PurgeCaddy deletes all Caddy workloads from kube-system (Deployment,
+// Service, ConfigMap, PVC). Idempotent — NotFound on any resource is success.
+// Called by the tunnel reconcile path when migrating away from Caddy.
+func (c *Client) PurgeCaddy(ctx context.Context) error {
+	if err := IgnoreNotFound(c.cs.AppsV1().Deployments(CaddyNamespace).Delete(ctx, CaddyName, metav1.DeleteOptions{})); err != nil {
+		return fmt.Errorf("purge caddy deployment: %w", err)
+	}
+	if err := IgnoreNotFound(c.cs.CoreV1().Services(CaddyNamespace).Delete(ctx, CaddyName, metav1.DeleteOptions{})); err != nil {
+		return fmt.Errorf("purge caddy service: %w", err)
+	}
+	if err := IgnoreNotFound(c.cs.CoreV1().ConfigMaps(CaddyNamespace).Delete(ctx, CaddyConfigMapName, metav1.DeleteOptions{})); err != nil {
+		return fmt.Errorf("purge caddy configmap: %w", err)
+	}
+	if err := IgnoreNotFound(c.cs.CoreV1().PersistentVolumeClaims(CaddyNamespace).Delete(ctx, CaddyPVCName, metav1.DeleteOptions{})); err != nil {
+		return fmt.Errorf("purge caddy pvc: %w", err)
+	}
+	return nil
+}
+
 // firstCaddyPod returns the name of the Caddy pod. Errors with a clear
 // message if the pod isn't up yet so the reconciler can surface "Caddy
 // not ready" instead of "no pods found".

@@ -45,6 +45,22 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		}
 	}
 
+	// providers.tunnel — optional, but when set requires dns + at least one domain.
+	if t := cfg.Providers.Tunnel; t != "" {
+		switch t {
+		case "cloudflare", "ngrok":
+			// supported
+		default:
+			return fmt.Errorf("providers.tunnel %q is not supported (expected: cloudflare | ngrok)", t)
+		}
+		if cfg.Providers.DNS == "" {
+			return fmt.Errorf("providers.tunnel: DNS provider is required when tunnel is configured (set providers.dns)")
+		}
+		if len(cfg.Domains) == 0 {
+			return fmt.Errorf("providers.tunnel: at least one domain is required when tunnel is configured (set domains:)")
+		}
+	}
+
 	// ── Servers ───────────────────────────────────────────────────────────
 	if len(cfg.Servers) == 0 {
 		return fmt.Errorf("at least one server is required")

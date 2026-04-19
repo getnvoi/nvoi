@@ -572,3 +572,43 @@ func TestValidateConfig_SecretsUnknownKind(t *testing.T) {
 	cfg.Providers.Secrets = &config.SecretsDef{Kind: "vault"}
 	assertValidationError(t, cfg, "not supported")
 }
+
+// ── providers.tunnel validation ──────────────────────────────────────────
+
+func TestValidateConfig_TunnelValid(t *testing.T) {
+	for _, kind := range []string{"cloudflare", "ngrok"} {
+		cfg := validCfgForTest()
+		cfg.Providers.Tunnel = kind
+		cfg.Providers.DNS = "cloudflare"
+		cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80}
+		cfg.Domains = map[string][]string{"web": {"api.myapp.com"}}
+		if err := ValidateConfig(cfg); err != nil {
+			t.Errorf("tunnel %q: unexpected error: %v", kind, err)
+		}
+	}
+}
+
+func TestValidateConfig_TunnelUnknownKind(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Tunnel = "tailscale"
+	cfg.Providers.DNS = "cloudflare"
+	cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80}
+	cfg.Domains = map[string][]string{"web": {"api.myapp.com"}}
+	assertValidationError(t, cfg, "not supported")
+}
+
+func TestValidateConfig_TunnelRequiresDNS(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Tunnel = "cloudflare"
+	cfg.Providers.DNS = ""
+	cfg.Services["web"] = config.ServiceDef{Image: "nginx", Port: 80}
+	cfg.Domains = map[string][]string{"web": {"api.myapp.com"}}
+	assertValidationError(t, cfg, "DNS provider is required")
+}
+
+func TestValidateConfig_TunnelRequiresDomains(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Tunnel = "cloudflare"
+	cfg.Providers.DNS = "cloudflare"
+	assertValidationError(t, cfg, "at least one domain is required")
+}

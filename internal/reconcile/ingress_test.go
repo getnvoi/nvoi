@@ -17,6 +17,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/internal/testutil"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
 )
 
@@ -350,5 +352,184 @@ func TestIngress_CertOrHTTPSTimeout_Warns_DoesNotFail(t *testing.T) {
 	}
 	if err := Ingress(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("cert/HTTPS timeout must not fail the deploy, got: %v", err)
+	}
+}
+
+// ─── TunnelIngress tests ─────────────────────────────────────────────────────
+
+func TestTunnelIngress_AppliesWorkloadsAndWritesDNS(t *testing.T) {
+	// Wire CF tunnel fake + CF DNS fake.
+	cftf := testutil.NewCloudflareTunnelFake(t)
+	cftf.Register("test-tunnel-dns")
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{ZoneID: "zone1", ZoneDomain: "myapp.com"})
+	cf.RegisterDNS("test-dns-tunnel")
+
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	dc.Tunnel = app.ProviderRef{Name: "test-tunnel-dns", Creds: map[string]string{}}
+	dc.DNS = app.ProviderRef{Name: "test-dns-tunnel", Creds: map[string]string{}}
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute", Tunnel: "test-tunnel-dns", DNS: "test-dns-tunnel"},
+		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services:  map[string]config.ServiceDef{"api": {Image: "myapp/api", Port: 8080}},
+		Domains:   map[string][]string{"api": {"api.myapp.com"}},
+	}
+
+	if err := TunnelIngress(context.Background(), dc, cfg); err != nil {
+		t.Fatalf("TunnelIngress: %v", err)
+	}
+
+	// Tunnel was created at the provider.
+	if !cftf.Has("create-tunnel:nvoi-myapp-prod") {
+		t.Errorf("expected create-tunnel op; ops: %v", cftf.All())
+	}
+	// Config was pushed.
+	if cftf.Count("config:") < 1 {
+		t.Errorf("expected config push; ops: %v", cftf.All())
+	}
+
+	// Agent deployment exists in the cluster.
+	kf := kfFor(dc)
+	if !kf.HasDeployment(testNS, "cloudflared") {
+		t.Errorf("cloudflared deployment missing from cluster")
+	}
+	if !kf.HasSecret(testNS, "cloudflared-token") {
+		t.Errorf("cloudflared-token secret missing from cluster")
+	}
+
+	// DNS CNAME was written.
+	if !cf.Has("ensure-dns:api.myapp.com") {
+		t.Errorf("expected DNS CNAME write; ops: %v", cf.All())
+	}
+}
+
+// ─── Migration tests ──────────────────────────────────────────────────────────
+
+// TestTunnelIngress_PurgesOrphanCaddy asserts that switching to a tunnel
+// removes any Caddy workloads left behind from a prior non-tunnel deploy.
+func TestTunnelIngress_PurgesOrphanCaddy(t *testing.T) {
+	cftf := testutil.NewCloudflareTunnelFake(t)
+	cftf.Register("test-tunnel-purge-caddy")
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{ZoneID: "zone1", ZoneDomain: "myapp.com"})
+	cf.RegisterDNS("test-dns-purge-caddy")
+
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	dc.Tunnel = app.ProviderRef{Name: "test-tunnel-purge-caddy", Creds: map[string]string{}}
+	dc.DNS = app.ProviderRef{Name: "test-dns-purge-caddy", Creds: map[string]string{}}
+
+	// Seed orphan Caddy resources as if a previous non-tunnel deploy left them.
+	kf := kfFor(dc)
+	ctx := context.Background()
+	one := int32(1)
+	seedOrphan := func() {
+		_, _ = kf.Typed.AppsV1().Deployments(kube.CaddyNamespace).Create(ctx, &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: kube.CaddyName, Namespace: kube.CaddyNamespace},
+			Spec:       appsv1.DeploymentSpec{Replicas: &one},
+		}, metav1.CreateOptions{})
+		_, _ = kf.Typed.CoreV1().Services(kube.CaddyNamespace).Create(ctx, &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: kube.CaddyName, Namespace: kube.CaddyNamespace},
+		}, metav1.CreateOptions{})
+	}
+	seedOrphan()
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute", Tunnel: "test-tunnel-purge-caddy", DNS: "test-dns-purge-caddy"},
+		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services:  map[string]config.ServiceDef{"api": {Image: "myapp/api", Port: 8080}},
+		Domains:   map[string][]string{"api": {"api.myapp.com"}},
+	}
+
+	if err := TunnelIngress(ctx, dc, cfg); err != nil {
+		t.Fatalf("TunnelIngress: %v", err)
+	}
+
+	// Caddy deployment must be gone — purged by the migration cleanup.
+	if kf.HasDeployment(kube.CaddyNamespace, kube.CaddyName) {
+		t.Error("orphan caddy deployment was not purged on tunnel migration")
+	}
+	if kf.HasService(kube.CaddyNamespace, kube.CaddyName) {
+		t.Error("orphan caddy service was not purged on tunnel migration")
+	}
+	// Tunnel agent must be present.
+	if !kf.HasDeployment(testNS, kube.CloudflareTunnelAgentName) {
+		t.Error("cloudflared deployment missing after tunnel migration")
+	}
+}
+
+// TestIngress_PurgesOrphanTunnelAgent asserts that switching back from tunnel
+// to Caddy removes any tunnel agent workloads left behind from a prior tunnel deploy.
+func TestIngress_PurgesOrphanTunnelAgent(t *testing.T) {
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	rec := installCaddyFixture(t, dc)
+	_ = rec
+	seedService(t, dc, "web", 80)
+
+	// Seed orphan cloudflared resources as if a previous tunnel deploy left them.
+	kf := kfFor(dc)
+	ctx := context.Background()
+	_, _ = kf.Typed.AppsV1().Deployments(testNS).Create(ctx, &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: kube.CloudflareTunnelAgentName, Namespace: testNS},
+	}, metav1.CreateOptions{})
+	_, _ = kf.Typed.CoreV1().Secrets(testNS).Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: kube.CloudflareTunnelSecretName, Namespace: testNS},
+	}, metav1.CreateOptions{})
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		// No tunnel — Caddy path.
+		Servers:  map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services: map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
+		Domains:  map[string][]string{"web": {"myapp.com"}},
+	}
+
+	if err := Ingress(ctx, dc, cfg); err != nil {
+		t.Fatalf("Ingress: %v", err)
+	}
+
+	// Tunnel agent must be gone — purged by the migration cleanup.
+	if kf.HasDeployment(testNS, kube.CloudflareTunnelAgentName) {
+		t.Error("orphan cloudflared deployment was not purged on Caddy migration")
+	}
+	if kf.HasSecret(testNS, kube.CloudflareTunnelSecretName) {
+		t.Error("orphan cloudflared-token secret was not purged on Caddy migration")
+	}
+	// Caddy must still be present.
+	if !kf.HasDeployment(kube.CaddyNamespace, kube.CaddyName) {
+		t.Error("caddy deployment missing after migration back to Caddy")
+	}
+}
+
+func TestTunnelIngress_CaddyNotApplied_WhenTunnelSet(t *testing.T) {
+	cftf := testutil.NewCloudflareTunnelFake(t)
+	cftf.Register("test-tunnel-nc")
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{ZoneID: "zone1", ZoneDomain: "myapp.com"})
+	cf.RegisterDNS("test-dns-nc")
+
+	ssh := convergeMock()
+	dc := testDC(ssh)
+	dc.Tunnel = app.ProviderRef{Name: "test-tunnel-nc", Creds: map[string]string{}}
+	dc.DNS = app.ProviderRef{Name: "test-dns-nc", Creds: map[string]string{}}
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute", Tunnel: "test-tunnel-nc", DNS: "test-dns-nc"},
+		Servers:   map[string]config.ServerDef{"master": {Type: "cx23", Region: "fsn1", Role: "master"}},
+		Services:  map[string]config.ServiceDef{"api": {Image: "myapp/api", Port: 8080}},
+		Domains:   map[string][]string{"api": {"api.myapp.com"}},
+	}
+
+	if err := TunnelIngress(context.Background(), dc, cfg); err != nil {
+		t.Fatalf("TunnelIngress: %v", err)
+	}
+
+	kf := kfFor(dc)
+	// Caddy must NOT be present when tunnel is set.
+	if kf.HasDeployment(kube.CaddyNamespace, kube.CaddyName) {
+		t.Errorf("caddy deployment must NOT be present when tunnel provider is configured")
 	}
 }

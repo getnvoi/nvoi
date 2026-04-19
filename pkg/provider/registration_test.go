@@ -5,16 +5,13 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 
-	// Blank imports — same as cmd/cli/main.go. If any are missing there,
-	// this test reminds you to add them.
-	_ "github.com/getnvoi/nvoi/pkg/provider/dns/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/dns/cloudflare"
-	_ "github.com/getnvoi/nvoi/pkg/provider/dns/scaleway"
-	_ "github.com/getnvoi/nvoi/pkg/provider/infra/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/infra/hetzner"
-	_ "github.com/getnvoi/nvoi/pkg/provider/infra/scaleway"
-	_ "github.com/getnvoi/nvoi/pkg/provider/storage/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
+	// Blank imports — mirrors cmd/cli/main.go. Each vendor package registers
+	// all its kinds (infra/dns/storage/tunnel) via init().
+	_ "github.com/getnvoi/nvoi/pkg/provider/aws"
+	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare"
+	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
+	_ "github.com/getnvoi/nvoi/pkg/provider/ngrok"
+	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
 )
 
 // TestAllProvidersRegistered verifies that every provider name core might

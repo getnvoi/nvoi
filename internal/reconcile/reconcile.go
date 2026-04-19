@@ -125,11 +125,14 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	// Ingress: gated by HasPublicIngress + len(domains). Once #49 lands
-	// (tunnel providers), this branch additionally checks
-	// cfg.Providers.Tunnel == "" — sandbox / managed-k8s without a public
-	// IP route through the tunnel instead of Caddy.
-	if infra.HasPublicIngress() && len(cfg.Domains) > 0 {
+	// Ingress: tunnel providers (#49) replace Caddy entirely when
+	// cfg.Providers.Tunnel is set. Otherwise, Caddy handles ingress when
+	// the infra provider has a public IP and domains are configured.
+	if cfg.Providers.Tunnel != "" {
+		if err := TunnelIngress(ctx, dc, cfg); err != nil {
+			return err
+		}
+	} else if infra.HasPublicIngress() && len(cfg.Domains) > 0 {
 		if err := RouteDomains(ctx, dc, cfg, infra, bctx); err != nil {
 			return err
 		}

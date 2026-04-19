@@ -58,6 +58,25 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}
 	}
 
+	// Tunnel — delete the provider-side tunnel. Called after DNS so DNS
+	// records are gone before the tunnel. Order matters for Cloudflare:
+	// the tunnel must be deleted AFTER the agent pods are gone (servers
+	// were already deleted by infra.Teardown which runs later — the
+	// tunnel Delete call is best-effort; if the agent is still connected,
+	// Cloudflare will reject it and the operator must re-run destroy).
+	if cfg.Providers.Tunnel != "" && dc.Tunnel.Name != "" {
+		tunnelNames, err := utils.NewNames(cfg.App, cfg.Env)
+		if err == nil {
+			tun, terr := provider.ResolveTunnel(dc.Tunnel.Name, dc.Tunnel.Creds)
+			if terr != nil {
+				collect(fmt.Errorf("resolve tunnel provider: %w", terr))
+			} else {
+				dc.Cluster.Log().Command("tunnel", "delete", tunnelNames.Base())
+				collect(tun.Delete(ctx, tunnelNames.Base()))
+			}
+		}
+	}
+
 	// Storage buckets — external, preserved by default.
 	if deleteStorage {
 		for _, name := range utils.SortedKeys(cfg.Storage) {
