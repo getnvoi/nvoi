@@ -4,6 +4,7 @@ env: production
 providers:
   infra: hetzner
   dns: cloudflare
+  tunnel: cloudflare
   secrets: infisical
 
 servers:

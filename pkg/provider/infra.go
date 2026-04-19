@@ -146,6 +146,12 @@ type InfraProvider interface {
 type IngressBinding struct {
 	DNSType   string // "A" | "AAAA" | "CNAME"
 	DNSTarget string
+	// Proxied, when true, requests that the DNS provider enable its own
+	// proxy layer for the record. On Cloudflare this is the orange-cloud
+	// flag, which is REQUIRED for CNAME records pointing at cfargotunnel.com
+	// — without it the subdomain has no public IPs and traffic never reaches
+	// the Cloudflare edge, causing ERR_CONNECTION_REFUSED.
+	Proxied bool
 }
 
 // ServiceTarget is the slice of service info the InfraProvider needs to

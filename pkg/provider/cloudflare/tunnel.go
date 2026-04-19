@@ -101,6 +101,10 @@ func (c *Client) Reconcile(ctx context.Context, req provider.TunnelRequest) (*pr
 		dnsBindings[r.Hostname] = provider.IngressBinding{
 			DNSType:   "CNAME",
 			DNSTarget: cnameTarget,
+			// Proxied MUST be true: cfargotunnel.com has no public IPs unless
+			// the record is orange-clouded. Without it the domain is
+			// unresolvable and all requests get ERR_CONNECTION_REFUSED.
+			Proxied: true,
 		}
 	}
 
