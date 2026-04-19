@@ -87,8 +87,14 @@ func TestDelete_RemovesTunnel(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 
+	if !fake.Has("delete-connections:del-id") {
+		t.Errorf("expected delete-connections; ops: %v", fake.All())
+	}
 	if !fake.Has("delete-tunnel:del-id") {
 		t.Errorf("expected delete-tunnel; ops: %v", fake.All())
+	}
+	if fake.IndexOf("delete-connections:del-id") >= fake.IndexOf("delete-tunnel:del-id") {
+		t.Errorf("connections delete must happen before tunnel delete; ops: %v", fake.All())
 	}
 }
 

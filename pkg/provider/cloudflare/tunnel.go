@@ -115,6 +115,8 @@ func (c *Client) Reconcile(ctx context.Context, req provider.TunnelRequest) (*pr
 }
 
 // Delete implements TunnelProvider. Idempotent — 404 is success.
+// Cloudflare exposes connector teardown separately from tunnel deletion,
+// so remove active connections first and then delete the tunnel itself.
 func (c *Client) Delete(ctx context.Context, name string) error {
 	tunnelID, err := c.findTunnel(ctx, name)
 	if err != nil {
@@ -122,6 +124,9 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 	}
 	if tunnelID == "" {
 		return nil // already gone
+	}
+	if err := c.deleteConnections(ctx, tunnelID); err != nil && !utils.IsNotFound(err) {
+		return fmt.Errorf("cloudflare tunnel connections delete: %w", err)
 	}
 	path := fmt.Sprintf("/accounts/%s/cfd_tunnel/%s", c.accountID, tunnelID)
 	if err := c.api.Do(ctx, "DELETE", path, nil, nil); err != nil {
@@ -200,4 +205,9 @@ func (c *Client) pushConfig(ctx context.Context, tunnelID string, routes []provi
 	body := cfTunnelConfigRequest{Config: cfTunnelConfig{Ingress: ingress}}
 	path := fmt.Sprintf("/accounts/%s/cfd_tunnel/%s/configurations", c.accountID, tunnelID)
 	return c.api.Do(ctx, "PUT", path, body, nil)
+}
+
+func (c *Client) deleteConnections(ctx context.Context, tunnelID string) error {
+	path := fmt.Sprintf("/accounts/%s/cfd_tunnel/%s/connections", c.accountID, tunnelID)
+	return c.api.Do(ctx, "DELETE", path, nil, nil)
 }

@@ -27,10 +27,11 @@ type CloudflareTunnelFake struct {
 }
 
 type cfFakeTunnel struct {
-	ID     string
-	Name   string
-	Token  string
-	Config map[string]any
+	ID             string
+	Name           string
+	Token          string
+	Config         map[string]any
+	HasActiveConns bool
 }
 
 // NewCloudflareTunnelFake creates a running CF Tunnel fake.
@@ -61,7 +62,7 @@ func (f *CloudflareTunnelFake) Register(name string) {
 func (f *CloudflareTunnelFake) SeedTunnel(id, name, token string) *cfFakeTunnel {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	t := &cfFakeTunnel{ID: id, Name: name, Token: token}
+	t := &cfFakeTunnel{ID: id, Name: name, Token: token, HasActiveConns: true}
 	f.tunnels[id] = t
 	return t
 }
@@ -69,6 +70,7 @@ func (f *CloudflareTunnelFake) SeedTunnel(id, name, token string) *cfFakeTunnel 
 var (
 	reCFTunnelToken  = regexp.MustCompile(`^/accounts/([^/]+)/cfd_tunnel/([^/]+)/token$`)
 	reCFTunnelConfig = regexp.MustCompile(`^/accounts/([^/]+)/cfd_tunnel/([^/]+)/configurations$`)
+	reCFTunnelConns  = regexp.MustCompile(`^/accounts/([^/]+)/cfd_tunnel/([^/]+)/connections$`)
 	reCFTunnelByID   = regexp.MustCompile(`^/accounts/([^/]+)/cfd_tunnel/([^/]+)$`)
 	reCFTunnelList   = regexp.MustCompile(`^/accounts/([^/]+)/cfd_tunnel$`)
 )
@@ -84,6 +86,16 @@ func (f *CloudflareTunnelFake) serve(w http.ResponseWriter, r *http.Request) {
 	if reCFTunnelConfig.MatchString(path) {
 		m := reCFTunnelConfig.FindStringSubmatch(path)
 		f.handleConfig(w, r, m[2])
+		return
+	}
+	if reCFTunnelConns.MatchString(path) {
+		m := reCFTunnelConns.FindStringSubmatch(path)
+		switch r.Method {
+		case "DELETE":
+			f.handleDeleteConnections(w, m[2])
+		default:
+			http.Error(w, "method not allowed", 405)
+		}
 		return
 	}
 	if m := reCFTunnelByID.FindStringSubmatch(path); m != nil {
@@ -195,9 +207,29 @@ func (f *CloudflareTunnelFake) handleConfig(w http.ResponseWriter, r *http.Reque
 func (f *CloudflareTunnelFake) handleDelete(w http.ResponseWriter, id string) {
 	_ = f.Record("delete-tunnel:" + id)
 	f.mu.Lock()
-	_, ok := f.tunnels[id]
+	t, ok := f.tunnels[id]
+	if ok && t.HasActiveConns {
+		f.mu.Unlock()
+		writeCFTunnelError(w, 409, "active connections must be deleted before tunnel delete")
+		return
+	}
 	if ok {
 		delete(f.tunnels, id)
+	}
+	f.mu.Unlock()
+	if !ok {
+		writeCFTunnelError(w, 404, "tunnel not found")
+		return
+	}
+	writeCFTunnelOK(w, nil)
+}
+
+func (f *CloudflareTunnelFake) handleDeleteConnections(w http.ResponseWriter, id string) {
+	_ = f.Record("delete-connections:" + id)
+	f.mu.Lock()
+	t, ok := f.tunnels[id]
+	if ok {
+		t.HasActiveConns = false
 	}
 	f.mu.Unlock()
 	if !ok {

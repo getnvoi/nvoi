@@ -27,8 +27,8 @@ type TunnelProvider interface {
 	Reconcile(ctx context.Context, req TunnelRequest) (*TunnelPlan, error)
 
 	// Delete removes the tunnel at the provider. Idempotent.
-	// Called after cluster workloads are gone so active connections have
-	// drained (Cloudflare rejects DELETE while connections are live).
+	// Providers that model active connectors separately must tear those
+	// down before deleting the tunnel itself.
 	Delete(ctx context.Context, name string) error
 
 	ListResources(ctx context.Context) ([]ResourceGroup, error)
