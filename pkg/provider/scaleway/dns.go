@@ -70,18 +70,22 @@ func (d *DNSClient) ensureCNAME(ctx context.Context, domain, target string) erro
 
 	return d.patchRecords(ctx, patchRequest{
 		ReturnAllRecords: false,
-		Changes: []change{{
-			Set: &changeSet{
-				Name: name,
-				Type: "CNAME",
-				Records: []recordData{{
+		Changes: []change{
+			{Delete: &changeDelete{Name: name, Type: "A"}},
+			{Delete: &changeDelete{Name: name, Type: "AAAA"}},
+			{
+				Set: &changeSet{
 					Name: name,
-					Data: target,
 					Type: "CNAME",
-					TTL:  300,
-				}},
+					Records: []recordData{{
+						Name: name,
+						Data: target,
+						Type: "CNAME",
+						TTL:  300,
+					}},
+				},
 			},
-		}},
+		},
 	})
 }
 
@@ -112,18 +116,21 @@ func (d *DNSClient) ensureAddress(ctx context.Context, domain, target string) er
 
 	return d.patchRecords(ctx, patchRequest{
 		ReturnAllRecords: false,
-		Changes: []change{{
-			Set: &changeSet{
-				Name: name,
-				Type: rtype,
-				Records: []recordData{{
+		Changes: []change{
+			{Delete: &changeDelete{Name: name, Type: "CNAME"}},
+			{
+				Set: &changeSet{
 					Name: name,
-					Data: target,
 					Type: rtype,
-					TTL:  300,
-				}},
+					Records: []recordData{{
+						Name: name,
+						Data: target,
+						Type: rtype,
+						TTL:  300,
+					}},
+				},
 			},
-		}},
+		},
 	})
 }
 

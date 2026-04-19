@@ -59,39 +59,10 @@ func (d *DNSClient) RouteTo(ctx context.Context, domain string, binding provider
 	}
 }
 
-// Unroute removes every A/AAAA record for domain in the configured zone.
-// Idempotent — Route53 returns success when the record set is absent.
+// Unroute removes every A/AAAA/CNAME record for domain in the configured zone.
+// Idempotent — missing records are ignored.
 func (d *DNSClient) Unroute(ctx context.Context, domain string) error {
-	zoneID, err := d.resolveHostedZone(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, rtype := range []r53types.RRType{r53types.RRTypeA, r53types.RRTypeAaaa} {
-		resp, err := d.r53.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{
-			HostedZoneId:    aws.String(zoneID),
-			StartRecordName: aws.String(domain),
-			StartRecordType: rtype,
-			MaxItems:        aws.Int32(1),
-		})
-		if err != nil {
-			continue
-		}
-		for _, rrs := range resp.ResourceRecordSets {
-			if strings.TrimSuffix(deref(rrs.Name), ".") == domain && rrs.Type == rtype {
-				_, _ = d.r53.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
-					HostedZoneId: aws.String(zoneID),
-					ChangeBatch: &r53types.ChangeBatch{
-						Changes: []r53types.Change{{
-							Action:            r53types.ChangeActionDelete,
-							ResourceRecordSet: &rrs,
-						}},
-					},
-				})
-			}
-		}
-	}
-	return nil
+	return d.deleteRecords(ctx, domain, r53types.RRTypeA, r53types.RRTypeAaaa, r53types.RRTypeCname)
 }
 
 // ListBindings returns every A/AAAA record in the configured hosted zone.
@@ -133,6 +104,10 @@ func (d *DNSClient) ensureAddress(ctx context.Context, domain, target string) er
 		return err
 	}
 
+	if err := d.deleteRecords(ctx, domain, r53types.RRTypeCname); err != nil {
+		return err
+	}
+
 	rtype := provider.RecordType(target)
 	_, err = d.r53.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
 		HostedZoneId: aws.String(zoneID),
@@ -163,6 +138,10 @@ func (d *DNSClient) ensureCNAME(ctx context.Context, domain, target string) erro
 		return err
 	}
 
+	if err := d.deleteRecords(ctx, domain, r53types.RRTypeA, r53types.RRTypeAaaa); err != nil {
+		return err
+	}
+
 	_, err = d.r53.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
 		HostedZoneId: aws.String(zoneID),
 		ChangeBatch: &r53types.ChangeBatch{
@@ -181,6 +160,42 @@ func (d *DNSClient) ensureCNAME(ctx context.Context, domain, target string) erro
 	})
 	if err != nil {
 		return fmt.Errorf("upsert CNAME record for %s: %w", domain, err)
+	}
+	return nil
+}
+
+func (d *DNSClient) deleteRecords(ctx context.Context, domain string, types ...r53types.RRType) error {
+	zoneID, err := d.resolveHostedZone(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, rtype := range types {
+		resp, err := d.r53.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{
+			HostedZoneId:    aws.String(zoneID),
+			StartRecordName: aws.String(domain),
+			StartRecordType: rtype,
+			MaxItems:        aws.Int32(1),
+		})
+		if err != nil {
+			return fmt.Errorf("list %s record for %s: %w", rtype, domain, err)
+		}
+		for _, rrs := range resp.ResourceRecordSets {
+			if strings.TrimSuffix(deref(rrs.Name), ".") != domain || rrs.Type != rtype {
+				continue
+			}
+			if _, err := d.r53.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
+				HostedZoneId: aws.String(zoneID),
+				ChangeBatch: &r53types.ChangeBatch{
+					Changes: []r53types.Change{{
+						Action:            r53types.ChangeActionDelete,
+						ResourceRecordSet: &rrs,
+					}},
+				},
+			}); err != nil {
+				return fmt.Errorf("delete %s record for %s: %w", rtype, domain, err)
+			}
+		}
 	}
 	return nil
 }
@@ -225,6 +240,5 @@ func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup
 	}
 	return []provider.ResourceGroup{g}, nil
 }
-
 
 var _ provider.DNSProvider = (*DNSClient)(nil)
