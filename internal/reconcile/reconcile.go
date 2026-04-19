@@ -48,19 +48,26 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	// to the second — unique per `bin/deploy` run.
 	dc.Cluster.DeployHash = time.Now().UTC().Format("20060102-150405")
 
-	// Build services with `build:` declared BEFORE touching infra. A
-	// build failure should never leave us with half-provisioned servers.
-	if err := Build(ctx, dc, cfg); err != nil {
-		return err
-	}
-
-	// Resolve the infra provider once; reuse for the whole deploy.
+	// Resolve the infra provider before Build — ArchForType is pure (no
+	// API calls, no credentials consumed) and we need the platform string
+	// to stamp --platform on every docker buildx invocation.
 	bctx := config.BootstrapContext(dc, cfg)
 	infra, err := provider.ResolveInfra(bctx.ProviderName, dc.Cluster.Credentials)
 	if err != nil {
 		return fmt.Errorf("resolve infra provider: %w", err)
 	}
 	defer func() { _ = infra.Close() }()
+
+	// Derive build platform from the master server type. Ensures the built
+	// image arch always matches the target server — critical when the
+	// operator builds on amd64 but deploys to an arm64 node (e.g. cax11).
+	buildPlatform := "linux/" + infra.ArchForType(masterServerType(cfg))
+
+	// Build services with `build:` declared BEFORE touching infra. A
+	// build failure should never leave us with half-provisioned servers.
+	if err := Build(ctx, dc, cfg, buildPlatform); err != nil {
+		return err
+	}
 
 	// Bootstrap: provider provisions servers/firewall/volumes (or sandbox,
 	// or auths against a managed control plane), returns a working kube
@@ -203,6 +210,18 @@ func RouteDomains(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		}
 	}
 	return nil
+}
+
+// masterServerType returns the server type string for the master node, used
+// to derive the build platform via infra.ArchForType. Returns "" when no
+// master is found (ValidateConfig would have caught that already).
+func masterServerType(cfg *config.AppConfig) string {
+	for _, srv := range cfg.Servers {
+		if srv.Role == "master" {
+			return srv.Type
+		}
+	}
+	return ""
 }
 
 func sortedDomainKeys(m map[string][]string) []string {

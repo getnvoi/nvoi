@@ -138,6 +138,15 @@ type InfraProvider interface {
 	// Called by the CLI at the end of every command that opened a
 	// provider — without it, SSH-tunneled providers leak file descriptors.
 	Close() error
+
+	// ArchForType returns the CPU architecture ("amd64" or "arm64") for the
+	// given server/instance type name. Pure — no API calls, no credentials
+	// needed. Used by the build pass to set --platform on docker buildx so
+	// the image arch always matches the target server.
+	//   hetzner: "cax*" → arm64 (Ampere Altra), everything else → amd64.
+	//   aws:     "a1.*", "t4g.*", "m6g.*", "c7g.*", etc. → arm64.
+	//   scaleway: "AMP2*", "COPARM1*" → arm64, everything else → amd64.
+	ArchForType(serverType string) string
 }
 
 // IngressBinding tells the DNS provider how to route a domain. The DNS

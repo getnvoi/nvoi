@@ -31,7 +31,10 @@ type BuildRunner interface {
 	// children for real work.
 	PreflightBuildx(ctx context.Context) error
 	Login(ctx context.Context, host, username, password string) error
-	Build(ctx context.Context, image, context, dockerfile string, stdout, stderr io.Writer) error
+	// platform is "linux/amd64" or "linux/arm64". Empty string omits the
+	// flag (Docker defaults to the host arch — acceptable for local testing
+	// but wrong for cross-arch deploys, e.g. amd64 laptop → arm64 server).
+	Build(ctx context.Context, image, context, dockerfile, platform string, stdout, stderr io.Writer) error
 	Push(ctx context.Context, image string, stdout, stderr io.Writer) error
 }
 
@@ -81,7 +84,7 @@ func (DockerRunner) Login(ctx context.Context, host, username, password string) 
 	return nil
 }
 
-func (DockerRunner) Build(ctx context.Context, image, buildCtx, dockerfile string, stdout, stderr io.Writer) error {
+func (DockerRunner) Build(ctx context.Context, image, buildCtx, dockerfile, platform string, stdout, stderr io.Writer) error {
 	// `docker buildx build` is the modern canonical path, same as
 	// Kamal and rbrun. Explicit over `docker build` because:
 	//   - Supports BuildKit-only Dockerfile features (cache mounts,
@@ -100,8 +103,11 @@ func (DockerRunner) Build(ctx context.Context, image, buildCtx, dockerfile strin
 		"-t", image,
 		"-f", dockerfile,
 		"--progress=plain",
-		buildCtx,
 	}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, buildCtx)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = os.Environ()
 	cmd.Stdout = stdout
@@ -133,6 +139,7 @@ type BuildServiceRequest struct {
 	Host       string // registry host (ghcr.io, docker.io, …) — must match <Image>'s host
 	Username   string // resolved (post-$VAR-expansion)
 	Password   string // resolved
+	Platform   string // "linux/amd64" or "linux/arm64" — derived from master server type
 	Runner     BuildRunner
 }
 
@@ -170,7 +177,7 @@ func BuildService(ctx context.Context, req BuildServiceRequest) error {
 	}
 
 	out.Progress(fmt.Sprintf("docker buildx build %s (context: %s)", req.Image, req.Context))
-	if err := runner.Build(ctx, req.Image, req.Context, dockerfile, out.Writer(), out.Writer()); err != nil {
+	if err := runner.Build(ctx, req.Image, req.Context, dockerfile, req.Platform, out.Writer(), out.Writer()); err != nil {
 		return err
 	}
 
