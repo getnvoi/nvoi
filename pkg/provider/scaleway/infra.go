@@ -56,24 +56,22 @@ func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (
 		}
 	}
 
-	if rules := cfg.FirewallRules(); len(rules) > 0 {
-		publicRules, err := provider.ResolveFirewallArgs(ctx, rules)
-		if err != nil {
+	publicRules, err := provider.FirewallAllowList(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return nil, err
+	}
+	if len(masters) > 0 {
+		if err := c.applyFirewall(ctx, dc, names.MasterFirewall(), publicRules); err != nil {
 			return nil, err
 		}
-		names, err := utils.NewNames(dc.App, dc.Env)
-		if err != nil {
+	}
+	if len(workers) > 0 {
+		if err := c.applyFirewall(ctx, dc, names.WorkerFirewall(), nil); err != nil {
 			return nil, err
-		}
-		if len(masters) > 0 {
-			if err := c.applyFirewall(ctx, dc, names.MasterFirewall(), publicRules); err != nil {
-				return nil, err
-			}
-		}
-		if len(workers) > 0 {
-			if err := c.applyFirewall(ctx, dc, names.WorkerFirewall(), nil); err != nil {
-				return nil, err
-			}
 		}
 	}
 

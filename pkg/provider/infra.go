@@ -232,6 +232,11 @@ type ProviderConfigView interface {
 	VolumeDefs() []VolumeSpec
 	ServiceDefs() []ServiceSpec
 	DomainsByService() map[string][]string
+	// TunnelProvider returns the configured tunnel provider name
+	// ("cloudflare", "ngrok") or empty string when no tunnel is configured.
+	// Bootstrap uses this to decide whether 80/443 should be auto-opened on
+	// the master firewall (Caddy mode) or kept closed (tunnel mode).
+	TunnelProvider() string
 }
 
 // ServerSpec is the provider-facing view of a server entry.

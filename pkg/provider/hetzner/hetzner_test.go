@@ -471,6 +471,69 @@ func TestResizeVolume(t *testing.T) {
 	}
 }
 
+// ── buildFirewallRules unit tests ───────────────────────────────────────────────
+
+func TestBuildFirewallRules_NilBase_NoHTTPPorts(t *testing.T) {
+	// Tunnel mode and no-domain configs pass nil — master should get SSH +
+	// internal only, never 80 or 443.
+	rules := buildFirewallRules(nil)
+	for _, r := range rules {
+		if r.Port == "80" || r.Port == "443" {
+			t.Errorf("nil allow-list must not produce port %s rule (tunnel/no-domain mode)", r.Port)
+		}
+	}
+	// SSH must always be present.
+	hasSSH := false
+	for _, r := range rules {
+		if r.Port == "22" {
+			hasSSH = true
+		}
+	}
+	if !hasSSH {
+		t.Error("SSH (22) must always be present in firewall rules")
+	}
+}
+
+func TestBuildFirewallRules_WithHTTPBase_HasBothPorts(t *testing.T) {
+	// Caddy mode passes {80, 443} as the auto-derived base.
+	base := provider.PortAllowList{
+		"80":  {"0.0.0.0/0", "::/0"},
+		"443": {"0.0.0.0/0", "::/0"},
+	}
+	rules := buildFirewallRules(base)
+	has80, has443 := false, false
+	for _, r := range rules {
+		if r.Port == "80" {
+			has80 = true
+		}
+		if r.Port == "443" {
+			has443 = true
+		}
+	}
+	if !has80 {
+		t.Error("Caddy base allow-list must produce port 80 rule")
+	}
+	if !has443 {
+		t.Error("Caddy base allow-list must produce port 443 rule")
+	}
+}
+
+func TestBuildFirewallRules_SSHOverride_AppliesCustomCIDR(t *testing.T) {
+	base := provider.PortAllowList{
+		"22": {"10.0.0.0/8"},
+	}
+	rules := buildFirewallRules(base)
+	for _, r := range rules {
+		if r.Port == "22" {
+			if len(r.SourceIPs) != 1 || r.SourceIPs[0] != "10.0.0.0/8" {
+				t.Errorf("SSH CIDR override not applied: got %v", r.SourceIPs)
+			}
+			return
+		}
+	}
+	t.Error("SSH rule not found")
+}
+
 // ── Firewall rule reconciliation ────────────────────────────────────────────────
 
 func TestEnsureFirewall_ExistingReturnsID(t *testing.T) {

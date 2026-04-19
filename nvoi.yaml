@@ -13,8 +13,6 @@ servers:
     region: nbg1
     role: master
 
-firewall: default
-
 volumes:
   pgdata:
     size: 20

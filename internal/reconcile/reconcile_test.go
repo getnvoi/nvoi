@@ -248,17 +248,18 @@ func TestInvariant_NoProviderBranching(t *testing.T) {
 // Connect-vs-Bootstrap split's whole point is that drift handling
 // happens HERE (Bootstrap's write contract) and nowhere else.
 //
-// Test: cfg declares a firewall (`default`); HetznerFake has the master
-// pre-seeded but no firewall. Running Deploy must issue the
-// firewall: rule-reconcile op (Bootstrap's applyFirewall path) — proving
-// drift IS reconciled on the deploy path.
+// Bootstrap always reconciles firewall rules regardless of firewall:
+// config — no preset needed to trigger it. The 80/443 allow-list is
+// auto-derived from domains + tunnel state; even a minimal config
+// (no domains, no tunnel) results in an applyFirewall call for
+// SSH-only rules.
 func TestInvariant_DeployDoesReconcileDrift(t *testing.T) {
 	var log opLog
 	ssh := convergeMock()
 	dc := convergeDC(&log, ssh)
 
 	cfg := minimalCfg()
-	cfg.Firewall = []string{"default"} // triggers applyFirewall in Bootstrap
+	// No firewall: key needed — Bootstrap always reconciles unconditionally.
 
 	if err := Deploy(context.Background(), dc, cfg); err != nil {
 		t.Fatalf("Deploy: %v", err)

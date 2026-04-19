@@ -43,48 +43,44 @@ func SortedPorts(m PortAllowList) []string {
 // A nil map = base rules only (SSH open + internal).
 type PortAllowList map[string][]string
 
-// ResolveFirewallArgs parses CLI args into a PortAllowList.
-// First arg may be a preset name ("default", "cloudflare").
-// Remaining args are raw "port:cidr,cidr" rules that override the preset.
-// SSH (22) is never included — it's always open, managed by instance set.
-func ResolveFirewallArgs(ctx context.Context, args []string) (PortAllowList, error) {
-	if len(args) == 0 {
-		return nil, nil
-	}
-
-	var base PortAllowList
-	rawArgs := args
-
-	// Check if first arg is a preset name (no ":" = not a raw rule)
-	if len(args) > 0 && !strings.Contains(args[0], ":") {
-		preset, err := resolvePreset(ctx, args[0])
-		if err != nil {
-			return nil, err
+// ResolveFirewallArgs parses firewall rule strings into a PortAllowList.
+// All entries must be in "port:cidr" or "port:cidr,cidr" format.
+// A plain word with no ":" (former preset names) is now a hard error —
+// presets were removed; 80/443 are auto-derived from config state instead.
+// SSH (22) is never included — always open, managed by instance set.
+func ResolveFirewallArgs(_ context.Context, args []string) (PortAllowList, error) {
+	for _, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed != "" && !strings.Contains(trimmed, ":") {
+			return nil, fmt.Errorf("firewall: %q is not a valid rule — use port:cidr format (e.g. 22:1.2.3.4/32); presets have been removed", trimmed)
 		}
-		base = preset
-		rawArgs = args[1:]
 	}
-
-	// Parse raw rules
-	overrides := ParseRawRules(rawArgs)
-
-	// Merge: raw overrides win for same port
-	return MergeAllowLists(base, overrides), nil
+	return ParseRawRules(args), nil
 }
 
-// resolvePreset returns the PortAllowList for a named preset.
-// SSH (22) is NOT included — always open, managed separately by instance set.
-func resolvePreset(ctx context.Context, name string) (PortAllowList, error) {
-	switch name {
-	case "default":
-		return PortAllowList{
+// FirewallAllowList derives the master-firewall allow-list from the config.
+//
+// Rule: 80/443 are auto-opened when domains are declared AND no tunnel
+// provider is configured (Caddy mode). In tunnel mode or with no domains
+// the allow-list base is nil — master gets SSH + internal ports only.
+//
+// User overrides from cfg.FirewallRules() are merged on top of the derived
+// base (same port in overrides wins). The validator already rejects 80/443
+// overrides in tunnel mode, so the merge here never re-opens closed ports.
+func FirewallAllowList(ctx context.Context, cfg ProviderConfigView) (PortAllowList, error) {
+	base := PortAllowList(nil)
+	if len(cfg.DomainsByService()) > 0 && cfg.TunnelProvider() == "" {
+		// Caddy mode: master needs public HTTP(S) to serve ACME + traffic.
+		base = PortAllowList{
 			"80":  {"0.0.0.0/0", "::/0"},
 			"443": {"0.0.0.0/0", "::/0"},
-		}, nil
-
-	default:
-		return nil, fmt.Errorf("unknown firewall preset: %q (available: default)", name)
+		}
 	}
+	userRules, err := ResolveFirewallArgs(ctx, cfg.FirewallRules())
+	if err != nil {
+		return nil, err
+	}
+	return MergeAllowLists(base, userRules), nil
 }
 
 // MergeAllowLists merges base + overrides. Override wins for same port.

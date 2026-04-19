@@ -73,6 +73,8 @@ func (v *View) ServiceDefs() []provider.ServiceSpec {
 	return out
 }
 
+func (v *View) TunnelProvider() string { return v.cfg.Providers.Tunnel }
+
 func (v *View) DomainsByService() map[string][]string {
 	if len(v.cfg.Domains) == 0 {
 		return nil

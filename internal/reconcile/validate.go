@@ -61,6 +61,22 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		}
 	}
 
+	// In tunnel mode, 80/443 must stay closed on the master — the tunnel
+	// agent owns all inbound traffic and master ports 80/443 are firewalled
+	// off. Opening them here contradicts the tunnel setup and leaks the
+	// service directly, bypassing the tunnel edge.
+	if cfg.Providers.Tunnel != "" {
+		for _, rule := range cfg.Firewall {
+			port, _, ok := strings.Cut(rule, ":")
+			if !ok {
+				continue
+			}
+			if port == "80" || port == "443" {
+				return fmt.Errorf("firewall: port %s cannot be opened in tunnel mode — the tunnel agent owns all inbound traffic; remove the rule or remove providers.tunnel", port)
+			}
+		}
+	}
+
 	// ── Servers ───────────────────────────────────────────────────────────
 	if len(cfg.Servers) == 0 {
 		return fmt.Errorf("at least one server is required")

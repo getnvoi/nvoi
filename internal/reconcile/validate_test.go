@@ -423,6 +423,51 @@ func TestValidateConfig_CronSecretEqualsWithoutDollar(t *testing.T) {
 	assertValidationError(t, cfg, "requires $")
 }
 
+// ── Firewall + tunnel validation ─────────────────────────────────────────────
+
+// validTunnelCfg returns a minimal config in tunnel mode (cloudflare).
+// domains and dns are required by the tunnel validator.
+func validTunnelCfg() *config.AppConfig {
+	cfg := validCfg()
+	cfg.Providers.DNS = "cloudflare"
+	cfg.Providers.Tunnel = "cloudflare"
+	cfg.Services["api"] = config.ServiceDef{Image: "myapp/api", Port: 8080}
+	cfg.Domains = map[string][]string{"api": {"api.example.com"}}
+	return cfg
+}
+
+func TestValidateConfig_TunnelMode_Firewall80_Errors(t *testing.T) {
+	cfg := validTunnelCfg()
+	cfg.Firewall = []string{"80:0.0.0.0/0"}
+	assertValidationError(t, cfg, "port 80 cannot be opened in tunnel mode")
+}
+
+func TestValidateConfig_TunnelMode_Firewall443_Errors(t *testing.T) {
+	cfg := validTunnelCfg()
+	cfg.Firewall = []string{"443:0.0.0.0/0"}
+	assertValidationError(t, cfg, "port 443 cannot be opened in tunnel mode")
+}
+
+func TestValidateConfig_TunnelMode_NonHTTPFirewallRule_Ok(t *testing.T) {
+	cfg := validTunnelCfg()
+	cfg.Firewall = []string{"8080:10.0.0.0/8"} // custom port, not 80/443
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("non-HTTP firewall rule in tunnel mode should be valid, got: %v", err)
+	}
+}
+
+func TestValidateConfig_CaddyMode_Firewall80_Ok(t *testing.T) {
+	// 80/443 in firewall is fine in Caddy mode (no tunnel).
+	cfg := validCfg()
+	cfg.Providers.DNS = "cloudflare"
+	cfg.Services["api"] = config.ServiceDef{Image: "myapp/api", Port: 8080}
+	cfg.Domains = map[string][]string{"api": {"api.example.com"}}
+	cfg.Firewall = []string{"80:1.2.3.4/32"}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("80 in firewall in Caddy mode should be valid, got: %v", err)
+	}
+}
+
 func assertValidationError(t *testing.T, cfg *config.AppConfig, substr string) {
 	t.Helper()
 	err := ValidateConfig(cfg)

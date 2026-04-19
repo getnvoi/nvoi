@@ -129,25 +129,26 @@ func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (
 		_ = masterShell.Close()
 	}
 
-	// Firewalls — write contract: rules reconciled, drift removed.
-	if rules := cfg.FirewallRules(); len(rules) > 0 {
-		publicRules, err := provider.ResolveFirewallArgs(ctx, rules)
-		if err != nil {
+	// Firewalls — always reconcile, rules derived from config state.
+	// Caddy mode (domains set, no tunnel): 80/443 auto-open on master.
+	// Tunnel mode or no domains: master gets SSH + internal only.
+	// Workers always get base rules regardless.
+	publicRules, err := provider.FirewallAllowList(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return nil, err
+	}
+	if len(masters) > 0 {
+		if err := c.applyFirewall(ctx, dc, names.MasterFirewall(), publicRules); err != nil {
 			return nil, err
 		}
-		names, err := utils.NewNames(dc.App, dc.Env)
-		if err != nil {
+	}
+	if len(workers) > 0 {
+		if err := c.applyFirewall(ctx, dc, names.WorkerFirewall(), nil); err != nil {
 			return nil, err
-		}
-		if len(masters) > 0 {
-			if err := c.applyFirewall(ctx, dc, names.MasterFirewall(), publicRules); err != nil {
-				return nil, err
-			}
-		}
-		if len(workers) > 0 {
-			if err := c.applyFirewall(ctx, dc, names.WorkerFirewall(), nil); err != nil {
-				return nil, err
-			}
 		}
 	}
 
