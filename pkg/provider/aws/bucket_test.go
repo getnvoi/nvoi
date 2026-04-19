@@ -77,4 +77,3 @@ func TestIsS3NotFound(t *testing.T) {
 		t.Error("nil error should not be NotFound")
 	}
 }
-

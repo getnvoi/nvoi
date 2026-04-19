@@ -185,7 +185,6 @@ func (b *BucketClient) Credentials(ctx context.Context) (provider.BucketCredenti
 	}, nil
 }
 
-
 func isS3BucketExists(err error) bool {
 	if err == nil {
 		return false
