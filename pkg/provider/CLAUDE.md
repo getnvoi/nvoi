@@ -2,7 +2,7 @@
 
 Provider interfaces and credential resolution. Everything pluggable is a provider.
 
-Six provider kinds live in core: `infra`, `dns`, `storage`, `secrets`, `tunnel`, `build`. (Pre-#47 the first kind was named `compute` and exposed a 16-method `ComputeProvider` interface mixing IaaS-specific ops with what nvoi actually needed. C10 deleted it; `InfraProvider` is the narrow replacement — `Bootstrap → *kube.Client` is the single load-bearing promise.) The `build` kind (added in #56-A) is the outer substrate a deploy runs on — `local` (default, in-process), `ssh` (PR-B, dispatches to a `role: builder` server), `daytona` (PR-C, dispatches into a managed sandbox). Distinct from the inner docker-buildx-and-push step in `internal/reconcile/images.go::BuildImages`, which runs pre-infra on whichever machine is executing `reconcile.Deploy`. Database engines stay product-layer and do not land in core.
+Seven provider kinds live in core: `infra`, `dns`, `storage`, `secrets`, `tunnel`, `build`, `ci`. (Pre-#47 the first kind was named `compute` and exposed a 16-method `ComputeProvider` interface mixing IaaS-specific ops with what nvoi actually needed. C10 deleted it; `InfraProvider` is the narrow replacement — `Bootstrap → *kube.Client` is the single load-bearing promise.) The `build` kind (added in #56-A) is the outer substrate a deploy runs on — `local` (default, in-process), `ssh` (PR-B, dispatches to a `role: builder` server), `daytona` (PR-C, dispatches into a managed sandbox). Distinct from the inner docker-buildx-and-push step in `internal/reconcile/images.go::BuildImages`, which runs pre-infra on whichever machine is executing `reconcile.Deploy`. The `ci` kind (added in #61) is consumed ONLY by `nvoi ci init`; `reconcile.Deploy` never reads `providers.ci`. Today: `github` (GitHub Actions). Database engines stay product-layer and do not land in core.
 
 ## Registration pattern
 
@@ -40,6 +40,20 @@ grep -rE 'Cluster\{[^}]*MasterKube|Cluster\.MasterKube\s*=|Cluster\{[^}]*NodeShe
 ```
 
 The Connect/Bootstrap split fixes the production failure class where `nvoi logs` could silently reconcile firewall drift and lock the user out — `cmd/cli/dispatch_test.go::TestDispatch_DriftScenario_DoesNotReconcile` locks the contract.
+
+## CIProvider
+
+`pkg/provider/ci.go` + `pkg/provider/github/`. Four methods, zero cluster touch:
+
+- **`ValidateCredentials(ctx) error`** — cheap `/user` + repo-existence probe. Runs before any mutation so a bad token / wrong repo fails fast.
+- **`Target() CITarget`** — `{URL, Owner, Repo}` for operator-facing log lines.
+- **`SyncSecrets(ctx, map[string]string) error`** — upload every secret to the provider's secret store. GitHub path: fetches `/actions/secrets/public-key`, seals each value via `golang.org/x/crypto/nacl/box.SealAnonymous` (curve25519 / libsodium sealed-box), PUTs to `/actions/secrets/{name}`. Empty values are rejected at the collector (`cmd/cli/ci.go::collectCISecrets`) — an empty secret on the runner reads as "absent" and breaks `ValidateConfig` obscurely.
+- **`RenderWorkflow(CIWorkflowPlan) (path, content, error)`** — deterministic workflow file. `SecretEnv` sorted by the caller so re-runs are byte-identical; the Contents API diff stays quiet when nothing changed.
+- **`CommitFiles(ctx, []CIFile, message) (url, error)`** — direct push to the default branch when it accepts direct pushes, feature branch (`nvoi/ci-init`) + PR otherwise. Protection detection: rulesets-first, then classic branch protection. 403-on-list treated as protected (safer default than half-committing a push that a hidden rule then rejects). 422 "repository rule violations" body-sniffed as an inline fallback trigger. Idempotent — existing PR reused on re-run.
+
+Credentials: `GITHUB_TOKEN` (fine-grained PAT or OAuth) + `GITHUB_REPO` (`owner/repo` | full URL). `GITHUB_REPO` auto-inferred from `git remote get-url origin` at the `cmd/` boundary when unset — the git CLI shell-out lives ONLY in `cmd/cli/ci.go`, never in the provider.
+
+Hosted-runner model only (`ubuntu-latest`). The rendered workflow curls `cdn.nvoi.to/bin/<version>/nvoi` to pin the runner binary.
 
 ## Credential resolution
 

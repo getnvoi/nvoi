@@ -76,6 +76,8 @@ providers:
   storage: cloudflare       # cloudflare | aws | scaleway
   secrets: infisical        # optional — doppler | awssm | infisical (see Credential resolution)
   tunnel: cloudflare        # optional — cloudflare | ngrok (see Tunnel ingress)
+  ci: github                # optional — github (only consumed by `nvoi ci init`; see CI onboarding)
+  build: local              # optional — local (default) | ssh | daytona
 
 servers:
   master:
@@ -133,6 +135,7 @@ domains:
 - Web-facing services (with domains): replicas omitted → 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid.
 - `services.X.build:` requires a `registry:` block AND the image's host must appear as a key. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag.
 - `providers.tunnel` — optional. When set: `providers.dns` required, at least one `domains:` entry required. Valid values: `cloudflare | ngrok`. Credentials validated at startup.
+- `providers.ci` — optional. When set, must be a registered CI provider (today: `github`). Pure metadata consumed ONLY by `nvoi ci init`; `reconcile.Deploy` never reads it. Unknown name = hard validate error.
 
 ## Private registries + local builds
 
@@ -243,6 +246,7 @@ SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guida
 | Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
 | Tunnel | `providers.tunnel` | `TunnelProvider` | cloudflare, ngrok |
 | Build | `providers.build` | `BuildProvider` | local (default); ssh #56-B, daytona #56-C |
+| CI | `providers.ci` | `CIProvider` | github (consumed by `nvoi ci init` only) |
 
 **InfraProvider contract** (`pkg/provider/infra.go`): every backend yields a `*kube.Client` via `Bootstrap` (write — converges drift) or `Connect` (read-only — attach to existing infra). Reconcile branches on none of: provider name, IngressBinding type, NodeShell-or-not, ConsumesBlocks. Adding a new backend = implementing the interface; zero reconcile changes.
 
@@ -298,6 +302,34 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **Local builds are optional and opt-in per service.** `PreflightBuildx` fires once so missing buildx surfaces with an actionable hint. Kamal-style auth via the real `~/.docker/config.json`. Runs PRE-infra via `BuildRunner`.
 - **Firewall orphan sweep deferred until after `ServersRemoveOrphans`.** `Firewall()` reconciles the desired per-role set early so new servers get rules before workloads land. `FirewallRemoveOrphans()` runs later because Hetzner rejects `DeleteFirewall` while a server is still attached — `DeleteServer`'s contract detaches first. `ensureFirewall` never resets rules.
 - **Root disk size is creation-only.** `disk` applies at `EnsureServer`. Changing it on an existing server has no effect — resize requires recreation. Hetzner rejects `disk` at config time (fixed per server type).
+
+## CI onboarding (`nvoi ci init`)
+
+`providers.ci` is **opt-in, non-custody SaaS-mode onboarding**. Never consumed by `reconcile.Deploy` — the field is pure metadata read only by `nvoi ci init`. A config with `providers.ci: github` still deploys identically from the laptop; the only new capability is porting every credential into the CI provider's secret store and committing a deploy workflow so `git push` becomes the deploy trigger.
+
+### Flow
+
+`nvoi ci init` (in `cmd/cli/ci.go::runCIInit`):
+
+1. `ValidateConfig` — same gate as `deploy`. `providers.ci` typo caught here.
+2. `provider.ResolveCI(ciName, ciCreds)` + `ValidateCredentials(ctx)` — fail fast before any mutation. `ciCreds["repo"]` auto-inferred from `git remote get-url origin` when unset.
+3. `collectCISecrets(cfg, source)` walks every source the runner will need:
+   - Each declared provider's schema fields (infra/dns/storage/build/tunnel).
+   - Secrets-backend bootstrap env (the one escape hatch that stays env-native — the backend can't authenticate to itself).
+   - `SSH_PRIVATE_KEY` via the same `resolveSSHKey` the laptop uses — load-bearing. Hard error if empty; the runner can't dial the master without it.
+   - `cfg.Secrets` + service/cron `secrets:` refs — bare `FOO` OR RHS `$VAR` of `ALIAS=$BAR`. The LHS (`ALIAS`) is the service-visible env name and must NOT be ported — the runner resolves `$BAR`.
+   - Registry username / password `$VAR` refs.
+4. `ciProv.SyncSecrets(ctx, secrets)` — uploads every collected secret (libsodium sealed-box via curve25519 on the GitHub path).
+5. `ciProv.RenderWorkflow(...)` — deterministic `.github/workflows/nvoi.yml` with sorted `secretEnv` (byte-identical across re-runs when the set is unchanged → the Contents API diff stays quiet).
+6. `ciProv.CommitFiles(ctx, files, msg)` — direct push to the default branch when it accepts direct pushes; otherwise feature branch (`nvoi/ci-init`) + PR. Protection detection: rulesets first, then classic protection, with 403-on-list treated as protected and 422 "repository rule violations" as the inline fallback trigger. Idempotent re-runs reuse the existing PR.
+
+### Parser sharing
+
+`cmd/cli/ci.go` and `internal/reconcile/envvars.go` both enumerate `$VAR` references — `cmd/` to know which env vars to port into the CI secret store, `reconcile` to resolve them at deploy time on the runner. Diverging rules (cmd thinks `${FOO_BAR}` is a var and reconcile doesn't, or vice versa) would be a silent source of wrong behavior between the laptop and the runner. Both paths share `pkg/utils/envvars.go` (`HasVarRef` / `ExtractVarRefs` / `IsVarStart` / `IsVarChar`) and `kube.ParseSecretRef` — one definition, one source of truth.
+
+### Composition
+
+Every `(build, ci)` pair composes freely — no coupling. `providers.build: ssh` + `providers.ci: github` is the remote-builder-on-CI path; `providers.build: local` + `providers.ci: github` keeps the build on the runner. Validator enforces the two independently.
 
 ## Tunnel ingress
 
