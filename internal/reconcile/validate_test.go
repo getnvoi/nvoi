@@ -813,3 +813,36 @@ func registerTestBuildProvider(_ *testing.T, name string, caps provider.BuildCap
 		return nil
 	})
 }
+
+// ── providers.ci validation ──────────────────────────────────────────────
+
+// TestValidateConfig_CIUnset_OK locks the default: omitting providers.ci is
+// valid. `nvoi ci init` is opt-in — a config that never sets ci must deploy
+// exactly as it did before the feature landed.
+func TestValidateConfig_CIUnset_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("empty providers.ci must be valid, got: %v", err)
+	}
+}
+
+// TestValidateConfig_CIGitHub_OK locks the happy path for the only CI
+// provider shipped today. If the github package's registration ever breaks
+// this fails loudly before any test that depends on `ci init` running.
+func TestValidateConfig_CIGitHub_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Ci = "github"
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("providers.ci: github must be valid, got: %v", err)
+	}
+}
+
+// TestValidateConfig_CIUnknownKind_Errors surfaces typos at validate time —
+// before any token is read, any secret synced, or any workflow committed.
+// `providers.ci: githob` would otherwise silently pass the CLI layer and
+// fail obscurely inside ResolveCI.
+func TestValidateConfig_CIUnknownKind_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Ci = "githob"
+	assertValidationError(t, cfg, "providers.ci")
+}
