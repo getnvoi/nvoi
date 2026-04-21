@@ -147,6 +147,45 @@ type InfraProvider interface {
 	//   aws:     "a1.*", "t4g.*", "m6g.*", "c7g.*", etc. → arm64.
 	//   scaleway: "AMP2*", "COPARM1*" → arm64, everything else → amd64.
 	ArchForType(serverType string) string
+
+	// ProvisionBuilders converges role: builder servers + their per-server
+	// cache volumes + the shared builder firewall. Idempotent: existing
+	// builders are lookup-only (no re-install), missing ones are created.
+	// Runs BEFORE Bootstrap on the SSH-build dispatch path — the CLI calls
+	// ProvisionBuilders first (so the target exists), fetches BuilderTargets,
+	// then SSH-dispatches the deploy into the builder where Bootstrap runs
+	// against the master/workers.
+	//
+	// Providers that don't support builders (managed k8s, sandbox) return
+	// nil when no role: builder servers are declared and an explicit error
+	// otherwise ("<provider> does not support role: builder").
+	ProvisionBuilders(ctx context.Context, dc *BootstrapContext) error
+
+	// BuilderTargets returns the SSH addressable endpoints of every
+	// role: builder server this provider manages for the current cluster.
+	// Read-only. Called by the CLI on the build-dispatch path to hand the
+	// SSH BuildProvider a target list — same ownership pattern as NodeShell.
+	//
+	//   IaaS: one entry per role: builder server (IPv4 + DefaultUser).
+	//   Managed/sandbox: (nil, nil). Callers feature-gate on empty.
+	BuilderTargets(ctx context.Context, dc *BootstrapContext) ([]BuilderTarget, error)
+}
+
+// BuilderTarget is the SSH-reachable address of one role: builder server.
+// The SSH BuildProvider dials Host:22 as User, authenticates with the
+// operator's SSH private key (passed through BuildRequest.SSHKey), and
+// runs `git clone` + `docker buildx build --push` on the builder.
+type BuilderTarget struct {
+	// Name is the full provider-side server name (e.g.
+	// "nvoi-myapp-prod-builder-1"). Diagnostic only — not parsed.
+	Name string
+	// Host is the routable address (public IPv4 for IaaS builders). The SSH
+	// BuildProvider dials Host + ":22".
+	Host string
+	// User is the login user — always utils.DefaultUser today ("deploy"),
+	// per RenderBuilderCloudInit. Carried explicitly so future non-Ubuntu
+	// images can diverge without touching the SSH BuildProvider.
+	User string
 }
 
 // IngressBinding tells the DNS provider how to route a domain. The DNS

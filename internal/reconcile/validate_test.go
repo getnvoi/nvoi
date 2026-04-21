@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 func TestValidateConfig_Valid(t *testing.T) {
@@ -699,4 +700,116 @@ func TestValidateConfig_BuildLocal_WithBuilderServer_Errors(t *testing.T) {
 	cfg.Providers.Build = "local"
 	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
 	assertValidationError(t, cfg, "does not use builder servers")
+}
+
+// TestValidateConfig_BuildUnsetWithBuilderServer_Errors mirrors the local
+// case for an unset build provider. Unset defaults to "local", so a stray
+// role: builder server is just as wrong. The uniform "resolve to local"
+// path means the error message names "local" explicitly — no special case.
+func TestValidateConfig_BuildUnsetWithBuilderServer_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = ""
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	assertValidationError(t, cfg, "does not use builder servers")
+}
+
+// ── role: builder enum acceptance ────────────────────────────────────────
+
+// TestValidateConfig_RoleBuilder_AcceptedUnderRequiresBuildersProvider covers
+// the role-enum acceptance of "builder" with a synthetic test-fixture
+// RequiresBuilders=true BuildProvider. The real `ssh` provider is exercised
+// separately (see the TestValidateConfig_BuildSSH_* tests below) — keeping
+// this fixture-based test proves the code path is generic for any
+// RequiresBuilders=true provider (ssh, daytona), not hard-wired to one
+// specific implementation.
+func TestValidateConfig_RoleBuilder_AcceptedUnderRequiresBuildersProvider(t *testing.T) {
+	registerTestBuildProvider(t, "testbuilder", provider.BuildCapability{RequiresBuilders: true})
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "testbuilder"
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("role: builder must be accepted under a RequiresBuilders=true build provider, got: %v", err)
+	}
+}
+
+// TestValidateConfig_RoleUnknown_Errors locks the role enum's rejection of
+// typos. The error message names all three valid roles so the operator
+// knows builder is a first-class option, not an internal-only role.
+func TestValidateConfig_RoleUnknown_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Servers["bad"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "boss"}
+	assertValidationError(t, cfg, "must be master, worker, or builder")
+}
+
+// TestValidateConfig_RequiresBuildersProvider_NoBuilderServer_Errors locks
+// R1 in the positive direction: a build provider that declares
+// RequiresBuilders=true must be matched by ≥1 role: builder server. Same
+// test-fixture build provider as above.
+func TestValidateConfig_RequiresBuildersProvider_NoBuilderServer_Errors(t *testing.T) {
+	registerTestBuildProvider(t, "testbuilder2", provider.BuildCapability{RequiresBuilders: true})
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "testbuilder2"
+	assertValidationError(t, cfg, "requires at least one server with role: builder")
+}
+
+// ── Real `ssh` build provider matrix ─────────────────────────────────────
+//
+// The R1 tests above use a synthetic `testbuilder*` fixture to prove the
+// validation code path is generic. The two tests below lock the actual
+// `ssh` provider's registration-time capability bits by running the real
+// registered entry through ValidateConfig. If someone ever flips
+// `RequiresBuilders` on the ssh provider, these tests fail — the
+// synthetic-fixture tests would still pass because they declare the bits
+// inline.
+
+// TestValidateConfig_BuildSSH_NoBuilderServer_Errors locks the real ssh
+// provider's R1 positive direction: ssh requires ≥1 role: builder server.
+// If a future edit drops RequiresBuilders to false this fails loudly.
+func TestValidateConfig_BuildSSH_NoBuilderServer_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "ssh"
+	// No builder server declared — the default validCfg only has a master.
+	assertValidationError(t, cfg, "requires at least one server with role: builder")
+}
+
+// TestValidateConfig_BuildSSH_WithBuilderServer_OK locks the real ssh
+// provider's R1 happy path: ssh + ≥1 role: builder server validates clean.
+func TestValidateConfig_BuildSSH_WithBuilderServer_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "ssh"
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("ssh + role: builder must validate clean, got: %v", err)
+	}
+}
+
+// TestValidateConfig_BuildDaytona_WithBuilderServer_Errors locks the R1
+// negative direction for daytona: RequiresBuilders=false, so pairing it
+// with a role: builder server is a misconfiguration (idle infra).
+func TestValidateConfig_BuildDaytona_WithBuilderServer_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "daytona"
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	assertValidationError(t, cfg, "does not use builder servers")
+}
+
+// TestValidateConfig_BuildDaytona_NoBuilderServer_OK locks daytona's happy
+// path: no builder servers declared, validates clean.
+func TestValidateConfig_BuildDaytona_NoBuilderServer_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "daytona"
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("daytona + no builder must validate clean, got: %v", err)
+	}
+}
+
+// registerTestBuildProvider registers a throwaway BuildProvider in the
+// provider registry under a unique name. Used by validator tests that need
+// specific BuildCapability bits without pulling in a production provider.
+// The factory returns a nil BuildProvider because the validator only
+// queries GetBuildCapability — it never calls ResolveBuild.
+func registerTestBuildProvider(_ *testing.T, name string, caps provider.BuildCapability) {
+	provider.RegisterBuild(name, provider.CredentialSchema{}, caps, func(map[string]string) provider.BuildProvider {
+		return nil
+	})
 }

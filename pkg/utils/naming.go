@@ -42,15 +42,42 @@ func (n *Names) Env() string { return n.env }
 
 // ── Infrastructure names ───────────────────────────────────────────────────────
 
-func (n *Names) Base() string           { return fmt.Sprintf("nvoi-%s-%s", n.app, n.env) }
-func (n *Names) Firewall() string       { return n.Base() + "-fw" } // legacy — do not use for new code
-func (n *Names) MasterFirewall() string { return n.Base() + "-master-fw" }
-func (n *Names) WorkerFirewall() string { return n.Base() + "-worker-fw" }
+func (n *Names) Base() string            { return fmt.Sprintf("nvoi-%s-%s", n.app, n.env) }
+func (n *Names) Firewall() string        { return n.Base() + "-fw" } // legacy — do not use for new code
+func (n *Names) MasterFirewall() string  { return n.Base() + "-master-fw" }
+func (n *Names) WorkerFirewall() string  { return n.Base() + "-worker-fw" }
+func (n *Names) BuilderFirewall() string { return n.Base() + "-builder-fw" }
+
+// FirewallForRole picks the per-role firewall name. Unknown roles fall back
+// to the worker firewall (base rules: SSH + internal only) — conservative
+// default so typos never open public ports.
 func (n *Names) FirewallForRole(role string) string {
-	if role == RoleMaster {
+	switch role {
+	case RoleMaster:
 		return n.MasterFirewall()
+	case RoleBuilder:
+		return n.BuilderFirewall()
+	default:
+		return n.WorkerFirewall()
 	}
-	return n.WorkerFirewall()
+}
+
+// BuilderCacheVolume is the per-builder Docker data-root volume. Same naming
+// scheme as user volumes (`<base>-<name>`) with a "-builder-cache" suffix so
+// the orphan-sweep pattern keeps working without special casing. One cache
+// volume per builder server keeps buildkit layer reuse scoped to the builder
+// that created them — no cross-builder cache contention.
+func (n *Names) BuilderCacheVolume(serverKey string) string {
+	return fmt.Sprintf("%s-%s-builder-cache", n.Base(), serverKey)
+}
+
+// BuilderCacheVolumeShort returns the cache volume's short form — the name
+// after the `<base>-` prefix is stripped. Providers' orphan-sweep and
+// teardown helpers key on short names (same as user-declared volume keys
+// in cfg.VolumeDefs). Keeping this derivation here avoids rebuilding the
+// "-builder-cache" literal outside naming.go.
+func (n *Names) BuilderCacheVolumeShort(serverKey string) string {
+	return fmt.Sprintf("%s-builder-cache", serverKey)
 }
 func (n *Names) Network() string           { return n.Base() + "-net" }
 func (n *Names) Server(key string) string  { return fmt.Sprintf("%s-%s", n.Base(), key) }
@@ -67,6 +94,14 @@ func (n *Names) KubeWorkload(svc string) string       { return svc }
 func (n *Names) KubeService(svc string) string        { return svc }
 func (n *Names) KubeSecrets() string                  { return "secrets" }
 func (n *Names) KubeServiceSecrets(svc string) string { return svc + "-secrets" }
+
+// CronJobRunName is the one-shot k8s Job name spawned by `nvoi cron run`.
+// Suffix is unix-nanoseconds (caller passes time.Now().Unix() — here for
+// the signature, CallerProvided so tests can inject deterministic values).
+// Lives in naming.go so every resource nvoi creates gets its name here.
+func (n *Names) CronJobRunName(cronName string, suffix int64) string {
+	return fmt.Sprintf("%s-run-%d", cronName, suffix)
+}
 
 // ── Labels ─────────────────────────────────────────────────────────────────────
 
@@ -113,7 +148,23 @@ const (
 	LabelConfigChecksum = "nvoi/config-checksum"
 	LabelNvoiDeployHash = "nvoi/deploy-hash"
 	RoleMaster          = "master"
+	RoleWorker          = "worker"
+	RoleBuilder         = "builder"
 )
+
+// BuilderCacheMountPath is the on-disk mount point for the per-builder cache
+// volume. Docker's data-root points here (see pkg/infra/cloudinit.go's
+// RenderBuilderCloudInit) so buildkit layer cache survives reboots and
+// short-circuits the second-and-later deploys.
+const BuilderCacheMountPath = "/var/lib/nvoi/builder-cache"
+
+// BuilderCacheVolumeSizeGB is the default size of each per-builder cache
+// volume. 50 GB is enough to hold a healthy buildkit cache for several
+// services across repeated deploys without resizing; under that, the cache
+// churns. Hetzner, AWS EBS, and Scaleway BlockStorage all accept 50 GB.
+// Not user-configurable today — cache size is an operator concern, not a
+// workload concern; revisit when we see cache pressure in real usage.
+const BuilderCacheVolumeSizeGB = 50
 
 // ── Storage env naming ─────────────────────────────────────────────────────────
 

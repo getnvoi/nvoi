@@ -107,7 +107,11 @@ func (c *Client) Bootstrap(ctx context.Context, dc *provider.BootstrapContext) (
 	cfg := dc.Cfg
 
 	// Servers — masters first, then workers (k3s join requires a running master).
-	masters, workers := splitServers(cfg.ServerDefs())
+	// Builders are excluded deliberately: they are provisioned out-of-band by
+	// ProvisionBuilders on the operator's machine BEFORE this Bootstrap runs
+	// on the builder (see pkg/provider/CLAUDE.md for the dispatch order).
+	// Bootstrap here converges only the k8s cluster.
+	masters, workers, _ := splitServers(cfg.ServerDefs())
 	var masterShell utils.SSHClient
 	for _, s := range append(masters, workers...) {
 		shell, err := c.provisionServer(ctx, dc, s, masterShell)
@@ -383,6 +387,195 @@ func (c *Client) provisionVolume(ctx context.Context, dc *provider.BootstrapCont
 	return nil
 }
 
+// ProvisionBuilders converges role: builder servers + their per-server
+// cache volumes + the shared builder firewall. Idempotent: existing
+// builders short-circuit through EnsureServer / EnsureVolume; missing
+// ones are created. Runs BEFORE Bootstrap on the SSH-build dispatch path
+// (see CLAUDE.md) so builders exist before the CLI fetches BuilderTargets.
+// No-op (returns nil) when no role: builder servers are declared.
+func (c *Client) ProvisionBuilders(ctx context.Context, dc *provider.BootstrapContext) error {
+	_, _, builders := splitServers(dc.Cfg.ServerDefs())
+	if len(builders) == 0 {
+		return nil
+	}
+
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return err
+	}
+	// Builder firewall: base rules only (SSH + internal). Public 80/443
+	// never reach a builder — the public ingress path is master-side only.
+	if err := c.applyFirewall(ctx, dc, names.BuilderFirewall(), nil); err != nil {
+		return err
+	}
+	for _, b := range builders {
+		if err := c.provisionBuilder(ctx, dc, b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// provisionBuilder is the per-builder orchestration. Distinct from
+// provisionServer — builders are NOT k8s nodes. The sequence:
+//
+//  1. EnsureServer with RenderBuilderCloudInit (Docker CE, disabled,
+//     daemon.json drop) + BuilderFirewall.
+//  2. Wait for SSH, enable swap.
+//  3. EnsureVolume for the cache, SSH-mount at BuilderCacheMountPath
+//     (blkid-gated mkfs via infra.MountVolume — safe to re-run).
+//  4. Enable + start docker (it was disabled by cloud-init so /var/lib/docker
+//     wouldn't shadow the cache-mount) and register binfmt_misc so the
+//     builder can cross-compile for any target arch.
+func (c *Client) provisionBuilder(ctx context.Context, dc *provider.BootstrapContext, s provider.ServerSpec) error {
+	out := dc.Output
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return err
+	}
+
+	pubKey, err := utils.DerivePublicKey(dc.SSHKey)
+	if err != nil {
+		return fmt.Errorf("derive public key: %w", err)
+	}
+
+	serverName := names.Server(s.Name)
+	userData, err := infra.RenderBuilderCloudInit(strings.TrimSpace(pubKey), serverName)
+	if err != nil {
+		return err
+	}
+
+	labels := names.Labels()
+	labels["role"] = utils.RoleBuilder
+
+	out.Command("instance", "set", serverName, "role", utils.RoleBuilder)
+
+	srv, err := c.EnsureServer(ctx, provider.CreateServerRequest{
+		Name:         serverName,
+		ServerType:   s.Type,
+		Image:        utils.DefaultImage,
+		Location:     s.Region,
+		UserData:     userData,
+		FirewallName: names.BuilderFirewall(),
+		NetworkName:  names.Network(),
+		DiskGB:       s.Disk,
+		Labels:       labels,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := infra.ClearKnownHost(srv.IPv4 + ":22"); err != nil {
+		if !strings.Contains(err.Error(), "no known host") {
+			out.Warning(fmt.Sprintf("clear known host %s: %s", srv.IPv4, err))
+		}
+	}
+
+	out.Progress(fmt.Sprintf("waiting for SSH on %s", srv.IPv4))
+	var ssh utils.SSHClient
+	sshCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	if err := utils.Poll(sshCtx, 2*time.Second, 5*time.Minute, func() (bool, error) {
+		conn, err := c.dialSSH(ctx, dc, srv.IPv4+":22")
+		if err != nil {
+			if errors.Is(err, infra.ErrHostKeyChanged) {
+				return false, err
+			}
+			if errors.Is(err, infra.ErrAuthFailed) {
+				return false, err
+			}
+			return false, nil
+		}
+		ssh = conn
+		return true, nil
+	}); err != nil {
+		return fmt.Errorf("SSH not reachable on %s: %w", srv.IPv4, err)
+	}
+	defer ssh.Close()
+	out.Success("SSH ready")
+
+	// Gate every subsequent step on cloud-init being fully applied. Ubuntu
+	// opens SSH before runcmd finishes, so `systemctl enable --now docker`
+	// (and the nvoi install referenced by the SSH BuildProvider) would
+	// otherwise race cloud-init's apt install / curl|sh on fast networks.
+	out.Progress("waiting for cloud-init")
+	if err := infra.WaitCloudInit(ctx, ssh); err != nil {
+		return err
+	}
+	out.Success("cloud-init done")
+
+	out.Progress("ensuring swap")
+	if err := infra.EnsureSwap(ctx, ssh, out.Writer()); err != nil {
+		out.Warning(fmt.Sprintf("swap: %s", err))
+	} else {
+		out.Success("swap ready")
+	}
+
+	// Cache volume — per-builder, name-keyed so different builders never
+	// contend on the same buildkit cache directory.
+	cacheName := names.BuilderCacheVolume(s.Name)
+	out.Command("volume", "set", cacheName, "size", fmt.Sprintf("%dGB", utils.BuilderCacheVolumeSizeGB), "server", serverName)
+	vol, err := c.EnsureVolume(ctx, provider.CreateVolumeRequest{
+		Name:       cacheName,
+		ServerName: serverName,
+		Size:       utils.BuilderCacheVolumeSizeGB,
+		Labels:     labels,
+	})
+	if err != nil {
+		return fmt.Errorf("builder cache volume: %w", err)
+	}
+
+	devicePath := c.ResolveDevicePath(vol)
+	if err := infra.MountVolume(ctx, ssh, devicePath, utils.BuilderCacheMountPath, out.Writer()); err != nil {
+		return fmt.Errorf("mount builder cache: %w", err)
+	}
+
+	// Docker was installed-but-disabled by cloud-init so /var/lib/docker
+	// wouldn't get populated on the root disk before the cache mount took
+	// effect. Now that BuilderCacheMountPath is live, enable + start it,
+	// then register binfmt so this builder can produce images for any arch.
+	out.Progress("enabling docker on builder")
+	if _, err := ssh.Run(ctx, "sudo systemctl enable --now docker.service docker.socket"); err != nil {
+		return fmt.Errorf("enable docker: %w", err)
+	}
+	if err := ssh.RunStream(ctx, "sudo docker run --privileged --rm tonistiigi/binfmt:latest --install all", out.Writer(), out.Writer()); err != nil {
+		// binfmt failure is non-fatal — builds targeting the host's native
+		// arch still succeed. Warn-and-continue mirrors the swap pattern.
+		out.Warning(fmt.Sprintf("binfmt register: %s", err))
+	}
+	out.Success(fmt.Sprintf("%s builder ready on %s", serverName, srv.IPv4))
+	return nil
+}
+
+// BuilderTargets returns every role: builder server this provider manages
+// for the current cluster. Looks up by labels (role=builder). Empty slice
+// when no builders are provisioned — callers feature-gate on len() == 0.
+// Same ownership pattern as NodeShell: the provider owns the lookup, the
+// CLI dispatcher consumes the result.
+func (c *Client) BuilderTargets(ctx context.Context, dc *provider.BootstrapContext) ([]provider.BuilderTarget, error) {
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return nil, err
+	}
+	labels := names.Labels()
+	labels["role"] = utils.RoleBuilder
+	servers, err := c.ListServers(ctx, labels)
+	if err != nil {
+		return nil, fmt.Errorf("hetzner.BuilderTargets: %w", err)
+	}
+	targets := make([]provider.BuilderTarget, 0, len(servers))
+	for _, s := range servers {
+		targets = append(targets, provider.BuilderTarget{
+			Name: s.Name,
+			Host: s.IPv4,
+			User: utils.DefaultUser,
+		})
+	}
+	// Deterministic order: tests + resource-listing want stability.
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Name < targets[j].Name })
+	return targets, nil
+}
+
 // labelNodeViaSSH labels a k8s node by exec'ing kubectl on the master via
 // SSH. Avoids needing a kube.Client during Bootstrap (we don't have one
 // until Bootstrap finishes).
@@ -485,17 +678,27 @@ func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapCont
 
 	if rules := cfg.FirewallRules(); len(rules) > 0 {
 		desiredFW := map[string]bool{}
-		masters, workers := splitServers(cfg.ServerDefs())
+		masters, workers, builders := splitServers(cfg.ServerDefs())
 		if len(masters) > 0 {
 			desiredFW[names.MasterFirewall()] = true
 		}
 		if len(workers) > 0 {
 			desiredFW[names.WorkerFirewall()] = true
 		}
+		if len(builders) > 0 {
+			desiredFW[names.BuilderFirewall()] = true
+		}
 		c.sweepFirewalls(ctx, out, names.Base()+"-", desiredFW)
 	}
 
+	// Desired volumes = user-declared + synthetic per-builder caches.
+	// Orphan sweep must preserve cache volumes attached to declared builders
+	// (they are provider-managed, not user-declared in volumes:).
+	_, _, builders := splitServers(cfg.ServerDefs())
 	desiredVols := volumeNameSet(cfg.VolumeDefs())
+	for _, b := range builders {
+		desiredVols[names.BuilderCacheVolumeShort(b.Name)] = true
+	}
 	for _, short := range live.Volumes {
 		if desiredVols[short] {
 			continue
@@ -526,13 +729,25 @@ func (c *Client) Teardown(ctx context.Context, dc *provider.BootstrapContext, de
 		}
 	}
 
+	masters, workers, builders := splitServers(cfg.ServerDefs())
+
 	if deleteVolumes {
 		for _, v := range cfg.VolumeDefs() {
 			collect(c.unmountAndDeleteVolume(ctx, dc, names, v.Name))
 		}
 	}
+	// Builder cache volumes are provider-synthesized (not in cfg.VolumeDefs)
+	// and are ALWAYS deleted on teardown regardless of --delete-volumes —
+	// nvoi-owned cache, never user data, no reason to preserve.
+	for _, b := range builders {
+		collect(c.unmountAndDeleteVolume(ctx, dc, names, names.BuilderCacheVolumeShort(b.Name)))
+	}
 
-	masters, workers := splitServers(cfg.ServerDefs())
+	// Builders first — they have no k8s state to drain and their firewall
+	// is disjoint from master/worker, so they tear down independently.
+	for _, s := range builders {
+		collect(c.drainAndDeleteServer(ctx, dc, names, s.Name))
+	}
 	for _, s := range workers {
 		collect(c.drainAndDeleteServer(ctx, dc, names, s.Name))
 	}
@@ -662,17 +877,26 @@ func (c *Client) sweepFirewalls(ctx context.Context, out provider.EventSink, pre
 }
 
 // splitServers returns ServerSpecs grouped by role, sorted within each
-// group. Mirrors internal/reconcile/helpers.go::SplitServers.
-func splitServers(defs []provider.ServerSpec) (masters, workers []provider.ServerSpec) {
+// group. Three-way split: role: builder is the third category (added in
+// #57) and is NEVER iterated by Bootstrap — builders are out-of-band to
+// the k8s cluster and are provisioned by ProvisionBuilders on the
+// operator's machine BEFORE the deploy is dispatched into a builder.
+// Any role except "worker" / "builder" (including the empty default)
+// falls into masters, matching the validator's role enum.
+func splitServers(defs []provider.ServerSpec) (masters, workers, builders []provider.ServerSpec) {
 	for _, s := range defs {
-		if s.Role == "worker" {
+		switch s.Role {
+		case utils.RoleWorker:
 			workers = append(workers, s)
-		} else {
+		case utils.RoleBuilder:
+			builders = append(builders, s)
+		default:
 			masters = append(masters, s)
 		}
 	}
 	sort.Slice(masters, func(i, j int) bool { return masters[i].Name < masters[j].Name })
 	sort.Slice(workers, func(i, j int) bool { return workers[i].Name < workers[j].Name })
+	sort.Slice(builders, func(i, j int) bool { return builders[i].Name < builders[j].Name })
 	return
 }
 

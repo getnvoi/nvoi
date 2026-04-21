@@ -2,12 +2,11 @@ package reconcile
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
 // Reconcile-level integration tests covering the load-bearing invariants
@@ -276,12 +275,18 @@ func TestInvariant_DeployDoesReconcileDrift(t *testing.T) {
 }
 
 // TestInvariant_Deploy_BuildPlatform_DerivedFromServerType verifies the
-// full chain: server type in cfg → infra.ArchForType → --platform on
-// docker buildx. Two sub-cases to rule out a false-positive from a
+// full chain: server type in cfg → infra.ArchForType → BuildRequest.Platform
+// threaded through reconcile.Deploy → reconcile.BuildImages → the resolved
+// BuildProvider. Two sub-cases to rule out a false-positive from a
 // hardcoded constant:
 //
 //   - cax11 (Hetzner ARM64 Ampere Altra) → linux/arm64
 //   - cx23  (Hetzner x86)               → linux/amd64
+//
+// The assertion runs on BuildRequest.Platform as captured by a test
+// BuildProvider — the production integration point where the string
+// actually has to be correct. No BuildRunner seam remains at reconcile
+// level; the docker-buildx concerns live inside pkg/provider/build/local.
 func TestInvariant_Deploy_BuildPlatform_DerivedFromServerType(t *testing.T) {
 	cases := []struct {
 		serverType   string
@@ -293,15 +298,8 @@ func TestInvariant_Deploy_BuildPlatform_DerivedFromServerType(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.serverType, func(t *testing.T) {
-			runner := &captureRunner{}
-			cleanup := SetBuildRunnerForTest(runner)
-			defer cleanup()
-
-			// Temp build context so BuildService's Dockerfile stat-check passes.
-			apiCtx := t.TempDir()
-			if err := os.WriteFile(filepath.Join(apiCtx, "Dockerfile"), []byte("FROM alpine\n"), 0644); err != nil {
-				t.Fatal(err)
-			}
+			builderName := "test-capture-deploy-" + tc.serverType
+			b := registerCaptureBuilder(t, builderName, provider.BuildCapability{})
 
 			var log opLog
 			dc := convergeDC(&log, convergeMock())
@@ -309,7 +307,10 @@ func TestInvariant_Deploy_BuildPlatform_DerivedFromServerType(t *testing.T) {
 
 			cfg := &config.AppConfig{
 				App: "myapp", Env: "prod",
-				Providers: config.ProvidersDef{Infra: "test-reconcile"},
+				Providers: config.ProvidersDef{
+					Infra: "test-reconcile",
+					Build: builderName,
+				},
 				Servers: map[string]config.ServerDef{
 					"master": {Type: tc.serverType, Region: "fsn1", Role: "master"},
 				},
@@ -319,7 +320,7 @@ func TestInvariant_Deploy_BuildPlatform_DerivedFromServerType(t *testing.T) {
 				Services: map[string]config.ServiceDef{
 					"api": {
 						Image: "ghcr.io/org/api:v1",
-						Build: &config.BuildSpec{Context: apiCtx},
+						Build: &config.BuildSpec{Context: "./api"},
 					},
 				},
 			}
@@ -328,19 +329,12 @@ func TestInvariant_Deploy_BuildPlatform_DerivedFromServerType(t *testing.T) {
 				t.Fatalf("Deploy: %v", err)
 			}
 
-			var gotPlatform string
-			for _, op := range runner.ops() {
-				if strings.HasPrefix(op, "build:") {
-					parts := strings.Split(op, ":")
-					gotPlatform = parts[len(parts)-1]
-					break
-				}
+			reqs := b.requests()
+			if len(reqs) == 0 {
+				t.Fatal("BuildProvider never invoked — BuildImages did not dispatch")
 			}
-			if gotPlatform == "" {
-				t.Fatal("no build op recorded — build service was not invoked")
-			}
-			if gotPlatform != tc.wantPlatform {
-				t.Errorf("server type %q → platform %q, want %q", tc.serverType, gotPlatform, tc.wantPlatform)
+			if reqs[0].Platform != tc.wantPlatform {
+				t.Errorf("server type %q → Platform %q, want %q", tc.serverType, reqs[0].Platform, tc.wantPlatform)
 			}
 		})
 	}

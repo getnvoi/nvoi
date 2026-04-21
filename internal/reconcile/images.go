@@ -5,44 +5,36 @@ import (
 	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// defaultBuildRunner is the real docker CLI runner. Overridable in tests
-// via SetBuildRunnerForTest so we never shell out during `bin/test`.
-var defaultBuildRunner app.BuildRunner = app.DockerRunner{}
-
-// SetBuildRunnerForTest swaps in a mock BuildRunner. Returns a cleanup
-// that restores the production DockerRunner.
-func SetBuildRunnerForTest(r app.BuildRunner) func() {
-	orig := defaultBuildRunner
-	defaultBuildRunner = r
-	return func() { defaultBuildRunner = orig }
-}
-
 // BuildImages walks cfg.Services in sorted order and, for each service with
-// a non-empty `build:` block, runs docker login → build → push using the
-// resolved registry credentials from cfg.Registry.
+// a non-empty `build:` directive, resolves the configured BuildProvider
+// (local / ssh / daytona) and calls bp.Build(req). The imageRef the provider
+// returns IS the one stamped on the PodSpec — normally identical to the
+// requested tag, but a content-addressed provider could return a digest ref.
 //
 // Named BuildImages (not Build) to free the word "build" for the outer
-// BuildProvider family in pkg/provider/build.go — the outer "build" is
-// the substrate a deploy runs on (local/ssh/daytona); this inner step is
-// specifically the docker-buildx-and-push loop invoked by reconcile.Deploy.
+// BuildProvider family in pkg/provider/build.go — "build" there is the
+// substrate choice (local vs ssh vs daytona); this function is the
+// orchestration step that dispatches one Build() per service.
 //
-// platform ("linux/amd64" or "linux/arm64") is stamped on every
-// docker buildx build invocation so the image arch matches the target
-// server. Derived by the caller from infra.ArchForType(masterServerType).
+// platform ("linux/amd64" or "linux/arm64") is derived by the caller from
+// infra.ArchForType(masterServerType). Stamped on every BuildRequest so
+// the image arch always matches the target server.
 //
-// Runs pre-Bootstrap (before ServersAdd) — a build failure must not leave
-// half-provisioned servers behind. No k8s or SSH contact; the only
-// external dependency is `docker` on the operator's PATH.
+// builders is the SSH-addressable list of role: builder servers as reported
+// by infra.BuilderTargets. Populated only when the selected build provider
+// sets RequiresBuilders=true (reconcile.Deploy calls ProvisionBuilders +
+// BuilderTargets before this step); nil otherwise. ssh consumes it; local
+// and daytona ignore it.
 //
-// Services without build: set are skipped — they pull the image from
-// wherever their `image:` tag points.
-func BuildImages(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, platform string) error {
-	// Fast exit: no service has a build: directive. Skip the whole pass,
-	// don't even require docker on PATH.
+// Runs pre-Bootstrap — a build failure must not leave half-provisioned
+// servers behind. Services without build: set are skipped (they pull
+// their image: tag verbatim).
+func BuildImages(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, platform string, builders []provider.BuilderTarget) error {
+	// Fast exit: no service has a build: directive. Skip the whole pass.
 	anyBuild := false
 	for _, svc := range cfg.Services {
 		if svc.Build != nil && svc.Build.Context != "" {
@@ -54,68 +46,104 @@ func BuildImages(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 		return nil
 	}
 
-	// Platform must be known before building any image. An empty platform
-	// means the caller failed to derive the server arch — proceeding would
-	// silently build for the host arch, producing an image that fails to
-	// run on a cross-arch target (e.g. amd64 image on an arm64 cax11).
+	// Platform must be known. An empty platform means the caller failed to
+	// derive the server arch — proceeding would silently build for the host
+	// arch, producing an image that fails to run on a cross-arch target.
 	if platform == "" {
 		return fmt.Errorf("build: target platform unknown — cannot determine server architecture")
 	}
 
-	// Verify buildx before anything else. Per-service docker errors for
-	// a missing plugin would fire N times with no install hint — this
-	// single preflight gives the operator one clear, actionable error
-	// before we resolve a single credential.
-	if err := defaultBuildRunner.PreflightBuildx(ctx); err != nil {
+	// Resolve the BuildProvider once. Unset → "local" (matches validator).
+	buildName := cfg.Providers.Build
+	if buildName == "" {
+		buildName = "local"
+	}
+	buildCreds, err := resolveBuildCreds(dc, buildName)
+	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
+	bp, err := provider.ResolveBuild(buildName, buildCreds)
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	defer func() { _ = bp.Close() }()
 
-	// Resolve registry creds once for the whole pass. Same helper the
-	// Registries() step uses — missing env var errors surface here,
-	// before any build starts.
-	creds, err := resolveRegistries(dc, cfg)
+	// Resolve registry creds once for the whole pass. Missing env var errors
+	// surface here, before any BuildProvider touches the network.
+	regCreds, err := resolveRegistries(dc, cfg)
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
 
-	// Deterministic order — same service always builds first across
-	// re-runs, so the deploy log diff is stable.
+	// Deterministic order — same service always builds first across re-runs,
+	// so the deploy log diff is stable.
 	for _, name := range utils.SortedKeys(cfg.Services) {
 		svc := cfg.Services[name]
 		if svc.Build == nil || svc.Build.Context == "" {
 			continue
 		}
 
-		// Full ref including host + user-tag-"-"-hash (or just hash).
-		// Same function Services() uses when writing the PodSpec, so the
-		// registry and the cluster always agree on the image string.
+		// Full ref including host + user-tag-"-"-hash (or just hash). Same
+		// function Services() uses when writing the PodSpec, so the registry
+		// and the cluster always agree on the image string.
 		fullImage, err := ResolveImage(cfg, name, dc.Cluster.DeployHash)
 		if err != nil {
 			return err
 		}
 		host := imageRegistryHost(fullImage)
-		auth, ok := creds[host]
+		auth, ok := regCreds[host]
 		if !ok {
-			// Validation already catches this — belt-and-suspenders in
-			// case someone edits config between validate and build.
+			// Validation already catches this — belt-and-suspenders in case
+			// someone edits config between validate and build.
 			return fmt.Errorf("services.%s.build: no credentials for registry %q", name, host)
 		}
 
-		if err := app.BuildService(ctx, app.BuildServiceRequest{
-			Cluster:    dc.Cluster,
-			Name:       name,
-			Image:      fullImage,
+		req := provider.BuildRequest{
+			Service:    name,
 			Context:    svc.Build.Context,
-			Dockerfile: svc.Build.Dockerfile, // empty → BuildService defaults to <Context>/Dockerfile
-			Host:       host,
-			Username:   auth.Username,
-			Password:   auth.Password,
+			Dockerfile: svc.Build.Dockerfile,
 			Platform:   platform,
-			Runner:     defaultBuildRunner,
-		}); err != nil {
-			return err
+			Image:      fullImage,
+			Registry: provider.RegistryAuth{
+				Host:     host,
+				Username: auth.Username,
+				Password: auth.Password,
+			},
+			Builders:  builders,
+			SSHKey:    dc.Cluster.SSHKey,
+			GitRemote: dc.GitRemote,
+			GitRef:    dc.GitRef,
+			Output:    dc.Cluster.Log().Writer(),
 		}
+
+		ref, err := bp.Build(ctx, req)
+		if err != nil {
+			return fmt.Errorf("services.%s.build: %w", name, err)
+		}
+		if ref == "" {
+			return fmt.Errorf("services.%s.build: provider %q returned empty image ref", name, buildName)
+		}
+		// Future: if ref != fullImage (content-addressed builder), stash on
+		// DeployContext so Services() stamps the returned ref on the PodSpec.
+		// Today every registered provider returns req.Image verbatim, so we
+		// just validate non-empty and move on.
 	}
 
 	return nil
+}
+
+// resolveBuildCreds walks the BuildProvider's credential schema, pulling
+// each declared env var out of dc.Creds. The local provider has an empty
+// schema so this returns {}; ssh has no creds either (uses dc.Cluster.SSHKey
+// carried via BuildRequest); daytona requires DAYTONA_API_KEY.
+func resolveBuildCreds(dc *config.DeployContext, name string) (map[string]string, error) {
+	schema, err := provider.GetBuildSchema(name)
+	if err != nil {
+		return nil, err
+	}
+	source := dc.Creds
+	if source == nil {
+		source = provider.MapSource{M: map[string]string{}}
+	}
+	return provider.ResolveFrom(schema, source)
 }

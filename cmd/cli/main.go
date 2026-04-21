@@ -20,8 +20,12 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
 	_ "github.com/getnvoi/nvoi/pkg/provider/ngrok"
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
-	// Build backends — `providers.build` family (local default, ssh/daytona land in PR-B/C).
+	// Build backends — `providers.build` family. local = in-process
+	// default; ssh dispatches to a role: builder server over SSH;
+	// daytona runs the build inside a managed DinD sandbox.
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/ssh"
 	// Secrets backends
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"

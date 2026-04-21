@@ -12,10 +12,15 @@ import (
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
-	// Register the "local" BuildProvider so ValidateConfig tests that set
-	// cfg.Providers.Build resolve its capability bits. The cmd/cli binary
-	// blank-imports this in main.go; the reconcile test binary does it here.
+	// Register every production BuildProvider so ValidateConfig tests that
+	// set cfg.Providers.Build resolve the real capability bits. Matches the
+	// cmd/cli binary's blank-imports in main.go:
+	//   - local   — RequiresBuilders: false (default)
+	//   - ssh     — RequiresBuilders: true
+	//   - daytona — RequiresBuilders: false (runs in a managed sandbox)
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/ssh"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 

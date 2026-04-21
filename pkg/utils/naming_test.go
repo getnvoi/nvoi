@@ -80,11 +80,15 @@ func TestNamesInfrastructure(t *testing.T) {
 	}{
 		{"Base", n.Base(), "nvoi-dummy-rails-production"},
 		{"Firewall", n.Firewall(), "nvoi-dummy-rails-production-fw"},
+		{"MasterFirewall", n.MasterFirewall(), "nvoi-dummy-rails-production-master-fw"},
+		{"WorkerFirewall", n.WorkerFirewall(), "nvoi-dummy-rails-production-worker-fw"},
+		{"BuilderFirewall", n.BuilderFirewall(), "nvoi-dummy-rails-production-builder-fw"},
 		{"Network", n.Network(), "nvoi-dummy-rails-production-net"},
 		{"Server master", n.Server("master"), "nvoi-dummy-rails-production-master"},
 		{"Server worker1", n.Server("worker1"), "nvoi-dummy-rails-production-worker1"},
 		{"Volume pgdata", n.Volume("pgdata"), "nvoi-dummy-rails-production-pgdata"},
 		{"Bucket assets", n.Bucket("assets"), "nvoi-dummy-rails-production-assets"},
+		{"BuilderCacheVolume primary", n.BuilderCacheVolume("primary"), "nvoi-dummy-rails-production-primary-builder-cache"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -240,6 +244,35 @@ func TestParseVolumeMount(t *testing.T) {
 			}
 			if named != tt.wantNamed {
 				t.Errorf("named = %v, want %v", named, tt.wantNamed)
+			}
+		})
+	}
+}
+
+// TestFirewallForRole locks 3-way role routing: master → master firewall,
+// builder → builder firewall, everything else (worker + unknown) → worker
+// firewall. Unknown-role fallback to worker is deliberate — worker rules are
+// the conservative choice (SSH + internal only), so a typo never leaks ports.
+func TestFirewallForRole(t *testing.T) {
+	n, err := NewNames("app", "env")
+	if err != nil {
+		t.Fatalf("NewNames: %v", err)
+	}
+	tests := []struct {
+		role string
+		want string
+	}{
+		{RoleMaster, n.MasterFirewall()},
+		{RoleWorker, n.WorkerFirewall()},
+		{RoleBuilder, n.BuilderFirewall()},
+		{"", n.WorkerFirewall()},         // empty role falls back to worker (safe default)
+		{"somejunk", n.WorkerFirewall()}, // typo falls back to worker
+	}
+	for _, tt := range tests {
+		t.Run("role="+tt.role, func(t *testing.T) {
+			got := n.FirewallForRole(tt.role)
+			if got != tt.want {
+				t.Errorf("FirewallForRole(%q) = %q, want %q", tt.role, got, tt.want)
 			}
 		})
 	}

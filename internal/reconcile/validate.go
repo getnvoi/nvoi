@@ -47,30 +47,35 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	}
 
 	// providers.build — optional, defaults to "local" (in-process docker
-	// buildx on the operator's machine). Non-local values (ssh / daytona
-	// when they land) dispatch the deploy onto a remote substrate.
+	// buildx on the operator's machine). Unset is treated as "local" here
+	// so every rule below runs through a single code path — no "if unset
+	// then …" branches duplicating logic.
 	//
-	// Validator rule R1: if the selected provider's BuildCapability flags
-	// RequiresBuilders, the config must declare at least one server with
-	// role: builder. Local sets RequiresBuilders=false so this is a no-op
-	// under the default; ssh (PR-B) flips it to true.
-	if b := cfg.Providers.Build; b != "" {
-		caps, err := provider.GetBuildCapability(b)
-		if err != nil {
-			return fmt.Errorf("providers.build: %w", err)
+	// Validator rule R1 (symmetric): RequiresBuilders must match the
+	// declared role: builder servers exactly.
+	//   - RequiresBuilders=true  + 0 builders → error (builder missing)
+	//   - RequiresBuilders=false + ≥1 builder → error (idle infra)
+	// local sets RequiresBuilders=false; ssh flips it to true; daytona keeps
+	// it false (runs inside a managed sandbox, not on role:builder servers).
+	buildName := cfg.Providers.Build
+	if buildName == "" {
+		buildName = "local"
+	}
+	caps, err := provider.GetBuildCapability(buildName)
+	if err != nil {
+		return fmt.Errorf("providers.build: %w", err)
+	}
+	builderCount := 0
+	for _, srv := range cfg.Servers {
+		if srv.Role == utils.RoleBuilder {
+			builderCount++
 		}
-		builderCount := 0
-		for _, srv := range cfg.Servers {
-			if srv.Role == "builder" {
-				builderCount++
-			}
-		}
-		if caps.RequiresBuilders && builderCount == 0 {
-			return fmt.Errorf("providers.build %q requires at least one server with role: builder", b)
-		}
-		if !caps.RequiresBuilders && builderCount > 0 {
-			return fmt.Errorf("providers.build %q does not use builder servers — remove role: builder entries or pick a build provider that does (ssh, daytona)", b)
-		}
+	}
+	if caps.RequiresBuilders && builderCount == 0 {
+		return fmt.Errorf("providers.build %q requires at least one server with role: builder", buildName)
+	}
+	if !caps.RequiresBuilders && builderCount > 0 {
+		return fmt.Errorf("providers.build %q does not use builder servers — remove role: builder entries or pick a build provider that does (ssh)", buildName)
 	}
 
 	// providers.tunnel — optional, but when set requires dns + at least one domain.
@@ -121,10 +126,10 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			return fmt.Errorf("servers.%s.region is required", name)
 		}
 		if srv.Role == "" {
-			return fmt.Errorf("servers.%s.role is required (master or worker)", name)
+			return fmt.Errorf("servers.%s.role is required (master, worker, or builder)", name)
 		}
-		if srv.Role != "master" && srv.Role != "worker" {
-			return fmt.Errorf("servers.%s.role must be master or worker, got %q", name, srv.Role)
+		if srv.Role != utils.RoleMaster && srv.Role != utils.RoleWorker && srv.Role != utils.RoleBuilder {
+			return fmt.Errorf("servers.%s.role must be master, worker, or builder, got %q", name, srv.Role)
 		}
 		if srv.Disk < 0 {
 			return fmt.Errorf("servers.%s.disk must be >= 0", name)
@@ -132,10 +137,13 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if srv.Disk > 0 && cfg.Providers.Infra == "hetzner" {
 			return fmt.Errorf("servers.%s.disk: hetzner does not support custom root disk sizes — disk is fixed per server type", name)
 		}
-		if srv.Role == "master" {
+		if srv.Role == utils.RoleMaster {
 			masterCount++
 		}
 	}
+	// A k8s cluster needs exactly one master. Builders are additional (not
+	// substitutes) — declaring builders-only leaves nvoi without a cluster
+	// to deploy workloads into.
 	if masterCount == 0 {
 		return fmt.Errorf("servers: exactly one server must have role: master")
 	}

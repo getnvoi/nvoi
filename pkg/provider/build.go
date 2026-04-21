@@ -3,88 +3,130 @@ package provider
 import (
 	"context"
 	"fmt"
+	"io"
 )
 
-// BuildProvider is the substrate that physically executes `nvoi deploy`.
+// BuildProvider turns a BuildRequest into a pullable image reference.
 //
-// Three implementations in the roadmap:
+// Each provider is self-contained. The interface does NOT prescribe how the
+// image gets built or pushed — only that the returned ref is pullable by
+// anyone who can authenticate to its registry. Internals vary wildly:
 //
-//   - local   — default; runs reconcile.Deploy in-process on the operator's
-//     machine. Dispatch is never called (cmd/cli/deploy.go
-//     shortcuts to reconcile.Deploy directly). Registered so
-//     capability bits are addressable by name.
-//   - ssh     — PR-B; SSHes to a server with `role: builder` and invokes
-//     `nvoi deploy --local` there. Streams stdout/stderr back.
-//   - daytona — future; dispatches into a sandbox runtime.
+//   - local   — shells out to `docker buildx build --push` on the operator's
+//     machine against the local docker daemon.
+//   - ssh     — SSHes to a `role: builder` server and shells out
+//     `docker buildx build --push` there (DOCKER_HOST=ssh://...).
+//   - daytona — boots a Daytona sandbox, runs `docker buildx build --push`
+//     inside it over the Daytona session-exec API.
+//   - depot (future) — calls Depot's BuildKit gRPC endpoint; no docker CLI.
+//   - buildpacks (future) — runs `pack build`, different tool entirely.
 //
-// The validator (ValidateConfig) queries capability bits by name — hence
-// BuildCapability lives alongside the schema in the registry entry, not on
-// an instance method. Resolving a provider requires credentials; the
-// validator runs before credential resolution and must not need any.
-//
-// The deploy dispatcher in cmd/cli/deploy.go calls Dispatch for every
-// BuildProvider whose name is not "local" (local is the in-process path).
-// Providers that cannot be invoked from CI (e.g. local) set
-// DispatchableFromCI = false so PR-C's ci validator can reject them.
+// The contract is deliberately thin. Providers share no architectural
+// abstraction — only the return type. If three implementations end up with
+// near-identical shell-out code, we extract a helper THEN, not now.
 type BuildProvider interface {
-	// Dispatch executes a full deploy on whatever substrate this provider
-	// represents. The remote side reads the operator's config (shipped via
-	// BuildDispatch.ConfigPath) and the resolved environment
-	// (BuildDispatch.Env) and invokes `nvoi deploy --local` there.
-	//
-	// Never called for the "local" provider — the CLI dispatches in-process
-	// when the resolved name is "local".
-	Dispatch(ctx context.Context, req BuildDispatch) error
+	// Build ensures req.Image is pullable and returns the ref that actually
+	// landed in the registry. Normally equals req.Image. A content-addressed
+	// implementation may return a digest ref (e.g. `repo@sha256:...`) — the
+	// caller stamps whatever is returned on the PodSpec.
+	Build(ctx context.Context, req BuildRequest) (imageRef string, err error)
 
-	// Close releases any provider-internal resources (cached SSH
-	// connections, HTTP transports, etc.). Idempotent.
+	// Close releases any provider-internal resources (cached SSH connections,
+	// sandbox handles, HTTP transports, etc.). Idempotent.
 	Close() error
 }
 
-// BuildDispatch is the input a remote BuildProvider needs to run a deploy
-// on behalf of the operator.
-type BuildDispatch struct {
-	// ConfigPath is the absolute path on the operator's machine to the
-	// nvoi.yaml the deploy is running against. Remote providers ship this
-	// file to the builder; local never reads it (dispatch isn't called).
-	ConfigPath string
+// BuildRequest is everything a BuildProvider needs to produce one pullable
+// image. The orchestrator (reconcile.BuildImages) populates one per service
+// with a build: directive and calls Build.
+type BuildRequest struct {
+	// Service is the logical service name, used for logging only.
+	Service string
 
-	// Env is a snapshot of the operator's process environment at dispatch
-	// time — every credential the in-process reconcile would have resolved
-	// (infra / DNS / storage / registry / service $VAR expansion).
-	// Remote providers stream this to the builder's shell env so
-	// `nvoi deploy --local` on the builder resolves credentials the same
-	// way the operator's laptop would have.
+	// Context is the absolute path to the build context on the operator's
+	// filesystem. Providers that run the build remotely (ssh, daytona) are
+	// responsible for transporting it to the remote — typically via
+	// DOCKER_HOST=ssh://... which makes `docker buildx` handle context
+	// upload natively.
+	Context string
+
+	// Dockerfile is the path to the Dockerfile. Relative or absolute per the
+	// docker CLI's rules. When empty, the provider defaults to
+	// <Context>/Dockerfile.
+	Dockerfile string
+
+	// Platform is the target architecture — "linux/amd64" or "linux/arm64".
+	// Derived by the caller from infra.ArchForType(masterServerType).
+	// Empty is a bug (caller failed to derive arch); providers should
+	// refuse to build so a mismatched image never ships.
+	Platform string
+
+	// Image is the fully-qualified target ref: host/repo:tag-hash. Already
+	// computed by reconcile.ResolveImage — providers tag and push to this
+	// exact string.
+	Image string
+
+	// Registry is the push-side auth for the target registry. Host matches
+	// the host prefix of Image. Values are post-credential-resolution — no
+	// $VAR expansion left.
+	Registry RegistryAuth
+
+	// Builders is the set of role:builder servers currently provisioned for
+	// this cluster, as reported by InfraProvider.BuilderTargets. Populated
+	// by the orchestrator. Non-ssh providers ignore it; ssh picks the first
+	// entry today (sharding is a future concern).
+	Builders []BuilderTarget
+
+	// SSHKey is the operator's SSH private key bytes — same material the
+	// rest of reconcile uses to dial cluster nodes. Non-nil only when
+	// Builders is non-empty. ssh authenticates against role:builder with
+	// this; other providers ignore it.
+	SSHKey []byte
+
+	// GitRemote is the upstream URL of the operator's current checkout —
+	// inferred by the CLI via `git remote get-url origin` at deploy time,
+	// NOT declared in nvoi.yaml. Remote builders (ssh, daytona) `git clone`
+	// it on the build host because they can't reach the operator's
+	// filesystem. Local ignores it (it already has Context on disk).
 	//
-	// Format matches os.Environ(): []string of "KEY=VALUE".
-	Env []string
+	// Empty string when the operator's cwd is not a git checkout —
+	// providers that require it (ssh, daytona) error with an actionable
+	// message pointing at the fix ("initialize a git repo, add an origin
+	// remote").
+	GitRemote string
 
-	// Sink is the operator's Output. Remote providers tunnel the builder's
-	// stdout/stderr through this so the operator sees real-time progress
-	// during a remote build. Defined as any to avoid coupling pkg/provider
-	// to pkg/core — the local BuildProvider never uses it, and PR-B's ssh
-	// provider will type-assert to a narrow progress interface.
-	Sink any
+	// GitRef is the commit SHA of HEAD at deploy time (`git rev-parse HEAD`).
+	// Pinned to a SHA rather than a branch so the remote builder clones the
+	// exact tree the operator is deploying, even if `main` advances between
+	// the CLI invocation and the clone. Local ignores it.
+	GitRef string
+
+	// Output receives build logs (docker buildx streams, sandbox session
+	// output, etc.). Providers write build progress here so the operator
+	// sees real-time build output during reconcile.
+	Output io.Writer
+}
+
+// RegistryAuth is the host+credentials for one registry. Provider-agnostic:
+// the local/ssh/daytona runners docker-login with it; depot feeds it into
+// its gRPC request; buildpacks passes it to pack.
+type RegistryAuth struct {
+	Host     string
+	Username string
+	Password string
 }
 
 // BuildCapability is the set of static, registration-time facts about a
-// build provider that the validator and the CI resolver need. Held as
-// data (not a method) because ValidateConfig runs before credentials are
-// resolved, and methods on BuildProvider would require a live instance —
-// which requires creds. These facts never vary at runtime for a given
-// provider.
+// build provider that the validator needs. Held as data (not a method)
+// because ValidateConfig runs before credentials are resolved, and methods
+// on BuildProvider would require a live instance — which requires creds.
+// These facts never vary at runtime for a given provider.
 type BuildCapability struct {
 	// RequiresBuilders reports whether this provider needs at least one
-	// server with role: builder to execute. Validator rule R1:
+	// server with role: builder to execute. Validator rule:
 	//   - RequiresBuilders == true  →  builders must be ≥ 1
 	//   - RequiresBuilders == false →  builders must be == 0
 	RequiresBuilders bool
-
-	// DispatchableFromCI reports whether a CIProvider can dispatch deploys
-	// to this build provider. Validator rule R2: providers.ci set + build
-	// provider with DispatchableFromCI == false → error (e.g. `ci: github`
-	// with `build: local` is meaningless — there's no remote to dispatch to).
-	DispatchableFromCI bool
 }
 
 // ── Registry ─────────────────────────────────────────────────────────────────

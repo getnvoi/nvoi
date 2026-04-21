@@ -19,6 +19,15 @@ type DeployContext struct {
 	Storage app.ProviderRef
 	Tunnel  app.ProviderRef
 	Creds   provider.CredentialSource // single source for all credential resolution at runtime
+
+	// GitRemote and GitRef carry the operator's current checkout so remote
+	// BuildProviders (ssh, daytona) can clone the exact tree the operator is
+	// deploying. Populated at the cmd/ boundary via `git remote get-url
+	// origin` + `git rev-parse HEAD` — NOT read from nvoi.yaml. Empty when
+	// the cwd is not a git checkout; local builder ignores both, remote
+	// builders error with an actionable message.
+	GitRemote string
+	GitRef    string
 }
 
 // LiveState represents what's currently deployed.
@@ -150,13 +159,17 @@ type ProvidersDef struct {
 	// hit an unknown-field unmarshal error with a pointer to this rename.
 	Infra string `yaml:"infra"`
 	DNS   string `yaml:"dns,omitempty"`
-	// Build selects the BuildProvider — the substrate `nvoi deploy`
-	// physically runs on. Unset defaults to "local" (in-process reconcile
-	// on the operator's machine). Future values: "ssh" (PR-B: remote on a
-	// role: builder server), "daytona" (sandbox).
+	// Build selects the BuildProvider — how each service's image gets built.
+	// Each provider is entirely self-contained; the only shared contract is
+	// Build(ctx, req) → imageRef. Unset defaults to "local" (operator's
+	// machine). Values:
+	//   - "local"   — docker buildx on the operator's machine (default)
+	//   - "ssh"     — SSH to a role: builder server, git clone + buildx --push
+	//   - "daytona" — managed DinD sandbox, git clone + buildx --push
 	//
 	// Scalar only — same shape as Infra/DNS/Storage/Tunnel.
-	Build   string      `yaml:"build,omitempty"`
+	Build string `yaml:"build,omitempty"`
+
 	Storage string      `yaml:"storage,omitempty"`
 	Secrets *SecretsDef `yaml:"secrets,omitempty"`
 	Tunnel  string      `yaml:"tunnel,omitempty"`

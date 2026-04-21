@@ -42,6 +42,12 @@ func (stubInfra) NodeShell(context.Context, *BootstrapContext) (utils.SSHClient,
 func (stubInfra) ValidateCredentials(context.Context) error { return nil }
 func (stubInfra) Close() error                              { return nil }
 func (stubInfra) ArchForType(string) string                 { return "amd64" }
+func (stubInfra) ProvisionBuilders(context.Context, *BootstrapContext) error {
+	return nil
+}
+func (stubInfra) BuilderTargets(context.Context, *BootstrapContext) ([]BuilderTarget, error) {
+	return nil, nil
+}
 
 func init() {
 	RegisterInfra("test-infra", CredentialSchema{

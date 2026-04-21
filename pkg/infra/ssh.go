@@ -132,6 +132,41 @@ func (c *SSHClient) RunStream(ctx context.Context, cmd string, stdout, stderr io
 	}
 }
 
+// RunWithStdin executes cmd on the remote host with stdin piped from the
+// provided reader, streaming stdout/stderr back to the provided writers.
+// The SSH BuildProvider uses this to feed the push-side registry password
+// into `docker login --password-stdin` on the builder — no secrets on argv,
+// no temp files.
+func (c *SSHClient) RunWithStdin(ctx context.Context, cmd string, stdin io.Reader, stdout, stderr io.Writer) error {
+	sess, err := c.conn.NewSession()
+	if err != nil {
+		return fmt.Errorf("new session: %w", err)
+	}
+	defer sess.Close()
+
+	sess.Stdin = stdin
+	sess.Stdout = stdout
+	sess.Stderr = stderr
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sess.Run(cmd)
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = sess.Signal(ssh.SIGKILL)
+		_ = sess.Close()
+		<-done
+		return ctx.Err()
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("run %q: %w", cmd, err)
+		}
+		return nil
+	}
+}
+
 // Upload writes data to a remote file via SFTP.
 func (c *SSHClient) Upload(_ context.Context, local io.Reader, remotePath string, mode fs.FileMode) error {
 	sftpClient, err := sftp.NewClient(c.conn)

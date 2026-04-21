@@ -3,104 +3,94 @@ package reconcile
 import (
 	"context"
 	"errors"
-	"io"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
-	app "github.com/getnvoi/nvoi/pkg/core"
+	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
-// captureRunner records every BuildRunner call at the reconcile layer so
-// we can assert iteration order, per-service args, and skipping logic.
-type captureRunner struct {
+// captureBuilder is a BuildProvider test double that records every Build
+// call for assertions. Registered via registerCaptureBuilder under a
+// per-test name so reconcile.BuildImages resolves it through the
+// production provider registry — no private test seam.
+//
+// The BuildRequest is captured verbatim, so each test can assert on
+// Service / Image / Platform / Registry / Builders / GitRemote / GitRef
+// with field-level precision. Error mode is controlled by setting
+// captureBuilder.err — the builder returns that error from Build, which
+// propagates up through BuildImages.
+type captureBuilder struct {
 	mu    sync.Mutex
-	calls []string // e.g. "login:ghcr.io:alice" / "build:ghcr.io/org/api:v1" / "push:..."
+	calls []provider.BuildRequest
 	err   error
 }
 
-func (r *captureRunner) record(s string) {
-	r.mu.Lock()
-	r.calls = append(r.calls, s)
-	r.mu.Unlock()
+func (c *captureBuilder) Build(_ context.Context, req provider.BuildRequest) (string, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, req)
+	c.mu.Unlock()
+	if c.err != nil {
+		return "", c.err
+	}
+	return req.Image, nil
 }
 
-func (r *captureRunner) ops() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]string, len(r.calls))
-	copy(out, r.calls)
+func (c *captureBuilder) Close() error { return nil }
+
+func (c *captureBuilder) requests() []provider.BuildRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]provider.BuildRequest, len(c.calls))
+	copy(out, c.calls)
 	return out
 }
 
-// PreflightBuildx is a no-op in the common capture — existing tests care
-// about login/build/push ordering, not preflight invocation. Preflight-
-// specific assertions live in their own test below.
-func (r *captureRunner) PreflightBuildx(_ context.Context) error { return nil }
-
-func (r *captureRunner) Login(_ context.Context, host, user, _ string) error {
-	r.record("login:" + host + ":" + user)
-	return r.err
-}
-func (r *captureRunner) Build(_ context.Context, image, _, _, platform string, _, _ io.Writer) error {
-	r.record("build:" + image + ":" + platform)
-	return r.err
-}
-func (r *captureRunner) Push(_ context.Context, image string, _, _ io.Writer) error {
-	r.record("push:" + image)
-	return r.err
-}
-
-// stubBuildContext writes a minimal Dockerfile at the given path so the
-// os.Stat pre-check in BuildService passes.
-func stubBuildContext(t *testing.T, dir string) string {
-	t.Helper()
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine\n"), 0644); err != nil {
-		t.Fatalf("write Dockerfile: %v", err)
-	}
-	return dir
+// registerCaptureBuilder installs a captureBuilder under `name` with the
+// given capability bits. Returns the builder so the caller can assert on
+// its recorded calls. Credential schema is empty — tests that need
+// credentials set them via dc.Creds directly (registry auth resolution).
+//
+// RegisterBuild replaces on duplicate name, so each test registers under
+// a unique name to avoid cross-test interference when tests are reordered.
+func registerCaptureBuilder(_ *testing.T, name string, caps provider.BuildCapability) *captureBuilder {
+	b := &captureBuilder{}
+	provider.RegisterBuild(name, provider.CredentialSchema{}, caps, func(map[string]string) provider.BuildProvider {
+		return b
+	})
+	return b
 }
 
 // TestBuildImages_SkipsWhenNoServiceHasBuild verifies the fast-exit path. Users
-// with zero `build:` entries must not need `docker` on PATH.
+// with zero `build:` entries must not need any BuildProvider on PATH —
+// BuildImages returns before even resolving one.
 func TestBuildImages_SkipsWhenNoServiceHasBuild(t *testing.T) {
-	runner := &captureRunner{}
-	cleanup := SetBuildRunnerForTest(runner)
-	defer cleanup()
+	b := registerCaptureBuilder(t, "test-capture-skip", provider.BuildCapability{})
 
 	dc := testDCWithCreds(convergeMock())
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-skip"},
 		Services: map[string]config.ServiceDef{
 			"web": {Image: "docker.io/library/nginx"},
 			"api": {Image: "docker.io/library/redis"},
 		},
 	}
-	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64"); err != nil {
+	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64", nil); err != nil {
 		t.Fatalf("BuildImages: %v", err)
 	}
-	if ops := runner.ops(); len(ops) != 0 {
-		t.Errorf("runner must not be called when no service has build:, got %v", ops)
+	if reqs := b.requests(); len(reqs) != 0 {
+		t.Errorf("builder must not be called when no service has build:, got %d requests", len(reqs))
 	}
 }
 
 // TestBuildImages_OnlyBuildsServicesWithBuildField verifies we don't accidentally
 // rebuild every service — only the ones flagged. Also locks that the
-// resolved tag is user-tag + "-" + deploy-hash.
+// resolved image tag is user-tag + "-" + deploy-hash AND that resolved
+// registry credentials land on BuildRequest.Registry verbatim.
 func TestBuildImages_OnlyBuildsServicesWithBuildField(t *testing.T) {
-	runner := &captureRunner{}
-	cleanup := SetBuildRunnerForTest(runner)
-	defer cleanup()
-
-	tmp := t.TempDir()
-	apiCtx := stubBuildContext(t, filepath.Join(tmp, "services", "api"))
+	b := registerCaptureBuilder(t, "test-capture-only", provider.BuildCapability{})
 
 	dc := testDCWithCreds(convergeMock(),
 		"GITHUB_USER", "alice",
@@ -109,49 +99,48 @@ func TestBuildImages_OnlyBuildsServicesWithBuildField(t *testing.T) {
 	dc.Cluster.DeployHash = "20260417-143022"
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-only"},
 		Registry: map[string]config.RegistryDef{
 			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
 		},
 		Services: map[string]config.ServiceDef{
-			"web": {Image: "docker.io/library/nginx"}, // no build
+			"web": {Image: "docker.io/library/nginx"}, // no build — skipped
 			"api": {
 				Image: "ghcr.io/org/api:v1",
-				Build: &config.BuildSpec{Context: apiCtx},
+				Build: &config.BuildSpec{Context: "./services/api"},
 			},
 		},
 	}
-	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64"); err != nil {
+	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64", nil); err != nil {
 		t.Fatalf("BuildImages: %v", err)
 	}
-	ops := runner.ops()
-	// login:ghcr.io → build:<full-tag> → push:<full-tag>
-	// full-tag = ghcr.io/org/api:v1-20260417-143022 (user tag + hash suffix)
-	want := []string{
-		"login:ghcr.io:alice",
-		"build:ghcr.io/org/api:v1-20260417-143022:linux/amd64",
-		"push:ghcr.io/org/api:v1-20260417-143022",
+	reqs := b.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 build request (only api has build:), got %d", len(reqs))
 	}
-	if len(ops) != len(want) {
-		t.Fatalf("ops = %v, want %v", ops, want)
+	got := reqs[0]
+	if got.Service != "api" {
+		t.Errorf("Service = %q, want api", got.Service)
 	}
-	for i, w := range want {
-		if ops[i] != w {
-			t.Errorf("ops[%d] = %q, want %q", i, ops[i], w)
-		}
+	if want := "ghcr.io/org/api:v1-20260417-143022"; got.Image != want {
+		t.Errorf("Image = %q, want %q (user tag + '-' + deploy hash)", got.Image, want)
+	}
+	if got.Platform != "linux/amd64" {
+		t.Errorf("Platform = %q, want linux/amd64", got.Platform)
+	}
+	if got.Context != "./services/api" {
+		t.Errorf("Context = %q, want ./services/api", got.Context)
+	}
+	if got.Registry.Host != "ghcr.io" || got.Registry.Username != "alice" || got.Registry.Password != "ghp_xyz" {
+		t.Errorf("Registry = %+v, want {Host:ghcr.io Username:alice Password:ghp_xyz}", got.Registry)
 	}
 }
 
 // TestBuildImages_DeterministicIterationOrder verifies services build in
 // sorted order. Without this, re-runs produce non-identical deploy logs
-// and parallel-build implementations would need to re-establish order.
+// and any parallel-build implementation would need to re-establish order.
 func TestBuildImages_DeterministicIterationOrder(t *testing.T) {
-	runner := &captureRunner{}
-	cleanup := SetBuildRunnerForTest(runner)
-	defer cleanup()
-
-	tmp := t.TempDir()
-	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
-	webCtx := stubBuildContext(t, filepath.Join(tmp, "web"))
+	b := registerCaptureBuilder(t, "test-capture-order", provider.BuildCapability{})
 
 	dc := testDCWithCreds(convergeMock(),
 		"GITHUB_USER", "alice",
@@ -160,85 +149,69 @@ func TestBuildImages_DeterministicIterationOrder(t *testing.T) {
 	dc.Cluster.DeployHash = "20260417-143022"
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-order"},
 		Registry: map[string]config.RegistryDef{
 			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
 		},
 		Services: map[string]config.ServiceDef{
-			"web": {Image: "ghcr.io/org/web:v1", Build: &config.BuildSpec{Context: webCtx}},
-			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
+			"web": {Image: "ghcr.io/org/web:v1", Build: &config.BuildSpec{Context: "./web"}},
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: "./api"}},
 		},
 	}
-	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64"); err != nil {
+	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64", nil); err != nil {
 		t.Fatalf("BuildImages: %v", err)
 	}
-	// api builds before web (sorted Service name order).
-	ops := runner.ops()
-	var buildOps []string
-	for _, o := range ops {
-		if strings.HasPrefix(o, "build:") {
-			buildOps = append(buildOps, o)
-		}
+	reqs := b.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 build requests, got %d", len(reqs))
 	}
-	if len(buildOps) != 2 {
-		t.Fatalf("build ops = %v, want 2", buildOps)
+	// api sorts before web in lexicographic service order.
+	if reqs[0].Service != "api" {
+		t.Errorf("first build should be api, got %q", reqs[0].Service)
 	}
-	if !strings.Contains(buildOps[0], "/api:") {
-		t.Errorf("first build should be api, got: %v", buildOps)
+	if reqs[1].Service != "web" {
+		t.Errorf("second build should be web, got %q", reqs[1].Service)
 	}
-	if !strings.Contains(buildOps[1], "/web:") {
-		t.Errorf("second build should be web, got: %v", buildOps)
-	}
-	// Sanity: building services in a different input order must produce
-	// the same output order — Go map iteration is random without sort.
-	sort.Strings(buildOps) // no-op if already sorted; proves we're stable
 }
 
 // TestBuildImages_MissingEnvVar_HardError verifies that an unresolvable $VAR
-// in the registry block surfaces BEFORE any docker call — no "docker:
-// command not found" fallout when the real issue is a missing env.
+// in the registry block surfaces BEFORE any BuildProvider call — no "docker:
+// command not found" / "ssh: connection refused" fallout when the real
+// issue is a missing env var.
 func TestBuildImages_MissingEnvVar_HardError(t *testing.T) {
-	runner := &captureRunner{}
-	cleanup := SetBuildRunnerForTest(runner)
-	defer cleanup()
+	b := registerCaptureBuilder(t, "test-capture-missing", provider.BuildCapability{})
 
-	tmp := t.TempDir()
-	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
-
-	// GITHUB_TOKEN not seeded — resolution must error.
+	// GITHUB_TOKEN not seeded — registry auth resolution must error.
 	dc := testDCWithCreds(convergeMock(), "GITHUB_USER", "alice")
 	dc.Cluster.DeployHash = "20260417-143022"
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-missing"},
 		Registry: map[string]config.RegistryDef{
 			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
 		},
 		Services: map[string]config.ServiceDef{
-			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: "./api"}},
 		},
 	}
-	err := BuildImages(context.Background(), dc, cfg, "linux/amd64")
+	err := BuildImages(context.Background(), dc, cfg, "linux/amd64", nil)
 	if err == nil {
 		t.Fatal("expected error for missing $GITHUB_TOKEN")
 	}
 	if !strings.Contains(err.Error(), "GITHUB_TOKEN") {
 		t.Errorf("error should name the missing var, got: %v", err)
 	}
-	if ops := runner.ops(); len(ops) != 0 {
-		t.Errorf("runner must not be called when creds resolution fails, got %v", ops)
+	if reqs := b.requests(); len(reqs) != 0 {
+		t.Errorf("builder must not be called when creds resolution fails, got %d requests", len(reqs))
 	}
 }
 
-// TestBuildImages_FailurePropagates verifies that a failing docker command
-// aborts the whole Build pass — subsequent services don't get built
-// with a broken registry.
+// TestBuildImages_FailurePropagates verifies that a failing BuildProvider
+// aborts the whole Build pass — subsequent services don't get built with
+// a broken upstream.
 func TestBuildImages_FailurePropagates(t *testing.T) {
-	runner := &captureRunner{err: errors.New("daemon socket unreachable")}
-	cleanup := SetBuildRunnerForTest(runner)
-	defer cleanup()
-
-	tmp := t.TempDir()
-	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
-	webCtx := stubBuildContext(t, filepath.Join(tmp, "web"))
+	b := registerCaptureBuilder(t, "test-capture-fail", provider.BuildCapability{})
+	b.err = errors.New("builder exploded")
 
 	dc := testDCWithCreds(convergeMock(),
 		"GITHUB_USER", "alice", "GITHUB_TOKEN", "ghp_xyz",
@@ -246,51 +219,37 @@ func TestBuildImages_FailurePropagates(t *testing.T) {
 	dc.Cluster.DeployHash = "20260417-143022"
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Registry: map[string]config.RegistryDef{"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"}},
+		Providers: config.ProvidersDef{Build: "test-capture-fail"},
+		Registry: map[string]config.RegistryDef{
+			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
+		},
 		Services: map[string]config.ServiceDef{
-			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
-			"web": {Image: "ghcr.io/org/web:v1", Build: &config.BuildSpec{Context: webCtx}},
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: "./api"}},
+			"web": {Image: "ghcr.io/org/web:v1", Build: &config.BuildSpec{Context: "./web"}},
 		},
 	}
-	err := BuildImages(context.Background(), dc, cfg, "linux/amd64")
+	err := BuildImages(context.Background(), dc, cfg, "linux/amd64", nil)
 	if err == nil {
-		t.Fatal("expected error from failing runner")
+		t.Fatal("expected error from failing builder")
 	}
-	// Confirm web was never attempted — api's login failure aborted the pass.
-	for _, op := range runner.ops() {
-		if strings.Contains(op, "/web:") {
-			t.Errorf("web must not be built after api failure, ops: %v", runner.ops())
-		}
+	// api sorts first, fails first; web must never reach the builder.
+	reqs := b.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request (api; web skipped after failure), got %d", len(reqs))
+	}
+	if reqs[0].Service != "api" {
+		t.Errorf("first (and only) request should be api, got %q", reqs[0].Service)
 	}
 }
 
-// Silence unused imports on future trims.
-var _ app.BuildRunner
-
-// preflightFailRunner returns a preflight error and records every call
-// so the test can verify no login/build/push fires after preflight fails.
-type preflightFailRunner struct {
-	captureRunner
-}
-
-func (p *preflightFailRunner) PreflightBuildx(_ context.Context) error {
-	p.record("preflight")
-	return errors.New("docker buildx is required but not installed")
-}
-
-// TestBuildImages_EmptyPlatform_Errors verifies that Build() returns a hard error
-// when platform is "" and at least one service has a build: directive.
+// TestBuildImages_EmptyPlatform_Errors verifies that BuildImages returns a hard
+// error when platform is "" and at least one service has a build: directive.
 // An empty platform means the caller failed to derive the server arch —
 // silently proceeding would build for the host arch and produce an image
 // that crashes at container start on a cross-arch target (e.g. amd64 image
 // on arm64 cax11).
 func TestBuildImages_EmptyPlatform_Errors(t *testing.T) {
-	runner := &captureRunner{}
-	cleanup := SetBuildRunnerForTest(runner)
-	defer cleanup()
-
-	tmp := t.TempDir()
-	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
+	b := registerCaptureBuilder(t, "test-capture-platform", provider.BuildCapability{})
 
 	dc := testDCWithCreds(convergeMock(),
 		"GITHUB_USER", "alice", "GITHUB_TOKEN", "ghp_xyz",
@@ -298,37 +257,70 @@ func TestBuildImages_EmptyPlatform_Errors(t *testing.T) {
 	dc.Cluster.DeployHash = "20260417-143022"
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-platform"},
 		Registry: map[string]config.RegistryDef{
 			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
 		},
 		Services: map[string]config.ServiceDef{
-			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: "./api"}},
 		},
 	}
-	err := BuildImages(context.Background(), dc, cfg, "")
+	err := BuildImages(context.Background(), dc, cfg, "", nil)
 	if err == nil {
 		t.Fatal("expected error for empty platform")
 	}
 	if !strings.Contains(err.Error(), "platform") {
 		t.Errorf("error should mention platform, got: %v", err)
 	}
-	// Nothing should have been called — error fires before preflight.
-	if ops := runner.ops(); len(ops) != 0 {
-		t.Errorf("runner must not be called when platform is empty, got %v", ops)
+	if reqs := b.requests(); len(reqs) != 0 {
+		t.Errorf("builder must not be called when platform is empty, got %d requests", len(reqs))
 	}
 }
 
-// INVARIANT: preflight failure aborts the whole Build pass before any
-// registry creds are resolved, any docker login fires, or any service
-// is built. Per-service docker errors for a missing buildx would
-// otherwise spam once per service with no install hint.
-func TestBuildImages_PreflightFailure_ShortCircuitsEverything(t *testing.T) {
-	runner := &preflightFailRunner{}
-	cleanup := SetBuildRunnerForTest(runner)
-	defer cleanup()
+// TestBuildImages_PlatformStampedOnBuildRequest verifies that the platform
+// string passed to BuildImages reaches the BuildProvider via
+// BuildRequest.Platform. This is the cross-arch correctness invariant: an
+// arm64 platform string for a cax11 target must not be silently replaced
+// by the operator's host arch downstream.
+func TestBuildImages_PlatformStampedOnBuildRequest(t *testing.T) {
+	b := registerCaptureBuilder(t, "test-capture-arm", provider.BuildCapability{})
 
-	tmp := t.TempDir()
-	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
+	dc := testDCWithCreds(convergeMock(),
+		"GITHUB_USER", "alice",
+		"GITHUB_TOKEN", "ghp_xyz",
+	)
+	dc.Cluster.DeployHash = "20260417-143022"
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-arm"},
+		Registry: map[string]config.RegistryDef{
+			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
+		},
+		Services: map[string]config.ServiceDef{
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: "./api"}},
+		},
+	}
+
+	// arm64 simulates a cax11 target.
+	if err := BuildImages(context.Background(), dc, cfg, "linux/arm64", nil); err != nil {
+		t.Fatalf("BuildImages: %v", err)
+	}
+	reqs := b.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(reqs))
+	}
+	if reqs[0].Platform != "linux/arm64" {
+		t.Errorf("Platform = %q, want linux/arm64", reqs[0].Platform)
+	}
+}
+
+// TestBuildImages_BuildersPassedToProvider verifies the builders slice
+// (produced by infra.BuilderTargets for RequiresBuilders=true providers)
+// reaches the BuildProvider via BuildRequest.Builders. The ssh
+// BuildProvider consumes this; local/daytona ignore it. Locked here so
+// a future refactor can't silently drop the wiring.
+func TestBuildImages_BuildersPassedToProvider(t *testing.T) {
+	b := registerCaptureBuilder(t, "test-capture-builders", provider.BuildCapability{RequiresBuilders: true})
 
 	dc := testDCWithCreds(convergeMock(),
 		"GITHUB_USER", "alice", "GITHUB_TOKEN", "ghp_xyz",
@@ -336,26 +328,110 @@ func TestBuildImages_PreflightFailure_ShortCircuitsEverything(t *testing.T) {
 	dc.Cluster.DeployHash = "20260417-143022"
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-builders"},
 		Registry: map[string]config.RegistryDef{
 			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
 		},
 		Services: map[string]config.ServiceDef{
-			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: "./api"}},
 		},
 	}
-	err := BuildImages(context.Background(), dc, cfg, "linux/amd64")
-	if err == nil {
-		t.Fatal("expected preflight failure to propagate")
+	builders := []provider.BuilderTarget{
+		{Name: "nvoi-myapp-prod-builder-1", Host: "1.2.3.4", User: "deploy"},
 	}
-	if !strings.Contains(err.Error(), "buildx") {
-		t.Errorf("error should surface the buildx-missing hint, got: %v", err)
+	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64", builders); err != nil {
+		t.Fatalf("BuildImages: %v", err)
 	}
-	// Only "preflight" should have been recorded — no login/build/push.
-	ops := runner.ops()
-	if len(ops) != 1 || ops[0] != "preflight" {
-		t.Errorf("preflight failure must short-circuit login/build/push, got ops: %v", ops)
+	reqs := b.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(reqs))
+	}
+	got := reqs[0].Builders
+	if len(got) != 1 || got[0].Name != "nvoi-myapp-prod-builder-1" || got[0].Host != "1.2.3.4" || got[0].User != "deploy" {
+		t.Errorf("BuildRequest.Builders = %+v, want [{Name:nvoi-myapp-prod-builder-1 Host:1.2.3.4 User:deploy}]", got)
 	}
 }
+
+// TestBuildImages_GitRefCarriedOnRequest verifies GitRemote + GitRef
+// (populated by cmd/cli/deploy.go from the operator's cwd) reach the
+// BuildProvider. Remote builders (ssh, daytona) need these to clone the
+// exact tree being deployed; local ignores them. Locked so the CLI-layer
+// git inference can't be accidentally severed from the request.
+func TestBuildImages_GitRefCarriedOnRequest(t *testing.T) {
+	b := registerCaptureBuilder(t, "test-capture-gitref", provider.BuildCapability{})
+
+	dc := testDCWithCreds(convergeMock(),
+		"GITHUB_USER", "alice", "GITHUB_TOKEN", "ghp_xyz",
+	)
+	dc.Cluster.DeployHash = "20260417-143022"
+	dc.GitRemote = "git@github.com:getnvoi/nvoi.git"
+	dc.GitRef = "abcdef1234567890abcdef1234567890abcdef12"
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-gitref"},
+		Registry: map[string]config.RegistryDef{
+			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
+		},
+		Services: map[string]config.ServiceDef{
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: "./api"}},
+		},
+	}
+	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64", nil); err != nil {
+		t.Fatalf("BuildImages: %v", err)
+	}
+	reqs := b.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(reqs))
+	}
+	if reqs[0].GitRemote != dc.GitRemote {
+		t.Errorf("GitRemote = %q, want %q", reqs[0].GitRemote, dc.GitRemote)
+	}
+	if reqs[0].GitRef != dc.GitRef {
+		t.Errorf("GitRef = %q, want %q", reqs[0].GitRef, dc.GitRef)
+	}
+}
+
+// TestBuildImages_EmptyImageRef_Errors verifies the contract defense: a
+// BuildProvider that returns ("", nil) violates the Build contract (the
+// ref is what Services() stamps on the PodSpec). BuildImages must surface
+// this as an error, not silently propagate an empty ref.
+func TestBuildImages_EmptyImageRef_Errors(t *testing.T) {
+	// Custom builder that returns ("", nil) — breaks the contract.
+	broken := &emptyRefBuilder{}
+	provider.RegisterBuild("test-capture-emptyref", provider.CredentialSchema{},
+		provider.BuildCapability{},
+		func(map[string]string) provider.BuildProvider { return broken })
+
+	dc := testDCWithCreds(convergeMock(),
+		"GITHUB_USER", "alice", "GITHUB_TOKEN", "ghp_xyz",
+	)
+	dc.Cluster.DeployHash = "20260417-143022"
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Build: "test-capture-emptyref"},
+		Registry: map[string]config.RegistryDef{
+			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
+		},
+		Services: map[string]config.ServiceDef{
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: "./api"}},
+		},
+	}
+	err := BuildImages(context.Background(), dc, cfg, "linux/amd64", nil)
+	if err == nil {
+		t.Fatal("expected error for empty imageRef")
+	}
+	if !strings.Contains(err.Error(), "empty image ref") {
+		t.Errorf("error should mention empty image ref, got: %v", err)
+	}
+}
+
+type emptyRefBuilder struct{}
+
+func (emptyRefBuilder) Build(_ context.Context, _ provider.BuildRequest) (string, error) {
+	return "", nil
+}
+func (emptyRefBuilder) Close() error { return nil }
 
 // ── masterServerType ────────────────────────────────────────────────────────
 
@@ -405,47 +481,4 @@ func TestMasterServerType(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestBuildImages_PlatformStampedOnBuildRecord verifies that the platform string
-// passed to Build() reaches the docker buildx invocation. This is the
-// cross-arch correctness invariant: an arm64 platform string for a cax11
-// target must not be silently replaced by the operator's host arch.
-func TestBuildImages_PlatformStampedOnBuildRecord(t *testing.T) {
-	runner := &captureRunner{}
-	cleanup := SetBuildRunnerForTest(runner)
-	defer cleanup()
-
-	tmp := t.TempDir()
-	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
-
-	dc := testDCWithCreds(convergeMock(),
-		"GITHUB_USER", "alice",
-		"GITHUB_TOKEN", "ghp_xyz",
-	)
-	dc.Cluster.DeployHash = "20260417-143022"
-	cfg := &config.AppConfig{
-		App: "myapp", Env: "prod",
-		Registry: map[string]config.RegistryDef{
-			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
-		},
-		Services: map[string]config.ServiceDef{
-			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
-		},
-	}
-
-	// arm64 simulates a cax11 target — verifies the platform is not
-	// silently replaced by the operator's host arch.
-	if err := BuildImages(context.Background(), dc, cfg, "linux/arm64"); err != nil {
-		t.Fatalf("BuildImages: %v", err)
-	}
-	for _, op := range runner.ops() {
-		if strings.HasPrefix(op, "build:") {
-			if !strings.HasSuffix(op, ":linux/arm64") {
-				t.Errorf("build record should end with :linux/arm64, got %q", op)
-			}
-			return
-		}
-	}
-	t.Fatal("no build op recorded")
 }

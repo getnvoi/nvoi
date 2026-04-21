@@ -63,11 +63,38 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	// operator builds on amd64 but deploys to an arm64 node (e.g. cax11).
 	buildPlatform := "linux/" + infra.ArchForType(masterServerType(cfg))
 
+	// Some BuildProviders (ssh) require role: builder servers to exist
+	// before BuildImages fires. Provision them first, then hand the SSH
+	// targets to BuildImages via the builders slice. Providers that don't
+	// need builders (local, daytona) are declared RequiresBuilders=false
+	// — ProvisionBuilders is still called but is a no-op on those backends
+	// when no role: builder server is declared (the validator R1 rule
+	// already forced consistency).
+	buildName := cfg.Providers.Build
+	if buildName == "" {
+		buildName = "local"
+	}
+	caps, err := provider.GetBuildCapability(buildName)
+	if err != nil {
+		return fmt.Errorf("resolve build capability: %w", err)
+	}
+	var builders []provider.BuilderTarget
+	if caps.RequiresBuilders {
+		if err := infra.ProvisionBuilders(ctx, bctx); err != nil {
+			return fmt.Errorf("provision builders: %w", err)
+		}
+		t, err := infra.BuilderTargets(ctx, bctx)
+		if err != nil {
+			return fmt.Errorf("builder targets: %w", err)
+		}
+		builders = t
+	}
+
 	// Build images for services with `build:` declared BEFORE touching
-	// infra. A build failure should never leave us with half-provisioned
-	// servers. The outer `providers.build` family (local/ssh/daytona) is
-	// orthogonal — BuildImages is the inner docker-buildx-and-push step.
-	if err := BuildImages(ctx, dc, cfg, buildPlatform); err != nil {
+	// the rest of the infra. A build failure should never leave us with
+	// half-provisioned servers. BuildImages resolves the BuildProvider
+	// (local/ssh/daytona) and calls bp.Build once per service.
+	if err := BuildImages(ctx, dc, cfg, buildPlatform, builders); err != nil {
 		return err
 	}
 

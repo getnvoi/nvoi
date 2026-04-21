@@ -58,11 +58,17 @@ Some steps split the two halves across the flow (Servers, Firewall) because dele
 
 ### BuildImages (pre-infra)
 
-`images.go`. Runs before any infra. A build failure aborts the deploy before a server is provisioned. Runs locally — shells out to `docker buildx` on the operator's PATH via `pkg/core/build.go::BuildService` (through the `BuildRunner` interface — `DockerRunner` in prod, fakes in tests).
+`images.go`. Runs before any infra. A build failure aborts the deploy before a server is provisioned.
 
-Named `BuildImages` (not `Build`) to free the word "build" for the outer `BuildProvider` family in `pkg/provider/build.go` — the outer "build" is the substrate a deploy runs on (local / ssh / daytona); this inner step is specifically the docker-buildx-and-push loop invoked by `reconcile.Deploy`. The two are orthogonal: `BuildImages` always runs on whichever machine is executing `reconcile.Deploy`, which for `providers.build: local` is the operator's laptop and for `providers.build: ssh` (PR-B) is the remote builder server.
+Named `BuildImages` (not `Build`) to free the word "build" for the outer `BuildProvider` family in `pkg/provider/build.go` — the outer "build" is the substrate a deploy runs on (`local` / `ssh` / `daytona`); this inner step is specifically the per-service dispatch loop invoked by `reconcile.Deploy`. `BuildImages` resolves the selected `BuildProvider` once via `provider.ResolveBuild`, then walks `cfg.Services` in sorted order and calls `bp.Build(ctx, req)` per service with a `build:` directive. The returned image ref is what `Services()` stamps on the PodSpec.
 
-Single-service builds serialize; multi-service builds run via `BuildParallel`. One `PreflightBuildx` at the top of the pass so missing buildx surfaces once with an install hint instead of opaque per-service flag errors. Passwords flow via `--password-stdin`, never argv. Auth writes to the operator's real `~/.docker/config.json` (Kamal-style; DOCKER_CONFIG isolation breaks plugin discovery and context lookup — don't).
+Provider-specific mechanics live entirely inside each `BuildProvider`:
+
+- `local` — shells out to `docker login` + `docker buildx build --push` on the operator's machine via `pkg/core/build.go::BuildService` (the `BuildRunner` interface — `DockerRunner` in prod, fakes in tests).
+- `ssh` — dials a `role: builder` server via SSH, clones `req.GitRemote @ req.GitRef`, runs `docker buildx build --push` there.
+- `daytona` — boots a Daytona sandbox, clones the same git ref, runs the buildx-and-push loop inside the sandbox over Daytona's session-exec API.
+
+`reconcile.Deploy` provisions builders (`infra.ProvisionBuilders` + `infra.BuilderTargets`) before `BuildImages` when the resolved provider declares `BuildCapability.RequiresBuilders = true`. The resulting `[]BuilderTarget` is threaded into every `BuildRequest` — `ssh` consumes it, `local`/`daytona` ignore it. Git source (`req.GitRemote`, `req.GitRef`) is inferred by the CLI from the operator's cwd (`git remote get-url origin` + `git rev-parse HEAD`); remote providers (`ssh`, `daytona`) hard-error when those strings are empty.
 
 Image tag resolution (Kamal-style, adapted): host inferred when `image:` has no host and exactly one `registry:` entry is declared; ambiguous with multiple registries; bare shortnames rejected under `build:`. User tag (if any) preserved AND suffixed with `dc.Cluster.DeployHash` → guarantees a new `image:` string every deploy so the rollout controller always restarts pods. Digest-pinned references pass through unmodified. Logic in `image.go`.
 
