@@ -45,6 +45,38 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		}
 	}
 
+	// providers.tunnel — optional, but when set requires dns + at least one domain.
+	if t := cfg.Providers.Tunnel; t != "" {
+		switch t {
+		case "cloudflare", "ngrok":
+			// supported
+		default:
+			return fmt.Errorf("providers.tunnel %q is not supported (expected: cloudflare | ngrok)", t)
+		}
+		if cfg.Providers.DNS == "" {
+			return fmt.Errorf("providers.tunnel: DNS provider is required when tunnel is configured (set providers.dns)")
+		}
+		if len(cfg.Domains) == 0 {
+			return fmt.Errorf("providers.tunnel: at least one domain is required when tunnel is configured (set domains:)")
+		}
+	}
+
+	// In tunnel mode, 80/443 must stay closed on the master — the tunnel
+	// agent owns all inbound traffic and master ports 80/443 are firewalled
+	// off. Opening them here contradicts the tunnel setup and leaks the
+	// service directly, bypassing the tunnel edge.
+	if cfg.Providers.Tunnel != "" {
+		for _, rule := range cfg.Firewall {
+			port, _, ok := strings.Cut(rule, ":")
+			if !ok {
+				continue
+			}
+			if port == "80" || port == "443" {
+				return fmt.Errorf("firewall: port %s cannot be opened in tunnel mode — the tunnel agent owns all inbound traffic; remove the rule or remove providers.tunnel", port)
+			}
+		}
+	}
+
 	// ── Servers ───────────────────────────────────────────────────────────
 	if len(cfg.Servers) == 0 {
 		return fmt.Errorf("at least one server is required")

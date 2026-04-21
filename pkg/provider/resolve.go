@@ -144,6 +144,8 @@ func GetSchema(kind, name string) (CredentialSchema, error) {
 		return GetBucketSchema(name)
 	case "secrets":
 		return GetSecretsSchema(name)
+	case "tunnel":
+		return GetTunnelSchema(name)
 	default:
 		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
 	}

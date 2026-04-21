@@ -75,6 +75,7 @@ providers:
   dns: cloudflare           # cloudflare | aws | scaleway
   storage: cloudflare       # cloudflare | aws | scaleway
   secrets: infisical        # optional — doppler | awssm | infisical (see Credential resolution)
+  tunnel: cloudflare        # optional — cloudflare | ngrok (see Tunnel ingress)
 
 servers:
   master:
@@ -131,6 +132,7 @@ domains:
 - Services/crons: `image` required (unless `build:`), referenced `storage`/`volumes` exist. Volume mounts `name:/path`, volume must be on the same server as the workload.
 - Web-facing services (with domains): replicas omitted → 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid.
 - `services.X.build:` requires a `registry:` block AND the image's host must appear as a key. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag.
+- `providers.tunnel` — optional. When set: `providers.dns` required, at least one `domains:` entry required. Valid values: `cloudflare | ngrok`. Credentials validated at startup.
 
 ## Private registries + local builds
 
@@ -183,6 +185,7 @@ pkg/
     caddy.go               EnsureCaddy, ReloadCaddyConfig, WaitForCaddyCert, WaitForCaddyHTTPS, GetCaddyRoutes
     caddy_config.go        BuildCaddyConfig — pure JSON renderer (deterministic, sorted by Service)
     caddy_manifests.go     buildCaddyDeployment / Service / ConfigMap / PVC + constants
+    tunnel.go              PurgeTunnelAgents, PurgeCaddy, GetTunnelAgentPods + well-known agent name constants
     registry.go            BuildDockerConfigJSON + BuildPullSecret for imagePullSecrets
     generate.go            BuildService (Deployment/StatefulSet + Service), ParseSecretRef
     rollout.go diagnostics.go streaming.go
@@ -191,11 +194,13 @@ pkg/
     infra.go               InfraProvider interface (Bootstrap → *kube.Client) + BootstrapContext + LiveSnapshot + IngressBinding
     dns.go                 DNSProvider — RouteTo / Unroute / ListBindings (polymorphic over A/AAAA/CNAME)
     bucket.go secrets.go   BucketProvider / SecretsProvider
+    tunnel.go              TunnelProvider interface + TunnelRequest/Route/Plan + RegisterTunnel/ResolveTunnel
     types.go resolve.go    Server/Volume/Firewall/Network types + RegisterX/ResolveX registries
-    s3ops/ hetznerbase/ awsbase/ cfbase/ scwbase/
-    infra/{hetzner,aws,scaleway}/      — see pkg/provider/infra/CLAUDE.md
-    dns/{cloudflare,aws,scaleway}/
-    storage/{cloudflare,aws,scaleway}/
+    hetzner/               infra (+ register)
+    aws/                   infra + dns + storage (+ registers)
+    scaleway/              infra + dns + storage (+ registers)
+    cloudflare/            dns + storage + tunnel — tunnel.go, tunnel_client.go, workloads.go
+    ngrok/                 tunnel — tunnel.go, client.go, workloads.go
     secrets/{doppler,awssm,infisical}/ — direct-API credential backends
   utils/                   Pure utilities: naming, poll, httpclient, ssh keys, format, maps, params
     s3/                    S3-compatible ops with AWS Signature V4
@@ -236,6 +241,7 @@ SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guida
 | DNS | `providers.dns` | `DNSProvider` | cloudflare, aws, scaleway |
 | Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
 | Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
+| Tunnel | `providers.tunnel` | `TunnelProvider` | cloudflare, ngrok |
 
 **InfraProvider contract** (`pkg/provider/infra.go`): every backend yields a `*kube.Client` via `Bootstrap` (write — converges drift) or `Connect` (read-only — attach to existing infra). Reconcile branches on none of: provider name, IngressBinding type, NodeShell-or-not, ConsumesBlocks. Adding a new backend = implementing the interface; zero reconcile changes.
 
@@ -291,6 +297,49 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **Local builds are optional and opt-in per service.** `PreflightBuildx` fires once so missing buildx surfaces with an actionable hint. Kamal-style auth via the real `~/.docker/config.json`. Runs PRE-infra via `BuildRunner`.
 - **Firewall orphan sweep deferred until after `ServersRemoveOrphans`.** `Firewall()` reconciles the desired per-role set early so new servers get rules before workloads land. `FirewallRemoveOrphans()` runs later because Hetzner rejects `DeleteFirewall` while a server is still attached — `DeleteServer`'s contract detaches first. `ensureFirewall` never resets rules.
 - **Root disk size is creation-only.** `disk` applies at `EnsureServer`. Changing it on an existing server has no effect — resize requires recreation. Hetzner rejects `disk` at config time (fixed per server type).
+
+## Tunnel ingress
+
+`providers.tunnel` is an **optional, opt-in alternative** to the default Caddy + ACME + public-master-IP path. When set, the tunnel agent (cloudflared or ngrok) handles all inbound traffic — master ports 80/443 stay firewalled, TLS terminates at the provider edge.
+
+### Composition matrix
+
+| `infra` | `tunnel` | Flow |
+|---|---|---|
+| hetzner / aws / scaleway | _(unset)_ | Caddy + master public IP + DNS A record + ACME. Zero dependencies. |
+| hetzner / aws / scaleway | `cloudflare` / `ngrok` | Tunnel agent in cluster, Caddy skipped, master `:80/:443` closed, DNS CNAME to tunnel edge, TLS at provider edge. |
+
+### How it works
+
+1. `reconcile.TunnelIngress` calls `TunnelProvider.Reconcile(ctx, TunnelRequest{Name, Routes})` — upserts the provider-side tunnel (idempotent, name-keyed as `nvoi-{app}-{env}`), pushes the full route table, fetches the agent token.
+2. `TunnelPlan.Workloads` (Deployment + Secret ± ConfigMap) are applied to the cluster via `*kube.Client`.
+3. `TunnelPlan.DNSBindings` (hostname → CNAME target) are written via the configured `DNSProvider` — **tunnel providers never write DNS directly**.
+4. On the Caddy path when `providers.tunnel` was previously set, `PurgeTunnelAgents` removes orphaned agent workloads before Caddy starts.
+5. On the tunnel path, `PurgeCaddy` removes orphaned Caddy workloads (no longer consuming hostPort 80/443).
+
+### Teardown ordering
+
+`nvoi teardown` deletes the provider-side tunnel **after** the agent Deployment is gone. Cloudflare rejects `DELETE /cfd_tunnel/{id}` while connections are active — the ordering guarantees success.
+
+> **Known gap:** if `providers.tunnel` is removed from `nvoi.yaml` and a re-deploy is run (Caddy restored), the k8s-side orphan is cleaned up by `PurgeTunnelAgents`, but the **provider-side** tunnel (Cloudflare Tunnel object / ngrok reserved domains) is left until `nvoi teardown` or a manual cleanup. No state files means no record of the previous provider. Tracked for a future reconcile pass.
+
+### Per-provider details
+
+**Cloudflare Tunnel** (`pkg/provider/cloudflare/`)
+- Credentials: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
+- Lookup always includes `is_deleted=false` — Cloudflare soft-deletes tunnels for ~30 days; omitting the filter causes name collisions with the tombstone.
+- Ingress config pushed via `PUT /accounts/{acct}/cfd_tunnel/{id}/configurations`. Last rule is always `http_status:404` — unmatched hostnames get 404 at the edge, never reach the agent.
+- Agent: `cloudflare/cloudflared:2024.8.3`, 2 replicas, `50m/64Mi` requests, `200m/128Mi` limits.
+
+**ngrok** (`pkg/provider/ngrok/`)
+- Credentials: `NGROK_API_KEY`, `NGROK_AUTHTOKEN`
+- One reserved domain per hostname — looked up by name, created on first deploy, deleted on teardown.
+- Agent: `ngrok/ngrok:3.20.0`, 2 replicas, authtoken from Secret, per-tunnel config in ConfigMap mounted at `/etc/ngrok.yml`.
+
+### Testing fakes
+
+- `internal/testutil/cloudflaretunnelfake.go` — `CloudflareTunnelFake` (httptest + OpLog). Enforces `is_deleted=false` on every lookup (returns 400 otherwise).
+- `internal/testutil/ngrokfake.go` — `NgrokFake` (httptest + OpLog).
 
 ## Testing — mock governance
 

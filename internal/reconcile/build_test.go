@@ -46,8 +46,8 @@ func (r *captureRunner) Login(_ context.Context, host, user, _ string) error {
 	r.record("login:" + host + ":" + user)
 	return r.err
 }
-func (r *captureRunner) Build(_ context.Context, image, _, _ string, _, _ io.Writer) error {
-	r.record("build:" + image)
+func (r *captureRunner) Build(_ context.Context, image, _, _, platform string, _, _ io.Writer) error {
+	r.record("build:" + image + ":" + platform)
 	return r.err
 }
 func (r *captureRunner) Push(_ context.Context, image string, _, _ io.Writer) error {
@@ -83,7 +83,7 @@ func TestBuild_SkipsWhenNoServiceHasBuild(t *testing.T) {
 			"api": {Image: "docker.io/library/redis"},
 		},
 	}
-	if err := Build(context.Background(), dc, cfg); err != nil {
+	if err := Build(context.Background(), dc, cfg, "linux/amd64"); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if ops := runner.ops(); len(ops) != 0 {
@@ -120,7 +120,7 @@ func TestBuild_OnlyBuildsServicesWithBuildField(t *testing.T) {
 			},
 		},
 	}
-	if err := Build(context.Background(), dc, cfg); err != nil {
+	if err := Build(context.Background(), dc, cfg, "linux/amd64"); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	ops := runner.ops()
@@ -128,7 +128,7 @@ func TestBuild_OnlyBuildsServicesWithBuildField(t *testing.T) {
 	// full-tag = ghcr.io/org/api:v1-20260417-143022 (user tag + hash suffix)
 	want := []string{
 		"login:ghcr.io:alice",
-		"build:ghcr.io/org/api:v1-20260417-143022",
+		"build:ghcr.io/org/api:v1-20260417-143022:linux/amd64",
 		"push:ghcr.io/org/api:v1-20260417-143022",
 	}
 	if len(ops) != len(want) {
@@ -168,7 +168,7 @@ func TestBuild_DeterministicIterationOrder(t *testing.T) {
 			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
 		},
 	}
-	if err := Build(context.Background(), dc, cfg); err != nil {
+	if err := Build(context.Background(), dc, cfg, "linux/amd64"); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	// api builds before web (sorted Service name order).
@@ -216,7 +216,7 @@ func TestBuild_MissingEnvVar_HardError(t *testing.T) {
 			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
 		},
 	}
-	err := Build(context.Background(), dc, cfg)
+	err := Build(context.Background(), dc, cfg, "linux/amd64")
 	if err == nil {
 		t.Fatal("expected error for missing $GITHUB_TOKEN")
 	}
@@ -252,7 +252,7 @@ func TestBuild_FailurePropagates(t *testing.T) {
 			"web": {Image: "ghcr.io/org/web:v1", Build: &config.BuildSpec{Context: webCtx}},
 		},
 	}
-	err := Build(context.Background(), dc, cfg)
+	err := Build(context.Background(), dc, cfg, "linux/amd64")
 	if err == nil {
 		t.Fatal("expected error from failing runner")
 	}
@@ -276,6 +276,46 @@ type preflightFailRunner struct {
 func (p *preflightFailRunner) PreflightBuildx(_ context.Context) error {
 	p.record("preflight")
 	return errors.New("docker buildx is required but not installed")
+}
+
+// TestBuild_EmptyPlatform_Errors verifies that Build() returns a hard error
+// when platform is "" and at least one service has a build: directive.
+// An empty platform means the caller failed to derive the server arch —
+// silently proceeding would build for the host arch and produce an image
+// that crashes at container start on a cross-arch target (e.g. amd64 image
+// on arm64 cax11).
+func TestBuild_EmptyPlatform_Errors(t *testing.T) {
+	runner := &captureRunner{}
+	cleanup := SetBuildRunnerForTest(runner)
+	defer cleanup()
+
+	tmp := t.TempDir()
+	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
+
+	dc := testDCWithCreds(convergeMock(),
+		"GITHUB_USER", "alice", "GITHUB_TOKEN", "ghp_xyz",
+	)
+	dc.Cluster.DeployHash = "20260417-143022"
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Registry: map[string]config.RegistryDef{
+			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
+		},
+		Services: map[string]config.ServiceDef{
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
+		},
+	}
+	err := Build(context.Background(), dc, cfg, "")
+	if err == nil {
+		t.Fatal("expected error for empty platform")
+	}
+	if !strings.Contains(err.Error(), "platform") {
+		t.Errorf("error should mention platform, got: %v", err)
+	}
+	// Nothing should have been called — error fires before preflight.
+	if ops := runner.ops(); len(ops) != 0 {
+		t.Errorf("runner must not be called when platform is empty, got %v", ops)
+	}
 }
 
 // INVARIANT: preflight failure aborts the whole Build pass before any
@@ -303,7 +343,7 @@ func TestBuild_PreflightFailure_ShortCircuitsEverything(t *testing.T) {
 			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
 		},
 	}
-	err := Build(context.Background(), dc, cfg)
+	err := Build(context.Background(), dc, cfg, "linux/amd64")
 	if err == nil {
 		t.Fatal("expected preflight failure to propagate")
 	}
@@ -315,4 +355,97 @@ func TestBuild_PreflightFailure_ShortCircuitsEverything(t *testing.T) {
 	if len(ops) != 1 || ops[0] != "preflight" {
 		t.Errorf("preflight failure must short-circuit login/build/push, got ops: %v", ops)
 	}
+}
+
+// ── masterServerType ────────────────────────────────────────────────────────
+
+// TestMasterServerType verifies the helper extracts the master server's type
+// string from cfg.Servers. reconcile.Deploy feeds this into
+// infra.ArchForType to derive the --platform flag.
+func TestMasterServerType(t *testing.T) {
+	cases := []struct {
+		name    string
+		servers map[string]config.ServerDef
+		want    string
+	}{
+		{
+			name: "single master",
+			servers: map[string]config.ServerDef{
+				"master": {Type: "cax11", Region: "nbg1", Role: "master"},
+			},
+			want: "cax11",
+		},
+		{
+			name: "master + worker",
+			servers: map[string]config.ServerDef{
+				"master":   {Type: "cx22", Region: "nbg1", Role: "master"},
+				"worker-1": {Type: "cx11", Region: "nbg1", Role: "worker"},
+			},
+			want: "cx22",
+		},
+		{
+			name:    "no servers",
+			servers: map[string]config.ServerDef{},
+			want:    "",
+		},
+		{
+			name: "workers only",
+			servers: map[string]config.ServerDef{
+				"worker-1": {Type: "cx11", Region: "nbg1", Role: "worker"},
+			},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.AppConfig{Servers: tc.servers}
+			got := masterServerType(cfg)
+			if got != tc.want {
+				t.Errorf("masterServerType = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuild_PlatformStampedOnBuildRecord verifies that the platform string
+// passed to Build() reaches the docker buildx invocation. This is the
+// cross-arch correctness invariant: an arm64 platform string for a cax11
+// target must not be silently replaced by the operator's host arch.
+func TestBuild_PlatformStampedOnBuildRecord(t *testing.T) {
+	runner := &captureRunner{}
+	cleanup := SetBuildRunnerForTest(runner)
+	defer cleanup()
+
+	tmp := t.TempDir()
+	apiCtx := stubBuildContext(t, filepath.Join(tmp, "api"))
+
+	dc := testDCWithCreds(convergeMock(),
+		"GITHUB_USER", "alice",
+		"GITHUB_TOKEN", "ghp_xyz",
+	)
+	dc.Cluster.DeployHash = "20260417-143022"
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Registry: map[string]config.RegistryDef{
+			"ghcr.io": {Username: "$GITHUB_USER", Password: "$GITHUB_TOKEN"},
+		},
+		Services: map[string]config.ServiceDef{
+			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
+		},
+	}
+
+	// arm64 simulates a cax11 target — verifies the platform is not
+	// silently replaced by the operator's host arch.
+	if err := Build(context.Background(), dc, cfg, "linux/arm64"); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, op := range runner.ops() {
+		if strings.HasPrefix(op, "build:") {
+			if !strings.HasSuffix(op, ":linux/arm64") {
+				t.Errorf("build record should end with :linux/arm64, got %q", op)
+			}
+			return
+		}
+	}
+	t.Fatal("no build op recorded")
 }

@@ -1,0 +1,42 @@
+name: tunnel-live
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"  # Weekly on Sunday at 03:00 UTC
+  workflow_dispatch:       # Manual trigger for debugging
+
+jobs:
+  cloudflare:
+    name: Cloudflare Tunnel live test
+    runs-on: ubuntu-latest
+    if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run Cloudflare Tunnel live tests
+        run: go test -v -tags=tunnel_live -timeout=20m ./pkg/provider/tunnel/cloudflare/...
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+
+  ngrok:
+    name: ngrok Tunnel live test
+    runs-on: ubuntu-latest
+    if: ${{ secrets.NGROK_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run ngrok Tunnel live tests
+        run: go test -v -tags=tunnel_live -timeout=20m ./pkg/provider/tunnel/ngrok/...
+        env:
+          NGROK_API_KEY: ${{ secrets.NGROK_API_KEY }}
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}

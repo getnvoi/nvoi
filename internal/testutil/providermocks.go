@@ -65,9 +65,8 @@ import (
 	"sync"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
-	cloudflaredns "github.com/getnvoi/nvoi/pkg/provider/dns/cloudflare"
-	hetznerimpl "github.com/getnvoi/nvoi/pkg/provider/infra/hetzner"
-	cloudflarestorage "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
+	"github.com/getnvoi/nvoi/pkg/provider/cloudflare"
+	"github.com/getnvoi/nvoi/pkg/provider/hetzner"
 )
 
 // Cleanup is the minimal interface NewHetznerFake / NewCloudflareFake need for
@@ -242,7 +241,7 @@ func NewHetznerFake(t Cleanup) *HetznerFake {
 func (f *HetznerFake) Register(name string) {
 	schema := provider.CredentialSchema{Name: name}
 	provider.RegisterInfra(name, schema, func(creds map[string]string) provider.InfraProvider {
-		c := hetznerimpl.New("test-token")
+		c := hetzner.New("test-token")
 		c.APIClient().BaseURL = f.URL
 		return c
 	})
@@ -1006,7 +1005,7 @@ func (f *CloudflareFake) RegisterDNS(name string) {
 		for k, v := range creds {
 			effective[k] = v
 		}
-		c := cloudflaredns.NewDNS(effective)
+		c := cloudflare.NewDNS(effective)
 		c.APIClient().BaseURL = f.URL
 		return c
 	})
@@ -1023,7 +1022,7 @@ func (f *CloudflareFake) RegisterBucket(name string) {
 		for k, v := range creds {
 			effective[k] = v
 		}
-		c := cloudflarestorage.New(effective)
+		c := cloudflare.NewBucket(effective)
 		c.APIClient().BaseURL = f.URL
 		c.SetS3EndpointOverride(f.URL)
 		return c

@@ -14,18 +14,12 @@ import (
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
 
-	// Infra
-	_ "github.com/getnvoi/nvoi/pkg/provider/infra/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/infra/hetzner"
-	_ "github.com/getnvoi/nvoi/pkg/provider/infra/scaleway"
-	// DNS
-	_ "github.com/getnvoi/nvoi/pkg/provider/dns/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/dns/cloudflare"
-	_ "github.com/getnvoi/nvoi/pkg/provider/dns/scaleway"
-	// Storage
-	_ "github.com/getnvoi/nvoi/pkg/provider/storage/aws"
-	_ "github.com/getnvoi/nvoi/pkg/provider/storage/cloudflare"
-	_ "github.com/getnvoi/nvoi/pkg/provider/storage/scaleway"
+	// Providers — each vendor package registers all its kinds via init().
+	_ "github.com/getnvoi/nvoi/pkg/provider/aws"
+	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare"
+	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
+	_ "github.com/getnvoi/nvoi/pkg/provider/ngrok"
+	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
 	// Secrets backends
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"

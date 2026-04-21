@@ -385,11 +385,15 @@ func TestBuildService_ImagePullSecrets(t *testing.T) {
 	})
 }
 
-// INVARIANT: nvoi/deploy-hash label lands on the workload metadata AND
-// the pod-template metadata — so `kubectl get deploy -L nvoi/deploy-hash`
-// and `kubectl get pods -L nvoi/deploy-hash` both surface the deploy
-// that placed the resource. The label must NOT appear in the selector
-// (matchLabels) — that would orphan old pods on every deploy.
+// INVARIANT: nvoi/deploy-hash label lands on the Deployment/StatefulSet
+// ObjectMeta — `kubectl get deploy -L nvoi/deploy-hash` surfaces which
+// deploy last converged the workload. It must NOT appear on the pod-template
+// labels: changing a pod-template label triggers a rolling restart, and for
+// pull-only services (postgres:17, redis:7, etc.) whose image is static, that
+// would restart a live database on every deploy, dropping DB connections for
+// every dependent service. Built services restart naturally because their
+// image tag changes every deploy (hash suffix). The label must NOT appear in
+// the selector (matchLabels) — that would orphan old pods on every deploy.
 func TestBuildService_DeployHashLabel(t *testing.T) {
 	workload, _, _, err := BuildService(ServiceSpec{
 		Name:       "web",
@@ -402,11 +406,13 @@ func TestBuildService_DeployHashLabel(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	dep := asDeployment(t, workload)
+	// Hash IS on workload metadata (observability).
 	if got := dep.ObjectMeta.Labels[utils.LabelNvoiDeployHash]; got != "20260417-143022" {
 		t.Errorf("workload label = %q, want 20260417-143022", got)
 	}
-	if got := dep.Spec.Template.ObjectMeta.Labels[utils.LabelNvoiDeployHash]; got != "20260417-143022" {
-		t.Errorf("pod template label = %q, want 20260417-143022", got)
+	// Hash is NOT on pod-template — that would restart pull-only services every deploy.
+	if got, ok := dep.Spec.Template.ObjectMeta.Labels[utils.LabelNvoiDeployHash]; ok {
+		t.Errorf("pod template must NOT carry deploy-hash (causes unnecessary restarts for pull-only services); got %q", got)
 	}
 	// REGRESSION GUARD: the selector must NOT carry the hash. Including
 	// it would mean every new deploy (new hash) selects a fresh empty

@@ -8,6 +8,24 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+// stubView is a minimal ProviderConfigView for FirewallAllowList tests.
+// ProviderConfigView is a data-view interface (not a provider interface), so
+// a local stub here is explicitly permitted by the mock governance rules.
+type stubView struct {
+	domains map[string][]string
+	tunnel  string
+	rules   []string
+}
+
+func (s *stubView) AppName() string                       { return "test" }
+func (s *stubView) EnvName() string                       { return "dev" }
+func (s *stubView) ServerDefs() []ServerSpec              { return nil }
+func (s *stubView) FirewallRules() []string               { return s.rules }
+func (s *stubView) VolumeDefs() []VolumeSpec              { return nil }
+func (s *stubView) ServiceDefs() []ServiceSpec            { return nil }
+func (s *stubView) DomainsByService() map[string][]string { return s.domains }
+func (s *stubView) TunnelProvider() string                { return s.tunnel }
+
 func TestParseRawRules(t *testing.T) {
 	got := ParseRawRules([]string{"80:0.0.0.0/0", "443:10.0.0.0/8,192.168.1.0/24"})
 	want := PortAllowList{
@@ -52,48 +70,95 @@ func TestParseRawRules_Empty(t *testing.T) {
 	}
 }
 
-func TestResolveFirewallArgs_PresetDefault(t *testing.T) {
-	got, err := ResolveFirewallArgs(context.Background(), []string{"default"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got["80"]) == 0 || len(got["443"]) == 0 {
-		t.Errorf("default preset should open 80 and 443, got %v", got)
-	}
-	if got["80"][0] != "0.0.0.0/0" {
-		t.Errorf("80 should be open, got %v", got["80"])
-	}
-	if !containsCIDR(got["80"], "::/0") || !containsCIDR(got["443"], "::/0") {
-		t.Errorf("default preset should be dual-stack, got %v", got)
-	}
-	// SSH should NOT be in the preset — managed by instance set
-	if _, ok := got["22"]; ok {
-		t.Errorf("SSH (22) should not be in preset, got %v", got["22"])
+// Presets were removed — any plain word (no ":") is a hard error.
+func TestResolveFirewallArgs_PresetLikeArg_Errors(t *testing.T) {
+	for _, arg := range []string{"default", "cloudflare", "something"} {
+		_, err := ResolveFirewallArgs(context.Background(), []string{arg})
+		if err == nil {
+			t.Errorf("expected error for preset-like arg %q, got nil", arg)
+		}
+		if !contains(err.Error(), "port:cidr") {
+			t.Errorf("error for %q should hint at port:cidr format, got: %v", arg, err)
+		}
 	}
 }
 
-func TestResolveFirewallArgs_PresetPlusOverride(t *testing.T) {
-	got, err := ResolveFirewallArgs(context.Background(), []string{"default", "443:10.0.0.0/8"})
+// ── FirewallAllowList ────────────────────────────────────────────────────────
+
+func TestFirewallAllowList_CaddyMode_Opens80And443(t *testing.T) {
+	cfg := &stubView{domains: map[string][]string{"api": {"api.example.com"}}, tunnel: ""}
+	rules, err := FirewallAllowList(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// 80 from preset
-	if got["80"][0] != "0.0.0.0/0" {
-		t.Errorf("80 should be from preset, got %v", got["80"])
+	if len(rules["80"]) == 0 {
+		t.Error("Caddy mode: port 80 should be open")
 	}
-	// 443 overridden
-	if got["443"][0] != "10.0.0.0/8" {
-		t.Errorf("443 should be overridden, got %v", got["443"])
+	if len(rules["443"]) == 0 {
+		t.Error("Caddy mode: port 443 should be open")
+	}
+	if !containsCIDR(rules["80"], "0.0.0.0/0") || !containsCIDR(rules["80"], "::/0") {
+		t.Errorf("port 80 should be dual-stack, got %v", rules["80"])
 	}
 }
 
-func TestResolveFirewallArgs_UnknownPreset(t *testing.T) {
-	_, err := ResolveFirewallArgs(context.Background(), []string{"nonexistent"})
+func TestFirewallAllowList_TunnelMode_NoHTTPPorts(t *testing.T) {
+	cfg := &stubView{
+		domains: map[string][]string{"api": {"api.example.com"}},
+		tunnel:  "cloudflare",
+	}
+	rules, err := FirewallAllowList(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := rules["80"]; ok {
+		t.Error("tunnel mode: port 80 must be closed")
+	}
+	if _, ok := rules["443"]; ok {
+		t.Error("tunnel mode: port 443 must be closed")
+	}
+}
+
+func TestFirewallAllowList_NoDomains_NoHTTPPorts(t *testing.T) {
+	cfg := &stubView{domains: nil, tunnel: ""}
+	rules, err := FirewallAllowList(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := rules["80"]; ok {
+		t.Error("no domains: port 80 must be closed")
+	}
+	if _, ok := rules["443"]; ok {
+		t.Error("no domains: port 443 must be closed")
+	}
+}
+
+func TestFirewallAllowList_UserOverride_MergedOnTop(t *testing.T) {
+	// User restricts SSH to a specific CIDR in Caddy mode.
+	cfg := &stubView{
+		domains: map[string][]string{"api": {"api.example.com"}},
+		tunnel:  "",
+		rules:   []string{"22:10.0.0.1/32"},
+	}
+	rules, err := FirewallAllowList(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 80/443 still auto-derived
+	if len(rules["80"]) == 0 || len(rules["443"]) == 0 {
+		t.Error("80/443 should still be auto-open in Caddy mode even with SSH override")
+	}
+	// SSH CIDR overridden
+	if len(rules["22"]) != 1 || rules["22"][0] != "10.0.0.1/32" {
+		t.Errorf("SSH override not applied, got %v", rules["22"])
+	}
+}
+
+func TestFirewallAllowList_InvalidRule_Errors(t *testing.T) {
+	cfg := &stubView{rules: []string{"default"}}
+	_, err := FirewallAllowList(context.Background(), cfg)
 	if err == nil {
-		t.Fatal("expected error for unknown preset")
-	}
-	if !contains(err.Error(), "unknown firewall preset") {
-		t.Errorf("error should mention unknown preset, got: %v", err)
+		t.Fatal("expected error for invalid (preset-like) rule")
 	}
 }
 

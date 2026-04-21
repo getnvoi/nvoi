@@ -138,6 +138,15 @@ type InfraProvider interface {
 	// Called by the CLI at the end of every command that opened a
 	// provider — without it, SSH-tunneled providers leak file descriptors.
 	Close() error
+
+	// ArchForType returns the CPU architecture ("amd64" or "arm64") for the
+	// given server/instance type name. Pure — no API calls, no credentials
+	// needed. Used by the build pass to set --platform on docker buildx so
+	// the image arch always matches the target server.
+	//   hetzner: "cax*" → arm64 (Ampere Altra), everything else → amd64.
+	//   aws:     "a1.*", "t4g.*", "m6g.*", "c7g.*", etc. → arm64.
+	//   scaleway: "AMP2*", "COPARM1*" → arm64, everything else → amd64.
+	ArchForType(serverType string) string
 }
 
 // IngressBinding tells the DNS provider how to route a domain. The DNS
@@ -146,6 +155,12 @@ type InfraProvider interface {
 type IngressBinding struct {
 	DNSType   string // "A" | "AAAA" | "CNAME"
 	DNSTarget string
+	// Proxied, when true, requests that the DNS provider enable its own
+	// proxy layer for the record. On Cloudflare this is the orange-cloud
+	// flag, which is REQUIRED for CNAME records pointing at cfargotunnel.com
+	// — without it the subdomain has no public IPs and traffic never reaches
+	// the Cloudflare edge, causing ERR_CONNECTION_REFUSED.
+	Proxied bool
 }
 
 // ServiceTarget is the slice of service info the InfraProvider needs to
@@ -226,6 +241,11 @@ type ProviderConfigView interface {
 	VolumeDefs() []VolumeSpec
 	ServiceDefs() []ServiceSpec
 	DomainsByService() map[string][]string
+	// TunnelProvider returns the configured tunnel provider name
+	// ("cloudflare", "ngrok") or empty string when no tunnel is configured.
+	// Bootstrap uses this to decide whether 80/443 should be auto-opened on
+	// the master firewall (Caddy mode) or kept closed (tunnel mode).
+	TunnelProvider() string
 }
 
 // ServerSpec is the provider-facing view of a server entry.

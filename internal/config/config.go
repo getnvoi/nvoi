@@ -17,6 +17,7 @@ type DeployContext struct {
 	Cluster app.Cluster
 	DNS     app.ProviderRef
 	Storage app.ProviderRef
+	Tunnel  app.ProviderRef
 	Creds   provider.CredentialSource // single source for all credential resolution at runtime
 }
 
@@ -151,6 +152,7 @@ type ProvidersDef struct {
 	DNS     string      `yaml:"dns,omitempty"`
 	Storage string      `yaml:"storage,omitempty"`
 	Secrets *SecretsDef `yaml:"secrets,omitempty"`
+	Tunnel  string      `yaml:"tunnel,omitempty"`
 }
 
 // SecretsDef selects a secrets backend. Unset → nvoi falls back to

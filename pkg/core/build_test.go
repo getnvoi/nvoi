@@ -42,7 +42,7 @@ func (f *fakeBuildRunner) Login(_ context.Context, host, username, password stri
 	return f.loginErr
 }
 
-func (f *fakeBuildRunner) Build(_ context.Context, image, buildCtx, dockerfile string, _, _ io.Writer) error {
+func (f *fakeBuildRunner) Build(_ context.Context, image, buildCtx, dockerfile, _ string, _, _ io.Writer) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeBuildCall{Op: "build", Image: image, Context: buildCtx, Dockerfile: dockerfile})

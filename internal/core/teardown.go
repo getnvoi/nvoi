@@ -23,6 +23,8 @@ import (
 //  2. Storage buckets (only with --delete-storage; preserved by default).
 //  3. infra.Teardown — the provider does servers / firewalls / volumes
 //     (gated by --delete-volumes) / network in the right order.
+//  4. Tunnel delete — after infra so tunnel agents are gone before the
+//     provider-side tunnel is removed.
 //
 // Best-effort: each step's errors are collected and surfaced together.
 func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
@@ -79,6 +81,32 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 	} else {
 		defer func() { _ = prov.Close() }()
 		collect(prov.Teardown(ctx, bctx, deleteVolumes))
+	}
+
+	// Tunnel — delete the provider-side tunnel after infra teardown so
+	// cluster-side tunnel agents are already gone. Cloudflare rejects
+	// tunnel deletion while active connections still exist. ngrok models
+	// ingress as per-hostname reserved domains, so teardown deletes each
+	// configured hostname explicitly; this also cleans up legacy domains
+	// that predate the metadata tagging added in the provider.
+	if cfg.Providers.Tunnel != "" && dc.Tunnel.Name != "" {
+		tun, terr := provider.ResolveTunnel(dc.Tunnel.Name, dc.Tunnel.Creds)
+		if terr != nil {
+			collect(fmt.Errorf("resolve tunnel provider: %w", terr))
+		} else if cfg.Providers.Tunnel == "ngrok" {
+			for _, svcName := range utils.SortedKeys(cfg.Domains) {
+				for _, domain := range cfg.Domains[svcName] {
+					dc.Cluster.Log().Command("tunnel", "delete-domain", domain)
+					collect(tun.Delete(ctx, domain))
+				}
+			}
+		} else {
+			tunnelNames, err := utils.NewNames(cfg.App, cfg.Env)
+			if err == nil {
+				dc.Cluster.Log().Command("tunnel", "delete", tunnelNames.Base())
+				collect(tun.Delete(ctx, tunnelNames.Base()))
+			}
+		}
 	}
 
 	if len(errs) > 0 {

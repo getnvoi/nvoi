@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	smtypes "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/getnvoi/nvoi/pkg/provider"
-	"github.com/getnvoi/nvoi/pkg/provider/awsbase"
+	nvoiaws "github.com/getnvoi/nvoi/pkg/provider/aws"
 )
 
 // Client manages secrets via AWS Secrets Manager.
@@ -19,7 +19,7 @@ type Client struct {
 }
 
 func New(creds map[string]string) *Client {
-	cfg, err := awsbase.LoadConfig(creds)
+	cfg, err := nvoiaws.LoadConfig(creds)
 	if err != nil {
 		// Factory is called after schema validation — if we can't load config
 		// the credentials are malformed. ValidateCredentials will surface this.

@@ -38,6 +38,19 @@ func RenderDescribe(res *pkgcore.DescribeResult) {
 		}
 	}
 
+	if res.Tunnel != nil {
+		t = g.Add(fmt.Sprintf("TUNNEL (%s)", res.Tunnel.Provider), "DOMAIN", "SERVICE", "PORT")
+		for _, r := range res.Tunnel.Routes {
+			t.Row(r.Domain, r.Service, fmt.Sprintf("%d", r.Port))
+		}
+		if len(res.Tunnel.Agents) > 0 {
+			t = g.Add("TUNNEL AGENTS", "NAME", "STATUS", "RESTARTS", "AGE")
+			for _, a := range res.Tunnel.Agents {
+				t.Row(a.Name, a.Status, fmt.Sprintf("%d", a.Restarts), a.Age)
+			}
+		}
+	}
+
 	if len(res.Secrets) > 0 {
 		t = g.Add("SECRETS", "KEY", "SERVICE")
 		for _, s := range res.Secrets {

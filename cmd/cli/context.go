@@ -24,6 +24,7 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 	sshKey, _ := resolveSSHKey(source)
 	dnsCreds, _ := resolveProviderCreds(source, "dns", cfg.Providers.DNS)
 	storageCreds, _ := resolveProviderCreds(source, "storage", cfg.Providers.Storage)
+	tunnelCreds, _ := resolveProviderCreds(source, "tunnel", cfg.Providers.Tunnel)
 
 	return &config.DeployContext{
 		Cluster: app.Cluster{
@@ -36,6 +37,7 @@ func buildDeployContext(ctx context.Context, out app.Output, cfg *config.AppConf
 		},
 		DNS:     app.ProviderRef{Name: cfg.Providers.DNS, Creds: dnsCreds},
 		Storage: app.ProviderRef{Name: cfg.Providers.Storage, Creds: storageCreds},
+		Tunnel:  app.ProviderRef{Name: cfg.Providers.Tunnel, Creds: tunnelCreds},
 		Creds:   source,
 	}, nil
 }

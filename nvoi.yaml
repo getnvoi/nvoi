@@ -4,6 +4,7 @@ env: production
 providers:
   infra: hetzner
   dns: cloudflare
+  tunnel: cloudflare
   secrets: infisical
 
 servers:
@@ -11,8 +12,6 @@ servers:
     type: cax11
     region: nbg1
     role: master
-
-firewall: default
 
 volumes:
   pgdata:

@@ -79,19 +79,31 @@ type ServiceSpec struct {
 // the workload kind: "deployment" or "statefulset".
 func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[string]string) (workload runtime.Object, svc *corev1.Service, kind string, err error) {
 	ns := names.KubeNamespace()
-	labels := map[string]string{
+	// workloadLabels carries the deploy hash and is stamped on the
+	// Deployment/StatefulSet ObjectMeta — `kubectl get deploy -L nvoi/deploy-hash`
+	// always shows which deploy last converged this workload.
+	//
+	// podLabels is intentionally kept separate and NEVER carries the
+	// deploy hash. Changing any pod-template label triggers a rolling
+	// restart. For services with `build:` the image tag already changes
+	// every deploy (the hash is part of the tag), which drives the
+	// restart naturally. For pull-only services (e.g. postgres:17) the
+	// image is static — stamping a new hash every deploy would cause an
+	// unnecessary rolling restart and a live-DB connectivity window for
+	// every dependent service. Pod restarts happen only when the spec
+	// actually changes (image bump, env change, command, etc.).
+	podLabels := map[string]string{
 		utils.LabelAppName:      spec.Name,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
 		utils.LabelNvoiService:  spec.Name,
 	}
-	// DeployHash is informational only — never appears in selectors
-	// (the Deployment/StatefulSet Selector below uses LabelAppName
-	// alone, so adding extra label keys here is safe). On workload +
-	// pod-template metadata it gives `kubectl -L nvoi/deploy-hash` a
-	// direct "which deploy placed this" readout, and changing it
-	// between deploys is exactly what drives the rolling restart.
+	workloadLabels := map[string]string{
+		utils.LabelAppName:      spec.Name,
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiService:  spec.Name,
+	}
 	if spec.DeployHash != "" {
-		labels[utils.LabelNvoiDeployHash] = spec.DeployHash
+		workloadLabels[utils.LabelNvoiDeployHash] = spec.DeployHash
 	}
 
 	// Container
@@ -171,12 +183,12 @@ func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 		one := int32(1)
 		ss := &appsv1.StatefulSet{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "StatefulSet"},
-			ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: workloadLabels},
 			Spec: appsv1.StatefulSetSpec{
 				ServiceName: spec.Name,
 				Replicas:    &one,
 				Selector:    &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: spec.Name}},
-				Template:    corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
+				Template:    corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: podLabels}, Spec: podSpec},
 			},
 		}
 		workload = ss
@@ -188,7 +200,7 @@ func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 		}
 		dep := &appsv1.Deployment{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
-			ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: workloadLabels},
 			Spec: appsv1.DeploymentSpec{
 				Replicas: &replicas,
 				Strategy: appsv1.DeploymentStrategy{
@@ -199,7 +211,7 @@ func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 					},
 				},
 				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{utils.LabelAppName: spec.Name}},
-				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec},
+				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: podLabels}, Spec: podSpec},
 			},
 		}
 		workload = dep
@@ -208,7 +220,7 @@ func BuildService(spec ServiceSpec, names *utils.Names, managedVolPaths map[stri
 
 	svc = &corev1.Service{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
-		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: workloadLabels},
 		Spec:       svcSpec(spec.Name, spec.Port),
 	}
 	return workload, svc, kind, nil
