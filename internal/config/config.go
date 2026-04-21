@@ -173,6 +173,17 @@ type ProvidersDef struct {
 	Storage string      `yaml:"storage,omitempty"`
 	Secrets *SecretsDef `yaml:"secrets,omitempty"`
 	Tunnel  string      `yaml:"tunnel,omitempty"`
+
+	// Ci selects the CI/CD dispatcher — the substrate that invokes
+	// `nvoi deploy` on every push. Read by exactly one command,
+	// `nvoi ci init`, which moves every credential into the CI
+	// provider's secret store and commits a workflow. `reconcile.Deploy`
+	// never reads this field. Values:
+	//   - "github" — GitHub Actions (today)
+	//   - future: gitlab, bitbucket
+	//
+	// Scalar only — same shape as Infra/DNS/Build/Storage/Tunnel.
+	Ci string `yaml:"ci,omitempty"`
 }
 
 // SecretsDef selects a secrets backend. Unset → nvoi falls back to

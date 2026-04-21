@@ -148,6 +148,8 @@ func GetSchema(kind, name string) (CredentialSchema, error) {
 		return GetTunnelSchema(name)
 	case "build":
 		return GetBuildSchema(name)
+	case "ci":
+		return GetCISchema(name)
 	default:
 		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
 	}

@@ -78,6 +78,17 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		return fmt.Errorf("providers.build %q does not use builder servers — remove role: builder entries or pick a build provider that does (ssh)", buildName)
 	}
 
+	// providers.ci — optional. When set, must be a registered CI provider
+	// name (today: "github"). Typo detection via GetCISchema — the registry
+	// is the single source of truth for valid names, so new CI providers
+	// require zero changes here. No coupling to providers.build: every
+	// (build, ci) pair composes freely.
+	if ciName := cfg.Providers.Ci; ciName != "" {
+		if _, err := provider.GetCISchema(ciName); err != nil {
+			return fmt.Errorf("providers.ci: %w", err)
+		}
+	}
+
 	// providers.tunnel — optional, but when set requires dns + at least one domain.
 	if t := cfg.Providers.Tunnel; t != "" {
 		switch t {
