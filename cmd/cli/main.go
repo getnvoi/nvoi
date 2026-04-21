@@ -17,6 +17,7 @@ import (
 	// Providers — each vendor package registers all its kinds via init().
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare"
+	_ "github.com/getnvoi/nvoi/pkg/provider/github"
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
 	_ "github.com/getnvoi/nvoi/pkg/provider/ngrok"
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
@@ -73,6 +74,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(newExecCmd(&rt))
 	root.AddCommand(newSSHCmd(&rt))
 	root.AddCommand(newCronCmd(&rt))
+	root.AddCommand(newCICmd(&rt))
 
 	root.SetErr(newErrorWriter(root))
 	root.SetErrPrefix("")
