@@ -17,7 +17,7 @@ Deploy(ctx, dc, cfg)
   → cfg.Resolve()                           — populate VolumeDef.MountPath, firewall names
   → sync Cluster.Provider from cfg.Providers.Infra (legacy callers)
   → dc.Cluster.DeployHash = now.UTC().Format("20060102-150405")
-  → Build(ctx, dc, cfg)                     — LOCAL docker login/build/push for services.X.build; PRE-infra
+  → BuildImages(ctx, dc, cfg, platform)     — LOCAL docker login/build/push for services.X.build; PRE-infra
   → infra = provider.ResolveInfra(...)      — single provider instance for the whole deploy; defer Close()
   → kc = infra.Bootstrap(ctx, bctx)         — provisions servers + firewall + volumes; returns *kube.Client
   → ns = infra.NodeShell(ctx, bctx)          — optional SSH for `nvoi ssh`; nil for sandbox/managed
@@ -56,9 +56,11 @@ Some steps split the two halves across the flow (Servers, Firewall) because dele
 
 ## Step notes
 
-### Build (pre-infra)
+### BuildImages (pre-infra)
 
-`build.go`. Runs before any infra. A build failure aborts the deploy before a server is provisioned. Runs locally — shells out to `docker buildx` on the operator's PATH via `pkg/core/build.go::BuildService` (through the `BuildRunner` interface — `DockerRunner` in prod, fakes in tests).
+`images.go`. Runs before any infra. A build failure aborts the deploy before a server is provisioned. Runs locally — shells out to `docker buildx` on the operator's PATH via `pkg/core/build.go::BuildService` (through the `BuildRunner` interface — `DockerRunner` in prod, fakes in tests).
+
+Named `BuildImages` (not `Build`) to free the word "build" for the outer `BuildProvider` family in `pkg/provider/build.go` — the outer "build" is the substrate a deploy runs on (local / ssh / daytona); this inner step is specifically the docker-buildx-and-push loop invoked by `reconcile.Deploy`. The two are orthogonal: `BuildImages` always runs on whichever machine is executing `reconcile.Deploy`, which for `providers.build: local` is the operator's laptop and for `providers.build: ssh` (PR-B) is the remote builder server.
 
 Single-service builds serialize; multi-service builds run via `BuildParallel`. One `PreflightBuildx` at the top of the pass so missing buildx surfaces once with an install hint instead of opaque per-service flag errors. Passwords flow via `--password-stdin`, never argv. Auth writes to the operator's real `~/.docker/config.json` (Kamal-style; DOCKER_CONFIG isolation breaks plugin discovery and context lookup — don't).
 

@@ -657,3 +657,46 @@ func TestValidateConfig_TunnelRequiresDomains(t *testing.T) {
 	cfg.Providers.DNS = "cloudflare"
 	assertValidationError(t, cfg, "at least one domain is required")
 }
+
+// ── providers.build validation ───────────────────────────────────────────
+
+// TestValidateConfig_BuildUnset_OK locks the default: omitting providers.build
+// is valid. The in-process path (reconcile.Deploy) runs as it always has.
+func TestValidateConfig_BuildUnset_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("empty providers.build must be valid, got: %v", err)
+	}
+}
+
+// TestValidateConfig_BuildLocal_OK locks the explicit default: providers.build:
+// local is accepted and requires no builders (RequiresBuilders=false).
+func TestValidateConfig_BuildLocal_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "local"
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("providers.build: local must be valid, got: %v", err)
+	}
+}
+
+// TestValidateConfig_BuildUnknownKind_Errors verifies we surface unregistered
+// build providers at validate time — before any credential or infra work.
+// Typos like `providers.build: loocal` must fail loudly.
+func TestValidateConfig_BuildUnknownKind_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "loocal"
+	assertValidationError(t, cfg, "unsupported build provider")
+}
+
+// TestValidateConfig_BuildLocal_WithBuilderServer_Errors locks R1 in the
+// negative direction: `local` does NOT use builders, so declaring a
+// role: builder server alongside `local` is a misconfiguration — the
+// builder would sit idle. The provider-block validation fires before the
+// server-role enum check, so the operator gets the actionable error
+// (name the alternative build providers) instead of a generic "unknown role".
+func TestValidateConfig_BuildLocal_WithBuilderServer_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "local"
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	assertValidationError(t, cfg, "does not use builder servers")
+}

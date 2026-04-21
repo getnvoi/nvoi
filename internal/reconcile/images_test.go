@@ -68,9 +68,9 @@ func stubBuildContext(t *testing.T, dir string) string {
 	return dir
 }
 
-// TestBuild_SkipsWhenNoServiceHasBuild verifies the fast-exit path. Users
+// TestBuildImages_SkipsWhenNoServiceHasBuild verifies the fast-exit path. Users
 // with zero `build:` entries must not need `docker` on PATH.
-func TestBuild_SkipsWhenNoServiceHasBuild(t *testing.T) {
+func TestBuildImages_SkipsWhenNoServiceHasBuild(t *testing.T) {
 	runner := &captureRunner{}
 	cleanup := SetBuildRunnerForTest(runner)
 	defer cleanup()
@@ -83,18 +83,18 @@ func TestBuild_SkipsWhenNoServiceHasBuild(t *testing.T) {
 			"api": {Image: "docker.io/library/redis"},
 		},
 	}
-	if err := Build(context.Background(), dc, cfg, "linux/amd64"); err != nil {
-		t.Fatalf("Build: %v", err)
+	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64"); err != nil {
+		t.Fatalf("BuildImages: %v", err)
 	}
 	if ops := runner.ops(); len(ops) != 0 {
 		t.Errorf("runner must not be called when no service has build:, got %v", ops)
 	}
 }
 
-// TestBuild_OnlyBuildsServicesWithBuildField verifies we don't accidentally
+// TestBuildImages_OnlyBuildsServicesWithBuildField verifies we don't accidentally
 // rebuild every service — only the ones flagged. Also locks that the
 // resolved tag is user-tag + "-" + deploy-hash.
-func TestBuild_OnlyBuildsServicesWithBuildField(t *testing.T) {
+func TestBuildImages_OnlyBuildsServicesWithBuildField(t *testing.T) {
 	runner := &captureRunner{}
 	cleanup := SetBuildRunnerForTest(runner)
 	defer cleanup()
@@ -120,8 +120,8 @@ func TestBuild_OnlyBuildsServicesWithBuildField(t *testing.T) {
 			},
 		},
 	}
-	if err := Build(context.Background(), dc, cfg, "linux/amd64"); err != nil {
-		t.Fatalf("Build: %v", err)
+	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64"); err != nil {
+		t.Fatalf("BuildImages: %v", err)
 	}
 	ops := runner.ops()
 	// login:ghcr.io → build:<full-tag> → push:<full-tag>
@@ -141,10 +141,10 @@ func TestBuild_OnlyBuildsServicesWithBuildField(t *testing.T) {
 	}
 }
 
-// TestBuild_DeterministicIterationOrder verifies services build in
+// TestBuildImages_DeterministicIterationOrder verifies services build in
 // sorted order. Without this, re-runs produce non-identical deploy logs
 // and parallel-build implementations would need to re-establish order.
-func TestBuild_DeterministicIterationOrder(t *testing.T) {
+func TestBuildImages_DeterministicIterationOrder(t *testing.T) {
 	runner := &captureRunner{}
 	cleanup := SetBuildRunnerForTest(runner)
 	defer cleanup()
@@ -168,8 +168,8 @@ func TestBuild_DeterministicIterationOrder(t *testing.T) {
 			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
 		},
 	}
-	if err := Build(context.Background(), dc, cfg, "linux/amd64"); err != nil {
-		t.Fatalf("Build: %v", err)
+	if err := BuildImages(context.Background(), dc, cfg, "linux/amd64"); err != nil {
+		t.Fatalf("BuildImages: %v", err)
 	}
 	// api builds before web (sorted Service name order).
 	ops := runner.ops()
@@ -193,10 +193,10 @@ func TestBuild_DeterministicIterationOrder(t *testing.T) {
 	sort.Strings(buildOps) // no-op if already sorted; proves we're stable
 }
 
-// TestBuild_MissingEnvVar_HardError verifies that an unresolvable $VAR
+// TestBuildImages_MissingEnvVar_HardError verifies that an unresolvable $VAR
 // in the registry block surfaces BEFORE any docker call — no "docker:
 // command not found" fallout when the real issue is a missing env.
-func TestBuild_MissingEnvVar_HardError(t *testing.T) {
+func TestBuildImages_MissingEnvVar_HardError(t *testing.T) {
 	runner := &captureRunner{}
 	cleanup := SetBuildRunnerForTest(runner)
 	defer cleanup()
@@ -216,7 +216,7 @@ func TestBuild_MissingEnvVar_HardError(t *testing.T) {
 			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
 		},
 	}
-	err := Build(context.Background(), dc, cfg, "linux/amd64")
+	err := BuildImages(context.Background(), dc, cfg, "linux/amd64")
 	if err == nil {
 		t.Fatal("expected error for missing $GITHUB_TOKEN")
 	}
@@ -228,10 +228,10 @@ func TestBuild_MissingEnvVar_HardError(t *testing.T) {
 	}
 }
 
-// TestBuild_FailurePropagates verifies that a failing docker command
+// TestBuildImages_FailurePropagates verifies that a failing docker command
 // aborts the whole Build pass — subsequent services don't get built
 // with a broken registry.
-func TestBuild_FailurePropagates(t *testing.T) {
+func TestBuildImages_FailurePropagates(t *testing.T) {
 	runner := &captureRunner{err: errors.New("daemon socket unreachable")}
 	cleanup := SetBuildRunnerForTest(runner)
 	defer cleanup()
@@ -252,7 +252,7 @@ func TestBuild_FailurePropagates(t *testing.T) {
 			"web": {Image: "ghcr.io/org/web:v1", Build: &config.BuildSpec{Context: webCtx}},
 		},
 	}
-	err := Build(context.Background(), dc, cfg, "linux/amd64")
+	err := BuildImages(context.Background(), dc, cfg, "linux/amd64")
 	if err == nil {
 		t.Fatal("expected error from failing runner")
 	}
@@ -278,13 +278,13 @@ func (p *preflightFailRunner) PreflightBuildx(_ context.Context) error {
 	return errors.New("docker buildx is required but not installed")
 }
 
-// TestBuild_EmptyPlatform_Errors verifies that Build() returns a hard error
+// TestBuildImages_EmptyPlatform_Errors verifies that Build() returns a hard error
 // when platform is "" and at least one service has a build: directive.
 // An empty platform means the caller failed to derive the server arch —
 // silently proceeding would build for the host arch and produce an image
 // that crashes at container start on a cross-arch target (e.g. amd64 image
 // on arm64 cax11).
-func TestBuild_EmptyPlatform_Errors(t *testing.T) {
+func TestBuildImages_EmptyPlatform_Errors(t *testing.T) {
 	runner := &captureRunner{}
 	cleanup := SetBuildRunnerForTest(runner)
 	defer cleanup()
@@ -305,7 +305,7 @@ func TestBuild_EmptyPlatform_Errors(t *testing.T) {
 			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
 		},
 	}
-	err := Build(context.Background(), dc, cfg, "")
+	err := BuildImages(context.Background(), dc, cfg, "")
 	if err == nil {
 		t.Fatal("expected error for empty platform")
 	}
@@ -322,7 +322,7 @@ func TestBuild_EmptyPlatform_Errors(t *testing.T) {
 // registry creds are resolved, any docker login fires, or any service
 // is built. Per-service docker errors for a missing buildx would
 // otherwise spam once per service with no install hint.
-func TestBuild_PreflightFailure_ShortCircuitsEverything(t *testing.T) {
+func TestBuildImages_PreflightFailure_ShortCircuitsEverything(t *testing.T) {
 	runner := &preflightFailRunner{}
 	cleanup := SetBuildRunnerForTest(runner)
 	defer cleanup()
@@ -343,7 +343,7 @@ func TestBuild_PreflightFailure_ShortCircuitsEverything(t *testing.T) {
 			"api": {Image: "ghcr.io/org/api:v1", Build: &config.BuildSpec{Context: apiCtx}},
 		},
 	}
-	err := Build(context.Background(), dc, cfg, "linux/amd64")
+	err := BuildImages(context.Background(), dc, cfg, "linux/amd64")
 	if err == nil {
 		t.Fatal("expected preflight failure to propagate")
 	}
@@ -407,11 +407,11 @@ func TestMasterServerType(t *testing.T) {
 	}
 }
 
-// TestBuild_PlatformStampedOnBuildRecord verifies that the platform string
+// TestBuildImages_PlatformStampedOnBuildRecord verifies that the platform string
 // passed to Build() reaches the docker buildx invocation. This is the
 // cross-arch correctness invariant: an arm64 platform string for a cax11
 // target must not be silently replaced by the operator's host arch.
-func TestBuild_PlatformStampedOnBuildRecord(t *testing.T) {
+func TestBuildImages_PlatformStampedOnBuildRecord(t *testing.T) {
 	runner := &captureRunner{}
 	cleanup := SetBuildRunnerForTest(runner)
 	defer cleanup()
@@ -436,8 +436,8 @@ func TestBuild_PlatformStampedOnBuildRecord(t *testing.T) {
 
 	// arm64 simulates a cax11 target — verifies the platform is not
 	// silently replaced by the operator's host arch.
-	if err := Build(context.Background(), dc, cfg, "linux/arm64"); err != nil {
-		t.Fatalf("Build: %v", err)
+	if err := BuildImages(context.Background(), dc, cfg, "linux/arm64"); err != nil {
+		t.Fatalf("BuildImages: %v", err)
 	}
 	for _, op := range runner.ops() {
 		if strings.HasPrefix(op, "build:") {

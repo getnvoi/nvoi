@@ -63,9 +63,11 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	// operator builds on amd64 but deploys to an arm64 node (e.g. cax11).
 	buildPlatform := "linux/" + infra.ArchForType(masterServerType(cfg))
 
-	// Build services with `build:` declared BEFORE touching infra. A
-	// build failure should never leave us with half-provisioned servers.
-	if err := Build(ctx, dc, cfg, buildPlatform); err != nil {
+	// Build images for services with `build:` declared BEFORE touching
+	// infra. A build failure should never leave us with half-provisioned
+	// servers. The outer `providers.build` family (local/ssh/daytona) is
+	// orthogonal — BuildImages is the inner docker-buildx-and-push step.
+	if err := BuildImages(ctx, dc, cfg, buildPlatform); err != nil {
 		return err
 	}
 

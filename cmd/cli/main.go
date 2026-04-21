@@ -20,6 +20,8 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
 	_ "github.com/getnvoi/nvoi/pkg/provider/ngrok"
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
+	// Build backends — `providers.build` family (local default, ssh/daytona land in PR-B/C).
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
 	// Secrets backends
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"

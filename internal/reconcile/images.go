@@ -21,19 +21,14 @@ func SetBuildRunnerForTest(r app.BuildRunner) func() {
 	return func() { defaultBuildRunner = orig }
 }
 
-// Build walks cfg.Services in sorted order and, for each service with a
-// non-empty `build:` block, runs docker login → build → push using the
+// BuildImages walks cfg.Services in sorted order and, for each service with
+// a non-empty `build:` block, runs docker login → build → push using the
 // resolved registry credentials from cfg.Registry.
 //
-// Runs pre-infra (before ServersAdd) — a build failure must not leave
-// half-provisioned servers behind. No k8s or SSH contact; the only
-// external dependency is `docker` on the operator's PATH.
-//
-// Services without build: set are skipped — they pull the image from
-// wherever their `image:` tag points.
-// Build walks cfg.Services in sorted order and, for each service with a
-// non-empty `build:` block, runs docker login → build → push using the
-// resolved registry credentials from cfg.Registry.
+// Named BuildImages (not Build) to free the word "build" for the outer
+// BuildProvider family in pkg/provider/build.go — the outer "build" is
+// the substrate a deploy runs on (local/ssh/daytona); this inner step is
+// specifically the docker-buildx-and-push loop invoked by reconcile.Deploy.
 //
 // platform ("linux/amd64" or "linux/arm64") is stamped on every
 // docker buildx build invocation so the image arch matches the target
@@ -45,7 +40,7 @@ func SetBuildRunnerForTest(r app.BuildRunner) func() {
 //
 // Services without build: set are skipped — they pull the image from
 // wherever their `image:` tag points.
-func Build(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, platform string) error {
+func BuildImages(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, platform string) error {
 	// Fast exit: no service has a build: directive. Skip the whole pass,
 	// don't even require docker on PATH.
 	anyBuild := false

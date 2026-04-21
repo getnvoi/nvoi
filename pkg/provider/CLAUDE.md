@@ -2,7 +2,7 @@
 
 Provider interfaces and credential resolution. Everything pluggable is a provider.
 
-Four provider kinds live in core: `infra`, `dns`, `storage`, `secrets`. (Pre-#47 the first kind was named `compute` and exposed a 16-method `ComputeProvider` interface mixing IaaS-specific ops with what nvoi actually needed. C10 deleted it; `InfraProvider` is the narrow replacement — `Bootstrap → *kube.Client` is the single load-bearing promise.) Build pipelines and database engines stay product-layer and do not land in core — `build:` on a service is a local shell-out to `docker buildx`, not a provider plugin.
+Six provider kinds live in core: `infra`, `dns`, `storage`, `secrets`, `tunnel`, `build`. (Pre-#47 the first kind was named `compute` and exposed a 16-method `ComputeProvider` interface mixing IaaS-specific ops with what nvoi actually needed. C10 deleted it; `InfraProvider` is the narrow replacement — `Bootstrap → *kube.Client` is the single load-bearing promise.) The `build` kind (added in #56-A) is the outer substrate a deploy runs on — `local` (default, in-process), `ssh` (PR-B, dispatches to a `role: builder` server), `daytona` (PR-C, dispatches into a managed sandbox). Distinct from the inner docker-buildx-and-push step in `internal/reconcile/images.go::BuildImages`, which runs pre-infra on whichever machine is executing `reconcile.Deploy`. Database engines stay product-layer and do not land in core.
 
 ## Registration pattern
 

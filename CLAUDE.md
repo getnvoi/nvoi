@@ -242,6 +242,7 @@ SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guida
 | Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
 | Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
 | Tunnel | `providers.tunnel` | `TunnelProvider` | cloudflare, ngrok |
+| Build | `providers.build` | `BuildProvider` | local (default); ssh #56-B, daytona #56-C |
 
 **InfraProvider contract** (`pkg/provider/infra.go`): every backend yields a `*kube.Client` via `Bootstrap` (write — converges drift) or `Connect` (read-only — attach to existing infra). Reconcile branches on none of: provider name, IngressBinding type, NodeShell-or-not, ConsumesBlocks. Adding a new backend = implementing the interface; zero reconcile changes.
 

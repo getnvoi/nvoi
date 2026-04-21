@@ -12,6 +12,10 @@ import (
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	// Register the "local" BuildProvider so ValidateConfig tests that set
+	// cfg.Providers.Build resolve its capability bits. The cmd/cli binary
+	// blank-imports this in main.go; the reconcile test binary does it here.
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 

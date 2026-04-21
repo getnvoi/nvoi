@@ -148,8 +148,15 @@ type ProvidersDef struct {
 	// Infra is the infra provider key (refactor #47). The legacy
 	// `providers.compute` field was removed in C8 — configs using it
 	// hit an unknown-field unmarshal error with a pointer to this rename.
-	Infra   string      `yaml:"infra"`
-	DNS     string      `yaml:"dns,omitempty"`
+	Infra string `yaml:"infra"`
+	DNS   string `yaml:"dns,omitempty"`
+	// Build selects the BuildProvider — the substrate `nvoi deploy`
+	// physically runs on. Unset defaults to "local" (in-process reconcile
+	// on the operator's machine). Future values: "ssh" (PR-B: remote on a
+	// role: builder server), "daytona" (sandbox).
+	//
+	// Scalar only — same shape as Infra/DNS/Storage/Tunnel.
+	Build   string      `yaml:"build,omitempty"`
 	Storage string      `yaml:"storage,omitempty"`
 	Secrets *SecretsDef `yaml:"secrets,omitempty"`
 	Tunnel  string      `yaml:"tunnel,omitempty"`

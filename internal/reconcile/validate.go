@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -42,6 +43,33 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			// supported
 		default:
 			return fmt.Errorf("providers.secrets.kind %q is not supported (expected: doppler | awssm | infisical)", s.Kind)
+		}
+	}
+
+	// providers.build — optional, defaults to "local" (in-process docker
+	// buildx on the operator's machine). Non-local values (ssh / daytona
+	// when they land) dispatch the deploy onto a remote substrate.
+	//
+	// Validator rule R1: if the selected provider's BuildCapability flags
+	// RequiresBuilders, the config must declare at least one server with
+	// role: builder. Local sets RequiresBuilders=false so this is a no-op
+	// under the default; ssh (PR-B) flips it to true.
+	if b := cfg.Providers.Build; b != "" {
+		caps, err := provider.GetBuildCapability(b)
+		if err != nil {
+			return fmt.Errorf("providers.build: %w", err)
+		}
+		builderCount := 0
+		for _, srv := range cfg.Servers {
+			if srv.Role == "builder" {
+				builderCount++
+			}
+		}
+		if caps.RequiresBuilders && builderCount == 0 {
+			return fmt.Errorf("providers.build %q requires at least one server with role: builder", b)
+		}
+		if !caps.RequiresBuilders && builderCount > 0 {
+			return fmt.Errorf("providers.build %q does not use builder servers — remove role: builder entries or pick a build provider that does (ssh, daytona)", b)
 		}
 	}
 
