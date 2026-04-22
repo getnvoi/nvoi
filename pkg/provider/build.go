@@ -130,30 +130,32 @@ type BuildCapability struct {
 }
 
 // ── Registry ─────────────────────────────────────────────────────────────────
+//
+// Build is the one outlier among the seven provider kinds: alongside the
+// usual schema + factory, each entry carries a static BuildCapability
+// read BEFORE credentials are resolved (see GetBuildCapability). Rather
+// than teach the generic registry a second payload slot (cost: a second
+// type param on six kinds that never use it), we keep a tiny parallel
+// map here. Capabilities are registration-time data, never per-instance,
+// so a parallel map is the simplest fit.
 
-type buildEntry struct {
-	schema  CredentialSchema
-	caps    BuildCapability
-	factory func(creds map[string]string) BuildProvider
-}
-
-var buildProviders = map[string]buildEntry{}
+var (
+	buildRegistry = newRegistry[BuildProvider]("build")
+	buildCaps     = map[string]BuildCapability{}
+)
 
 // RegisterBuild registers a BuildProvider factory + capability under a name.
 // Called from the provider package's init(). Re-registration replaces.
 func RegisterBuild(name string, schema CredentialSchema, caps BuildCapability, factory func(creds map[string]string) BuildProvider) {
-	buildProviders[name] = buildEntry{schema: schema, caps: caps, factory: factory}
+	buildRegistry.register(name, schema, factory)
+	buildCaps[name] = caps
 }
 
 // GetBuildSchema returns the credential schema for a build provider name.
 // Used by cmd/cli/context.go when collecting creds for each configured
 // provider, and by the validator when surfacing typos in providers.build.
 func GetBuildSchema(name string) (CredentialSchema, error) {
-	entry, ok := buildProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported build provider: %q", name)
-	}
-	return entry.schema, nil
+	return buildRegistry.getSchema(name)
 }
 
 // GetBuildCapability returns the static capability bits for a build
@@ -161,23 +163,16 @@ func GetBuildSchema(name string) (CredentialSchema, error) {
 // before credentials are resolved — so capabilities must be available
 // without constructing a BuildProvider instance.
 func GetBuildCapability(name string) (BuildCapability, error) {
-	entry, ok := buildProviders[name]
+	caps, ok := buildCaps[name]
 	if !ok {
 		return BuildCapability{}, fmt.Errorf("unsupported build provider: %q", name)
 	}
-	return entry.caps, nil
+	return caps, nil
 }
 
 // ResolveBuild creates a BuildProvider with pre-resolved credentials.
 // Credentials must already be fully resolved by the caller — same contract
 // as ResolveInfra / ResolveDNS / ResolveBucket.
 func ResolveBuild(name string, creds map[string]string) (BuildProvider, error) {
-	entry, ok := buildProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported build provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
+	return buildRegistry.resolve(name, creds)
 }

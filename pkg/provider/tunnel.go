@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -66,36 +65,20 @@ type TunnelPlan struct {
 
 // ── Registry ─────────────────────────────────────────────────────────────────
 
-type tunnelEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) TunnelProvider
-}
-
-var tunnelProviders = map[string]tunnelEntry{}
+var tunnelRegistry = newRegistry[TunnelProvider]("tunnel")
 
 // RegisterTunnel registers a TunnelProvider factory under a name.
 // Called from the provider package's init().
 func RegisterTunnel(name string, schema CredentialSchema, factory func(creds map[string]string) TunnelProvider) {
-	tunnelProviders[name] = tunnelEntry{schema: schema, factory: factory}
+	tunnelRegistry.register(name, schema, factory)
 }
 
 // GetTunnelSchema returns the credential schema for a tunnel provider name.
 func GetTunnelSchema(name string) (CredentialSchema, error) {
-	entry, ok := tunnelProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported tunnel provider: %q", name)
-	}
-	return entry.schema, nil
+	return tunnelRegistry.getSchema(name)
 }
 
 // ResolveTunnel creates a TunnelProvider with pre-resolved credentials.
 func ResolveTunnel(name string, creds map[string]string) (TunnelProvider, error) {
-	entry, ok := tunnelProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported tunnel provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
+	return tunnelRegistry.resolve(name, creds)
 }

@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"fmt"
 )
 
 // CIProvider dispatches `nvoi deploy` from a CI substrate (GitHub Actions
@@ -107,40 +106,24 @@ type CIFile struct {
 
 // ── Registry ─────────────────────────────────────────────────────────────────
 
-type ciEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) CIProvider
-}
-
-var ciProviders = map[string]ciEntry{}
+var ciRegistry = newRegistry[CIProvider]("CI")
 
 // RegisterCI registers a CIProvider factory under a name. Called from the
 // provider package's init(). Re-registration replaces.
 func RegisterCI(name string, schema CredentialSchema, factory func(creds map[string]string) CIProvider) {
-	ciProviders[name] = ciEntry{schema: schema, factory: factory}
+	ciRegistry.register(name, schema, factory)
 }
 
 // GetCISchema returns the credential schema for a CI provider name. Used
 // by cmd/cli/context.go when resolving credentials and by the validator
 // when surfacing typos in providers.ci.
 func GetCISchema(name string) (CredentialSchema, error) {
-	entry, ok := ciProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported CI provider: %q", name)
-	}
-	return entry.schema, nil
+	return ciRegistry.getSchema(name)
 }
 
 // ResolveCI creates a CIProvider with pre-resolved credentials. Same
 // contract as ResolveInfra / ResolveBuild — credentials must already be
 // fully resolved by the caller.
 func ResolveCI(name string, creds map[string]string) (CIProvider, error) {
-	entry, ok := ciProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported CI provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
+	return ciRegistry.resolve(name, creds)
 }

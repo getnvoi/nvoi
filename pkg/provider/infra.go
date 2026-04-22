@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
@@ -328,37 +327,21 @@ type EventSink interface {
 
 // ── Registry ──────────────────────────────────────────────────────────────────
 
-type infraEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) InfraProvider
-}
-
-var infraProviders = map[string]infraEntry{}
+var infraRegistry = newRegistry[InfraProvider]("infra")
 
 // RegisterInfra registers an InfraProvider factory under a name. Called
 // from the provider's init().
 func RegisterInfra(name string, schema CredentialSchema, factory func(creds map[string]string) InfraProvider) {
-	infraProviders[name] = infraEntry{schema: schema, factory: factory}
+	infraRegistry.register(name, schema, factory)
 }
 
 // GetInfraSchema returns the credential schema for an infra provider name.
 func GetInfraSchema(name string) (CredentialSchema, error) {
-	entry, ok := infraProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported infra provider: %q", name)
-	}
-	return entry.schema, nil
+	return infraRegistry.getSchema(name)
 }
 
 // ResolveInfra creates an infra provider with pre-resolved credentials.
 // Credentials must already be fully resolved (flag → env / source done by caller).
 func ResolveInfra(name string, creds map[string]string) (InfraProvider, error) {
-	entry, ok := infraProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported infra provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
+	return infraRegistry.resolve(name, creds)
 }
