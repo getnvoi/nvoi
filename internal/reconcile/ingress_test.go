@@ -20,6 +20,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // init clamps Caddy poll loops so reconcile-level tests stay under the
@@ -106,7 +107,7 @@ func installCaddyFixture(t *testing.T, dc *config.DeployContext) *caddyExecRecor
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "caddy-abc",
 			Namespace: kube.CaddyNamespace,
-			Labels:    map[string]string{"app.kubernetes.io/name": kube.CaddyName},
+			Labels:    map[string]string{utils.LabelAppName: kube.CaddyName},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}

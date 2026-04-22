@@ -194,9 +194,9 @@ func (c *Client) provisionServer(ctx context.Context, dc *provider.BootstrapCont
 	}
 
 	labels := names.Labels()
-	role := "master"
-	if s.Role == "worker" {
-		role = "worker"
+	role := utils.RoleMaster
+	if s.Role == utils.RoleWorker {
+		role = utils.RoleWorker
 	}
 	labels["role"] = role
 
@@ -267,7 +267,7 @@ func (c *Client) provisionServer(ctx context.Context, dc *provider.BootstrapCont
 
 	srvNode := infra.Node{PublicIP: srv.IPv4, PrivateIP: srv.PrivateIP}
 
-	if s.Role == "worker" {
+	if s.Role == utils.RoleWorker {
 		// Worker join needs the master's SSH for the join token.
 		joinShell := masterShell
 		if joinShell == nil {

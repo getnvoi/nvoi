@@ -258,7 +258,7 @@ func TestDescribeTunnelAgents(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "cloudflared-abc",
 			Namespace:         ns,
-			Labels:            map[string]string{"app.kubernetes.io/name": "cloudflared"},
+			Labels:            map[string]string{utils.LabelAppName: "cloudflared"},
 			CreationTimestamp: creation,
 		},
 		Spec: corev1.PodSpec{NodeName: "nvoi-myapp-prod-master"},
@@ -310,7 +310,7 @@ func TestDescribeTunnelAgents_WaitingPodStatus(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cloudflared-pending",
 			Namespace: ns,
-			Labels:    map[string]string{"app.kubernetes.io/name": "cloudflared"},
+			Labels:    map[string]string{utils.LabelAppName: "cloudflared"},
 		},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodPending,

@@ -6,6 +6,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func TestPodReady_AllReady(t *testing.T) {
@@ -96,7 +98,7 @@ func TestTimeoutDiagnostics_IncludesPodPhase(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "web-abc",
 			Namespace: "ns",
-			Labels:    map[string]string{"app.kubernetes.io/name": "web"},
+			Labels:    map[string]string{utils.LabelAppName: "web"},
 		},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodPending,
@@ -128,7 +130,7 @@ func TestTimeoutDiagnostics_RunningButUnready_FlagsProbe(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "web-abc", Namespace: "ns",
-			Labels: map[string]string{"app.kubernetes.io/name": "web"},
+			Labels: map[string]string{utils.LabelAppName: "web"},
 		},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
@@ -153,7 +155,7 @@ func TestTimeoutDiagnostics_Terminated_ShowsExitCode(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "web-abc", Namespace: "ns",
-			Labels: map[string]string{"app.kubernetes.io/name": "web"},
+			Labels: map[string]string{utils.LabelAppName: "web"},
 		},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,

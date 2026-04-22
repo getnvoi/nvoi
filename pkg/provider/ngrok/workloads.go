@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 const (
@@ -86,11 +87,11 @@ func buildDeployment(labels map[string]string) *appsv1.Deployment {
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app.kubernetes.io/name": AgentName},
+				MatchLabels: map[string]string{utils.LabelAppName: AgentName},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{"app.kubernetes.io/name": AgentName},
+					Labels: map[string]string{utils.LabelAppName: AgentName},
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{

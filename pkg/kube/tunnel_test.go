@@ -8,6 +8,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func TestPurgeTunnelAgents_Empty_Idempotent(t *testing.T) {
@@ -70,7 +72,7 @@ func TestGetTunnelAgentPods_ReturnsCloudflaredPods(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "cloudflared-abc123",
 			Namespace: ns,
-			Labels:    map[string]string{"app.kubernetes.io/name": CloudflareTunnelAgentName},
+			Labels:    map[string]string{utils.LabelAppName: CloudflareTunnelAgentName},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
@@ -95,7 +97,7 @@ func TestGetTunnelAgentPods_ReturnsNgrokPods(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "ngrok-xyz",
 			Namespace: ns,
-			Labels:    map[string]string{"app.kubernetes.io/name": NgrokTunnelAgentName},
+			Labels:    map[string]string{utils.LabelAppName: NgrokTunnelAgentName},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
@@ -129,13 +131,13 @@ func TestGetTunnelAgentPods_FiltersUnrelatedPods(t *testing.T) {
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "unrelated-pod", Namespace: ns,
-				Labels: map[string]string{"app.kubernetes.io/name": "some-other-app"},
+				Labels: map[string]string{utils.LabelAppName: "some-other-app"},
 			},
 		},
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "cloudflared-real", Namespace: ns,
-				Labels: map[string]string{"app.kubernetes.io/name": CloudflareTunnelAgentName},
+				Labels: map[string]string{utils.LabelAppName: CloudflareTunnelAgentName},
 			},
 		},
 	)

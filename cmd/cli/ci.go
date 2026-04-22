@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/reconcile"
@@ -112,15 +111,9 @@ func runCIInit(ctx context.Context, rt *runtime, nvoiVersion string) error {
 	// Sorted env list so the rendered workflow is byte-identical across
 	// re-runs unless the set changes — the Contents API diff stays quiet,
 	// repeated `ci init` runs don't create noise commits.
-	secretNames := make([]string, 0, len(secrets))
-	for k := range secrets {
-		secretNames = append(secretNames, k)
-	}
-	sort.Strings(secretNames)
-
 	path, content, err := ciProv.RenderWorkflow(provider.CIWorkflowPlan{
 		NvoiVersion: nvoiVersion,
-		SecretEnv:   secretNames,
+		SecretEnv:   utils.SortedKeys(secrets),
 	})
 	if err != nil {
 		return err

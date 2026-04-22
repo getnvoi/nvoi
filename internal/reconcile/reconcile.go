@@ -7,6 +7,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Deploy reconciles live infrastructure to match the YAML config.
@@ -199,7 +200,7 @@ func RouteDomains(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	if err != nil {
 		return fmt.Errorf("resolve dns provider: %w", err)
 	}
-	for _, svcName := range sortedDomainKeys(cfg.Domains) {
+	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		binding, err := infra.IngressBinding(ctx, bctx, provider.ServiceTarget{
 			Name: svcName,
 			Port: cfg.Services[svcName].Port,
@@ -246,22 +247,9 @@ func RouteDomains(ctx context.Context, dc *config.DeployContext, cfg *config.App
 // master is found (ValidateConfig would have caught that already).
 func masterServerType(cfg *config.AppConfig) string {
 	for _, srv := range cfg.Servers {
-		if srv.Role == "master" {
+		if srv.Role == utils.RoleMaster {
 			return srv.Type
 		}
 	}
 	return ""
-}
-
-func sortedDomainKeys(m map[string][]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
-			keys[j-1], keys[j] = keys[j], keys[j-1]
-		}
-	}
-	return keys
 }

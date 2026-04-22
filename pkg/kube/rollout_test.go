@@ -6,11 +6,13 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // podLabel returns the label selector map WaitRollout's selector matches on.
 func podLabel(service string) map[string]string {
-	return map[string]string{"app.kubernetes.io/name": service}
+	return map[string]string{utils.LabelAppName: service}
 }
 
 // readyPodFor returns a pod that is Running and Ready — WaitRollout's happy path.
