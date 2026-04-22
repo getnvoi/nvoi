@@ -267,6 +267,10 @@ func LocalForward(client utils.SSHClient, remoteAddr string) (localAddr string, 
 // ErrHostKeyChanged is returned when a known host presents a different key.
 var ErrHostKeyChanged = fmt.Errorf("ssh host key changed")
 
+// ErrNoKnownHost is returned by ClearKnownHost when the host isn't in
+// the known_hosts file. Callers use errors.Is — never string matching.
+var ErrNoKnownHost = fmt.Errorf("no known host entry")
+
 // ErrAuthFailed is returned when SSH authentication fails.
 var ErrAuthFailed = fmt.Errorf("ssh authentication failed")
 
@@ -344,7 +348,7 @@ func ClearKnownHost(host string) error {
 		if _, exists := knownHosts[host+":22"]; exists {
 			host = host + ":22"
 		} else {
-			return fmt.Errorf("no known host entry for %s", host)
+			return fmt.Errorf("%w for %s", ErrNoKnownHost, host)
 		}
 	}
 	delete(knownHosts, host)

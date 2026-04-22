@@ -2,12 +2,13 @@ package hetzner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -305,19 +306,21 @@ func (c *Client) getVolume(ctx context.Context, id string) (*provider.Volume, er
 }
 
 func (c *Client) detachVolume(ctx context.Context, volumeID string) error {
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, infra.PollInterval, infra.PollFast, func() (bool, error) {
 		var resp struct {
 			Action struct {
 				ID int64 `json:"id"`
 			} `json:"action"`
 		}
-		if err := c.api.Do(ctx, "POST", fmt.Sprintf("/volumes/%s/actions/detach", volumeID), nil, &resp); err != nil {
-			if strings.Contains(err.Error(), "not attached") {
-				return true, nil
-			}
-			if isLocked(err) {
-				return false, nil // retry
-			}
+		err := c.api.Do(ctx, "POST", fmt.Sprintf("/volumes/%s/actions/detach", volumeID), nil, &resp)
+		switch {
+		case err == nil:
+			// fall through to action polling
+		case errors.Is(err, infra.ErrNotAttached):
+			return true, nil // already detached
+		case errors.Is(err, infra.ErrLocked):
+			return false, nil // retry
+		default:
 			return false, fmt.Errorf("detach volume: %w", err)
 		}
 		if resp.Action.ID != 0 {
@@ -329,15 +332,12 @@ func (c *Client) detachVolume(ctx context.Context, volumeID string) error {
 	})
 }
 
-func isLocked(err error) bool {
-	if apiErr, ok := err.(*utils.APIError); ok {
-		return apiErr.Status == 423
-	}
-	return false
-}
-
+// waitForAction polls Hetzner's /actions/{id} until success or error.
+// infra.PollInterval + infra.PollFast — the attach/detach/resize happy
+// path completes in single-digit seconds; no provider-specific interval
+// override needed.
 func (c *Client) waitForAction(ctx context.Context, actionID int64) error {
-	return utils.Poll(ctx, 2*time.Second, 2*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, infra.PollInterval, infra.PollFast, func() (bool, error) {
 		var resp struct {
 			Action struct {
 				ID     int64  `json:"id"`

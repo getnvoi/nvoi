@@ -2,12 +2,12 @@ package hetzner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
-	"strings"
-	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -80,19 +80,21 @@ func (c *Client) detachFirewall(ctx context.Context, firewallID, serverID string
 			{"type": "server", "server": map[string]any{"id": intID}},
 		},
 	}
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, infra.PollInterval, infra.PollFast, func() (bool, error) {
 		var resp struct {
 			Actions []struct {
 				ID int64 `json:"id"`
 			} `json:"actions"`
 		}
-		if err := c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/remove_from_resources", firewallID), body, &resp); err != nil {
-			if strings.Contains(err.Error(), "not found") {
-				return true, nil
-			}
-			if isLocked(err) {
-				return false, nil // retry
-			}
+		err := c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/remove_from_resources", firewallID), body, &resp)
+		switch {
+		case err == nil:
+			// fall through
+		case errors.Is(err, utils.ErrNotFound):
+			return true, nil // firewall or attachment already gone
+		case errors.Is(err, infra.ErrLocked):
+			return false, nil // retry
+		default:
 			return false, fmt.Errorf("detach firewall: %w", err)
 		}
 		for _, a := range resp.Actions {
@@ -119,7 +121,7 @@ func (c *Client) attachFirewall(ctx context.Context, firewallID, serverID string
 		} `json:"actions"`
 	}
 	if err := c.api.Do(ctx, "POST", fmt.Sprintf("/firewalls/%s/actions/apply_to_resources", firewallID), body, &resp); err != nil {
-		if strings.Contains(err.Error(), "already added") {
+		if errors.Is(err, infra.ErrAlreadyAttached) {
 			return nil // idempotent
 		}
 		return fmt.Errorf("attach firewall: %w", err)

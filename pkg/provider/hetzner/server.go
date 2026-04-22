@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -135,7 +135,7 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 
 	// Wait for gone — only trust s==nil when the API call succeeded.
 	// API errors (rate limit, network) must retry, not short-circuit.
-	return utils.Poll(ctx, 3*time.Second, 2*time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, infra.PollInterval, infra.PollFast, func() (bool, error) {
 		s, err := c.getServerByName(ctx, req.Name)
 		if err != nil {
 			return false, nil // transient API error — retry

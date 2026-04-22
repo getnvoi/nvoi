@@ -3,9 +3,9 @@ package scaleway
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -300,7 +300,7 @@ func (c *Client) detachVolumeByID(ctx context.Context, volumeID string) error {
 }
 
 func (c *Client) waitForVolumeAvailable(ctx context.Context, volumeID string) error {
-	return utils.Poll(ctx, 2*time.Second, time.Minute, func() (bool, error) {
+	return utils.Poll(ctx, infra.PollInterval, infra.PollFast, func() (bool, error) {
 		var resp blockVolumeJSON
 		if err := c.api.Do(ctx, "GET", c.blockPath(fmt.Sprintf("/volumes/%s", volumeID)), nil, &resp); err != nil {
 			return false, nil

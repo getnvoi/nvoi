@@ -231,7 +231,7 @@ func (c *Client) provisionServer(ctx context.Context, dc *provider.BootstrapCont
 	}
 
 	if err := infra.ClearKnownHost(srv.IPv4 + ":22"); err != nil {
-		if !strings.Contains(err.Error(), "no known host") {
+		if !errors.Is(err, infra.ErrNoKnownHost) {
 			out.Warning(fmt.Sprintf("clear known host %s: %s", srv.IPv4, err))
 		}
 	}
@@ -466,7 +466,7 @@ func (c *Client) provisionBuilder(ctx context.Context, dc *provider.BootstrapCon
 	}
 
 	if err := infra.ClearKnownHost(srv.IPv4 + ":22"); err != nil {
-		if !strings.Contains(err.Error(), "no known host") {
+		if !errors.Is(err, infra.ErrNoKnownHost) {
 			out.Warning(fmt.Sprintf("clear known host %s: %s", srv.IPv4, err))
 		}
 	}
