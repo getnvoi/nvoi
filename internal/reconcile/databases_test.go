@@ -158,6 +158,106 @@ func TestDatabases_NoBackupSkipsBucketProvisioning(t *testing.T) {
 	}
 }
 
+// TestDatabases_ResolvesVarRefsInAllCredFields locks the invariant
+// that user / password / database all resolve $VAR references against
+// the same source map. Previously only user + password did — database
+// passed through literally, so `$MAIN_POSTGRES_DB` would hit postgres
+// as the literal string "$MAIN_POSTGRES_DB" and connect would fail.
+// The three fields have to stay in lockstep.
+func TestDatabases_ResolvesVarRefsInAllCredFields(t *testing.T) {
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
+	cf.RegisterBucket("test-bucket-vars")
+
+	dc := testDC(convergeMock())
+	dc.Creds = testCreds()
+	dc.Storage = app.ProviderRef{
+		Name:  "test-bucket-vars",
+		Creds: map[string]string{"api_key": "x", "account_id": "acct"},
+	}
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-vars"},
+		Databases: map[string]config.DatabaseDef{
+			"app": {
+				Engine:   "postgres",
+				Server:   "master",
+				Size:     20,
+				User:     "$PG_USER",
+				Password: "$PG_PASS",
+				Database: "$PG_DB",
+			},
+		},
+	}
+
+	sources := map[string]string{
+		"PG_USER": "resolveduser",
+		"PG_PASS": "resolvedpass",
+		"PG_DB":   "resolveddb",
+	}
+
+	out, err := Databases(context.Background(), dc, cfg, sources)
+	if err != nil {
+		t.Fatalf("Databases: %v", err)
+	}
+
+	// The synthesized DATABASE_URL_APP is built from all three resolved
+	// fields. Presence of each resolved value there proves none of the
+	// fields short-circuited with a literal "$VAR".
+	url := out["DATABASE_URL_APP"]
+	for _, want := range []string{"resolveduser", "resolvedpass", "resolveddb"} {
+		if !strings.Contains(url, want) {
+			t.Errorf("DATABASE_URL_APP missing %q; got %q", want, url)
+		}
+	}
+	if strings.Contains(url, "$") {
+		t.Errorf("DATABASE_URL_APP contains unresolved $: %q", url)
+	}
+
+	// The in-cluster credentials Secret holds the resolved database
+	// name too — the postgres entrypoint reads this key directly.
+	kf := kfFor(dc)
+	got, err := kf.GetSecretValue(context.Background(), "nvoi-myapp-prod",
+		"nvoi-myapp-prod-db-app-credentials", "database")
+	if err != nil {
+		t.Fatalf("read credentials Secret: %v", err)
+	}
+	if got != "resolveddb" {
+		t.Errorf("credentials Secret database = %q, want %q", got, "resolveddb")
+	}
+}
+
+// TestDatabases_UnresolvedVarInDatabaseErrors locks the error path:
+// a $VAR reference in database: that can't be resolved must fail with
+// a field-qualified error, matching the existing user/password shape.
+func TestDatabases_UnresolvedVarInDatabaseErrors(t *testing.T) {
+	dc := testDC(convergeMock())
+	dc.Creds = testCreds()
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute"},
+		Databases: map[string]config.DatabaseDef{
+			"app": {
+				Engine:   "postgres",
+				Server:   "master",
+				Size:     20,
+				User:     "u",
+				Password: "p",
+				Database: "$MISSING",
+			},
+		},
+	}
+
+	_, err := Databases(context.Background(), dc, cfg, map[string]string{})
+	if err == nil {
+		t.Fatal("expected error for unresolved $MISSING in database:, got nil")
+	}
+	if !strings.Contains(err.Error(), "databases.app.database") {
+		t.Errorf("error should be field-qualified; got: %s", err.Error())
+	}
+}
+
 // TestDatabases_HardErrorOnServerChange locks the "local NVMe cannot
 // migrate" invariant. Selfhosted databases pin their data to one node
 // via k3s local-path — flipping databases.X.server: would silently

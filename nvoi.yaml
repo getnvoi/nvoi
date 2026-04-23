@@ -5,6 +5,7 @@ providers:
   infra: hetzner
   dns: cloudflare
   tunnel: cloudflare
+  storage: cloudflare      # required for databases.*.backup — R2 bucket provisioned implicitly
   secrets: infisical
 
 servers:
@@ -13,35 +14,34 @@ servers:
     region: nbg1
     role: master
 
-volumes:
-  pgdata:
-    size: 20
+# No volumes block for the database — managed databases pin data to the
+# node's local NVMe via k3s local-path. Network-attached volumes
+# (Hetzner Block Volume) are ~10x slower and the wrong substrate for a
+# primary DB. Durability is handled by databases.main.backup below.
+# Moving the DB to a different server is blocked by reconcile (#67).
+
+databases:
+  main:
+    engine: postgres
+    version: "17"
     server: master
+    size: 20
+    user: $MAIN_POSTGRES_USER
+    password: $MAIN_POSTGRES_PASSWORD
+    database: $MAIN_POSTGRES_DB
+    backup:
+      schedule: "0 3 * * *"        # daily at 03:00 UTC
+      retention: 14                # days; applied as R2 lifecycle
 
 services:
-  postgres:
-    image: postgres:17
-    port: 5432
-    server: master
-    replicas: 1
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    env:
-      - PGDATA=/var/lib/postgresql/data/pgdata
-    secrets:
-      - POSTGRES_USER=$MAIN_POSTGRES_USER
-      - POSTGRES_PASSWORD=$MAIN_POSTGRES_PASSWORD
-      - POSTGRES_DB=$MAIN_POSTGRES_DB
-
   api:
     image: deemx/nvoi-api         # repo-only — host inferred from registry:, tag auto-appended per deploy
     build:
       context: ./
       dockerfile: ./cmd/api/Dockerfile
     port: 8080
-    depends_on: [postgres]
-    secrets:
-      - DATABASE_URL=postgresql://$MAIN_POSTGRES_USER:$MAIN_POSTGRES_PASSWORD@postgres:5432/$MAIN_POSTGRES_DB?sslmode=disable
+    databases:
+      - DATABASE_URL=main         # alias DATABASE_URL_MAIN → DATABASE_URL (cmd/api reads bare DATABASE_URL)
 
 registry:
   docker.io:

@@ -157,12 +157,11 @@ func databaseRequest(dc *config.DeployContext, names *utils.Names, name string, 
 		BackupName:            names.KubeDatabaseBackupCron(name),
 		CredentialsSecretName: names.KubeDatabaseCredentials(name),
 		Spec: provider.DatabaseSpec{
-			Engine:   def.Engine,
-			Version:  def.Version,
-			Server:   def.Server,
-			Size:     def.Size,
-			Database: def.Database,
-			Region:   def.Region,
+			Engine:  def.Engine,
+			Version: def.Version,
+			Server:  def.Server,
+			Size:    def.Size,
+			Region:  def.Region,
 		},
 	}
 	if def.Backup != nil {
@@ -171,6 +170,11 @@ func databaseRequest(dc *config.DeployContext, names *utils.Names, name string, 
 			Retention: def.Backup.Retention,
 		}
 	}
+	// user / password / database all support $VAR references resolved
+	// against the same source map the services/crons pipeline uses.
+	// Keeping the three fields in lockstep avoids the foot-gun where
+	// $MAIN_POSTGRES_USER resolves but $MAIN_POSTGRES_DB gets passed
+	// through literally and postgres rejects the DSN at connect time.
 	if def.User != "" {
 		v, err := resolveRef(def.User, sources)
 		if err != nil {
@@ -184,6 +188,13 @@ func databaseRequest(dc *config.DeployContext, names *utils.Names, name string, 
 			return req, fmt.Errorf("databases.%s.password: %w", name, err)
 		}
 		req.Spec.Password = v
+	}
+	if def.Database != "" {
+		v, err := resolveRef(def.Database, sources)
+		if err != nil {
+			return req, fmt.Errorf("databases.%s.database: %w", name, err)
+		}
+		req.Spec.Database = v
 	}
 	return req, nil
 }
