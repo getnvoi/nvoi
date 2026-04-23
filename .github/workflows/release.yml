@@ -35,7 +35,14 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           ext=""; [ "$GOOS" = "windows" ] && ext=".exe"
-          go build -ldflags="-s -w" -o "dist/nvoi-${GOOS}-${GOARCH}${ext}" ./cmd/cli
+          # Bake the version so the CLI knows which docker.io/nvoi/backup
+          # tag to reference. The image workflow below publishes the
+          # matching tag — keeping binary and image version in lockstep
+          # is the same discipline we apply to user workloads
+          # (deploy-hash tags).
+          go build \
+            -ldflags="-s -w -X github.com/getnvoi/nvoi/pkg/utils.Version=${{ github.ref_name }}" \
+            -o "dist/nvoi-${GOOS}-${GOARCH}${ext}" ./cmd/cli
       - uses: actions/upload-artifact@v4
         with:
           name: nvoi-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -60,3 +67,34 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: ./worker/deploy.sh release "${{ github.ref_name }}" dist
+
+  # docker.io/nvoi/backup — the uniform database backup runner image
+  # every DatabaseProvider's CronJob invokes. Version must match the
+  # CLI binary (both baked with -X pkg/utils.Version=<tag>), so this
+  # job only runs on tags and the tag is the version.
+  backup-image:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push nvoi/backup
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: cmd/backup/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            NVOI_VERSION=${{ github.ref_name }}
+          # Two tags: exact version (what the CLI pins) and `latest`
+          # (ops can watch with `docker pull nvoi/backup:latest` when
+          # debugging). The CLI only references the exact version.
+          tags: |
+            docker.io/nvoi/backup:${{ github.ref_name }}
+            docker.io/nvoi/backup:latest
+          push: true
