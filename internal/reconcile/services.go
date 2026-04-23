@@ -52,6 +52,7 @@ func Services(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 
 		// Expand storage: into per-service secret entries
 		expandStorageCreds(svc.Storage, sources, svcSecretKVs, &svcSecretRefs)
+		expandDatabaseCreds(svc.Databases, sources, svcSecretKVs, &svcSecretRefs)
 
 		// Upsert per-service secrets into k8s
 		if err := upsertServiceSecrets(ctx, dc, names, name, svcSecretKVs); err != nil {
@@ -146,6 +147,19 @@ func expandStorageCreds(storageNames []string, sources map[string]string, kvs ma
 				kvs[key] = val
 				*refs = append(*refs, key)
 			}
+		}
+	}
+}
+
+func expandDatabaseCreds(databaseRefs []string, sources map[string]string, kvs map[string]string, refs *[]string) {
+	for _, ref := range databaseRefs {
+		envName, dbName := parseDatabaseRef(ref)
+		if envName == "" {
+			envName = utils.DatabaseEnvName(dbName)
+		}
+		if val, ok := sources[utils.DatabaseEnvName(dbName)]; ok {
+			kvs[envName] = val
+			*refs = append(*refs, envName)
 		}
 	}
 }

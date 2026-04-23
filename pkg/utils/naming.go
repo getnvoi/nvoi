@@ -94,6 +94,13 @@ func (n *Names) KubeWorkload(svc string) string       { return svc }
 func (n *Names) KubeService(svc string) string        { return svc }
 func (n *Names) KubeSecrets() string                  { return "secrets" }
 func (n *Names) KubeServiceSecrets(svc string) string { return svc + "-secrets" }
+func (n *Names) Database(name string) string          { return fmt.Sprintf("%s-db-%s", n.Base(), name) }
+func (n *Names) KubeDatabaseCredentials(name string) string {
+	return n.Database(name) + "-credentials"
+}
+func (n *Names) KubeDatabasePVC(name string) string        { return n.Database(name) + "-data" }
+func (n *Names) KubeDatabaseBackupCron(name string) string { return n.Database(name) + "-backup" }
+func (n *Names) KubeDatabasePod(name string) string        { return n.Database(name) + "-0" }
 
 // CronJobRunName is the one-shot k8s Job name spawned by `nvoi cron run`.
 // Suffix is unix-nanoseconds (caller passes time.Now().Unix() — here for
@@ -171,6 +178,11 @@ const BuilderCacheVolumeSizeGB = 50
 func StorageEnvPrefix(bucketName string) string {
 	upper := strings.ToUpper(bucketName)
 	return "STORAGE_" + strings.ReplaceAll(upper, "-", "_")
+}
+
+func DatabaseEnvName(name string) string {
+	upper := strings.ToUpper(name)
+	return "DATABASE_URL_" + strings.ReplaceAll(upper, "-", "_")
 }
 
 // ── Network CIDRs ──────────────────────────────────────────────────────────────

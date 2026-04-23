@@ -27,6 +27,8 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/ssh"
+	_ "github.com/getnvoi/nvoi/pkg/provider/neon"
+	_ "github.com/getnvoi/nvoi/pkg/provider/postgres"
 	// Secrets backends
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"
@@ -75,6 +77,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(newSSHCmd(&rt))
 	root.AddCommand(newCronCmd(&rt))
 	root.AddCommand(newCICmd(&rt))
+	root.AddCommand(newDatabaseCmd(&rt))
 
 	root.SetErr(newErrorWriter(root))
 	root.SetErrPrefix("")

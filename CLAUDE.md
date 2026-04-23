@@ -2,7 +2,7 @@
 
 ## What nvoi is
 
-The foundational engine for reconciling cloud infrastructure + Kubernetes workloads from a single YAML. `nvoi deploy` converges live state to match the config. `nvoi teardown` nukes the provider side. `nvoi describe` reads the cluster live. Packages, databases, build pipelines and anything product-shaped live in an upper layer that consumes this engine — explicitly not part of core.
+The foundational engine for reconciling cloud infrastructure + Kubernetes workloads from a single YAML. `nvoi deploy` converges live state to match the config. `nvoi teardown` nukes the provider side. `nvoi describe` reads the cluster live. Packages, build pipelines and other product-layer concerns stay outside core; database lifecycle is the explicit exception and lands in core via the `databases:` provider surface.
 
 ## Philosophy
 
@@ -10,7 +10,7 @@ The foundational engine for reconciling cloud infrastructure + Kubernetes worklo
 - **No state files.** Infrastructure is the source of truth. No manifest, no local cache.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic, no UUIDs — the naming convention finds everything.
 - **Reconcile vs teardown.** Reconcile converges on a diff. Teardown is a hard nuke of external provider resources; k8s dies with the servers. Volumes and storage preserved by default (`--delete-volumes` / `--delete-storage` to nuke).
-- **Two-layer core.** Layer 1: provider infra (servers, firewall, volumes, DNS, buckets). Layer 2: k8s manifests (services, crons, ingress, secrets). Bound by deterministic naming. Nothing else.
+- **Two-layer core.** Layer 1: provider infra (servers, firewall, volumes, DNS, buckets, databases). Layer 2: k8s manifests (services, crons, ingress, secrets). Bound by deterministic naming.
 - **InfraProvider owns its convergence — split contract: Connect (read-only) vs Bootstrap (writes).** Every infra backend (Hetzner / AWS / Scaleway today, Daytona / managed-k8s tomorrow) implements one interface (`pkg/provider/infra.go::InfraProvider`). `reconcile.Deploy` calls `infra.Bootstrap` (drift reconciled, missing resources created). Every other CLI command (`logs`, `exec`, `describe`, `cron run`, `resources`, `ssh`) routes through `Cluster.Kube` / `Cluster.SSH` to `infra.Connect` / `infra.NodeShell` — read-only attach, no provider mutations. Reconcile never branches on provider name.
 - **SSH transport + typed kube client.** When the provider has a host shell (every IaaS), it returns one via `infra.NodeShell` — cached on `Cluster.NodeShell`. The kube client `infra.Bootstrap` (or `infra.Connect`) returns is cached on `Cluster.MasterKube`. Both shared across every reconcile step.
 - **Credentials flow through one `CredentialSource`.** Default `EnvSource` reads `os.Getenv`. When `providers.secrets` is set to `doppler | awssm | infisical`, source switches to `SecretsSource` and every credential (infra, DNS, storage, SSH key, service `$VAR`) fetches from the backend's direct API — no shell-outs.
@@ -105,12 +105,23 @@ registry:                   # private container-registry pull creds (optional)
 storage:
   assets: {}
 
+databases:
+  app:
+    engine: postgres
+    version: "16"
+    server: master
+    size: 20
+    user: $POSTGRES_APP_USER
+    password: $POSTGRES_APP_PASSWORD
+    database: myapp
+
 services:
   api:
     image: ghcr.io/myorg/api:v1
     build: ./services/api   # bool | string | {context, dockerfile} — requires registry: entry for the image's host
     port: 8080
     secrets: [JWT_SECRET, ENCRYPTION_KEY]
+    databases: [app]        # injects DATABASE_URL_APP
     server: master          # nodeSelector
     # servers: [worker-1, worker-2]  # nodeAffinity + topologySpread
 
@@ -131,6 +142,7 @@ domains:
 - `app` and `env` required; `providers.infra` required (the legacy `providers.compute` key was removed in #47 — use `providers.infra`).
 - At least one server, exactly one master, all have type/region/role. `disk` optional (creation-only, not resizable). Hetzner + `disk` = hard error (fixed per server type).
 - Volumes: size > 0, server exists. `server` / `servers` mutually exclusive. Multiple servers + volume = error.
+- Databases: `engine` required and must be a registered database provider. Selfhosted engines require `user` / `password` / `database` / `server` / `size`; SaaS engines reject those fields. `backup.storage` must reference `storage:`.
 - Services/crons: `image` required (unless `build:`), referenced `storage`/`volumes` exist. Volume mounts `name:/path`, volume must be on the same server as the workload.
 - Web-facing services (with domains): replicas omitted → 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid.
 - `services.X.build:` requires a `registry:` block AND the image's host must appear as a key. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag.

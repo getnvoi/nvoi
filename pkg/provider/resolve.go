@@ -140,6 +140,8 @@ func GetSchema(kind, name string) (CredentialSchema, error) {
 		return GetBuildSchema(name)
 	case "ci":
 		return GetCISchema(name)
+	case "database":
+		return GetDatabaseSchema(name)
 	default:
 		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
 	}

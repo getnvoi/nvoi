@@ -146,7 +146,12 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	sources := mergeSources(secretValues, storageCreds)
+	databaseCreds, err := Databases(ctx, dc, cfg, secretValues)
+	if err != nil {
+		return err
+	}
+
+	sources := mergeSources(secretValues, storageCreds, databaseCreds)
 
 	if err := Services(ctx, dc, cfg, sources); err != nil {
 		return err

@@ -27,7 +27,7 @@ import (
 //     provider-side tunnel is removed.
 //
 // Best-effort: each step's errors are collected and surfaced together.
-func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage bool) error {
+func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, deleteVolumes, deleteStorage, deleteDatabases bool) error {
 	if err := cfg.Resolve(); err != nil {
 		return err
 	}
@@ -68,6 +68,45 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 				Storage: dc.Storage, Name: name,
 			}))
 			collect(app.StorageDelete(ctx, app.StorageDeleteRequest{Cluster: dc.Cluster, Storage: dc.Storage, Name: name}))
+		}
+	}
+
+	if deleteDatabases {
+		names, nerr := utils.NewNames(cfg.App, cfg.Env)
+		if nerr != nil {
+			collect(nerr)
+		} else {
+			for _, name := range utils.SortedKeys(cfg.Databases) {
+				def := cfg.Databases[name]
+				schema, serr := provider.GetSchema("database", def.Engine)
+				if serr != nil {
+					collect(fmt.Errorf("database %s schema: %w", name, serr))
+					continue
+				}
+				creds, cerr := provider.ResolveFrom(schema, dc.Creds)
+				if cerr != nil {
+					collect(fmt.Errorf("database %s creds: %w", name, cerr))
+					continue
+				}
+				db, derr := provider.ResolveDatabase(def.Engine, creds)
+				if derr != nil {
+					collect(fmt.Errorf("database %s provider: %w", name, derr))
+					continue
+				}
+				req := provider.DatabaseRequest{
+					Name:                  name,
+					FullName:              names.Database(name),
+					PodName:               names.KubeDatabasePod(name),
+					PVCName:               names.KubeDatabasePVC(name),
+					BackupName:            names.KubeDatabaseBackupCron(name),
+					CredentialsSecretName: names.KubeDatabaseCredentials(name),
+					Namespace:             names.KubeNamespace(),
+					Labels:                names.Labels(),
+					DeleteVolumes:         deleteVolumes || deleteDatabases,
+				}
+				collect(db.Delete(ctx, req))
+				_ = db.Close()
+			}
 		}
 	}
 

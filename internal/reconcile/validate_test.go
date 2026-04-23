@@ -6,6 +6,8 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	_ "github.com/getnvoi/nvoi/pkg/provider/neon"
+	_ "github.com/getnvoi/nvoi/pkg/provider/postgres"
 )
 
 func TestValidateConfig_Valid(t *testing.T) {
@@ -845,4 +847,81 @@ func TestValidateConfig_CIUnknownKind_Errors(t *testing.T) {
 	cfg := validCfgForTest()
 	cfg.Providers.Ci = "githob"
 	assertValidationError(t, cfg, "providers.ci")
+}
+
+func TestValidateConfig_DatabasePostgresValid(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine:   "postgres",
+			Server:   "master",
+			Size:     20,
+			User:     "$POSTGRES_APP_USER",
+			Password: "$POSTGRES_APP_PASSWORD",
+			Database: "myapp",
+			Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *"},
+		},
+	}
+	cfg.Services["api"] = config.ServiceDef{Image: "nginx", Databases: []string{"app"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("expected valid database config, got %v", err)
+	}
+}
+
+func TestValidateConfig_DatabaseRequiresVarRefs(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine:   "postgres",
+			Server:   "master",
+			Size:     20,
+			User:     "appuser",
+			Password: "$POSTGRES_APP_PASSWORD",
+			Database: "myapp",
+		},
+	}
+	assertValidationError(t, cfg, "databases.app.user must be a $VAR reference")
+}
+
+func TestValidateConfig_DatabaseNeonRejectsSelfHostedFields(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"analytics": {
+			Engine: "neon",
+			User:   "$USER",
+		},
+	}
+	assertValidationError(t, cfg, "not valid for SaaS engine neon")
+}
+
+func TestValidateConfig_DatabaseBackupStorageMustExist(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine:   "postgres",
+			Server:   "master",
+			Size:     20,
+			User:     "$POSTGRES_APP_USER",
+			Password: "$POSTGRES_APP_PASSWORD",
+			Database: "myapp",
+			Backup:   &config.DatabaseBackupDef{Storage: "missing"},
+		},
+	}
+	assertValidationError(t, cfg, "databases.app.backup.storage")
+}
+
+func TestValidateConfig_ServiceDatabaseAliasMustBeEnvVar(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine:   "postgres",
+			Server:   "master",
+			Size:     20,
+			User:     "$POSTGRES_APP_USER",
+			Password: "$POSTGRES_APP_PASSWORD",
+			Database: "myapp",
+		},
+	}
+	cfg.Services["api"] = config.ServiceDef{Image: "nginx", Databases: []string{"bad-alias=app"}}
+	assertValidationError(t, cfg, "services.api.databases")
 }

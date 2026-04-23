@@ -51,6 +51,7 @@ type AppConfig struct {
 	Volumes   map[string]VolumeDef   `yaml:"volumes,omitempty"`
 	Secrets   []string               `yaml:"secrets,omitempty"`
 	Storage   map[string]StorageDef  `yaml:"storage,omitempty"`
+	Databases map[string]DatabaseDef `yaml:"databases,omitempty"`
 	Registry  map[string]RegistryDef `yaml:"registry,omitempty"`
 	Services  map[string]ServiceDef  `yaml:"services"`
 	Crons     map[string]CronDef     `yaml:"crons,omitempty"`
@@ -245,6 +246,24 @@ type StorageDef struct {
 	Bucket     string `yaml:"bucket,omitempty"`
 }
 
+type DatabaseDef struct {
+	Engine   string             `yaml:"engine"`
+	Version  string             `yaml:"version,omitempty"`
+	Server   string             `yaml:"server,omitempty"`
+	Size     int                `yaml:"size,omitempty"`
+	User     string             `yaml:"user,omitempty"`
+	Password string             `yaml:"password,omitempty"`
+	Database string             `yaml:"database,omitempty"`
+	Region   string             `yaml:"region,omitempty"`
+	Backup   *DatabaseBackupDef `yaml:"backup,omitempty"`
+}
+
+type DatabaseBackupDef struct {
+	Schedule  string `yaml:"schedule,omitempty"`
+	Retention int    `yaml:"retention,omitempty"`
+	Storage   string `yaml:"storage,omitempty"`
+}
+
 type ServiceDef struct {
 	Image     string     `yaml:"image,omitempty"`
 	Port      int        `yaml:"port,omitempty"`
@@ -256,6 +275,7 @@ type ServiceDef struct {
 	Env       []string   `yaml:"env,omitempty"`
 	Secrets   []string   `yaml:"secrets,omitempty"`
 	Storage   []string   `yaml:"storage,omitempty"`
+	Databases []string   `yaml:"databases,omitempty"`
 	Volumes   []string   `yaml:"volumes,omitempty"`
 	DependsOn []string   `yaml:"depends_on,omitempty"` // other services that must be Ready before this one is applied
 	Build     *BuildSpec `yaml:"build,omitempty"`      // nil → pull-only; non-nil → build locally + push + pull

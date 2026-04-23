@@ -12,10 +12,12 @@ func newTeardownCmd(rt *runtime) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dv, _ := cmd.Flags().GetBool("delete-volumes")
 			ds, _ := cmd.Flags().GetBool("delete-storage")
-			return core.Teardown(cmd.Context(), rt.dc, rt.cfg, dv, ds)
+			dd, _ := cmd.Flags().GetBool("delete-databases")
+			return core.Teardown(cmd.Context(), rt.dc, rt.cfg, dv, ds, dd)
 		},
 	}
 	cmd.Flags().Bool("delete-volumes", false, "also delete persistent volumes (preserved by default)")
 	cmd.Flags().Bool("delete-storage", false, "also delete storage buckets (preserved by default)")
+	cmd.Flags().Bool("delete-databases", false, "also delete provider-side databases (preserved by default)")
 	return cmd
 }

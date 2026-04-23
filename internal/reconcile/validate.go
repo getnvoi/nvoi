@@ -185,6 +185,75 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		}
 	}
 
+	// ── Databases ────────────────────────────────────────────────────────
+	for name, db := range cfg.Databases {
+		if err := utils.ValidateName("databases."+name, name); err != nil {
+			return err
+		}
+		if strings.TrimSpace(db.Engine) == "" {
+			return fmt.Errorf("databases.%s.engine is required", name)
+		}
+		if _, err := provider.GetDatabaseSchema(db.Engine); err != nil {
+			return fmt.Errorf("databases.%s.engine: %w", name, err)
+		}
+		if databaseEngineIsSelfHosted(db.Engine) {
+			if db.User == "" {
+				return fmt.Errorf("databases.%s.user is required", name)
+			}
+			if db.Password == "" {
+				return fmt.Errorf("databases.%s.password is required", name)
+			}
+			if db.Database == "" {
+				return fmt.Errorf("databases.%s.database is required", name)
+			}
+			if db.Server == "" {
+				return fmt.Errorf("databases.%s.server is required", name)
+			}
+			if db.Size <= 0 {
+				return fmt.Errorf("databases.%s.size must be > 0", name)
+			}
+			if !hasVarRef(db.User) {
+				return fmt.Errorf("databases.%s.user must be a $VAR reference", name)
+			}
+			if !hasVarRef(db.Password) {
+				return fmt.Errorf("databases.%s.password must be a $VAR reference", name)
+			}
+			if _, ok := cfg.Servers[db.Server]; !ok {
+				return fmt.Errorf("databases.%s.server: %q is not a defined server", name, db.Server)
+			}
+		}
+		if databaseEngineIsSaaS(db.Engine) {
+			if db.User != "" {
+				return fmt.Errorf("databases.%s.user is not valid for SaaS engine %s", name, db.Engine)
+			}
+			if db.Password != "" {
+				return fmt.Errorf("databases.%s.password is not valid for SaaS engine %s", name, db.Engine)
+			}
+			if db.Database != "" {
+				return fmt.Errorf("databases.%s.database is not valid for SaaS engine %s", name, db.Engine)
+			}
+			if db.Server != "" {
+				return fmt.Errorf("databases.%s.server is not valid for SaaS engine %s", name, db.Engine)
+			}
+			if db.Size != 0 {
+				return fmt.Errorf("databases.%s.size is not valid for SaaS engine %s", name, db.Engine)
+			}
+		}
+		if db.Backup != nil {
+			if db.Backup.Storage != "" {
+				if databaseEngineIsSaaS(db.Engine) {
+					return fmt.Errorf("databases.%s.backup.storage is not valid for SaaS engine %s", name, db.Engine)
+				}
+				if _, ok := cfg.Storage[db.Backup.Storage]; !ok {
+					return fmt.Errorf("databases.%s.backup.storage: %q is not a defined storage", name, db.Backup.Storage)
+				}
+			}
+			if db.Backup.Schedule != "" && !validCronExpr(db.Backup.Schedule) {
+				return fmt.Errorf("databases.%s.backup.schedule %q is invalid", name, db.Backup.Schedule)
+			}
+		}
+	}
+
 	// ── Services ──────────────────────────────────────────────────────────
 	for name, svc := range cfg.Services {
 		if err := utils.ValidateName("services."+name, name); err != nil {
@@ -239,6 +308,17 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		for _, ref := range svc.Storage {
 			if _, ok := cfg.Storage[ref]; !ok {
 				return fmt.Errorf("services.%s.storage: %q is not a defined storage", name, ref)
+			}
+		}
+		for _, ref := range svc.Databases {
+			envName, dbName := parseDatabaseRef(ref)
+			if envName != "" {
+				if err := utils.ValidateEnvVarName("services."+name+".databases", envName); err != nil {
+					return err
+				}
+			}
+			if _, ok := cfg.Databases[dbName]; !ok {
+				return fmt.Errorf("services.%s.databases: %q is not a defined database", name, dbName)
 			}
 		}
 		if err := validateVolumeMounts(cfg, "services."+name, svc.Volumes); err != nil {
@@ -487,4 +567,33 @@ func validateSecretRefs(context string, refs []string) error {
 		}
 	}
 	return nil
+}
+
+func databaseEngineIsSelfHosted(engine string) bool {
+	switch engine {
+	case "postgres", "mysql":
+		return true
+	default:
+		return false
+	}
+}
+
+func databaseEngineIsSaaS(engine string) bool {
+	switch engine {
+	case "neon", "planetscale":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseDatabaseRef(ref string) (envName, dbName string) {
+	if left, right, ok := strings.Cut(ref, "="); ok {
+		return left, right
+	}
+	return "", ref
+}
+
+func validCronExpr(s string) bool {
+	return len(strings.Fields(s)) == 5
 }
