@@ -31,6 +31,15 @@ type DatabaseRequest struct {
 	PVCName               string
 	BackupName            string
 	CredentialsSecretName string
+	// BackupCredsSecretName is the cluster-side Secret that holds the
+	// bucket credentials the backup CronJob / one-shot Job envFroms. Set
+	// by the reconciler when Spec.Backup != nil and providers.storage is
+	// configured. Shape of the Secret's Data keys:
+	//   BUCKET_ENDPOINT, BUCKET_NAME, AWS_ACCESS_KEY_ID,
+	//   AWS_SECRET_ACCESS_KEY, AWS_REGION
+	// Plus ENGINE (per-database) and DATABASE_URL (mirrored from the
+	// credentials Secret so the backup tool has a single source).
+	BackupCredsSecretName string
 	Labels                map[string]string
 	Spec                  DatabaseSpec
 	Bucket                *BucketHandle
@@ -51,10 +60,13 @@ type DatabaseSpec struct {
 	Backup   *DatabaseBackupSpec
 }
 
+// DatabaseBackupSpec is the reconciled backup policy for one database.
+// The bucket itself is provisioned implicitly by the reconciler — the
+// spec carries only what the provider's Reconcile needs to decide
+// whether to emit a CronJob and what schedule / retention to set.
 type DatabaseBackupSpec struct {
 	Schedule  string
 	Retention int
-	Storage   string
 }
 
 type BucketHandle struct {

@@ -148,6 +148,29 @@ func (f *CloudflareFake) SeedBucket(name string) *cfBucket {
 	return b
 }
 
+// HasBucket reports whether the fake currently holds a bucket with the
+// given name. Used by reconcile-level tests that assert implicit bucket
+// provisioning (e.g. database backup buckets).
+func (f *CloudflareFake) HasBucket(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.buckets[name]
+	return ok
+}
+
+// BucketNames returns every bucket held by the fake, for test error
+// messages that want to show what actually exists when an expectation
+// fails.
+func (f *CloudflareFake) BucketNames() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.buckets))
+	for name := range f.buckets {
+		out = append(out, name)
+	}
+	return out
+}
+
 // SeedBucketObject adds an object to an existing bucket.
 func (f *CloudflareFake) SeedBucketObject(bucket, key string, body []byte) {
 	f.mu.Lock()

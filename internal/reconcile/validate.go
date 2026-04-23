@@ -240,13 +240,13 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			}
 		}
 		if db.Backup != nil {
-			if db.Backup.Storage != "" {
-				if databaseEngineIsSaaS(db.Engine) {
-					return fmt.Errorf("databases.%s.backup.storage is not valid for SaaS engine %s", name, db.Engine)
-				}
-				if _, ok := cfg.Storage[db.Backup.Storage]; !ok {
-					return fmt.Errorf("databases.%s.backup.storage: %q is not a defined storage", name, db.Backup.Storage)
-				}
+			// Backups demand an object store to push dumps to. nvoi
+			// provisions the bucket implicitly per-database — the operator
+			// just declares the bucket provider once on providers.storage.
+			// Missing storage here means backups have nowhere to land, so
+			// we fail loudly at validate time rather than mid-reconcile.
+			if cfg.Providers.Storage == "" {
+				return fmt.Errorf("databases.%s.backup set but providers.storage is not configured — backups need a bucket provider", name)
 			}
 			if db.Backup.Schedule != "" && !validCronExpr(db.Backup.Schedule) {
 				return fmt.Errorf("databases.%s.backup.schedule %q is invalid", name, db.Backup.Schedule)

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
+
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
@@ -76,8 +78,17 @@ func (p *Provider) EnsureCredentials(ctx context.Context, kc *kube.Client, req p
 	return creds, nil
 }
 
-func (p *Provider) Reconcile(context.Context, provider.DatabaseRequest) (*provider.DatabasePlan, error) {
-	return &provider.DatabasePlan{}, nil
+// Reconcile emits the shared backup CronJob when backups are configured.
+// Neon has no in-cluster workloads — the database itself lives at the
+// Neon API — so the only thing Reconcile produces is the uniform dump
+// pipeline, pointed at the external endpoint via DATABASE_URL from the
+// credentials Secret written by EnsureCredentials.
+func (p *Provider) Reconcile(_ context.Context, req provider.DatabaseRequest) (*provider.DatabasePlan, error) {
+	var workloads []runtime.Object
+	if req.Spec.Backup != nil && req.Spec.Backup.Schedule != "" {
+		workloads = append(workloads, provider.BuildBackupCronJob(req))
+	}
+	return &provider.DatabasePlan{Workloads: workloads}, nil
 }
 
 func (p *Provider) Delete(ctx context.Context, req provider.DatabaseRequest) error {
@@ -111,81 +122,39 @@ func (p *Provider) ExecSQL(ctx context.Context, req provider.DatabaseRequest, st
 	return &out, nil
 }
 
+// BackupNow kicks a one-shot Job from the scheduled CronJob template.
+// The CronJob body — neon image, pg_dump against DATABASE_URL, gzip,
+// sigv4 upload — is identical to postgres/mysql selfhosted and
+// planetscale. Uniform pull-then-put semantics mean `BackupNow` is a
+// thin wrapper over `CreateJobFromCronJob` in every provider.
+//
+// Neon's native branch primitive is no longer the backup of record:
+// branches give zero-cost PITR but fragment the list/download surface.
+// nvoi promises "gzipped dumps in a bucket" uniformly; operators who
+// want branches still have the Neon UI.
 func (p *Provider) BackupNow(ctx context.Context, req provider.DatabaseRequest) (*provider.BackupRef, error) {
-	project, err := p.findProjectByName(ctx, req.FullName)
-	if err != nil {
+	if req.Kube == nil {
+		return nil, fmt.Errorf("neon BackupNow requires kube client")
+	}
+	if req.Spec.Backup == nil || req.Spec.Backup.Schedule == "" {
+		return nil, fmt.Errorf("neon backup schedule is not configured")
+	}
+	jobName := fmt.Sprintf("%s-manual-%d", req.BackupName, time.Now().Unix())
+	if err := req.Kube.CreateJobFromCronJob(ctx, req.Namespace, req.BackupName, jobName); err != nil {
 		return nil, err
 	}
-	if project == nil {
-		return nil, fmt.Errorf("neon project %q not found", req.FullName)
-	}
-	body := map[string]any{
-		"branch": map[string]any{
-			"name":      fmt.Sprintf("backup-%d", time.Now().Unix()),
-			"parent_id": project.DefaultBranchID,
-		},
-	}
-	resp, err := p.request(ctx, http.MethodPost, fmt.Sprintf("/projects/%s/branches", project.ID), body)
-	if err != nil {
-		return nil, err
-	}
-	branch, err := parseNeonBranch(resp)
-	if err != nil {
-		return nil, err
-	}
-	return &provider.BackupRef{
-		ID:        branch.ID,
-		CreatedAt: branch.CreatedAt,
-		Kind:      "branch",
-	}, nil
+	return &provider.BackupRef{ID: jobName, CreatedAt: time.Now().UTC().Format(time.RFC3339), Kind: "dump"}, nil
 }
 
+// ListBackups / DownloadBackup delegate to the shared bucket helpers —
+// every engine's backup artifact is a gzipped logical dump in the
+// same object-store layout, so there's nothing engine-specific here.
 func (p *Provider) ListBackups(ctx context.Context, req provider.DatabaseRequest) ([]provider.BackupRef, error) {
-	project, err := p.findProjectByName(ctx, req.FullName)
-	if err != nil {
-		return nil, err
-	}
-	if project == nil {
-		return nil, nil
-	}
-	resp, err := p.request(ctx, http.MethodGet, fmt.Sprintf("/projects/%s/branches", project.ID), nil)
-	if err != nil {
-		return nil, err
-	}
-	var payload struct {
-		Branches []struct {
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			CreatedAt string `json:"created_at"`
-		} `json:"branches"`
-	}
-	if err := json.Unmarshal(resp, &payload); err != nil {
-		return nil, err
-	}
-	out := make([]provider.BackupRef, 0, len(payload.Branches))
-	for _, b := range payload.Branches {
-		if !strings.HasPrefix(b.Name, "backup-") {
-			continue
-		}
-		out = append(out, provider.BackupRef{ID: b.ID, CreatedAt: b.CreatedAt, Kind: "branch"})
-	}
-	return out, nil
+	return provider.BucketListBackups(ctx, req)
 }
 
 func (p *Provider) DownloadBackup(ctx context.Context, req provider.DatabaseRequest, backupID string, w io.Writer) error {
-	project, err := p.findProjectByName(ctx, req.FullName)
-	if err != nil {
-		return err
-	}
-	if project == nil {
-		return fmt.Errorf("neon project %q not found", req.FullName)
-	}
-	resp, err := p.request(ctx, http.MethodGet, fmt.Sprintf("/projects/%s/branches/%s/dump", project.ID, backupID), nil)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(resp)
-	return err
+	return provider.BucketDownloadBackup(ctx, req, backupID, w)
 }
 
 type neonProject struct {

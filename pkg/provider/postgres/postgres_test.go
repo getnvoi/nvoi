@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/getnvoi/nvoi/internal/testutil/kubefake"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
@@ -115,4 +118,72 @@ func TestParseCSV_MultiColumn(t *testing.T) {
 	if len(res.Rows) != 1 || res.Rows[0][1] != "2" {
 		t.Fatalf("rows = %#v", res.Rows)
 	}
+}
+
+// Reconcile must emit Service + PVC + StatefulSet + backup CronJob when
+// Spec.Backup is set. Locks the selfhosted workload shape plus the
+// uniform backup envFrom wiring — same contract neon/planetscale tests
+// enforce on their end.
+func TestReconcile_EmitsStatefulSetPlusBackupCronJob(t *testing.T) {
+	p := &Provider{}
+	req := provider.DatabaseRequest{
+		Name:                  "app",
+		FullName:              "nvoi-myapp-prod-db-app",
+		PVCName:               "nvoi-myapp-prod-db-app-data",
+		BackupName:            "nvoi-myapp-prod-db-app-backup",
+		CredentialsSecretName: "nvoi-myapp-prod-db-app-credentials",
+		BackupCredsSecretName: "nvoi-myapp-prod-db-app-backup-creds",
+		Namespace:             "nvoi-myapp-prod",
+		Spec: provider.DatabaseSpec{
+			Engine:   "postgres",
+			Version:  "16",
+			Server:   "master",
+			Size:     20,
+			User:     "appuser",
+			Password: "s3cr3t",
+			Database: "myapp",
+			Backup:   &provider.DatabaseBackupSpec{Schedule: "0 3 * * *"},
+		},
+	}
+	plan, err := p.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Expected: Service, PVC, StatefulSet, CronJob.
+	if len(plan.Workloads) != 4 {
+		t.Fatalf("expected 4 workloads, got %d", len(plan.Workloads))
+	}
+	cj, ok := plan.Workloads[3].(*batchv1.CronJob)
+	if !ok {
+		t.Fatalf("expected *batchv1.CronJob as last workload, got %T", plan.Workloads[3])
+	}
+	envFrom := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].EnvFrom
+	if !envFromHas(envFrom, "nvoi-myapp-prod-db-app-credentials") {
+		t.Fatalf("credentials Secret missing from envFrom: %#v", envFrom)
+	}
+	if !envFromHas(envFrom, "nvoi-myapp-prod-db-app-backup-creds") {
+		t.Fatalf("backup-creds Secret missing from envFrom: %#v", envFrom)
+	}
+	env := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env
+	if !envHas(env, "ENGINE", "postgres") {
+		t.Fatalf("ENGINE=postgres missing in env: %#v", env)
+	}
+}
+
+func envFromHas(sources []corev1.EnvFromSource, name string) bool {
+	for _, s := range sources {
+		if s.SecretRef != nil && s.SecretRef.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func envHas(env []corev1.EnvVar, name, value string) bool {
+	for _, e := range env {
+		if e.Name == name && e.Value == value {
+			return true
+		}
+	}
+	return false
 }

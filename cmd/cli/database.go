@@ -147,15 +147,23 @@ func resolveDatabaseCommand(cmd *cobra.Command, rt *runtime, name string) (provi
 	req.Namespace = names.KubeNamespace()
 	req.Labels = names.Labels()
 	req.Log = rt.out
-	if def.Backup != nil && def.Backup.Storage != "" {
+	// Backup bucket: same derivation as reconcile (one bucket per
+	// database, deterministic name from Names.KubeDatabaseBackupBucket).
+	// We don't EnsureBucket here — deploy is the only path that
+	// provisions — but we do fetch credentials so list/download work.
+	// If providers.storage is unset, the validator will have already
+	// rejected any backup config; leaving Bucket nil for databases that
+	// don't declare backup: is correct.
+	if def.Backup != nil {
 		creds, err := commandBucketCredentials(rt)
 		if err != nil {
 			return provider.DatabaseRequest{}, nil, nil, err
 		}
 		req.Bucket = &provider.BucketHandle{
-			Name:        names.Bucket(def.Backup.Storage),
+			Name:        names.KubeDatabaseBackupBucket(name),
 			Credentials: creds,
 		}
+		req.BackupCredsSecretName = names.KubeDatabaseBackupCreds(name)
 	}
 
 	kc, _, cleanup, kerr := rt.dc.Cluster.Kube(cmd.Context(), config.NewView(rt.cfg))
@@ -259,7 +267,6 @@ func commandDatabaseRequest(name string, def config.DatabaseDef, names *utils.Na
 		req.Spec.Backup = &provider.DatabaseBackupSpec{
 			Schedule:  def.Backup.Schedule,
 			Retention: def.Backup.Retention,
-			Storage:   def.Backup.Storage,
 		}
 	}
 	return req, nil

@@ -9,6 +9,16 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// Databases converges every entry in `cfg.Databases` against the
+// configured provider. Step runs between Storage() and Services() so
+// consumer services can envFrom `DATABASE_URL_<NAME>` out of the merged
+// credential map this step returns.
+//
+// When `def.Backup` is set, this step also provisions the per-database
+// backup bucket on `providers.storage` (one bucket per database,
+// prefix-free), applies the retention policy, and materializes the
+// `-backup-creds` cluster Secret that the uniform backup CronJob
+// envFroms. The provider's Reconcile then emits the CronJob itself.
 func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, sources map[string]string) (map[string]string, error) {
 	names, err := dc.Cluster.Names()
 	if err != nil {
@@ -33,7 +43,7 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 			return nil, fmt.Errorf("databases.%s: %w", name, err)
 		}
 
-		req, err := databaseRequest(cfg, dc, names, name, def, sources)
+		req, err := databaseRequest(dc, names, name, def, sources)
 		if err != nil {
 			_ = db.Close()
 			return nil, err
@@ -41,6 +51,17 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 		req.Namespace = names.KubeNamespace()
 		req.Labels = names.Labels()
 		req.Log = dc.Cluster.Log()
+
+		// Backup bucket + creds Secret — idempotent upsert. The bucket
+		// is named deterministically (see Names.KubeDatabaseBackupBucket),
+		// so re-running this step just re-asserts the retention policy
+		// and re-materializes the creds Secret.
+		if def.Backup != nil {
+			if err := ensureDatabaseBackupBucket(ctx, dc, cfg, names, name, def, &req); err != nil {
+				_ = db.Close()
+				return nil, err
+			}
+		}
 
 		resolved, err := db.EnsureCredentials(ctx, dc.Cluster.MasterKube, req)
 		if err != nil {
@@ -65,7 +86,57 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 	return out, nil
 }
 
-func databaseRequest(cfg *config.AppConfig, dc *config.DeployContext, names *utils.Names, name string, def config.DatabaseDef, sources map[string]string) (provider.DatabaseRequest, error) {
+// ensureDatabaseBackupBucket provisions the per-database backup bucket
+// on the configured `providers.storage`, applies the retention
+// lifecycle, and writes the cluster-side Secret the backup CronJob /
+// one-shot Job envFroms. Mutates req so the provider's Reconcile knows
+// where to point the CronJob.
+//
+// Validator guarantees `cfg.Providers.Storage != ""` when def.Backup is
+// set, so the error path here is a provider-side failure, not a config
+// issue.
+func ensureDatabaseBackupBucket(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, names *utils.Names, dbName string, def config.DatabaseDef, req *provider.DatabaseRequest) error {
+	_ = cfg
+	if dc.Storage.Name == "" {
+		return fmt.Errorf("databases.%s.backup: providers.storage is not configured (validator should have caught this)", dbName)
+	}
+	bucket, err := provider.ResolveBucket(dc.Storage.Name, dc.Storage.Creds)
+	if err != nil {
+		return fmt.Errorf("databases.%s.backup: resolve bucket provider: %w", dbName, err)
+	}
+	bucketName := names.KubeDatabaseBackupBucket(dbName)
+	if err := bucket.EnsureBucket(ctx, bucketName); err != nil {
+		return fmt.Errorf("databases.%s.backup: ensure bucket %s: %w", dbName, bucketName, err)
+	}
+	if def.Backup.Retention > 0 {
+		if err := bucket.SetLifecycle(ctx, bucketName, def.Backup.Retention); err != nil {
+			return fmt.Errorf("databases.%s.backup: set lifecycle: %w", dbName, err)
+		}
+	}
+	bucketCreds, err := bucket.Credentials(ctx)
+	if err != nil {
+		return fmt.Errorf("databases.%s.backup: fetch bucket credentials: %w", dbName, err)
+	}
+	// Cluster-side Secret — the CronJob / one-shot Job envFroms this to
+	// get BUCKET_ENDPOINT / BUCKET_NAME / AWS_* for the sigv4 upload.
+	// Shape owned by provider.BuildBackupCredsSecretData so the image's
+	// entrypoint contract stays in one place.
+	credsSecretName := names.KubeDatabaseBackupCreds(dbName)
+	if dc.Cluster.MasterKube != nil {
+		if err := dc.Cluster.MasterKube.EnsureSecret(
+			ctx, names.KubeNamespace(), credsSecretName,
+			provider.BuildBackupCredsSecretData(bucketName, bucketCreds),
+		); err != nil {
+			return fmt.Errorf("databases.%s.backup: write %s: %w", dbName, credsSecretName, err)
+		}
+	}
+	req.Bucket = &provider.BucketHandle{Name: bucketName, Credentials: bucketCreds}
+	req.BackupCredsSecretName = credsSecretName
+	return nil
+}
+
+func databaseRequest(dc *config.DeployContext, names *utils.Names, name string, def config.DatabaseDef, sources map[string]string) (provider.DatabaseRequest, error) {
+	_ = dc
 	req := provider.DatabaseRequest{
 		Name:                  name,
 		FullName:              names.Database(name),
@@ -86,17 +157,6 @@ func databaseRequest(cfg *config.AppConfig, dc *config.DeployContext, names *uti
 		req.Spec.Backup = &provider.DatabaseBackupSpec{
 			Schedule:  def.Backup.Schedule,
 			Retention: def.Backup.Retention,
-			Storage:   def.Backup.Storage,
-		}
-		if def.Backup.Storage != "" {
-			bucketCreds, err := databaseBucketCredentials(cfg, dc, def.Backup.Storage)
-			if err != nil {
-				return req, fmt.Errorf("databases.%s.bucket: %w", name, err)
-			}
-			req.Bucket = &provider.BucketHandle{
-				Name:        names.Bucket(def.Backup.Storage),
-				Credentials: bucketCreds,
-			}
 		}
 	}
 	if def.User != "" {
@@ -114,19 +174,6 @@ func databaseRequest(cfg *config.AppConfig, dc *config.DeployContext, names *uti
 		req.Spec.Password = v
 	}
 	return req, nil
-}
-
-func databaseBucketCredentials(cfg *config.AppConfig, dc *config.DeployContext, storageName string) (provider.BucketCredentials, error) {
-	_ = cfg
-	_ = storageName
-	if dc.Storage.Name == "" {
-		return provider.BucketCredentials{}, fmt.Errorf("providers.storage is required for database backups")
-	}
-	bucket, err := provider.ResolveBucket(dc.Storage.Name, dc.Storage.Creds)
-	if err != nil {
-		return provider.BucketCredentials{}, err
-	}
-	return bucket.Credentials(context.Background())
 }
 
 func resolveDatabaseProviderCreds(source provider.CredentialSource, name string) (map[string]string, error) {

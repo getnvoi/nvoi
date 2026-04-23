@@ -11,7 +11,6 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,7 +19,6 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
-	"github.com/getnvoi/nvoi/pkg/utils/s3"
 )
 
 type Provider struct{}
@@ -55,12 +53,21 @@ func (p *Provider) Reconcile(_ context.Context, req provider.DatabaseRequest) (*
 		buildPVC(req),
 		buildStatefulSet(req),
 	}
+	// Backup CronJob is the uniform path — every DatabaseProvider whose
+	// Spec.Backup is set delegates to provider.BuildBackupCronJob. The
+	// reconciler upstream is responsible for provisioning the bucket and
+	// materializing the `-backup-creds` Secret this CronJob envFroms;
+	// we just emit the workload.
 	if req.Spec.Backup != nil && req.Spec.Backup.Schedule != "" {
-		workloads = append(workloads, buildBackupCron(req))
+		workloads = append(workloads, provider.BuildBackupCronJob(req))
 	}
 	return &provider.DatabasePlan{Workloads: workloads}, nil
 }
 
+// Delete is a no-op for postgres selfhosted — the StatefulSet /
+// Service / PVC / Secret / CronJob die with the cluster namespace on
+// teardown (or stay on re-deploy drift). The PVC lives under
+// `--delete-volumes`, orthogonal to the DatabaseProvider contract.
 func (p *Provider) Delete(context.Context, provider.DatabaseRequest) error { return nil }
 
 func (p *Provider) ExecSQL(ctx context.Context, req provider.DatabaseRequest, stmt string) (*provider.SQLResult, error) {
@@ -70,49 +77,15 @@ func (p *Provider) ExecSQL(ctx context.Context, req provider.DatabaseRequest, st
 	return ExecSQLWithKube(ctx, req.Kube, req, stmt)
 }
 
-func (p *Provider) ListBackups(_ context.Context, req provider.DatabaseRequest) ([]provider.BackupRef, error) {
-	if req.Bucket == nil {
-		return nil, fmt.Errorf("postgres backups require backup.storage")
-	}
-	objects, err := s3.ListObjects(
-		req.Bucket.Credentials.Endpoint,
-		req.Bucket.Credentials.AccessKeyID,
-		req.Bucket.Credentials.SecretAccessKey,
-		req.Bucket.Name,
-		backupPrefix(req),
-	)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]provider.BackupRef, 0, len(objects))
-	for _, obj := range objects {
-		out = append(out, provider.BackupRef{
-			ID:        strings.TrimPrefix(obj.Key, backupPrefix(req)),
-			CreatedAt: obj.LastModified,
-			SizeBytes: obj.Size,
-			Kind:      "dump",
-		})
-	}
-	return out, nil
+// ListBackups / DownloadBackup delegate to the shared bucket helpers —
+// every DatabaseProvider produces the same artifact (gzipped logical
+// dump, prefix-free layout), so enumeration/download is engine-agnostic.
+func (p *Provider) ListBackups(ctx context.Context, req provider.DatabaseRequest) ([]provider.BackupRef, error) {
+	return provider.BucketListBackups(ctx, req)
 }
 
-func (p *Provider) DownloadBackup(_ context.Context, req provider.DatabaseRequest, backupID string, w io.Writer) error {
-	if req.Bucket == nil {
-		return fmt.Errorf("postgres backups require backup.storage")
-	}
-	rc, _, _, err := s3.GetStream(
-		req.Bucket.Credentials.Endpoint,
-		req.Bucket.Credentials.AccessKeyID,
-		req.Bucket.Credentials.SecretAccessKey,
-		req.Bucket.Name,
-		backupKey(req, backupID),
-	)
-	if err != nil {
-		return err
-	}
-	defer rc.Close()
-	_, err = io.Copy(w, rc)
-	return err
+func (p *Provider) DownloadBackup(ctx context.Context, req provider.DatabaseRequest, backupID string, w io.Writer) error {
+	return provider.BucketDownloadBackup(ctx, req, backupID, w)
 }
 
 func ExecSQLWithKube(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest, stmt string) (*provider.SQLResult, error) {
@@ -268,37 +241,10 @@ func buildStatefulSet(req provider.DatabaseRequest) runtime.Object {
 	}
 }
 
-func buildBackupCron(req provider.DatabaseRequest) runtime.Object {
-	return &batchv1.CronJob{
-		TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "CronJob"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      req.BackupName,
-			Namespace: req.Namespace,
-			Labels:    labels(req),
-		},
-		Spec: batchv1.CronJobSpec{
-			Schedule: req.Spec.Backup.Schedule,
-			JobTemplate: batchv1.JobTemplateSpec{
-				Spec: batchv1.JobSpec{
-					Template: corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{
-							RestartPolicy: corev1.RestartPolicyNever,
-							Containers: []corev1.Container{{
-								Name:    "backup",
-								Image:   "postgres:16-alpine",
-								Command: []string{"sh", "-lc", "pg_dump \"$DATABASE_URL\" > /tmp/backup.sql && wc -c /tmp/backup.sql"},
-								Env: []corev1.EnvVar{
-									{Name: "DATABASE_URL", Value: credentials(req).URL},
-								},
-							}},
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
+// BackupNow kicks a one-shot Job from the scheduled CronJob's template.
+// The CronJob IS the source of truth for backup configuration (image,
+// envFrom, entrypoint) — BackupNow just instantiates it out-of-band so
+// `nvoi database backup now` doesn't drift from the scheduled path.
 func BackupNowWithKube(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest) (*provider.BackupRef, error) {
 	if req.Spec.Backup == nil || req.Spec.Backup.Schedule == "" {
 		return nil, fmt.Errorf("postgres backup schedule is not configured")
@@ -315,12 +261,4 @@ func (p *Provider) BackupNow(ctx context.Context, req provider.DatabaseRequest) 
 		return nil, fmt.Errorf("postgres BackupNow requires kube client")
 	}
 	return BackupNowWithKube(ctx, req.Kube, req)
-}
-
-func backupPrefix(req provider.DatabaseRequest) string {
-	return req.Name + "/"
-}
-
-func backupKey(req provider.DatabaseRequest, id string) string {
-	return backupPrefix(req) + id
 }

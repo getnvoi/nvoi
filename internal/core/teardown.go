@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -76,6 +77,19 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		if nerr != nil {
 			collect(nerr)
 		} else {
+			// Resolve the bucket provider once — reused to nuke each
+			// database's backup bucket. Nil when providers.storage is
+			// unset (valid: no backups were provisioned in the first
+			// place).
+			var bucketProv provider.BucketProvider
+			if dc.Storage.Name != "" {
+				if b, err := provider.ResolveBucket(dc.Storage.Name, dc.Storage.Creds); err == nil {
+					bucketProv = b
+				} else {
+					collect(fmt.Errorf("resolve bucket provider for database teardown: %w", err))
+				}
+			}
+
 			for _, name := range utils.SortedKeys(cfg.Databases) {
 				def := cfg.Databases[name]
 				schema, serr := provider.GetSchema("database", def.Engine)
@@ -100,12 +114,29 @@ func Teardown(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 					PVCName:               names.KubeDatabasePVC(name),
 					BackupName:            names.KubeDatabaseBackupCron(name),
 					CredentialsSecretName: names.KubeDatabaseCredentials(name),
+					BackupCredsSecretName: names.KubeDatabaseBackupCreds(name),
 					Namespace:             names.KubeNamespace(),
 					Labels:                names.Labels(),
 					DeleteVolumes:         deleteVolumes || deleteDatabases,
 				}
 				collect(db.Delete(ctx, req))
 				_ = db.Close()
+
+				// Nuke the per-database backup bucket — nvoi
+				// provisioned it, nvoi owns its deletion. Empty first
+				// (bucket providers reject delete on non-empty buckets)
+				// then delete. Best-effort — every error is collected
+				// so one missing bucket doesn't block the rest.
+				if def.Backup != nil && bucketProv != nil {
+					bucketName := names.KubeDatabaseBackupBucket(name)
+					dc.Cluster.Log().Command("database", "delete-backups", name)
+					if err := bucketProv.EmptyBucket(ctx, bucketName); err != nil && !errors.Is(err, utils.ErrNotFound) {
+						collect(fmt.Errorf("empty backup bucket %s: %w", bucketName, err))
+					}
+					if err := bucketProv.DeleteBucket(ctx, bucketName); err != nil && !errors.Is(err, utils.ErrNotFound) {
+						collect(fmt.Errorf("delete backup bucket %s: %w", bucketName, err))
+					}
+				}
 			}
 		}
 	}

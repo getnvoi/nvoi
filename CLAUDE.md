@@ -114,6 +114,9 @@ databases:
     user: $POSTGRES_APP_USER
     password: $POSTGRES_APP_PASSWORD
     database: myapp
+    backup:                   # optional — requires providers.storage
+      schedule: "0 3 * * *"
+      retention: 14           # days applied via BucketProvider.SetLifecycle
 
 services:
   api:
@@ -142,7 +145,7 @@ domains:
 - `app` and `env` required; `providers.infra` required (the legacy `providers.compute` key was removed in #47 — use `providers.infra`).
 - At least one server, exactly one master, all have type/region/role. `disk` optional (creation-only, not resizable). Hetzner + `disk` = hard error (fixed per server type).
 - Volumes: size > 0, server exists. `server` / `servers` mutually exclusive. Multiple servers + volume = error.
-- Databases: `engine` required and must be a registered database provider. Selfhosted engines require `user` / `password` / `database` / `server` / `size`; SaaS engines reject those fields. `backup.storage` must reference `storage:`.
+- Databases: `engine` required and must be a registered database provider. Selfhosted engines require `user` / `password` / `database` / `server` / `size`; SaaS engines reject those fields. Any `databases.<name>.backup` set requires `providers.storage` — nvoi provisions the backup bucket implicitly per-database (no `backup.storage:` field to wire up; see **Database backups**).
 - Services/crons: `image` required (unless `build:`), referenced `storage`/`volumes` exist. Volume mounts `name:/path`, volume must be on the same server as the workload.
 - Web-facing services (with domains): replicas omitted → 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid.
 - `services.X.build:` requires a `registry:` block AND the image's host must appear as a key. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag.
@@ -167,6 +170,37 @@ Two independent concerns that compose:
 **Deploy hash tag + label:** `dc.Cluster.DeployHash = YYYYMMDD-HHMMSS` (UTC). User tag preserved and suffixed with the hash (`:v2` → `:v2-<hash>`); no user tag → `:<hash>`. Same hash stamped as `nvoi/deploy-hash: <hash>` on workload metadata AND pod-template metadata (NEVER selectors). Every deploy produces a new `image:` string so rolling updates always trigger without a `:latest` foot-gun.
 
 Chmod / Dockerfile hygiene is the user's responsibility — nvoi does not mutate the build context. Use BuildKit `COPY --chmod=0755` or `RUN chmod +x` inside the Dockerfile.
+
+## Database backups
+
+Every `DatabaseProvider` backs up the same way: a gzipped logical dump lands in an object-store bucket provisioned implicitly per-database. **Pull mechanics vary by engine; put mechanics are identical.**
+
+| Engine | Pull | Put |
+|---|---|---|
+| `postgres` selfhosted | `pg_dump` against the in-cluster Service | s3 PutObject |
+| `mysql` selfhosted | `mysqldump` against the in-cluster Service | s3 PutObject |
+| `neon` | `pg_dump` against `{branch.host}:5432` (external TLS) | s3 PutObject |
+| `planetscale` | `mysqldump` against `{db}.{org}.psdb.cloud:3306` (external TLS) | s3 PutObject |
+
+**Bucket:** `nvoi-{app}-{env}-db-{name}-backups` — one bucket per database, prefix-free layout. Name derivation lives in `pkg/utils/naming.go::Names.KubeDatabaseBackupBucket`. Provisioned on `providers.storage` by `internal/reconcile/databases.go::ensureDatabaseBackupBucket` with the retention policy applied via `BucketProvider.SetLifecycle(name, retention)` once per reconcile.
+
+**Image:** `docker.io/nvoi/backup:<cli-version>` — public Docker Hub repo, built from `cmd/backup/Dockerfile`, published on every `v*` tag by `.github/workflows/release.yml`. The CLI binary bakes its version into `pkg/utils.Version` at build time (`-ldflags -X`), and `provider.BackupImage()` returns the matching tag — binary and image stay in lockstep.
+
+**Entrypoint contract** (`cmd/backup/main.go`):
+
+- `ENGINE` — postgres | mysql | neon | planetscale
+- `DB_URL` — DSN, sourced from the credentials Secret's `url` key via envFrom prefix `DB_`
+- `BUCKET_ENDPOINT` / `BUCKET_NAME` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` — from the `-backup-creds` Secret
+
+The binary picks the dump tool, pipes stdout through gzip into `/tmp/backup.sql.gz`, stats for size, and `s3.PutStream`s with `UNSIGNED-PAYLOAD` SigV4 (avoids hashing the full body — flat memory for large dumps). Key: `<YYYYMMDDTHHMMSSZ>.sql.gz`. Exit non-zero on failure so the k8s Job records Failed and retries per `BackoffLimit`.
+
+**`BackupNow`:** every provider's `BackupNow` kicks a one-shot Job from the scheduled CronJob's template via `kc.CreateJobFromCronJob` — the CronJob IS the source of truth, so scheduled and manual backups run identical code.
+
+**`ListBackups` / `DownloadBackup`:** shared helpers in `pkg/provider/database_backups.go` that walk the bucket directly — engine-agnostic, one implementation across postgres/neon/planetscale.
+
+**Teardown:** `--delete-databases` empties + deletes each backup bucket after `DatabaseProvider.Delete`. Ordering matters — the bucket delete must not race the provider-side database delete.
+
+SaaS-native snapshots (Neon branches, PlanetScale branches) are no longer the backup of record. The trade-off is intentional: zero-cost PITR via branches fragments list/download across providers; gzipped-dumps-in-a-bucket keeps the surface uniform. Operators who want branches still have the Neon/PlanetScale UIs.
 
 ## Architecture
 

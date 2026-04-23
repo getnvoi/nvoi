@@ -851,6 +851,7 @@ func TestValidateConfig_CIUnknownKind_Errors(t *testing.T) {
 
 func TestValidateConfig_DatabasePostgresValid(t *testing.T) {
 	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare" // backup: set → providers.storage required
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
 			Engine:   "postgres",
@@ -894,7 +895,10 @@ func TestValidateConfig_DatabaseNeonRejectsSelfHostedFields(t *testing.T) {
 	assertValidationError(t, cfg, "not valid for SaaS engine neon")
 }
 
-func TestValidateConfig_DatabaseBackupStorageMustExist(t *testing.T) {
+// Backups need a bucket provider. Declaring `backup:` without
+// `providers.storage` is a hard validation error — we refuse to reconcile
+// a schedule that has nowhere to put its dumps.
+func TestValidateConfig_DatabaseBackupRequiresProvidersStorage(t *testing.T) {
 	cfg := validCfgForTest()
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
@@ -904,10 +908,44 @@ func TestValidateConfig_DatabaseBackupStorageMustExist(t *testing.T) {
 			User:     "$POSTGRES_APP_USER",
 			Password: "$POSTGRES_APP_PASSWORD",
 			Database: "myapp",
-			Backup:   &config.DatabaseBackupDef{Storage: "missing"},
+			Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *"},
 		},
 	}
-	assertValidationError(t, cfg, "databases.app.backup.storage")
+	assertValidationError(t, cfg, "providers.storage is not configured")
+}
+
+// Same rule applies to SaaS engines — backups are uniform, so the
+// providers.storage requirement isn't engine-specific.
+func TestValidateConfig_DatabaseBackupSaaSRequiresProvidersStorage(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"analytics": {
+			Engine: "neon",
+			Region: "eu-central-1",
+			Backup: &config.DatabaseBackupDef{Retention: 14},
+		},
+	}
+	assertValidationError(t, cfg, "providers.storage is not configured")
+}
+
+// Happy path: backup set + providers.storage set → valid.
+func TestValidateConfig_DatabaseBackupWithProvidersStorage_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare"
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine:   "postgres",
+			Server:   "master",
+			Size:     20,
+			User:     "$POSTGRES_APP_USER",
+			Password: "$POSTGRES_APP_PASSWORD",
+			Database: "myapp",
+			Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
+		},
+	}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("backup with providers.storage must validate clean, got: %v", err)
+	}
 }
 
 func TestValidateConfig_ServiceDatabaseAliasMustBeEnvVar(t *testing.T) {

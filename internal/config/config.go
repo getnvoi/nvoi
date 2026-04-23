@@ -258,10 +258,17 @@ type DatabaseDef struct {
 	Backup   *DatabaseBackupDef `yaml:"backup,omitempty"`
 }
 
+// DatabaseBackupDef configures the shared backup pipeline.
+//
+// The backup bucket is provisioned implicitly by nvoi per database — there
+// is no `storage:` reference to wire up. Every engine (postgres/mysql
+// selfhosted, neon, planetscale) pulls with engine-specific tooling and
+// pushes gzipped logical dumps to `nvoi-{app}-{env}-db-{name}-backups` on
+// the configured `providers.storage`. The validator requires
+// `providers.storage` whenever any database has `backup:` set.
 type DatabaseBackupDef struct {
 	Schedule  string `yaml:"schedule,omitempty"`
 	Retention int    `yaml:"retention,omitempty"`
-	Storage   string `yaml:"storage,omitempty"`
 }
 
 type ServiceDef struct {
