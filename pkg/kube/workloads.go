@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -80,6 +81,28 @@ func (c *Client) ListCronJobNames(ctx context.Context, ns string) ([]string, err
 		out = append(out, cj.Name)
 	}
 	return out, nil
+}
+
+// GetStatefulSet returns the StatefulSet named `name` in `ns`, or
+// (nil, nil) when it doesn't exist. The "exists-or-not" shape is
+// deliberate — callers are doing a probe (does this workload already
+// live here?), not a load-bearing read, so funneling NotFound through
+// an explicit nil is cleaner than forcing every call site to import
+// apierrors.IsNotFound.
+//
+// Used by reconcile.Databases to detect node-pin drift before touching
+// a database: the existing StatefulSet's nodeSelector is the source of
+// truth for which node the data physically lives on, and a mismatch
+// with cfg has to hard-error (local NVMe can't migrate — see #67).
+func (c *Client) GetStatefulSet(ctx context.Context, ns, name string) (*appsv1.StatefulSet, error) {
+	ss, err := c.cs.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get statefulset %s/%s: %w", ns, name, err)
+	}
+	return ss, nil
 }
 
 // DeleteByName removes the Deployment, StatefulSet, and Service named `name`.

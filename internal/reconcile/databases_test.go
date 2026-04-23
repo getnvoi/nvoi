@@ -2,12 +2,18 @@ package reconcile
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	_ "github.com/getnvoi/nvoi/pkg/provider/postgres"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // TestDatabases_ProvisionsBackupBucketAndCredsSecret locks the unified
@@ -149,5 +155,135 @@ func TestDatabases_NoBackupSkipsBucketProvisioning(t *testing.T) {
 	kf := kfFor(dc)
 	if kf.HasSecret("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-backup-creds") {
 		t.Fatalf("backup-creds Secret must NOT exist when backup: unset")
+	}
+}
+
+// TestDatabases_HardErrorOnServerChange locks the "local NVMe cannot
+// migrate" invariant. Selfhosted databases pin their data to one node
+// via k3s local-path — flipping databases.X.server: would silently
+// initialize an empty PGDATA on the new node and orphan the old data.
+//
+// The guard runs BEFORE any provider resolution or kube mutation, so a
+// blocked deploy leaves the cluster untouched. We assert three things:
+//
+//  1. Deploy errors naming both the current and requested nodes so the
+//     operator can see the drift without digging through kubectl.
+//  2. The error message points at the migration path (issue #67) so
+//     this isn't a dead-end — there IS a documented escape hatch.
+//  3. Zero cluster mutations happened for this database — no CronJob,
+//     no credentials Secret, no bucket side-effects. The guard is
+//     purely a read, and it short-circuits everything downstream.
+func TestDatabases_HardErrorOnServerChange(t *testing.T) {
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
+	cf.RegisterBucket("test-bucket-guard")
+
+	dc := testDC(convergeMock())
+	dc.Creds = testCreds()
+	dc.Storage = app.ProviderRef{
+		Name:  "test-bucket-guard",
+		Creds: map[string]string{"api_key": "x", "account_id": "acct"},
+	}
+
+	// Seed a live StatefulSet pinned to "master" — this is the state
+	// that would exist after a prior successful deploy.
+	kf := kfFor(dc)
+	existing := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nvoi-myapp-prod-db-app",
+			Namespace: "nvoi-myapp-prod",
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					NodeSelector: map[string]string{utils.LabelNvoiRole: "master"},
+				},
+			},
+		},
+	}
+	if _, err := kf.Typed.AppsV1().StatefulSets("nvoi-myapp-prod").Create(
+		context.Background(), existing, metav1.CreateOptions{},
+	); err != nil {
+		t.Fatalf("seed existing StatefulSet: %v", err)
+	}
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-guard"},
+		Databases: map[string]config.DatabaseDef{
+			"app": {
+				Engine:   "postgres",
+				Server:   "db-master", // changed from "master"
+				Size:     20,
+				User:     "$U",
+				Password: "$P",
+				Database: "myapp",
+				Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
+			},
+		},
+	}
+
+	_, err := Databases(context.Background(), dc, cfg,
+		map[string]string{"U": "u", "P": "p"})
+	if err == nil {
+		t.Fatal("expected hard error on server change, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{"master", "db-master", "#67", "databases.app"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error missing %q; got: %s", want, msg)
+		}
+	}
+
+	// Zero mutations past the guard — the backup bucket must NOT have
+	// been provisioned, the credentials Secret must NOT have been
+	// written, and no CronJob was applied. A future regression that
+	// reorders the guard below any provider op would flip these.
+	if cf.HasBucket("nvoi-myapp-prod-db-app-backups") {
+		t.Error("backup bucket must not be provisioned when guard trips")
+	}
+	if kf.HasSecret("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-backup-creds") {
+		t.Error("backup-creds Secret must not be written when guard trips")
+	}
+	if kf.HasSecret("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-credentials") {
+		t.Error("credentials Secret must not be written when guard trips")
+	}
+	if kf.HasCronJob("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-backup") {
+		t.Error("backup CronJob must not be applied when guard trips")
+	}
+}
+
+// TestDatabases_FirstDeploySkipsGuard locks the "guard is drift-only,
+// not first-deploy" property. When no live StatefulSet exists yet, the
+// guard must return nil and let reconcile proceed — otherwise no
+// database could ever be deployed for the first time.
+func TestDatabases_FirstDeploySkipsGuard(t *testing.T) {
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
+	cf.RegisterBucket("test-bucket-first")
+
+	dc := testDC(convergeMock())
+	dc.Creds = testCreds()
+	dc.Storage = app.ProviderRef{
+		Name:  "test-bucket-first",
+		Creds: map[string]string{"api_key": "x", "account_id": "acct"},
+	}
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-first"},
+		Databases: map[string]config.DatabaseDef{
+			"app": {
+				Engine:   "postgres",
+				Server:   "master",
+				Size:     20,
+				User:     "$U",
+				Password: "$P",
+				Database: "myapp",
+			},
+		},
+	}
+
+	if _, err := Databases(context.Background(), dc, cfg,
+		map[string]string{"U": "u", "P": "p"}); err != nil {
+		t.Fatalf("first-deploy must succeed (no live StatefulSet), got: %v", err)
 	}
 }

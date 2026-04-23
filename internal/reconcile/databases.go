@@ -29,6 +29,18 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 	for _, name := range utils.SortedKeys(cfg.Databases) {
 		def := cfg.Databases[name]
 
+		// Block silent node-migration BEFORE any provider resolution or
+		// cluster mutation. Selfhosted engines (postgres/mysql) pin data
+		// to one node's local NVMe via k3s local-path — flipping
+		// databases.X.server: would destroy the existing cluster's data
+		// and initialize an empty PGDATA on the new node without warning.
+		// SaaS engines (neon, planetscale) have no `server:` and skip
+		// naturally (def.Server == ""). See #67 for the migrate command
+		// that will lift this restriction.
+		if err := guardNodePinDrift(ctx, dc, names, name, def); err != nil {
+			return nil, err
+		}
+
 		creds, err := resolveDatabaseProviderCreds(dc.Creds, def.Engine)
 		if err != nil {
 			return nil, fmt.Errorf("databases.%s.provider: %w", name, err)
@@ -174,6 +186,52 @@ func databaseRequest(dc *config.DeployContext, names *utils.Names, name string, 
 		req.Spec.Password = v
 	}
 	return req, nil
+}
+
+// guardNodePinDrift returns an error when a selfhosted database is
+// already deployed on one node (per the live StatefulSet's
+// nodeSelector[nvoi-role]) and cfg now asks for a different node. Local
+// NVMe can't teleport — the new node would come up with empty PGDATA
+// and the old data would be orphaned on the old node's disk. Fail
+// loudly with a migration path instead.
+//
+// Skips when:
+//   - def.Server is empty (SaaS engine — no node to pin to).
+//   - No live StatefulSet exists (first deploy of this database).
+//   - MasterKube is nil (defensive — shouldn't happen in a real reconcile).
+//
+// The check only reads cluster state; it does not mutate. Running
+// Deploy twice with the same server: value is still idempotent.
+func guardNodePinDrift(ctx context.Context, dc *config.DeployContext, names *utils.Names, name string, def config.DatabaseDef) error {
+	if def.Server == "" {
+		return nil
+	}
+	if dc.Cluster.MasterKube == nil {
+		return nil
+	}
+	existing, err := dc.Cluster.MasterKube.GetStatefulSet(ctx, names.KubeNamespace(), names.Database(name))
+	if err != nil {
+		return fmt.Errorf("databases.%s: read live state: %w", name, err)
+	}
+	if existing == nil {
+		return nil
+	}
+	current := existing.Spec.Template.Spec.NodeSelector[utils.LabelNvoiRole]
+	if current == "" || current == def.Server {
+		return nil
+	}
+	return fmt.Errorf(
+		"databases.%s: server change blocked\n"+
+			"  currently deployed on: %s\n"+
+			"  nvoi.yaml says:        %s\n\n"+
+			"Local NVMe cannot migrate between nodes. Automated migration via\n"+
+			"`nvoi database migrate` is tracked in #67. Until it ships, migrate manually:\n\n"+
+			"  1. nvoi database backup now %s\n"+
+			"  2. remove databases.%s from nvoi.yaml, run: nvoi deploy\n"+
+			"  3. restore config with server: %s, run: nvoi deploy\n"+
+			"  4. restore the backup into the new instance (pg_restore / mysql)",
+		name, current, def.Server, name, name, def.Server,
+	)
 }
 
 func resolveDatabaseProviderCreds(source provider.CredentialSource, name string) (map[string]string, error) {
