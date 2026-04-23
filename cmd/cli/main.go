@@ -28,6 +28,7 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
 	_ "github.com/getnvoi/nvoi/pkg/provider/build/ssh"
 	_ "github.com/getnvoi/nvoi/pkg/provider/neon"
+	_ "github.com/getnvoi/nvoi/pkg/provider/planetscale"
 	_ "github.com/getnvoi/nvoi/pkg/provider/postgres"
 	// Secrets backends
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"

@@ -33,7 +33,7 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 			return nil, fmt.Errorf("databases.%s: %w", name, err)
 		}
 
-		req, err := databaseRequest(cfg, names, name, def, sources)
+		req, err := databaseRequest(cfg, dc, names, name, def, sources)
 		if err != nil {
 			_ = db.Close()
 			return nil, err
@@ -65,7 +65,7 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 	return out, nil
 }
 
-func databaseRequest(cfg *config.AppConfig, names *utils.Names, name string, def config.DatabaseDef, sources map[string]string) (provider.DatabaseRequest, error) {
+func databaseRequest(cfg *config.AppConfig, dc *config.DeployContext, names *utils.Names, name string, def config.DatabaseDef, sources map[string]string) (provider.DatabaseRequest, error) {
 	req := provider.DatabaseRequest{
 		Name:                  name,
 		FullName:              names.Database(name),
@@ -89,7 +89,14 @@ func databaseRequest(cfg *config.AppConfig, names *utils.Names, name string, def
 			Storage:   def.Backup.Storage,
 		}
 		if def.Backup.Storage != "" {
-			req.Bucket = &provider.BucketHandle{Name: names.Bucket(def.Backup.Storage)}
+			bucketCreds, err := databaseBucketCredentials(cfg, dc, def.Backup.Storage)
+			if err != nil {
+				return req, fmt.Errorf("databases.%s.bucket: %w", name, err)
+			}
+			req.Bucket = &provider.BucketHandle{
+				Name:        names.Bucket(def.Backup.Storage),
+				Credentials: bucketCreds,
+			}
 		}
 	}
 	if def.User != "" {
@@ -107,6 +114,19 @@ func databaseRequest(cfg *config.AppConfig, names *utils.Names, name string, def
 		req.Spec.Password = v
 	}
 	return req, nil
+}
+
+func databaseBucketCredentials(cfg *config.AppConfig, dc *config.DeployContext, storageName string) (provider.BucketCredentials, error) {
+	_ = cfg
+	_ = storageName
+	if dc.Storage.Name == "" {
+		return provider.BucketCredentials{}, fmt.Errorf("providers.storage is required for database backups")
+	}
+	bucket, err := provider.ResolveBucket(dc.Storage.Name, dc.Storage.Creds)
+	if err != nil {
+		return provider.BucketCredentials{}, err
+	}
+	return bucket.Credentials(context.Background())
 }
 
 func resolveDatabaseProviderCreds(source provider.CredentialSource, name string) (map[string]string, error) {

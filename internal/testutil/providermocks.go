@@ -199,3 +199,8 @@ func registerBucket(name string, factory func(creds map[string]string) provider.
 func registerCI(name string, schema provider.CredentialSchema, factory func(creds map[string]string) provider.CIProvider) {
 	provider.RegisterCI(name, schema, factory)
 }
+
+// registerDatabase is a shared helper for database fake registration.
+func registerDatabase(name string, schema provider.CredentialSchema, factory func(creds map[string]string) provider.DatabaseProvider) {
+	provider.RegisterDatabase(name, schema, factory)
+}

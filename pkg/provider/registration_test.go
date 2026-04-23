@@ -12,6 +12,7 @@ import (
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
 	_ "github.com/getnvoi/nvoi/pkg/provider/neon"
 	_ "github.com/getnvoi/nvoi/pkg/provider/ngrok"
+	_ "github.com/getnvoi/nvoi/pkg/provider/planetscale"
 	_ "github.com/getnvoi/nvoi/pkg/provider/postgres"
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
 )
@@ -48,7 +49,7 @@ func TestAllProvidersRegistered(t *testing.T) {
 		}
 	}
 
-	database := []string{"postgres", "neon"}
+	database := []string{"postgres", "neon", "planetscale"}
 	for _, name := range database {
 		_, err := provider.ResolveDatabase(name, map[string]string{"api_key": "x"})
 		if err != nil && contains(err.Error(), "unsupported") {

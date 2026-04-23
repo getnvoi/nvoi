@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -146,6 +147,16 @@ func resolveDatabaseCommand(cmd *cobra.Command, rt *runtime, name string) (provi
 	req.Namespace = names.KubeNamespace()
 	req.Labels = names.Labels()
 	req.Log = rt.out
+	if def.Backup != nil && def.Backup.Storage != "" {
+		creds, err := commandBucketCredentials(rt)
+		if err != nil {
+			return provider.DatabaseRequest{}, nil, nil, err
+		}
+		req.Bucket = &provider.BucketHandle{
+			Name:        names.Bucket(def.Backup.Storage),
+			Credentials: creds,
+		}
+	}
 
 	kc, _, cleanup, kerr := rt.dc.Cluster.Kube(cmd.Context(), config.NewView(rt.cfg))
 	if kerr == nil {
@@ -165,6 +176,17 @@ func resolveDatabaseCommand(cmd *cobra.Command, rt *runtime, name string) (provi
 		return provider.DatabaseRequest{}, nil, nil, err
 	}
 	return req, prov, cleanup, nil
+}
+
+func commandBucketCredentials(rt *runtime) (provider.BucketCredentials, error) {
+	if rt.dc.Storage.Name == "" {
+		return provider.BucketCredentials{}, fmt.Errorf("providers.storage is required for database backups")
+	}
+	bucket, err := provider.ResolveBucket(rt.dc.Storage.Name, rt.dc.Storage.Creds)
+	if err != nil {
+		return provider.BucketCredentials{}, err
+	}
+	return bucket.Credentials(context.Background())
 }
 
 func commandSources(rt *runtime) (map[string]string, error) {
@@ -232,6 +254,13 @@ func commandDatabaseRequest(name string, def config.DatabaseDef, names *utils.Na
 			return req, fmt.Errorf("databases.%s.password: %w", name, err)
 		}
 		req.Spec.Password = v
+	}
+	if def.Backup != nil {
+		req.Spec.Backup = &provider.DatabaseBackupSpec{
+			Schedule:  def.Backup.Schedule,
+			Retention: def.Backup.Retention,
+			Storage:   def.Backup.Storage,
+		}
 	}
 	return req, nil
 }

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
@@ -27,64 +29,49 @@ func New(creds map[string]string) *Provider {
 	return &Provider{
 		apiKey:  creds["api_key"],
 		baseURL: strings.TrimRight(base, "/"),
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
 func (p *Provider) Close() error { return nil }
+
 func (p *Provider) ListResources(context.Context) ([]provider.ResourceGroup, error) {
 	return nil, nil
 }
 
 func (p *Provider) ValidateCredentials(ctx context.Context) error {
-	_, err := p.request(ctx, http.MethodGet, "/projects", nil)
+	_, err := p.listProjects(ctx)
 	return err
 }
 
 func (p *Provider) EnsureCredentials(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest) (provider.DatabaseCredentials, error) {
 	if kc != nil {
-		if url, err := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "url"); err == nil && url != "" {
-			host, _ := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "host")
-			user, _ := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "user")
-			password, _ := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "password")
-			database, _ := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "database")
-			return provider.DatabaseCredentials{URL: url, Host: host, User: user, Password: password, Database: database, Port: 5432, SSLMode: "require"}, nil
+		if creds, err := readSecretCredentials(ctx, kc, req); err == nil && creds.URL != "" {
+			return creds, nil
 		}
 	}
 
-	project := map[string]any{"name": req.FullName, "region": req.Spec.Region}
-	resp, err := p.request(ctx, http.MethodPost, "/projects", project)
+	project, branch, err := p.ensureProject(ctx, req)
 	if err != nil {
 		return provider.DatabaseCredentials{}, err
 	}
-	var created struct {
-		Host     string `json:"host"`
-		User     string `json:"user"`
-		Password string `json:"password"`
-		Database string `json:"database"`
-		URL      string `json:"url"`
-	}
-	if err := json.Unmarshal(resp, &created); err != nil {
+	password, err := p.revealPassword(ctx, project.ID, branch.ID, branch.RoleName)
+	if err != nil {
 		return provider.DatabaseCredentials{}, err
 	}
 	creds := provider.DatabaseCredentials{
-		URL:      created.URL,
-		Host:     created.Host,
+		URL:      fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=require", branch.RoleName, password, branch.Host, branch.DatabaseName),
+		Host:     branch.Host,
 		Port:     5432,
-		User:     created.User,
-		Password: created.Password,
-		Database: created.Database,
+		User:     branch.RoleName,
+		Password: password,
+		Database: branch.DatabaseName,
 		SSLMode:  "require",
 	}
 	if kc != nil {
-		_ = kc.EnsureSecret(ctx, req.Namespace, req.CredentialsSecretName, map[string]string{
-			"url":      creds.URL,
-			"host":     creds.Host,
-			"user":     creds.User,
-			"password": creds.Password,
-			"database": creds.Database,
-			"sslmode":  creds.SSLMode,
-		})
+		if err := writeSecretCredentials(ctx, kc, req, creds); err != nil {
+			return provider.DatabaseCredentials{}, err
+		}
 	}
 	return creds, nil
 }
@@ -94,12 +81,26 @@ func (p *Provider) Reconcile(context.Context, provider.DatabaseRequest) (*provid
 }
 
 func (p *Provider) Delete(ctx context.Context, req provider.DatabaseRequest) error {
-	_, err := p.request(ctx, http.MethodDelete, "/projects/"+req.FullName, nil)
+	project, err := p.findProjectByName(ctx, req.FullName)
+	if err != nil {
+		return err
+	}
+	if project == nil {
+		return nil
+	}
+	_, err = p.request(ctx, http.MethodDelete, "/projects/"+project.ID, nil)
 	return err
 }
 
 func (p *Provider) ExecSQL(ctx context.Context, req provider.DatabaseRequest, stmt string) (*provider.SQLResult, error) {
-	resp, err := p.request(ctx, http.MethodPost, "/sql", map[string]any{"project": req.FullName, "query": stmt})
+	project, err := p.findProjectByName(ctx, req.FullName)
+	if err != nil {
+		return nil, err
+	}
+	if project == nil {
+		return nil, fmt.Errorf("neon project %q not found", req.FullName)
+	}
+	resp, err := p.sqlRequest(ctx, project.ID, stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -111,31 +112,75 @@ func (p *Provider) ExecSQL(ctx context.Context, req provider.DatabaseRequest, st
 }
 
 func (p *Provider) BackupNow(ctx context.Context, req provider.DatabaseRequest) (*provider.BackupRef, error) {
-	resp, err := p.request(ctx, http.MethodPost, "/projects/"+req.FullName+"/branches", map[string]any{"name": "backup-now"})
+	project, err := p.findProjectByName(ctx, req.FullName)
 	if err != nil {
 		return nil, err
 	}
-	var ref provider.BackupRef
-	if err := json.Unmarshal(resp, &ref); err != nil {
+	if project == nil {
+		return nil, fmt.Errorf("neon project %q not found", req.FullName)
+	}
+	body := map[string]any{
+		"branch": map[string]any{
+			"name":      fmt.Sprintf("backup-%d", time.Now().Unix()),
+			"parent_id": project.DefaultBranchID,
+		},
+	}
+	resp, err := p.request(ctx, http.MethodPost, fmt.Sprintf("/projects/%s/branches", project.ID), body)
+	if err != nil {
 		return nil, err
 	}
-	return &ref, nil
+	branch, err := parseNeonBranch(resp)
+	if err != nil {
+		return nil, err
+	}
+	return &provider.BackupRef{
+		ID:        branch.ID,
+		CreatedAt: branch.CreatedAt,
+		Kind:      "branch",
+	}, nil
 }
 
 func (p *Provider) ListBackups(ctx context.Context, req provider.DatabaseRequest) ([]provider.BackupRef, error) {
-	resp, err := p.request(ctx, http.MethodGet, "/projects/"+req.FullName+"/branches", nil)
+	project, err := p.findProjectByName(ctx, req.FullName)
 	if err != nil {
 		return nil, err
 	}
-	var refs []provider.BackupRef
-	if err := json.Unmarshal(resp, &refs); err != nil {
+	if project == nil {
+		return nil, nil
+	}
+	resp, err := p.request(ctx, http.MethodGet, fmt.Sprintf("/projects/%s/branches", project.ID), nil)
+	if err != nil {
 		return nil, err
 	}
-	return refs, nil
+	var payload struct {
+		Branches []struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			CreatedAt string `json:"created_at"`
+		} `json:"branches"`
+	}
+	if err := json.Unmarshal(resp, &payload); err != nil {
+		return nil, err
+	}
+	out := make([]provider.BackupRef, 0, len(payload.Branches))
+	for _, b := range payload.Branches {
+		if !strings.HasPrefix(b.Name, "backup-") {
+			continue
+		}
+		out = append(out, provider.BackupRef{ID: b.ID, CreatedAt: b.CreatedAt, Kind: "branch"})
+	}
+	return out, nil
 }
 
 func (p *Provider) DownloadBackup(ctx context.Context, req provider.DatabaseRequest, backupID string, w io.Writer) error {
-	resp, err := p.request(ctx, http.MethodGet, "/projects/"+req.FullName+"/branches/"+backupID+"/dump", nil)
+	project, err := p.findProjectByName(ctx, req.FullName)
+	if err != nil {
+		return err
+	}
+	if project == nil {
+		return fmt.Errorf("neon project %q not found", req.FullName)
+	}
+	resp, err := p.request(ctx, http.MethodGet, fmt.Sprintf("/projects/%s/branches/%s/dump", project.ID, backupID), nil)
 	if err != nil {
 		return err
 	}
@@ -143,7 +188,181 @@ func (p *Provider) DownloadBackup(ctx context.Context, req provider.DatabaseRequ
 	return err
 }
 
+type neonProject struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	DefaultBranchID string `json:"default_branch_id"`
+}
+
+type neonResolvedBranch struct {
+	ID           string
+	CreatedAt    string
+	Host         string
+	RoleName     string
+	DatabaseName string
+}
+
+func (p *Provider) listProjects(ctx context.Context) ([]neonProject, error) {
+	resp, err := p.request(ctx, http.MethodGet, "/projects", nil)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Projects []neonProject `json:"projects"`
+	}
+	if err := json.Unmarshal(resp, &payload); err != nil {
+		return nil, err
+	}
+	return payload.Projects, nil
+}
+
+func (p *Provider) findProjectByName(ctx context.Context, name string) (*neonProject, error) {
+	projects, err := p.listProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, project := range projects {
+		if project.Name == name {
+			cp := project
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (p *Provider) ensureProject(ctx context.Context, req provider.DatabaseRequest) (*neonProject, *neonResolvedBranch, error) {
+	if project, err := p.findProjectByName(ctx, req.FullName); err != nil {
+		return nil, nil, err
+	} else if project != nil {
+		branch, err := p.getProjectBranch(ctx, project.ID, project.DefaultBranchID)
+		return project, branch, err
+	}
+	body := map[string]any{
+		"project": map[string]any{
+			"name":      req.FullName,
+			"region_id": req.Spec.Region,
+		},
+	}
+	resp, err := p.request(ctx, http.MethodPost, "/projects", body)
+	if err != nil {
+		return nil, nil, err
+	}
+	var payload struct {
+		Project neonProject `json:"project"`
+		Branch  struct {
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			CreatedAt    string `json:"created_at"`
+			RoleName     string `json:"role_name"`
+			DatabaseName string `json:"database_name"`
+			Host         string `json:"host"`
+		} `json:"branch"`
+	}
+	if err := json.Unmarshal(resp, &payload); err != nil {
+		return nil, nil, err
+	}
+	payload.Project.DefaultBranchID = payload.Branch.ID
+	return &payload.Project, &neonResolvedBranch{
+		ID:           payload.Branch.ID,
+		CreatedAt:    payload.Branch.CreatedAt,
+		Host:         payload.Branch.Host,
+		RoleName:     payload.Branch.RoleName,
+		DatabaseName: payload.Branch.DatabaseName,
+	}, nil
+}
+
+func (p *Provider) getProjectBranch(ctx context.Context, projectID, branchID string) (*neonResolvedBranch, error) {
+	resp, err := p.request(ctx, http.MethodGet, fmt.Sprintf("/projects/%s/branches/%s", projectID, branchID), nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseNeonBranch(resp)
+}
+
+func parseNeonBranch(resp []byte) (*neonResolvedBranch, error) {
+	var payload struct {
+		Branch struct {
+			ID           string `json:"id"`
+			CreatedAt    string `json:"created_at"`
+			RoleName     string `json:"role_name"`
+			DatabaseName string `json:"database_name"`
+			Host         string `json:"host"`
+		} `json:"branch"`
+	}
+	if err := json.Unmarshal(resp, &payload); err != nil {
+		return nil, err
+	}
+	return &neonResolvedBranch{
+		ID:           payload.Branch.ID,
+		CreatedAt:    payload.Branch.CreatedAt,
+		Host:         payload.Branch.Host,
+		RoleName:     payload.Branch.RoleName,
+		DatabaseName: payload.Branch.DatabaseName,
+	}, nil
+}
+
+func (p *Provider) revealPassword(ctx context.Context, projectID, branchID, roleName string) (string, error) {
+	resp, err := p.request(ctx, http.MethodGet, fmt.Sprintf("/projects/%s/branches/%s/roles/%s/reveal_password", projectID, branchID, roleName), nil)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(resp, &payload); err != nil {
+		return "", err
+	}
+	if payload.Password == "" {
+		return "", fmt.Errorf("neon reveal_password returned empty password")
+	}
+	return payload.Password, nil
+}
+
+func (p *Provider) sqlRequest(ctx context.Context, projectID, stmt string) ([]byte, error) {
+	sqlURL := p.baseURL + "/sql"
+	if strings.EqualFold(p.baseURL, "https://console.neon.tech/api/v2") {
+		sqlURL = p.baseURL + "/sql"
+	}
+	body := map[string]any{"project_id": projectID, "query": stmt}
+	return p.requestAbsolute(ctx, http.MethodPost, sqlURL, body)
+}
+
+func readSecretCredentials(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest) (provider.DatabaseCredentials, error) {
+	urlValue, err := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "url")
+	if err != nil {
+		return provider.DatabaseCredentials{}, err
+	}
+	host, _ := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "host")
+	user, _ := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "user")
+	password, _ := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "password")
+	database, _ := kc.GetSecretValue(ctx, req.Namespace, req.CredentialsSecretName, "database")
+	return provider.DatabaseCredentials{
+		URL:      urlValue,
+		Host:     host,
+		Port:     5432,
+		User:     user,
+		Password: password,
+		Database: database,
+		SSLMode:  "require",
+	}, nil
+}
+
+func writeSecretCredentials(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest, creds provider.DatabaseCredentials) error {
+	return kc.EnsureSecret(ctx, req.Namespace, req.CredentialsSecretName, map[string]string{
+		"url":      creds.URL,
+		"host":     creds.Host,
+		"user":     creds.User,
+		"password": creds.Password,
+		"database": creds.Database,
+		"sslmode":  creds.SSLMode,
+	})
+}
+
 func (p *Provider) request(ctx context.Context, method, path string, body any) ([]byte, error) {
+	return p.requestAbsolute(ctx, method, p.baseURL+path, body)
+}
+
+func (p *Provider) requestAbsolute(ctx context.Context, method, target string, body any) ([]byte, error) {
 	var r io.Reader
 	if body != nil {
 		buf := &bytes.Buffer{}
@@ -152,7 +371,7 @@ func (p *Provider) request(ctx context.Context, method, path string, body any) (
 		}
 		r = buf
 	}
-	req, err := http.NewRequestWithContext(ctx, method, p.baseURL+path, r)
+	req, err := http.NewRequestWithContext(ctx, method, target, r)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +387,18 @@ func (p *Provider) request(ctx context.Context, method, path string, body any) (
 		return nil, err
 	}
 	if res.StatusCode >= 300 {
-		return nil, fmt.Errorf("neon API %s %s: %s", method, path, strings.TrimSpace(string(b)))
+		return nil, fmt.Errorf("neon API %s %s: %s", method, pathForError(target), strings.TrimSpace(string(b)))
 	}
 	return b, nil
+}
+
+func pathForError(target string) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	if u.RawQuery == "" {
+		return u.Path
+	}
+	return u.Path + "?" + u.RawQuery
 }

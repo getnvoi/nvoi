@@ -8,6 +8,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils/s3"
 )
 
 type Provider struct{}
@@ -68,16 +70,49 @@ func (p *Provider) ExecSQL(ctx context.Context, req provider.DatabaseRequest, st
 	return ExecSQLWithKube(ctx, req.Kube, req, stmt)
 }
 
-func (p *Provider) BackupNow(context.Context, provider.DatabaseRequest) (*provider.BackupRef, error) {
-	return nil, fmt.Errorf("postgres backup now is not implemented yet")
+func (p *Provider) ListBackups(_ context.Context, req provider.DatabaseRequest) ([]provider.BackupRef, error) {
+	if req.Bucket == nil {
+		return nil, fmt.Errorf("postgres backups require backup.storage")
+	}
+	objects, err := s3.ListObjects(
+		req.Bucket.Credentials.Endpoint,
+		req.Bucket.Credentials.AccessKeyID,
+		req.Bucket.Credentials.SecretAccessKey,
+		req.Bucket.Name,
+		backupPrefix(req),
+	)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]provider.BackupRef, 0, len(objects))
+	for _, obj := range objects {
+		out = append(out, provider.BackupRef{
+			ID:        strings.TrimPrefix(obj.Key, backupPrefix(req)),
+			CreatedAt: obj.LastModified,
+			SizeBytes: obj.Size,
+			Kind:      "dump",
+		})
+	}
+	return out, nil
 }
 
-func (p *Provider) ListBackups(context.Context, provider.DatabaseRequest) ([]provider.BackupRef, error) {
-	return nil, fmt.Errorf("postgres backup list is not implemented yet")
-}
-
-func (p *Provider) DownloadBackup(context.Context, provider.DatabaseRequest, string, io.Writer) error {
-	return fmt.Errorf("postgres backup download is not implemented yet")
+func (p *Provider) DownloadBackup(_ context.Context, req provider.DatabaseRequest, backupID string, w io.Writer) error {
+	if req.Bucket == nil {
+		return fmt.Errorf("postgres backups require backup.storage")
+	}
+	rc, _, _, err := s3.GetStream(
+		req.Bucket.Credentials.Endpoint,
+		req.Bucket.Credentials.AccessKeyID,
+		req.Bucket.Credentials.SecretAccessKey,
+		req.Bucket.Name,
+		backupKey(req, backupID),
+	)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	_, err = io.Copy(w, rc)
+	return err
 }
 
 func ExecSQLWithKube(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest, stmt string) (*provider.SQLResult, error) {
@@ -251,7 +286,10 @@ func buildBackupCron(req provider.DatabaseRequest) runtime.Object {
 							Containers: []corev1.Container{{
 								Name:    "backup",
 								Image:   "postgres:16-alpine",
-								Command: []string{"sh", "-lc", "echo backup placeholder"},
+								Command: []string{"sh", "-lc", "pg_dump \"$DATABASE_URL\" > /tmp/backup.sql && wc -c /tmp/backup.sql"},
+								Env: []corev1.EnvVar{
+									{Name: "DATABASE_URL", Value: credentials(req).URL},
+								},
 							}},
 						},
 					},
@@ -259,4 +297,30 @@ func buildBackupCron(req provider.DatabaseRequest) runtime.Object {
 			},
 		},
 	}
+}
+
+func BackupNowWithKube(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest) (*provider.BackupRef, error) {
+	if req.Spec.Backup == nil || req.Spec.Backup.Schedule == "" {
+		return nil, fmt.Errorf("postgres backup schedule is not configured")
+	}
+	jobName := fmt.Sprintf("%s-manual-%d", req.BackupName, time.Now().Unix())
+	if err := kc.CreateJobFromCronJob(ctx, req.Namespace, req.BackupName, jobName); err != nil {
+		return nil, err
+	}
+	return &provider.BackupRef{ID: jobName, CreatedAt: time.Now().UTC().Format(time.RFC3339), Kind: "dump"}, nil
+}
+
+func (p *Provider) BackupNow(ctx context.Context, req provider.DatabaseRequest) (*provider.BackupRef, error) {
+	if req.Kube == nil {
+		return nil, fmt.Errorf("postgres BackupNow requires kube client")
+	}
+	return BackupNowWithKube(ctx, req.Kube, req)
+}
+
+func backupPrefix(req provider.DatabaseRequest) string {
+	return req.Name + "/"
+}
+
+func backupKey(req provider.DatabaseRequest, id string) string {
+	return backupPrefix(req) + id
 }

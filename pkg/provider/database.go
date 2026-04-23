@@ -58,7 +58,8 @@ type DatabaseBackupSpec struct {
 }
 
 type BucketHandle struct {
-	Name string
+	Name        string
+	Credentials BucketCredentials
 }
 
 type DatabasePlan struct {
