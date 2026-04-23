@@ -102,6 +102,22 @@ func (n *Names) KubeDatabasePVC(name string) string        { return n.Database(n
 func (n *Names) KubeDatabaseBackupCron(name string) string { return n.Database(name) + "-backup" }
 func (n *Names) KubeDatabasePod(name string) string        { return n.Database(name) + "-0" }
 
+// KubeDatabaseBackupBucket — one bucket per database, provisioned
+// implicitly on `providers.storage` when `databases.<name>.backup` is set.
+// Prefix-free: one bucket holds exactly one database's dumps, so a single
+// `SetLifecycle(bucket, retention)` governs the whole retention policy.
+func (n *Names) KubeDatabaseBackupBucket(name string) string {
+	return n.Database(name) + "-backups"
+}
+
+// KubeDatabaseBackupCreds — cluster-side Secret envFrom'd by the backup
+// CronJob / one-shot Job. Materializes the bucket's S3-compatible
+// credentials (endpoint, key id, secret, region) so the dump tool
+// uploads without a provider SDK.
+func (n *Names) KubeDatabaseBackupCreds(name string) string {
+	return n.Database(name) + "-backup-creds"
+}
+
 // CronJobRunName is the one-shot k8s Job name spawned by `nvoi cron run`.
 // Suffix is unix-nanoseconds (caller passes time.Now().Unix() — here for
 // the signature, CallerProvided so tests can inject deterministic values).

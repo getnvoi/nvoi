@@ -43,6 +43,42 @@ func Put(endpoint, accessKey, secretKey, bucket, key string, body []byte) error 
 	return nil
 }
 
+// PutStream uploads a stream of known size to an S3-compatible endpoint
+// using UNSIGNED-PAYLOAD — avoids buffering the whole body to compute a
+// sha256. Required for large database dumps: Put() loads everything
+// into memory, which OOMs pods at ≥500 MB.
+//
+// AWS S3, Cloudflare R2, and Scaleway Object Storage all accept
+// UNSIGNED-PAYLOAD for PutObject. The server still validates
+// Content-Length, so the caller MUST pass the exact byte count.
+//
+// Used by cmd/backup, which streams `pg_dump | gzip` from a temp file
+// after it's fully written (stat → size → upload). Lives next to Put()
+// because both share Sign() / the same endpoint/key URL layout.
+func PutStream(endpoint, accessKey, secretKey, bucket, key string, body io.Reader, size int64, timeout time.Duration) error {
+	client := &http.Client{Timeout: timeout}
+	url := fmt.Sprintf("%s/%s/%s", endpoint, bucket, key)
+	req, err := http.NewRequest("PUT", url, body)
+	if err != nil {
+		return fmt.Errorf("s3 put-stream request: %w", err)
+	}
+	req.ContentLength = size
+	req.Header.Set("Content-Type", "application/octet-stream")
+	SignUnsigned(req, accessKey, secretKey, "auto")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("s3 put-stream %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
 // Get downloads an object from an S3-compatible endpoint.
 // Returns the body bytes and content type. Returns error for non-2xx responses.
 func Get(endpoint, accessKey, secretKey, bucket, key string) ([]byte, string, error) {
@@ -161,6 +197,51 @@ type listBucketResult struct {
 
 func parseXML(data []byte, v any) error {
 	return xml.Unmarshal(data, v)
+}
+
+// SignUnsigned signs a request whose body's sha256 we don't want to
+// compute. Sets `x-amz-content-sha256: UNSIGNED-PAYLOAD` — supported by
+// AWS S3, R2, and Scaleway for PutObject requests. Used by PutStream()
+// so large objects (database dumps) stream from disk without a
+// full-body hash pass.
+//
+// The rest of the SigV4 canonicalization matches Sign() exactly, which
+// is why both are in this file.
+func SignUnsigned(req *http.Request, accessKey, secretKey, region string) {
+	now := time.Now().UTC()
+	datestamp := now.Format("20060102")
+	amzDate := now.Format("20060102T150405Z")
+
+	const payloadHash = "UNSIGNED-PAYLOAD"
+	req.Header.Set("x-amz-content-sha256", payloadHash)
+	req.Header.Set("x-amz-date", amzDate)
+	req.Header.Set("Host", req.URL.Host)
+
+	canonicalURI := req.URL.Path
+	if canonicalURI == "" {
+		canonicalURI = "/"
+	}
+
+	signedHeaders := "content-type;host;x-amz-content-sha256;x-amz-date"
+	canonicalHeaders := fmt.Sprintf("content-type:%s\nhost:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
+		req.Header.Get("Content-Type"), req.URL.Host, payloadHash, amzDate)
+	canonicalRequest := strings.Join([]string{
+		req.Method, canonicalURI, req.URL.Query().Encode(), canonicalHeaders, signedHeaders, payloadHash,
+	}, "\n")
+
+	credentialScope := fmt.Sprintf("%s/%s/s3/aws4_request", datestamp, region)
+	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s",
+		amzDate, credentialScope, sha256Hex([]byte(canonicalRequest)))
+
+	kDate := hmacSHA256([]byte("AWS4"+secretKey), []byte(datestamp))
+	kRegion := hmacSHA256(kDate, []byte(region))
+	kService := hmacSHA256(kRegion, []byte("s3"))
+	kSigning := hmacSHA256(kService, []byte("aws4_request"))
+	signature := hex.EncodeToString(hmacSHA256(kSigning, []byte(stringToSign)))
+
+	req.Header.Set("Authorization", fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		accessKey, credentialScope, signedHeaders, signature))
 }
 
 // Sign adds AWS Signature V4 headers to an HTTP request.
