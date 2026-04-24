@@ -819,6 +819,32 @@ func (c *Client) NodeShell(ctx context.Context, dc *provider.BootstrapContext) (
 	return conn, nil
 }
 
+// SSHToNode dials SSH to a specific node by its YAML-declared server
+// short name. Looks up the matching instance by its fully-qualified
+// name and dials its public IPv4. Caller owns Close().
+func (c *Client) SSHToNode(ctx context.Context, dc *provider.BootstrapContext, serverName string) (utils.SSHClient, error) {
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return nil, err
+	}
+	full := names.Server(serverName)
+	srv, err := c.getServerByName(ctx, full)
+	if err != nil {
+		return nil, fmt.Errorf("scaleway.SSHToNode %s: %w", serverName, err)
+	}
+	if srv == nil {
+		return nil, fmt.Errorf("scaleway.SSHToNode %s: %w", serverName, provider.ErrNotBootstrapped)
+	}
+	if srv.IPv4 == "" {
+		return nil, fmt.Errorf("scaleway.SSHToNode %s: instance has no public IPv4", serverName)
+	}
+	conn, err := c.dialSSH(ctx, dc, srv.IPv4+":22")
+	if err != nil {
+		return nil, fmt.Errorf("scaleway.SSHToNode dial %s: %w", srv.IPv4, err)
+	}
+	return conn, nil
+}
+
 // Close releases the cached SSH if Bootstrap (or NodeShell's cold path)
 // established one. Idempotent.
 func (c *Client) Close() error {

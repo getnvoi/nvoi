@@ -979,6 +979,39 @@ func (c *Client) NodeShell(ctx context.Context, dc *provider.BootstrapContext) (
 	return conn, nil
 }
 
+// SSHToNode dials SSH to a specific node identified by its
+// YAML-declared server short name. Looks up the server by its full
+// cluster-qualified name (nvoi-{app}-{env}-{serverName}) and dials
+// its public IPv4 with the same key NodeShell uses. Returns
+// ErrNotBootstrapped when the named server doesn't exist.
+//
+// Unlike NodeShell, the connection is NOT cached on the provider —
+// callers that need repeated access to non-master nodes should cache
+// their own handle (or re-dial, since the cost is a single SSH
+// handshake). Caller owns Close().
+func (c *Client) SSHToNode(ctx context.Context, dc *provider.BootstrapContext, serverName string) (utils.SSHClient, error) {
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return nil, err
+	}
+	fullName := names.Server(serverName)
+	srv, err := c.getServerByName(ctx, fullName)
+	if err != nil {
+		return nil, fmt.Errorf("hetzner.SSHToNode %s: %w", serverName, err)
+	}
+	if srv == nil {
+		return nil, fmt.Errorf("hetzner.SSHToNode %s: %w", serverName, provider.ErrNotBootstrapped)
+	}
+	if srv.IPv4 == "" {
+		return nil, fmt.Errorf("hetzner.SSHToNode %s: server has no public IPv4", serverName)
+	}
+	conn, err := c.dialSSH(ctx, dc, srv.IPv4+":22")
+	if err != nil {
+		return nil, fmt.Errorf("hetzner.SSHToNode dial %s: %w", srv.IPv4, err)
+	}
+	return conn, nil
+}
+
 // Close releases the cached SSH if Bootstrap (or NodeShell's cold path)
 // established one. Idempotent.
 func (c *Client) Close() error {

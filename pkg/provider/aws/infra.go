@@ -848,6 +848,39 @@ func (c *Client) NodeShell(ctx context.Context, dc *provider.BootstrapContext) (
 	return conn, nil
 }
 
+// SSHToNode dials SSH to a specific node by its YAML-declared server
+// short name. Filters ListServers by the fully-qualified name and
+// dials the matching instance's public IPv4. Caller owns Close().
+func (c *Client) SSHToNode(ctx context.Context, dc *provider.BootstrapContext, serverName string) (utils.SSHClient, error) {
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return nil, err
+	}
+	full := names.Server(serverName)
+	servers, err := c.ListServers(ctx, names.Labels())
+	if err != nil {
+		return nil, fmt.Errorf("aws.SSHToNode %s: %w", serverName, err)
+	}
+	var found *provider.Server
+	for _, s := range servers {
+		if s.Name == full {
+			found = s
+			break
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("aws.SSHToNode %s: %w", serverName, provider.ErrNotBootstrapped)
+	}
+	if found.IPv4 == "" {
+		return nil, fmt.Errorf("aws.SSHToNode %s: instance has no public IPv4", serverName)
+	}
+	conn, err := c.dialSSH(ctx, dc, found.IPv4+":22")
+	if err != nil {
+		return nil, fmt.Errorf("aws.SSHToNode dial %s: %w", found.IPv4, err)
+	}
+	return conn, nil
+}
+
 // Close releases the cached SSH if Bootstrap (or NodeShell's cold path)
 // established one. Idempotent.
 func (c *Client) Close() error {

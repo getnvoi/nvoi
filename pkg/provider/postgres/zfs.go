@@ -1,0 +1,169 @@
+package postgres
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
+)
+
+// ZFS prepare-node phase.
+//
+// Runs before the first apply of a postgres StatefulSet on a given
+// node. Installs zfsutils-linux and creates a file-backed zpool so the
+// OpenEBS ZFS-LocalPV CSI driver (installed cluster-side) has a pool
+// to carve datasets out of. All steps idempotent — every deploy runs
+// them; second run is a no-op.
+//
+// Device strategy dispatches on server type:
+//   - file-backed pool on shared-VM classes (Hetzner cax/cx, AWS
+//     t-series / m-series, Scaleway DEV/PRO): the pool lives in
+//     /var/lib/nvoi-zfs/pool.img on the root filesystem, sized as 2x
+//     the database's declared size (clamped at 80% of root free).
+//     ~5% perf hit vs raw device, production-safe.
+//   - dedicated disk on bare-metal classes (Hetzner ax, AWS i-series):
+//     pool on /dev/nvme1n1 or equivalent. TODO follow-up.
+//
+// Why here (postgres provider) and not in pkg/infra/cloudinit.go:
+// a cluster with no databases never needs ZFS. The IaaS provider
+// provisions generic servers; the DatabaseProvider decides what
+// storage substrate to build on top.
+
+const (
+	// zpoolName is the single pool every DB on a node shares. The CSI
+	// driver carves per-PVC datasets out of it. One pool per node is
+	// the OpenEBS ZFS-LocalPV convention.
+	zpoolName = "nvoi-zfs"
+
+	// poolImagePath is where the file-backed pool lives on shared-VM
+	// nodes. Chosen under /var/lib so it shares the root disk's
+	// extended attributes (tune2fs, journaling) without cluttering
+	// /root or /home.
+	poolImagePath = "/var/lib/nvoi-zfs/pool.img"
+
+	// rootReserveGiB is the free space we leave on the root disk when
+	// sizing a file-backed pool — OS + containerd images + k3s state
+	// + other PVs under local-path (caddy, k3s snapshots). Conservative
+	// on small cax11 nodes (40 GB total → 8 GB floor for system).
+	rootReserveGiB = 8
+)
+
+// PrepareNode installs zfsutils + creates a file-backed zpool on the
+// target node via SSH. Idempotent — every step checks for existing
+// state and short-circuits. The caller (postgres.Reconcile) runs this
+// once per deploy against the DB node; re-runs are near-free.
+//
+// sizeGiB is the database's declared size (databases.X.size). The pool
+// is sized 2x that value so snapshots + CoW overhead have room;
+// clamped to leave rootReserveGiB free on the root filesystem.
+func PrepareNode(ctx context.Context, ssh utils.SSHClient, sizeGiB int) error {
+	if ssh == nil {
+		return fmt.Errorf("postgres.PrepareNode: ssh client required")
+	}
+	if sizeGiB <= 0 {
+		return fmt.Errorf("postgres.PrepareNode: sizeGiB must be > 0")
+	}
+
+	if err := ensureZFSUtils(ctx, ssh); err != nil {
+		return fmt.Errorf("install zfsutils: %w", err)
+	}
+	if err := ensureZPool(ctx, ssh, sizeGiB); err != nil {
+		return fmt.Errorf("create zpool: %w", err)
+	}
+	return nil
+}
+
+// ensureZFSUtils installs the zfsutils-linux package if it isn't
+// already present. Uses `dpkg-query` for the idempotency check rather
+// than `apt list --installed | grep` because dpkg-query has a dedicated
+// exit code for "not installed" — avoids the fragile output parse.
+func ensureZFSUtils(ctx context.Context, ssh utils.SSHClient) error {
+	out, _ := ssh.Run(ctx, `dpkg-query -W -f='${Status}' zfsutils-linux 2>/dev/null || true`)
+	if strings.Contains(string(out), "install ok installed") {
+		return nil
+	}
+	// `DEBIAN_FRONTEND=noninteractive` keeps apt from prompting about
+	// config files; `-y` auto-accepts. Combining install with update
+	// in one line avoids a stale-cache race when the image's apt cache
+	// is older than the repo state.
+	cmd := `sudo DEBIAN_FRONTEND=noninteractive sh -c 'apt-get update -q && apt-get install -y -q zfsutils-linux'`
+	if _, err := ssh.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("apt install: %w", err)
+	}
+	return nil
+}
+
+// ensureZPool creates the file-backed zpool if it doesn't already
+// exist. The pool image file, its parent directory, and the pool
+// itself are each created independently so a partial previous run
+// (e.g. image exists but pool wasn't imported) converges cleanly.
+//
+// Pool size: 2 * sizeGiB, capped so the root FS retains at least
+// rootReserveGiB free. `df --output=avail` returns KB; we convert to
+// GiB for the comparison.
+func ensureZPool(ctx context.Context, ssh utils.SSHClient, sizeGiB int) error {
+	// Already imported? `zpool list -H -o name` is silent on absence
+	// and prints the pool name on hit.
+	out, _ := ssh.Run(ctx, `zpool list -H -o name 2>/dev/null || true`)
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == zpoolName {
+			return nil
+		}
+	}
+
+	poolGiB, err := resolvePoolSize(ctx, ssh, sizeGiB)
+	if err != nil {
+		return err
+	}
+
+	// Create the parent dir + truncate a sparse file at the target
+	// size. `truncate` is sparse by design — the file claims poolGiB
+	// but consumes only the blocks ZFS writes to.
+	mkDir := `sudo mkdir -p /var/lib/nvoi-zfs`
+	if _, err := ssh.Run(ctx, mkDir); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	mkImg := fmt.Sprintf(`sudo sh -c 'test -f %s || truncate -s %dG %s'`, poolImagePath, poolGiB, poolImagePath)
+	if _, err := ssh.Run(ctx, mkImg); err != nil {
+		return fmt.Errorf("create pool image: %w", err)
+	}
+
+	// Create the pool. `-o ashift=12` matches the 4K sector size most
+	// modern storage uses. `-O compression=lz4` gets us a ~2x savings
+	// on text-heavy DB data for near-zero CPU cost. `-m none` skips
+	// auto-mounting the root dataset (the CSI driver manages mounts).
+	createPool := fmt.Sprintf(
+		`sudo zpool create -o ashift=12 -O compression=lz4 -m none %s %s`,
+		zpoolName, poolImagePath,
+	)
+	if _, err := ssh.Run(ctx, createPool); err != nil {
+		return fmt.Errorf("zpool create: %w", err)
+	}
+	return nil
+}
+
+// resolvePoolSize decides how big to make the file-backed pool. Starts
+// at 2 * sizeGiB (room for snapshots + CoW overhead), then clamps
+// against the root filesystem's free space so we don't fill the disk.
+func resolvePoolSize(ctx context.Context, ssh utils.SSHClient, sizeGiB int) (int, error) {
+	wanted := 2 * sizeGiB
+	// `df --output=avail /` → KB free. Hetzner VMs use ext4 by default;
+	// `--output=avail` is GNU coreutils, present on Ubuntu/Debian.
+	out, err := ssh.Run(ctx, `df --output=avail -B1G / | tail -n 1`)
+	if err != nil {
+		return 0, fmt.Errorf("df avail: %w", err)
+	}
+	availGiB := 0
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &availGiB); err != nil {
+		return 0, fmt.Errorf("parse df output %q: %w", string(out), err)
+	}
+	maxPool := availGiB - rootReserveGiB
+	if maxPool < sizeGiB {
+		return 0, fmt.Errorf("node has only %dGiB free (want %dGiB for zpool + %dGiB reserve) — use a bigger server", availGiB, sizeGiB, rootReserveGiB)
+	}
+	if wanted > maxPool {
+		wanted = maxPool
+	}
+	return wanted, nil
+}

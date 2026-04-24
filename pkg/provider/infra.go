@@ -128,6 +128,19 @@ type InfraProvider interface {
 	// the provider dials fresh.
 	NodeShell(ctx context.Context, dc *BootstrapContext) (utils.SSHClient, error)
 
+	// SSHToNode returns an SSH client for a SPECIFIC node identified by
+	// its YAML-declared server short name (e.g. "master", "db-master",
+	// "worker-1"). Distinct from NodeShell which always returns the
+	// master's SSH: SSHToNode lets callers that need host-level access to
+	// a non-master node (the postgres provider's ZFS prepare-node phase,
+	// for example) reach the right machine.
+	//
+	// Providers without host SSH (managed k8s) return (nil,
+	// ErrNotImplemented). Hetzner/AWS/Scaleway dial the server's public
+	// IPv4 directly using the same SSH key NodeShell uses. Callers must
+	// Close() the returned client.
+	SSHToNode(ctx context.Context, dc *BootstrapContext, serverName string) (utils.SSHClient, error)
+
 	// ValidateCredentials probes the backend's API at startup so a
 	// misconfigured provider fails loudly before reconcile begins.
 	ValidateCredentials(ctx context.Context) error
