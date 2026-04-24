@@ -5,8 +5,18 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// corev1Delete is corev1.PersistentVolumeReclaimDelete bound to a
+// package-level var so we can take its address when stamping the
+// StorageClass's ReclaimPolicy (the field is a *string-ish pointer).
+var corev1Delete = corev1.PersistentVolumeReclaimDelete
 
 // ZFS prepare-node phase.
 //
@@ -30,6 +40,12 @@ import (
 // provisions generic servers; the DatabaseProvider decides what
 // storage substrate to build on top.
 
+// ZFSStorageClassName is the StorageClass every postgres PVC binds to.
+// The OpenEBS ZFS-LocalPV CSI driver provisions a ZFS dataset on the
+// per-node pool (zpoolName below) whenever a PVC references this SC.
+// Exported because postgres.buildPVC stamps it on the PVC spec.
+const ZFSStorageClassName = "nvoi-zfs-localpv"
+
 const (
 	// zpoolName is the single pool every DB on a node shares. The CSI
 	// driver carves per-PVC datasets out of it. One pool per node is
@@ -48,6 +64,44 @@ const (
 	// on small cax11 nodes (40 GB total → 8 GB floor for system).
 	rootReserveGiB = 8
 )
+
+// buildZFSStorageClass returns the cluster-scoped StorageClass that
+// binds postgres PVCs to the OpenEBS ZFS-LocalPV CSI driver. Applied
+// idempotently by postgres.Reconcile on every deploy so the SC is
+// always present if any DB declares a PVC against it.
+//
+// `poolname=<zpoolName>` tells the CSI which pool on the node to carve
+// datasets from. `fstype=zfs` keeps the mount ZFS-native (no ext4
+// layer on top). `WaitForFirstConsumer` defers binding until the pod
+// schedules, so the CSI provisions the dataset on the right node when
+// pods have nodeSelector constraints.
+//
+// ReclaimPolicy=Delete: when the PVC is deleted (e.g. during
+// `nvoi database migrate` teardown), the ZFS dataset is destroyed
+// too. No orphan datasets on the old node.
+func buildZFSStorageClass() runtime.Object {
+	reclaim := corev1Delete
+	binding := storagev1.VolumeBindingWaitForFirstConsumer
+	allowExpand := true
+	return &storagev1.StorageClass{
+		TypeMeta: metav1.TypeMeta{APIVersion: "storage.k8s.io/v1", Kind: "StorageClass"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ZFSStorageClassName,
+			Labels: map[string]string{
+				utils.LabelAppManagedBy: utils.LabelManagedBy,
+			},
+		},
+		Provisioner: "zfs.csi.openebs.io",
+		Parameters: map[string]string{
+			"poolname":    zpoolName,
+			"fstype":      "zfs",
+			"compression": "lz4",
+		},
+		ReclaimPolicy:        &reclaim,
+		VolumeBindingMode:    &binding,
+		AllowVolumeExpansion: &allowExpand,
+	}
+}
 
 // PrepareNode installs zfsutils + creates a file-backed zpool on the
 // target node via SSH. Idempotent — every step checks for existing

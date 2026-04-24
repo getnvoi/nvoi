@@ -14,6 +14,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -71,9 +72,15 @@ func (c *Client) Apply(ctx context.Context, ns string, obj runtime.Object) error
 	}
 	obj.GetObjectKind().SetGroupVersionKind(gvk)
 
-	if accessor, ok := obj.(metav1.Object); ok && gvk.Kind != "Namespace" {
-		if accessor.GetNamespace() == "" && ns != "" {
-			accessor.SetNamespace(ns)
+	// Cluster-scoped kinds must never inherit the caller's namespace —
+	// the apiserver rejects the Update with "request namespace does not
+	// match object namespace." Extend this list when adding new cluster-
+	// scoped kinds (CSIDriver, CRD, ClusterRole, etc.).
+	if !isClusterScoped(gvk) {
+		if accessor, ok := obj.(metav1.Object); ok {
+			if accessor.GetNamespace() == "" && ns != "" {
+				accessor.SetNamespace(ns)
+			}
 		}
 	}
 
@@ -245,6 +252,26 @@ func (c *Client) applyTyped(ctx context.Context, ns string, gvk schema.GroupVers
 			return uerr
 		})
 		return true, wrapApply(gvk, name, err)
+	case *storagev1.StorageClass:
+		// Cluster-scoped, no namespace. Provisioner + parameters are
+		// effectively immutable post-creation — k8s allows updates but
+		// the CSI drivers don't react to them, so an "update" after
+		// Create is a silent no-op. We still issue the Update so our
+		// FieldManager shows ownership.
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			existing, gerr := c.cs.StorageV1().StorageClasses().Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(gerr) {
+				_, cerr := c.cs.StorageV1().StorageClasses().Create(ctx, typed, metav1.CreateOptions{FieldManager: FieldManager})
+				return cerr
+			}
+			if gerr != nil {
+				return gerr
+			}
+			typed.ResourceVersion = existing.ResourceVersion
+			_, uerr := c.cs.StorageV1().StorageClasses().Update(ctx, typed, metav1.UpdateOptions{FieldManager: FieldManager})
+			return uerr
+		})
+		return true, wrapApply(gvk, name, err)
 	case *networkingv1.Ingress:
 		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			existing, gerr := c.cs.NetworkingV1().Ingresses(ns).Get(ctx, name, metav1.GetOptions{})
@@ -262,6 +289,23 @@ func (c *Client) applyTyped(ctx context.Context, ns string, gvk schema.GroupVers
 		return true, wrapApply(gvk, name, err)
 	}
 	return false, nil
+}
+
+// isClusterScoped reports whether a GVK refers to a non-namespaced
+// resource. Used by Apply to skip namespace inheritance (which would
+// trigger "request namespace does not match object namespace" on the
+// Update call).
+func isClusterScoped(gvk schema.GroupVersionKind) bool {
+	switch gvk.Kind {
+	case "Namespace",
+		"StorageClass",
+		"CSIDriver",
+		"CustomResourceDefinition",
+		"ClusterRole",
+		"ClusterRoleBinding":
+		return true
+	}
+	return false
 }
 
 func wrapApply(gvk schema.GroupVersionKind, name string, err error) error {

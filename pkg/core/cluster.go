@@ -151,6 +151,33 @@ func (c *Cluster) SSH(ctx context.Context, cfg provider.ProviderConfigView) (uti
 	return shell, names, nil
 }
 
+// SSHToNode returns an SSH client to a specific node by its
+// YAML-declared short name. Unlike SSH() (master-only), this dials
+// the exact node a caller needs — used by the postgres provider's
+// ZFS prepare-node phase to reach whichever node hosts the DB.
+//
+// Always opens a fresh connection; caller owns Close(). Returns an
+// actionable error for providers without host shell access
+// (managed-k8s / sandbox).
+func (c *Cluster) SSHToNode(ctx context.Context, cfg provider.ProviderConfigView, serverName string) (utils.SSHClient, error) {
+	bctx := c.bootstrapContext(cfg)
+	infraProv, err := provider.ResolveInfra(c.Provider, c.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("resolve infra provider: %w", err)
+	}
+	shell, err := infraProv.SSHToNode(ctx, bctx, serverName)
+	if err != nil {
+		if errors.Is(err, provider.ErrNotBootstrapped) {
+			return nil, fmt.Errorf("server %q not found for %s/%s — run `nvoi deploy` to provision", serverName, c.AppName, c.Env)
+		}
+		return nil, fmt.Errorf("infra.SSHToNode %s: %w", serverName, err)
+	}
+	if shell == nil {
+		return nil, fmt.Errorf("infra provider %q has no node shell — sandbox / managed-k8s providers don't expose host SSH", c.Provider)
+	}
+	return shell, nil
+}
+
 // Connect opens an SSH connection using SSHFunc or the default infra.ConnectSSH.
 // Caller owns the connection and must close it.
 func (c *Cluster) Connect(ctx context.Context, addr string) (utils.SSHClient, error) {

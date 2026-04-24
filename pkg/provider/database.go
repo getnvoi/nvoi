@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -57,7 +58,14 @@ type DatabaseRequest struct {
 	Bucket                *BucketHandle
 	DeleteVolumes         bool
 	Kube                  *kube.Client
-	Log                   EventSink
+	// NodeSSH is an SSH client to the DB's target node (as named by
+	// Spec.Server). Set by the reconciler via
+	// InfraProvider.SSHToNode — nil for SaaS engines and for callers
+	// that don't need host-level access. Postgres's selfhosted path
+	// uses it for the ZFS prepare-node phase (install zfsutils,
+	// create zpool); other engines ignore it.
+	NodeSSH utils.SSHClient
+	Log     EventSink
 }
 
 type DatabaseSpec struct {

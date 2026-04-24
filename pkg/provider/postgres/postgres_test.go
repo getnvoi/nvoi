@@ -149,13 +149,14 @@ func TestReconcile_EmitsStatefulSetPlusBackupCronJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Expected: Service, PVC, StatefulSet, CronJob.
-	if len(plan.Workloads) != 4 {
-		t.Fatalf("expected 4 workloads, got %d", len(plan.Workloads))
+	// Expected: StorageClass (cluster-scoped, applied first so the PVC
+	// binds against it), Service, PVC, StatefulSet, CronJob.
+	if len(plan.Workloads) != 5 {
+		t.Fatalf("expected 5 workloads, got %d", len(plan.Workloads))
 	}
-	cj, ok := plan.Workloads[3].(*batchv1.CronJob)
+	cj, ok := plan.Workloads[4].(*batchv1.CronJob)
 	if !ok {
-		t.Fatalf("expected *batchv1.CronJob as last workload, got %T", plan.Workloads[3])
+		t.Fatalf("expected *batchv1.CronJob as last workload, got %T", plan.Workloads[4])
 	}
 	envFrom := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].EnvFrom
 	if !envFromHas(envFrom, "nvoi-myapp-prod-db-app-credentials") {

@@ -47,8 +47,22 @@ func (p *Provider) EnsureCredentials(ctx context.Context, kc *kube.Client, req p
 	return creds, nil
 }
 
-func (p *Provider) Reconcile(_ context.Context, req provider.DatabaseRequest) (*provider.DatabasePlan, error) {
+func (p *Provider) Reconcile(ctx context.Context, req provider.DatabaseRequest) (*provider.DatabasePlan, error) {
+	// ZFS prepare-node runs over SSH before we emit cluster workloads.
+	// Installs zfsutils-linux + creates the file-backed zpool on the
+	// DB's target node. Idempotent — re-runs are near-free. Skipped
+	// when NodeSSH is nil (tests that don't wire SSH, or callers that
+	// bootstrapped the node out-of-band).
+	if req.NodeSSH != nil && req.Spec.Size > 0 {
+		if err := PrepareNode(ctx, req.NodeSSH, req.Spec.Size); err != nil {
+			return nil, fmt.Errorf("postgres.PrepareNode: %w", err)
+		}
+	}
+
 	workloads := []runtime.Object{
+		// StorageClass first so the PVC binds against it. Cluster-scoped,
+		// idempotent Apply via the typed clientset.
+		buildZFSStorageClass(),
 		buildService(req),
 		buildPVC(req),
 		buildStatefulSet(req),
@@ -183,6 +197,7 @@ func buildService(req provider.DatabaseRequest) runtime.Object {
 }
 
 func buildPVC(req provider.DatabaseRequest) runtime.Object {
+	sc := ZFSStorageClassName
 	return &corev1.PersistentVolumeClaim{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -192,6 +207,11 @@ func buildPVC(req provider.DatabaseRequest) runtime.Object {
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			// Pinned to ZFS-LocalPV. size: → quota: on the dataset,
+			// enforced at the block layer by the CSI driver. Without an
+			// explicit StorageClassName the default SC (k3s local-path)
+			// would silently win and size: would revert to advisory.
+			StorageClassName: &sc,
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: resource.MustParse(fmt.Sprintf("%dGi", req.Spec.Size)),

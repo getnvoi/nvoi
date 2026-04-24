@@ -221,6 +221,33 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			if _, ok := cfg.Servers[db.Server]; !ok {
 				return fmt.Errorf("databases.%s.server: %q is not a defined server", name, db.Server)
 			}
+			// Selfhosted databases run on ZFS-LocalPV on a dedicated node.
+			// master carries etcd + kube-apiserver + Caddy and can't
+			// also own a zpool without risking cluster-control-plane
+			// availability. Operators wanting a minimal single-node
+			// footprint use SaaS engines (neon, planetscale).
+			if db.Server == utils.RoleMaster {
+				return fmt.Errorf(
+					"databases.%s.server cannot be %q — selfhosted DBs require a dedicated node (add a worker to servers: and point server: at it, or switch to engine: neon | planetscale)",
+					name, utils.RoleMaster,
+				)
+			}
+			// A DB node runs ZFS + carries the DB's data. Sharing it with
+			// services or crons creates noisy-neighbor risk and makes
+			// disk-budget reasoning per-database impossible. Enforce the
+			// dedicated-node invariant at config time.
+			if shared := servicesSharingServer(cfg, db.Server); len(shared) > 0 {
+				return fmt.Errorf(
+					"databases.%s.server %q is shared with service(s) %v — DB nodes must be dedicated (move the service(s) to a different server:)",
+					name, db.Server, shared,
+				)
+			}
+			if shared := cronsSharingServer(cfg, db.Server); len(shared) > 0 {
+				return fmt.Errorf(
+					"databases.%s.server %q is shared with cron(s) %v — DB nodes must be dedicated (move the cron(s) to a different server:)",
+					name, db.Server, shared,
+				)
+			}
 		}
 		if databaseEngineIsSaaS(db.Engine) {
 			if db.User != "" {
@@ -596,4 +623,44 @@ func parseDatabaseRef(ref string) (envName, dbName string) {
 
 func validCronExpr(s string) bool {
 	return len(strings.Fields(s)) == 5
+}
+
+// servicesSharingServer returns the names of services that target
+// `server` either via Server: (single-server pin) or Servers: (multi-
+// server spread). Used by the DB validator to enforce dedicated DB
+// nodes.
+func servicesSharingServer(cfg *config.AppConfig, server string) []string {
+	var out []string
+	for name, svc := range cfg.Services {
+		if svc.Server == server {
+			out = append(out, name)
+			continue
+		}
+		for _, s := range svc.Servers {
+			if s == server {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// cronsSharingServer mirrors servicesSharingServer for cron entries.
+// Crons also support Server: + Servers: so both fields are checked.
+func cronsSharingServer(cfg *config.AppConfig, server string) []string {
+	var out []string
+	for name, cj := range cfg.Crons {
+		if cj.Server == server {
+			out = append(out, name)
+			continue
+		}
+		for _, s := range cj.Servers {
+			if s == server {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	return out
 }

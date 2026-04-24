@@ -130,6 +130,24 @@ func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *co
 	req.Namespace = names.KubeNamespace()
 	req.Labels = names.Labels()
 	req.Log = dc.Cluster.Log()
+	req.Kube = dc.Cluster.MasterKube
+
+	// Dial SSH to the DB's target node for any host-level setup the
+	// provider needs (postgres: ZFS prepare-node). Skipped for SaaS
+	// engines (def.Server == "") and when the cluster doesn't expose a
+	// per-node shell. The provider decides whether to use req.NodeSSH
+	// or ignore it.
+	if def.Server != "" {
+		ns, err := dc.Cluster.SSHToNode(ctx, config.NewView(cfg), def.Server)
+		if err == nil && ns != nil {
+			req.NodeSSH = ns
+			defer ns.Close()
+		}
+		// Non-fatal: if SSH to the target node fails, the provider's
+		// Reconcile falls back to skipping any host setup. The
+		// StatefulSet apply will surface a concrete error (e.g. PVC
+		// stuck Pending) if the skipped setup was actually required.
+	}
 
 	if def.Backup != nil {
 		if err := ensureDatabaseBackupBucket(ctx, dc, cfg, names, name, def, &req); err != nil {

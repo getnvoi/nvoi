@@ -569,7 +569,8 @@ func validCfgForTest() *config.AppConfig {
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Infra: "hetzner"},
 		Servers: map[string]config.ServerDef{
-			"master": {Type: "cax11", Region: "nbg1", Role: "master"},
+			"master":    {Type: "cax11", Region: "nbg1", Role: "master"},
+			"db-master": {Type: "cax21", Region: "nbg1", Role: "worker"},
 		},
 		Services: map[string]config.ServiceDef{},
 	}
@@ -855,7 +856,7 @@ func TestValidateConfig_DatabasePostgresValid(t *testing.T) {
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
 			Engine:   "postgres",
-			Server:   "master",
+			Server:   "db-master",
 			Size:     20,
 			User:     "$POSTGRES_APP_USER",
 			Password: "$POSTGRES_APP_PASSWORD",
@@ -874,7 +875,7 @@ func TestValidateConfig_DatabaseRequiresVarRefs(t *testing.T) {
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
 			Engine:   "postgres",
-			Server:   "master",
+			Server:   "db-master",
 			Size:     20,
 			User:     "appuser",
 			Password: "$POSTGRES_APP_PASSWORD",
@@ -882,6 +883,82 @@ func TestValidateConfig_DatabaseRequiresVarRefs(t *testing.T) {
 		},
 	}
 	assertValidationError(t, cfg, "databases.app.user must be a $VAR reference")
+}
+
+// TestValidateConfig_DatabaseBannedOnMaster locks the dedicated-node
+// invariant (#68): selfhosted DBs run on ZFS-LocalPV, and master owns
+// etcd + kube-apiserver + Caddy — can't also host a zpool without
+// risking cluster-control-plane availability. The error message must
+// point at the two escape hatches (dedicated server or SaaS engine)
+// so operators have a clear recovery path.
+func TestValidateConfig_DatabaseBannedOnMaster(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare"
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine:   "postgres",
+			Server:   "master",
+			Size:     20,
+			User:     "$U",
+			Password: "$P",
+			Database: "myapp",
+		},
+	}
+	assertValidationError(t, cfg, "cannot be \"master\"")
+	assertValidationError(t, cfg, "dedicated node")
+}
+
+// TestValidateConfig_DatabaseBannedOnSharedNode locks the other half
+// of the dedicated-node invariant: even on a non-master node, a DB
+// can't share its server with a service. Sharing creates noisy-
+// neighbor risk and makes per-DB disk budgeting (the ZFS pool sized
+// to 2x databases.X.size) unpredictable.
+func TestValidateConfig_DatabaseBannedOnSharedNode(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare"
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine:   "postgres",
+			Server:   "db-master",
+			Size:     20,
+			User:     "$U",
+			Password: "$P",
+			Database: "myapp",
+		},
+	}
+	cfg.Services["worker"] = config.ServiceDef{
+		Image:  "busybox",
+		Server: "db-master", // collision with databases.app.server
+	}
+	assertValidationError(t, cfg, "shared with service(s)")
+	assertValidationError(t, cfg, "worker")
+}
+
+// TestValidateConfig_DatabaseBannedOnSharedNode_Cron covers crons too
+// — same isolation rule applies, any workload sharing the DB node is
+// rejected.
+func TestValidateConfig_DatabaseBannedOnSharedNode_Cron(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare"
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine:   "postgres",
+			Server:   "db-master",
+			Size:     20,
+			User:     "$U",
+			Password: "$P",
+			Database: "myapp",
+		},
+	}
+	cfg.Crons = map[string]config.CronDef{
+		"cleanup": {
+			Image:    "busybox",
+			Schedule: "0 3 * * *",
+			Server:   "db-master",
+		},
+	}
+	assertValidationError(t, cfg, "shared with cron(s)")
+	assertValidationError(t, cfg, "cleanup")
 }
 
 func TestValidateConfig_DatabaseNeonRejectsSelfHostedFields(t *testing.T) {
@@ -903,7 +980,7 @@ func TestValidateConfig_DatabaseBackupRequiresProvidersStorage(t *testing.T) {
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
 			Engine:   "postgres",
-			Server:   "master",
+			Server:   "db-master",
 			Size:     20,
 			User:     "$POSTGRES_APP_USER",
 			Password: "$POSTGRES_APP_PASSWORD",
@@ -935,7 +1012,7 @@ func TestValidateConfig_DatabaseBackupWithProvidersStorage_OK(t *testing.T) {
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
 			Engine:   "postgres",
-			Server:   "master",
+			Server:   "db-master",
 			Size:     20,
 			User:     "$POSTGRES_APP_USER",
 			Password: "$POSTGRES_APP_PASSWORD",
@@ -953,7 +1030,7 @@ func TestValidateConfig_ServiceDatabaseAliasMustBeEnvVar(t *testing.T) {
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
 			Engine:   "postgres",
-			Server:   "master",
+			Server:   "db-master",
 			Size:     20,
 			User:     "$POSTGRES_APP_USER",
 			Password: "$POSTGRES_APP_PASSWORD",
