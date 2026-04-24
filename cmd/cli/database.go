@@ -29,7 +29,110 @@ func newDatabaseCmd(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newDatabaseSnapshotCmd(rt))
 	cmd.AddCommand(newDatabaseSnapshotsCmd(rt))
 	cmd.AddCommand(newDatabaseSnapshotDeleteCmd(rt))
+	cmd.AddCommand(newDatabaseBranchCmd(rt))
+	cmd.AddCommand(newDatabaseBranchDeleteCmd(rt))
 	return cmd
+}
+
+// newDatabaseBranchCmd creates a sibling database from a ZFS clone of
+// the source DB's data. O(100ms) on the CSI side thanks to copy-on-
+// write; writes to the branch diverge lazily, so disk cost starts at
+// near-zero and grows with actual changes.
+//
+// The branch gets its own k8s Service (`{source-pvc}-br-{branch}`)
+// and StatefulSet. Auth is inherited from the source's credentials
+// Secret (ZFS clones carry the pg_roles table bit-exact). Dev tools
+// connect to the branch Service instead of the primary.
+func newDatabaseBranchCmd(rt *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "branch <name> <branch-name>",
+		Short: "Create a ZFS-cloned branch of a database",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDatabaseBranch(cmd, rt, args[0], args[1])
+		},
+	}
+}
+
+func newDatabaseBranchDeleteCmd(rt *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "branch-delete <name> <branch-name>",
+		Short: "Delete a branch (StatefulSet + PVC + Service + VolumeSnapshot)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDatabaseBranchDelete(cmd, rt, args[0], args[1])
+		},
+	}
+}
+
+func runDatabaseBranch(cmd *cobra.Command, rt *runtime, dbName, branchName string) error {
+	def, ok := rt.cfg.Databases[dbName]
+	if !ok {
+		return fmt.Errorf("database %q is not defined", dbName)
+	}
+	if def.Server == "" {
+		return fmt.Errorf("databases.%s: branching requires a selfhosted engine — SaaS providers have their own native branching", dbName)
+	}
+	names, err := rt.dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	masterSSH, _, err := rt.dc.Cluster.SSH(cmd.Context(), config.NewView(rt.cfg))
+	if err != nil {
+		return fmt.Errorf("master SSH: %w", err)
+	}
+	kc, _, cleanup, err := rt.dc.Cluster.Kube(cmd.Context(), config.NewView(rt.cfg))
+	if err != nil {
+		return fmt.Errorf("master kube: %w", err)
+	}
+	defer cleanup()
+
+	version := def.Version
+	if version == "" {
+		version = "16"
+	}
+	src := postgres.BranchSource{
+		Namespace:         names.KubeNamespace(),
+		SourcePVC:         names.KubeDatabasePVC(dbName),
+		SourceService:     names.Database(dbName),
+		CredentialsSecret: names.KubeDatabaseCredentials(dbName),
+		Size:              def.Size,
+		Image:             "postgres:" + version + "-alpine",
+		ServerRole:        def.Server,
+	}
+
+	res, err := postgres.Branch(cmd.Context(), kc, masterSSH, src, branchName)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(rt.out.Writer(), "branch %s ready — service %s:5432 (snapshot %s)\n",
+		res.Name, res.Service, res.SnapshotName)
+	return nil
+}
+
+func runDatabaseBranchDelete(cmd *cobra.Command, rt *runtime, dbName, branchName string) error {
+	def, ok := rt.cfg.Databases[dbName]
+	if !ok {
+		return fmt.Errorf("database %q is not defined", dbName)
+	}
+	if def.Server == "" {
+		return fmt.Errorf("databases.%s: branching requires a selfhosted engine", dbName)
+	}
+	names, err := rt.dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	masterSSH, _, err := rt.dc.Cluster.SSH(cmd.Context(), config.NewView(rt.cfg))
+	if err != nil {
+		return fmt.Errorf("master SSH: %w", err)
+	}
+	kc, _, cleanup, err := rt.dc.Cluster.Kube(cmd.Context(), config.NewView(rt.cfg))
+	if err != nil {
+		return fmt.Errorf("master kube: %w", err)
+	}
+	defer cleanup()
+	return postgres.DeleteBranch(cmd.Context(), kc, masterSSH,
+		names.KubeNamespace(), names.KubeDatabasePVC(dbName), branchName)
 }
 
 // newDatabaseSnapshotCmd creates a ZFS-backed snapshot of a database's
