@@ -114,7 +114,7 @@ func buildZFSStorageClass() runtime.Object {
 // (we label the DB node during PrepareNode; the controller ignores
 // the rest). Inspecting a pinned manifest rather than tracking latest
 // avoids the "vendor changed the RBAC surface on Tuesday" failure mode.
-const zfsCSIManifestURL = "https://raw.githubusercontent.com/openebs/zfs-localpv/v2.6.0/deploy/zfs-operator.yaml"
+const zfsCSIManifestURL = "https://raw.githubusercontent.com/openebs/zfs-localpv/v2.9.1/deploy/zfs-operator.yaml"
 
 // EnsureZFSCSI installs the OpenEBS ZFS-LocalPV CSI driver if it
 // isn't already present. Runs `sudo k3s kubectl apply -f <pinned-url>`

@@ -64,27 +64,53 @@ deletionPolicy: Delete
 	return applyManifest(ctx, masterSSH, manifest)
 }
 
-// Snapshot creates a VolumeSnapshot of the DB's PVC. Label is optional
-// metadata; when empty a timestamp-based name is used. Returns the
-// snapshot's name so callers can later reference it for clone/rollback.
+// Snapshot creates a user-requested VolumeSnapshot of the DB's PVC.
+// Label is optional metadata; when empty a timestamp-based name is
+// used. Returns the snapshot's name so callers can later reference it
+// for clone/rollback.
+//
+// Label is validated as a DNS-1123 segment — it lands in an object
+// name and in shell-interpolated YAML inside a kubectl here-doc, so
+// unvalidated input is both a correctness hazard (kube rejects the
+// object) and an injection vector (escape the heredoc). ValidateName
+// rejects upper-case, dots, slashes, spaces, and everything else that
+// would break either layer.
 //
 // Concurrency note: VolumeSnapshot creation is async on the CSI
 // controller's side — the object lands immediately but ReadyToUse
-// flips true only after `zfs snapshot` completes (usually O(100ms) for
-// the pool sizes we're building). Callers that need the snapshot to be
-// ready before proceeding should poll — not wired in this cut.
-func Snapshot(ctx context.Context, masterSSH utils.SSHClient, namespace, pvcName, label string) (string, error) {
+// flips true only after `zfs snapshot` completes (usually O(100ms)).
+// PVC-from-snapshot binding handles the wait implicitly — the CSI
+// controller blocks the PVC until the source snapshot is Ready — so
+// callers don't need to poll themselves.
+func Snapshot(ctx context.Context, masterSSH utils.SSHClient, names *utils.Names, dbName, label string) (string, error) {
 	if masterSSH == nil {
 		return "", fmt.Errorf("postgres.Snapshot: master ssh required")
+	}
+	if names == nil {
+		return "", fmt.Errorf("postgres.Snapshot: names required")
 	}
 	if label == "" {
 		label = time.Now().UTC().Format("20060102t150405z")
 	}
-	snapName := fmt.Sprintf("%s-%s", pvcName, label)
-
-	if err := EnsureSnapshotClass(ctx, masterSSH); err != nil {
+	if err := utils.ValidateName("snapshot label", label); err != nil {
 		return "", err
 	}
+	snapName := names.KubeDatabaseSnapshot(dbName, label)
+	return snapName, applyVolumeSnapshot(ctx, masterSSH, names, dbName, snapName)
+}
+
+// applyVolumeSnapshot is the name-agnostic apply primitive both
+// Snapshot (user-facing, label-derived name) and Branch (snapshot
+// name derived from KubeDatabaseBranchSnapshot) compose onto. Doing
+// the manifest-render + kubectl-apply in one place keeps the YAML
+// template in a single location and stops callers from duplicating
+// the EnsureSnapshotClass prerequisite.
+func applyVolumeSnapshot(ctx context.Context, masterSSH utils.SSHClient, names *utils.Names, dbName, snapName string) error {
+	if err := EnsureSnapshotClass(ctx, masterSSH); err != nil {
+		return err
+	}
+	namespace := names.KubeNamespace()
+	pvcName := names.KubeDatabasePVC(dbName)
 
 	manifest := fmt.Sprintf(`apiVersion: %s
 kind: VolumeSnapshot
@@ -101,15 +127,17 @@ spec:
 `, snapshotAPIVersion, snapName, namespace, pvcName, SnapshotClassName, pvcName)
 
 	if err := applyManifest(ctx, masterSSH, manifest); err != nil {
-		return "", fmt.Errorf("apply VolumeSnapshot %s: %w", snapName, err)
+		return fmt.Errorf("apply VolumeSnapshot %s: %w", snapName, err)
 	}
-	return snapName, nil
+	return nil
 }
 
 // ListSnapshots returns every VolumeSnapshot in the namespace that's
 // tagged as belonging to the given DB. Names come back in kubectl's
 // ordering (stable by creation timestamp).
-func ListSnapshots(ctx context.Context, masterSSH utils.SSHClient, namespace, pvcName string) ([]string, error) {
+func ListSnapshots(ctx context.Context, masterSSH utils.SSHClient, names *utils.Names, dbName string) ([]string, error) {
+	namespace := names.KubeNamespace()
+	pvcName := names.KubeDatabasePVC(dbName)
 	cmd := fmt.Sprintf(
 		`sudo k3s kubectl -n %s get volumesnapshot -l nvoi/snapshot-of=%s -o name 2>/dev/null || true`,
 		namespace, pvcName,
@@ -118,7 +146,7 @@ func ListSnapshots(ctx context.Context, masterSSH utils.SSHClient, namespace, pv
 	if err != nil {
 		return nil, fmt.Errorf("list snapshots: %w", err)
 	}
-	var names []string
+	var snapNames []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -128,15 +156,19 @@ func ListSnapshots(ctx context.Context, masterSSH utils.SSHClient, namespace, pv
 		if i := strings.LastIndex(line, "/"); i >= 0 {
 			line = line[i+1:]
 		}
-		names = append(names, line)
+		snapNames = append(snapNames, line)
 	}
-	return names, nil
+	return snapNames, nil
 }
 
 // DeleteSnapshot removes a VolumeSnapshot. The ZFS-LocalPV CSI runs
 // `zfs destroy` on the underlying dataset (ReclaimPolicy=Delete on the
-// SnapshotClass). Idempotent via --ignore-not-found.
+// SnapshotClass). Idempotent via --ignore-not-found. Snapshot name is
+// validated as DNS-1123 so it can't inject into the kubectl command.
 func DeleteSnapshot(ctx context.Context, masterSSH utils.SSHClient, namespace, snapshotName string) error {
+	if err := utils.ValidateName("snapshot name", snapshotName); err != nil {
+		return err
+	}
 	cmd := fmt.Sprintf(
 		`sudo k3s kubectl -n %s delete volumesnapshot %s --ignore-not-found`,
 		namespace, snapshotName,
@@ -149,17 +181,18 @@ func DeleteSnapshot(ctx context.Context, masterSSH utils.SSHClient, namespace, s
 
 // ── Branch primitives (typed Go structs via kube.Client.Apply) ───────────
 
-// BranchSource is the subset of a DatabaseRequest plus live-derived
-// fields the branch helper needs. Kept separate from DatabaseRequest
-// so callers can construct it without threading the full request.
+// BranchSource is the subset of a DatabaseRequest the branch helper
+// needs. Derived names (PVC, Service, credentials Secret) come from
+// *utils.Names so the naming convention stays in one place. Image
+// naming is resolved via postgres.ImageFor(Version) — callers pass the
+// same Version string that cfg.databases.X.version carries, not a
+// pre-rendered image tag.
 type BranchSource struct {
-	Namespace         string // target namespace
-	SourcePVC         string // PVC of the source DB (the one we snapshot)
-	SourceService     string // Service name of the source DB (branch names derive from this)
-	CredentialsSecret string // credentials Secret the source DB already wrote
-	Size              int    // PVC storage request in GiB
-	Image             string // postgres image to run in the branch pod (same as source)
-	ServerRole        string // nvoi-role label of the DB node (branch shares the node)
+	Names      *utils.Names // cluster naming — must be non-nil
+	DBName     string       // databases.<name> key
+	Size       int          // PVC storage request in GiB
+	Version    string       // postgres version (empty → defaultPostgresVersion)
+	ServerRole string       // nvoi-role label of the DB node (branch shares the node)
 }
 
 // BranchResult names the workloads the branch created so callers can
@@ -202,6 +235,9 @@ func Branch(ctx context.Context, kc *kube.Client, masterSSH utils.SSHClient, src
 	if kc == nil {
 		return BranchResult{}, fmt.Errorf("postgres.Branch: kube client required")
 	}
+	if src.Names == nil {
+		return BranchResult{}, fmt.Errorf("postgres.Branch: names required")
+	}
 	if err := utils.ValidateName("branch", branchName); err != nil {
 		return BranchResult{}, err
 	}
@@ -209,26 +245,41 @@ func Branch(ctx context.Context, kc *kube.Client, masterSSH utils.SSHClient, src
 		return BranchResult{}, fmt.Errorf("postgres.Branch: source size must be > 0")
 	}
 
-	// 1. Snapshot the source PVC (kubectl-apply, external-snapshotter kind).
-	snapName, err := Snapshot(ctx, masterSSH, src.Namespace, src.SourcePVC, "br-"+branchName)
-	if err != nil {
+	// The branch workload name becomes a k8s Service name → DNS-1123
+	// label (63-char cap). ValidateName on branchName alone isn't
+	// enough because the final name is a composite of several
+	// already-validated segments. Check the composite upfront so we
+	// fail cleanly instead of mid-apply with an opaque kube error.
+	branchWorkload := src.Names.KubeDatabaseBranch(src.DBName, branchName)
+	if len(branchWorkload) > 63 {
+		return BranchResult{}, fmt.Errorf(
+			"postgres.Branch: composite name %q exceeds the 63-char DNS-1123 label limit for Service names — shorten the app/env/database/branch names",
+			branchWorkload,
+		)
+	}
+	namespace := src.Names.KubeNamespace()
+
+	// 1. Snapshot the source PVC. Uses KubeDatabaseBranchSnapshot so
+	// the snapshot's name encodes the branch lineage — list/delete by
+	// prefix traces a branch back to its seed without hand-crafting
+	// the "br-" segment at this call site.
+	snapName := src.Names.KubeDatabaseBranchSnapshot(src.DBName, branchName)
+	if err := applyVolumeSnapshot(ctx, masterSSH, src.Names, src.DBName, snapName); err != nil {
 		return BranchResult{}, fmt.Errorf("snapshot source: %w", err)
 	}
 
-	branchWorkload := fmt.Sprintf("%s-br-%s", src.SourcePVC, branchName)
-
 	// 2. PVC cloned from the snapshot (typed, applied via kube.Client).
-	if err := kc.Apply(ctx, src.Namespace, buildBranchPVC(src, branchWorkload, snapName)); err != nil {
+	if err := kc.Apply(ctx, namespace, buildBranchPVC(src, branchWorkload, snapName)); err != nil {
 		return BranchResult{}, fmt.Errorf("apply branch PVC: %w", err)
 	}
 
 	// 3. Sibling Service (typed).
-	if err := kc.Apply(ctx, src.Namespace, buildBranchService(src, branchWorkload)); err != nil {
+	if err := kc.Apply(ctx, namespace, buildBranchService(src, branchWorkload)); err != nil {
 		return BranchResult{}, fmt.Errorf("apply branch Service: %w", err)
 	}
 
 	// 4. Sibling StatefulSet (typed, bound to the clone PVC).
-	if err := kc.Apply(ctx, src.Namespace, buildBranchStatefulSet(src, branchWorkload)); err != nil {
+	if err := kc.Apply(ctx, namespace, buildBranchStatefulSet(src, branchWorkload)); err != nil {
 		return BranchResult{}, fmt.Errorf("apply branch StatefulSet: %w", err)
 	}
 
@@ -264,11 +315,18 @@ func Branch(ctx context.Context, kc *kube.Client, masterSSH utils.SSHClient, src
 // the SnapshotClass means the underlying ZFS datasets are destroyed
 // too. Idempotent (kc.DeleteByName + DeletePVC swallow NotFound;
 // kubectl delete --ignore-not-found for the snapshot).
-func DeleteBranch(ctx context.Context, kc *kube.Client, masterSSH utils.SSHClient, namespace, sourcePVC, branchName string) error {
+func DeleteBranch(ctx context.Context, kc *kube.Client, masterSSH utils.SSHClient, names *utils.Names, dbName, branchName string) error {
 	if kc == nil {
 		return fmt.Errorf("postgres.DeleteBranch: kube client required")
 	}
-	branchWorkload := fmt.Sprintf("%s-br-%s", sourcePVC, branchName)
+	if names == nil {
+		return fmt.Errorf("postgres.DeleteBranch: names required")
+	}
+	if err := utils.ValidateName("branch", branchName); err != nil {
+		return err
+	}
+	namespace := names.KubeNamespace()
+	branchWorkload := names.KubeDatabaseBranch(dbName, branchName)
 
 	// StatefulSet + Service first — evicts the pod before its PVC goes.
 	if err := kc.DeleteByName(ctx, namespace, branchWorkload); err != nil {
@@ -280,7 +338,7 @@ func DeleteBranch(ctx context.Context, kc *kube.Client, masterSSH utils.SSHClien
 	}
 	// VolumeSnapshot last — CSI runs zfs destroy on the snapshot. Via
 	// kubectl because VolumeSnapshot isn't in our typed surface.
-	snapName := fmt.Sprintf("%s-br-%s", sourcePVC, branchName)
+	snapName := names.KubeDatabaseBranchSnapshot(dbName, branchName)
 	if masterSSH != nil {
 		if err := DeleteSnapshot(ctx, masterSSH, namespace, snapName); err != nil {
 			return err
@@ -298,11 +356,8 @@ func buildBranchPVC(src BranchSource, name, snapshotName string) *corev1.Persist
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: src.Namespace,
-			Labels: map[string]string{
-				utils.LabelAppManagedBy: utils.LabelManagedBy,
-				brLabel:                 src.SourcePVC,
-			},
+			Namespace: src.Names.KubeNamespace(),
+			Labels:    branchLabels(src),
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
@@ -326,11 +381,8 @@ func buildBranchService(src BranchSource, name string) *corev1.Service {
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: src.Namespace,
-			Labels: map[string]string{
-				utils.LabelAppManagedBy: utils.LabelManagedBy,
-				brLabel:                 src.SourcePVC,
-			},
+			Namespace: src.Names.KubeNamespace(),
+			Labels:    branchLabels(src),
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{utils.LabelAppName: name},
@@ -345,23 +397,25 @@ func buildBranchService(src BranchSource, name string) *corev1.Service {
 
 func buildBranchStatefulSet(src BranchSource, name string) *appsv1.StatefulSet {
 	replicas := int32(1)
+	credsSecret := src.Names.KubeDatabaseCredentials(src.DBName)
 	secretKeyRef := func(key string) *corev1.EnvVarSource {
 		return &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: src.CredentialsSecret},
+				LocalObjectReference: corev1.LocalObjectReference{Name: credsSecret},
 				Key:                  key,
 			},
 		}
+	}
+	podLabels := map[string]string{utils.LabelAppName: name}
+	for k, v := range branchLabels(src) {
+		podLabels[k] = v
 	}
 	return &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "StatefulSet"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: src.Namespace,
-			Labels: map[string]string{
-				utils.LabelAppManagedBy: utils.LabelManagedBy,
-				brLabel:                 src.SourcePVC,
-			},
+			Namespace: src.Names.KubeNamespace(),
+			Labels:    branchLabels(src),
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas:    &replicas,
@@ -370,12 +424,7 @@ func buildBranchStatefulSet(src BranchSource, name string) *appsv1.StatefulSet {
 				MatchLabels: map[string]string{utils.LabelAppName: name},
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						utils.LabelAppName: name,
-						brLabel:            src.SourcePVC,
-					},
-				},
+				ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 				Spec: corev1.PodSpec{
 					// Branch shares the source node — the ZFS clone
 					// lives in the same pool. Cross-node branching
@@ -383,7 +432,7 @@ func buildBranchStatefulSet(src BranchSource, name string) *appsv1.StatefulSet {
 					NodeSelector: map[string]string{utils.LabelNvoiRole: src.ServerRole},
 					Containers: []corev1.Container{{
 						Name:  "postgres",
-						Image: src.Image,
+						Image: ImageFor(src.Version),
 						Env: []corev1.EnvVar{
 							// Credentials come from the source DB's
 							// Secret — ZFS clones carry pg_roles bit-
@@ -407,6 +456,17 @@ func buildBranchStatefulSet(src BranchSource, name string) *appsv1.StatefulSet {
 				},
 			},
 		},
+	}
+}
+
+// branchLabels is the common label set stamped on every workload a
+// branch creates. brLabel ties siblings back to the source DB so
+// list/delete operations can scope cleanly; managed-by is the usual
+// nvoi-owner selector.
+func branchLabels(src BranchSource) map[string]string {
+	return map[string]string{
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		brLabel:                 src.Names.KubeDatabasePVC(src.DBName),
 	}
 }
 

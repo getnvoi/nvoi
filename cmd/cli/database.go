@@ -101,18 +101,12 @@ func runDatabaseBranch(cmd *cobra.Command, rt *runtime, dbName, branchName strin
 	}
 	defer cleanup()
 
-	version := def.Version
-	if version == "" {
-		version = "16"
-	}
 	src := postgres.BranchSource{
-		Namespace:         names.KubeNamespace(),
-		SourcePVC:         names.KubeDatabasePVC(dbName),
-		SourceService:     names.Database(dbName),
-		CredentialsSecret: names.KubeDatabaseCredentials(dbName),
-		Size:              def.Size,
-		Image:             "postgres:" + version + "-alpine",
-		ServerRole:        def.Server,
+		Names:      names,
+		DBName:     dbName,
+		Size:       def.Size,
+		Version:    def.Version, // empty falls back to postgres.defaultPostgresVersion
+		ServerRole: def.Server,
 	}
 
 	res, err := postgres.Branch(cmd.Context(), kc, masterSSH, src, branchName)
@@ -145,8 +139,7 @@ func runDatabaseBranchDelete(cmd *cobra.Command, rt *runtime, dbName, branchName
 		return fmt.Errorf("master kube: %w", err)
 	}
 	defer cleanup()
-	return postgres.DeleteBranch(cmd.Context(), kc, masterSSH,
-		names.KubeNamespace(), names.KubeDatabasePVC(dbName), branchName)
+	return postgres.DeleteBranch(cmd.Context(), kc, masterSSH, names, dbName, branchName)
 }
 
 // newDatabaseSnapshotCmd creates a ZFS-backed snapshot of a database's
@@ -210,8 +203,7 @@ func runDatabaseSnapshot(cmd *cobra.Command, rt *runtime, dbName string) error {
 		return fmt.Errorf("master SSH: %w", err)
 	}
 	label, _ := cmd.Flags().GetString("label")
-	snapName, err := postgres.Snapshot(cmd.Context(), masterSSH,
-		names.KubeNamespace(), names.KubeDatabasePVC(dbName), label)
+	snapName, err := postgres.Snapshot(cmd.Context(), masterSSH, names, dbName, label)
 	if err != nil {
 		return err
 	}
@@ -235,8 +227,7 @@ func runDatabaseSnapshots(cmd *cobra.Command, rt *runtime, dbName string) error 
 	if err != nil {
 		return fmt.Errorf("master SSH: %w", err)
 	}
-	snaps, err := postgres.ListSnapshots(cmd.Context(), masterSSH,
-		names.KubeNamespace(), names.KubeDatabasePVC(dbName))
+	snaps, err := postgres.ListSnapshots(cmd.Context(), masterSSH, names, dbName)
 	if err != nil {
 		return err
 	}

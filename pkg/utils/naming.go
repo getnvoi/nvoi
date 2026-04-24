@@ -118,6 +118,36 @@ func (n *Names) KubeDatabaseBackupCreds(name string) string {
 	return n.Database(name) + "-backup-creds"
 }
 
+// KubeDatabaseSnapshot returns the VolumeSnapshot object name for a
+// user-requested snapshot of a DB. `label` is free-form metadata
+// (e.g. `pre-migration`); callers must pre-validate it with
+// ValidateName — it lands in a kube object name.
+//
+// Distinct from KubeDatabaseBranchSnapshot below: user snapshots and
+// branch snapshots have different purposes (audit / recovery vs clone
+// lineage) and different lifecycles. Keeping the helpers separate
+// stops the `br-` prefix from bleeding into caller code.
+func (n *Names) KubeDatabaseSnapshot(dbName, label string) string {
+	return n.KubeDatabasePVC(dbName) + "-snap-" + label
+}
+
+// KubeDatabaseBranch returns the base name shared by a branch's
+// sibling StatefulSet, Service, and PVC. Every branch workload is
+// named identically so consumer DNS (`{branch-name}:5432`) is
+// obvious. Callers must pre-validate `branch` with ValidateName.
+func (n *Names) KubeDatabaseBranch(dbName, branch string) string {
+	return n.KubeDatabasePVC(dbName) + "-br-" + branch
+}
+
+// KubeDatabaseBranchSnapshot returns the VolumeSnapshot object name
+// for the snapshot created as part of a Branch operation. Shares the
+// `-br-` segment with KubeDatabaseBranch so `list` operations can
+// trace a branch workload back to its seed snapshot by prefix alone.
+// Callers must pre-validate `branch` with ValidateName.
+func (n *Names) KubeDatabaseBranchSnapshot(dbName, branch string) string {
+	return n.KubeDatabaseBranch(dbName, branch) + "-snap"
+}
+
 // CronJobRunName is the one-shot k8s Job name spawned by `nvoi cron run`.
 // Suffix is unix-nanoseconds (caller passes time.Now().Unix() — here for
 // the signature, CallerProvided so tests can inject deterministic values).

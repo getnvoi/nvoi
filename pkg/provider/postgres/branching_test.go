@@ -36,14 +36,16 @@ func TestBranch_AppliesTypedWorkloads(t *testing.T) {
 		},
 	}
 
+	names, err := utils.NewNames("myapp", "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
 	src := BranchSource{
-		Namespace:         "nvoi-myapp-prod",
-		SourcePVC:         "nvoi-myapp-prod-db-app-data",
-		SourceService:     "nvoi-myapp-prod-db-app",
-		CredentialsSecret: "nvoi-myapp-prod-db-app-credentials",
-		Size:              20,
-		Image:             "postgres:16-alpine",
-		ServerRole:        "db-master",
+		Names:      names,
+		DBName:     "app",
+		Size:       20,
+		Version:    "16",
+		ServerRole: "db-master",
 	}
 
 	res, err := Branch(context.Background(), kf.Client, masterSSH, src, "pr142")
@@ -68,10 +70,10 @@ func TestBranch_AppliesTypedWorkloads(t *testing.T) {
 	}
 
 	// Typed PVC landed in the fake clientset via kc.Apply.
-	if !kf.HasPVC(src.Namespace, wantWorkload) {
+	if !kf.HasPVC(src.Names.KubeNamespace(), wantWorkload) {
 		t.Fatalf("branch PVC not applied via kube.Client")
 	}
-	pvc, err := kf.Typed.CoreV1().PersistentVolumeClaims(src.Namespace).Get(
+	pvc, err := kf.Typed.CoreV1().PersistentVolumeClaims(src.Names.KubeNamespace()).Get(
 		context.Background(), wantWorkload, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -87,15 +89,15 @@ func TestBranch_AppliesTypedWorkloads(t *testing.T) {
 	}
 
 	// Typed Service landed.
-	if !kf.HasService(src.Namespace, wantWorkload) {
+	if !kf.HasService(src.Names.KubeNamespace(), wantWorkload) {
 		t.Fatalf("branch Service not applied via kube.Client")
 	}
 
 	// Typed StatefulSet landed with the right pinning + PVC.
-	if !kf.HasStatefulSet(src.Namespace, wantWorkload) {
+	if !kf.HasStatefulSet(src.Names.KubeNamespace(), wantWorkload) {
 		t.Fatalf("branch StatefulSet not applied via kube.Client")
 	}
-	ss, err := kf.Typed.AppsV1().StatefulSets(src.Namespace).Get(
+	ss, err := kf.Typed.AppsV1().StatefulSets(src.Names.KubeNamespace()).Get(
 		context.Background(), wantWorkload, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -111,9 +113,9 @@ func TestBranch_AppliesTypedWorkloads(t *testing.T) {
 	}
 	// Credentials sourced from the source DB's Secret — the clone
 	// carries pg_roles, so auth is identical.
-	assertEnvFromSecret(t, ss, "POSTGRES_USER", src.CredentialsSecret)
-	assertEnvFromSecret(t, ss, "POSTGRES_PASSWORD", src.CredentialsSecret)
-	assertEnvFromSecret(t, ss, "POSTGRES_DB", src.CredentialsSecret)
+	assertEnvFromSecret(t, ss, "POSTGRES_USER", src.Names.KubeDatabaseCredentials(src.DBName))
+	assertEnvFromSecret(t, ss, "POSTGRES_PASSWORD", src.Names.KubeDatabaseCredentials(src.DBName))
+	assertEnvFromSecret(t, ss, "POSTGRES_DB", src.Names.KubeDatabaseCredentials(src.DBName))
 }
 
 // TestBranch_RejectsInvalidBranchName locks the validation boundary:
@@ -123,8 +125,12 @@ func TestBranch_RejectsInvalidBranchName(t *testing.T) {
 	ssh := &testutil.MockSSH{Prefixes: []testutil.MockPrefix{
 		{Prefix: "sudo k3s kubectl apply", Result: testutil.MockResult{}},
 	}}
-	_, err := Branch(context.Background(), kf.Client, ssh, BranchSource{
-		Namespace: "ns", SourcePVC: "pvc", Size: 20, Image: "postgres:16-alpine", ServerRole: "db-master",
+	names, err := utils.NewNames("myapp", "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Branch(context.Background(), kf.Client, ssh, BranchSource{
+		Names: names, DBName: "app", Size: 20, Version: "16", ServerRole: "db-master",
 	}, "UPPER.case")
 	if err == nil {
 		t.Fatal("expected validation error on invalid branch name")

@@ -21,6 +21,26 @@ import (
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
+// defaultPostgresVersion is the fallback tag when cfg omits a
+// databases.X.version: value. Keep aligned with the latest "current"
+// stable postgres major; bumping here is a deliberate commit.
+const defaultPostgresVersion = "16"
+
+// ImageFor returns the container image reference for a postgres pod
+// given a user-declared version string (from databases.X.version: in
+// cfg). Empty → default. Always the -alpine flavor to keep image
+// pulls small on the DB node.
+//
+// Single source of truth for postgres image naming — buildStatefulSet
+// AND the branch StatefulSet builder both call it so version bumps
+// propagate to both the primary and every branch in one place.
+func ImageFor(version string) string {
+	if version == "" {
+		version = defaultPostgresVersion
+	}
+	return "postgres:" + version + "-alpine"
+}
+
 type Provider struct{}
 
 func (p *Provider) ValidateCredentials(context.Context) error { return nil }
@@ -223,10 +243,6 @@ func buildPVC(req provider.DatabaseRequest) runtime.Object {
 
 func buildStatefulSet(req provider.DatabaseRequest) runtime.Object {
 	replicas := int32(1)
-	version := req.Spec.Version
-	if version == "" {
-		version = "16"
-	}
 	return &appsv1.StatefulSet{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "StatefulSet"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -248,7 +264,7 @@ func buildStatefulSet(req provider.DatabaseRequest) runtime.Object {
 					NodeSelector: map[string]string{"nvoi-role": req.Spec.Server},
 					Containers: []corev1.Container{{
 						Name:  "postgres",
-						Image: "postgres:" + version + "-alpine",
+						Image: ImageFor(req.Spec.Version),
 						Env: []corev1.EnvVar{
 							{Name: "POSTGRES_USER", Value: req.Spec.User},
 							{Name: "POSTGRES_PASSWORD", Value: req.Spec.Password},
