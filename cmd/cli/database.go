@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
@@ -22,6 +23,8 @@ func newDatabaseCmd(rt *runtime) *cobra.Command {
 	}
 	cmd.AddCommand(newDatabaseSQLCmd(rt))
 	cmd.AddCommand(newDatabaseBackupCmd(rt))
+	cmd.AddCommand(newDatabaseRestoreCmd(rt))
+	cmd.AddCommand(newDatabaseMigrateCmd(rt))
 	return cmd
 }
 
@@ -126,6 +129,268 @@ func newDatabaseBackupCmd(rt *runtime) *cobra.Command {
 	return cmd
 }
 
+// newDatabaseRestoreCmd replays a specific backup object into the
+// current database. Works for every engine (postgres, mysql, neon,
+// planetscale) via the unified restore Job launched by
+// provider.RunRestoreJob — selfhosted DBs connect to the in-cluster
+// Service, SaaS DBs connect to their external TLS endpoint, the Job
+// doesn't care which.
+//
+// Destructive: replacing the live data with a backup loses any writes
+// since the backup's timestamp. Requires --yes to skip confirmation.
+func newDatabaseRestoreCmd(rt *runtime) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "restore <name>",
+		Short: "Replay a backup into the database (destructive)",
+		Long: `Replay a backup artifact into the named database.
+
+The backup is pulled from the bucket, gunzipped, and piped into the
+engine's native restore tool against the database's DSN. Works for
+selfhosted (postgres, mysql) and SaaS (neon, planetscale) engines —
+the transport is the same: one-shot Job running the nvoi/db image.
+
+Destructive: any writes since the backup's timestamp are lost. Pass
+--yes to skip the confirmation prompt.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dbName := args[0]
+			backupID, _ := cmd.Flags().GetString("from-backup")
+			latest, _ := cmd.Flags().GetBool("latest")
+			yes, _ := cmd.Flags().GetBool("yes")
+
+			if backupID == "" && !latest {
+				return fmt.Errorf("either --from-backup <id> or --latest is required")
+			}
+			if backupID != "" && latest {
+				return fmt.Errorf("--from-backup and --latest are mutually exclusive")
+			}
+
+			req, prov, cleanup, err := resolveDatabaseCommand(cmd, rt, dbName)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+			defer prov.Close()
+
+			if req.Bucket == nil || req.BackupCredsSecretName == "" {
+				return fmt.Errorf("databases.%s: restore requires backup: config on the database (providers.storage + backup schedule)", dbName)
+			}
+
+			if latest {
+				refs, err := prov.ListBackups(cmd.Context(), req)
+				if err != nil {
+					return fmt.Errorf("list backups: %w", err)
+				}
+				if len(refs) == 0 {
+					return fmt.Errorf("no backups available for databases.%s", dbName)
+				}
+				// ListBackups returns objects as stored; the most recent
+				// is the lexicographically-largest key because keys are
+				// `YYYYMMDDTHHMMSSZ.sql.gz` (ISO-ordered by design).
+				backupID = refs[0].ID
+				for _, r := range refs[1:] {
+					if r.ID > backupID {
+						backupID = r.ID
+					}
+				}
+			}
+
+			if !yes {
+				fmt.Fprintf(rt.out.Writer(), "About to replay %q into databases.%s — this is destructive. Pass --yes to proceed.\n", backupID, dbName)
+				return fmt.Errorf("confirmation required (pass --yes)")
+			}
+
+			if err := prov.Restore(cmd.Context(), req, backupID); err != nil {
+				return err
+			}
+			fmt.Fprintf(rt.out.Writer(), "restored databases.%s from %s\n", dbName, backupID)
+			return nil
+		},
+	}
+	cmd.Flags().String("from-backup", "", "backup object key to replay (mutually exclusive with --latest)")
+	cmd.Flags().Bool("latest", false, "replay the most recent backup")
+	cmd.Flags().Bool("yes", false, "skip the destructive-action confirmation")
+	return cmd
+}
+
+// newDatabaseMigrateCmd moves a database to the node declared in cfg
+// by composing BackupNow → teardown old → apply new per cfg → restore
+// → health-check. The apply step reuses reconcile.ReconcileOneDatabase
+// so the shape of the recreated workloads is identical to what a
+// normal `nvoi deploy` would produce.
+//
+// Only supported form: no flags. The operator edits databases.X.server:
+// in nvoi.yaml, runs `nvoi deploy` (which provisions the new node and
+// emits a pending-migration warning), then runs this command.
+//
+// SaaS engines (neon, planetscale) have no server: — this command
+// refuses to run on them.
+func newDatabaseMigrateCmd(rt *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "migrate <name>",
+		Short: "Move a database to the node declared in nvoi.yaml (destructive)",
+		Long: `Move a database to the node named by databases.X.server: in nvoi.yaml.
+
+Workflow:
+  1. Edit databases.X.server: in nvoi.yaml to the target node.
+  2. nvoi deploy              — provisions the new node, warns about pending migration.
+  3. nvoi database migrate X  — this command. Takes a backup, tears down the old
+                                StatefulSet + PVC, applies the new StatefulSet per
+                                cfg, restores from the backup, health-checks.
+  4. nvoi deploy              — (optional) verify clean convergence.
+
+Downtime is the dump+restore window. Idempotent — re-running after success is a
+no-op.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDatabaseMigrate(cmd, rt, args[0])
+		},
+	}
+}
+
+func runDatabaseMigrate(cmd *cobra.Command, rt *runtime, dbName string) error {
+	def, ok := rt.cfg.Databases[dbName]
+	if !ok {
+		return fmt.Errorf("database %q is not defined", dbName)
+	}
+	// SaaS engines have no in-cluster StatefulSet to migrate from; their
+	// DR path is `restore --from-backup <id>`, not migrate.
+	if def.Server == "" {
+		return fmt.Errorf("databases.%s: migrate requires server: — SaaS engines (neon, planetscale) don't have a node to migrate between", dbName)
+	}
+
+	req, prov, cleanup, err := resolveDatabaseCommand(cmd, rt, dbName)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	defer prov.Close()
+
+	if req.Bucket == nil || req.BackupCredsSecretName == "" {
+		return fmt.Errorf("databases.%s: migrate requires backup: config (providers.storage + backup schedule). Without a bucket there's nowhere to stage the data during the move", dbName)
+	}
+
+	names, err := rt.dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	kc := rt.dc.Cluster.MasterKube
+	if kc == nil {
+		return fmt.Errorf("kube client required for migrate — are you connected to the cluster?")
+	}
+
+	existing, err := kc.GetStatefulSet(cmd.Context(), names.KubeNamespace(), names.Database(dbName))
+	if err != nil {
+		return fmt.Errorf("read live StatefulSet: %w", err)
+	}
+	if existing == nil {
+		return fmt.Errorf("databases.%s: no live StatefulSet found — nothing to migrate (run `nvoi deploy` first)", dbName)
+	}
+	currentNode := existing.Spec.Template.Spec.NodeSelector[utils.LabelNvoiRole]
+	if currentNode == def.Server {
+		fmt.Fprintf(rt.out.Writer(), "databases.%s: already on %s — no migration needed\n", dbName, def.Server)
+		return nil
+	}
+
+	rt.out.Progress(fmt.Sprintf("migrating databases.%s: %s → %s", dbName, currentNode, def.Server))
+
+	// 1. Fresh backup. The CronJob's template handles everything —
+	// ENGINE, DSN, bucket creds — so the backup is identical to a
+	// scheduled one. BackupNow returns the Job name; we then wait for
+	// the Job to Complete. The backup KEY (S3 object name) is
+	// deterministic: timestamp-formatted by the image.
+	rt.out.Progress("backup: starting")
+	backupRef, err := prov.BackupNow(cmd.Context(), req)
+	if err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	if err := kc.WaitForJob(cmd.Context(), req.Namespace, backupRef.ID, rt.out); err != nil {
+		return fmt.Errorf("backup job %s: %w", backupRef.ID, err)
+	}
+	// Resolve the freshly-uploaded object key — the most recent object
+	// in the bucket at this point is guaranteed to be the one we just
+	// pushed (scheduled backups don't race because we just ran Now,
+	// and migrate is single-operator).
+	freshKey, err := latestBackupKey(cmd.Context(), prov, req)
+	if err != nil {
+		return fmt.Errorf("locate fresh backup: %w", err)
+	}
+	rt.out.Success(fmt.Sprintf("backup: %s", freshKey))
+
+	// 2. Teardown old. DeleteByName removes Deployment/StatefulSet/
+	// Service of the same base name; we also explicitly drop the PVC
+	// so the old node's data volume is reclaimed (local-path hostPath
+	// today, ZFS dataset per #68). The credentials Secret + backup-
+	// creds Secret stay in place — the new pod will reuse them.
+	rt.out.Progress("teardown: old node")
+	if err := kc.DeleteByName(cmd.Context(), req.Namespace, names.Database(dbName)); err != nil {
+		return fmt.Errorf("teardown old workloads: %w", err)
+	}
+	if err := kc.DeletePVC(cmd.Context(), req.Namespace, names.KubeDatabasePVC(dbName)); err != nil {
+		return fmt.Errorf("teardown old pvc: %w", err)
+	}
+
+	// 3. Apply new per cfg. Reuses the normal reconcile pipeline (bucket
+	// ensure, backup-creds Secret ensure, credentials Secret ensure,
+	// provider.Reconcile → apply). The node selector now points at the
+	// new server; the PVC binds on that node's storage class.
+	rt.out.Progress(fmt.Sprintf("apply: new node %s", def.Server))
+	sources, err := commandSources(rt)
+	if err != nil {
+		return err
+	}
+	if _, err := reconcile.ReconcileOneDatabase(cmd.Context(), rt.dc, rt.cfg, names, dbName, def, sources); err != nil {
+		return fmt.Errorf("apply on %s: %w", def.Server, err)
+	}
+
+	// 4. Wait for the new pod to be Ready before restoring. Postgres
+	// container initializes the PGDATA directory + the empty DB on
+	// first boot; trying to restore before that's done will fail.
+	rt.out.Progress("waiting for new pod ready")
+	if err := kc.WaitRollout(cmd.Context(), req.Namespace, names.Database(dbName), "StatefulSet", false, rt.out); err != nil {
+		return fmt.Errorf("new pod rollout: %w", err)
+	}
+
+	// 5. Restore. Same unified Job the standalone `restore` verb uses —
+	// the migrate command is literally a composer over it.
+	rt.out.Progress(fmt.Sprintf("restore: replaying %s", freshKey))
+	// Refresh req.Kube since resolveDatabaseCommand built req earlier
+	// with the kube client. Still valid — cleanup is deferred to end
+	// of the command.
+	if err := prov.Restore(cmd.Context(), req, freshKey); err != nil {
+		return fmt.Errorf("restore: %w", err)
+	}
+
+	// 6. Health check. `SELECT 1` is the simplest possible connectivity
+	// + sanity probe. If it returns without error, the new pod is
+	// serving and the data is intact enough for the engine to respond.
+	if _, err := prov.ExecSQL(cmd.Context(), req, "SELECT 1"); err != nil {
+		return fmt.Errorf("health check: %w", err)
+	}
+	rt.out.Success(fmt.Sprintf("databases.%s migrated to %s", dbName, def.Server))
+	return nil
+}
+
+// latestBackupKey returns the lexicographically-largest backup key,
+// which is also the most recent because the image names objects as
+// `YYYYMMDDTHHMMSSZ.sql.gz`. Used by migrate after BackupNow completes.
+func latestBackupKey(ctx context.Context, prov provider.DatabaseProvider, req provider.DatabaseRequest) (string, error) {
+	refs, err := prov.ListBackups(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if len(refs) == 0 {
+		return "", fmt.Errorf("no backup objects found in bucket after BackupNow")
+	}
+	latest := refs[0].ID
+	for _, r := range refs[1:] {
+		if r.ID > latest {
+			latest = r.ID
+		}
+	}
+	return latest, nil
+}
+
 func resolveDatabaseCommand(cmd *cobra.Command, rt *runtime, name string) (provider.DatabaseRequest, provider.DatabaseProvider, func(), error) {
 	def, ok := rt.cfg.Databases[name]
 	if !ok {
@@ -217,7 +482,11 @@ func collectCommandSecrets(cfg *config.AppConfig, source provider.CredentialSour
 		}
 	}
 	for _, db := range cfg.Databases {
-		for _, raw := range []string{db.User, db.Password} {
+		// user / password / database all support $VAR references (same
+		// as the reconcile path). Missing `database` from this loop
+		// would silently drop the DSN's dbname when cmd/ calls
+		// commandDatabaseRequest, producing a broken req.Spec.Database.
+		for _, raw := range []string{db.User, db.Password, db.Database} {
 			for _, key := range utils.ExtractVarRefs(raw) {
 				v, err := source.Get(key)
 				if err != nil {
@@ -241,14 +510,17 @@ func commandDatabaseRequest(name string, def config.DatabaseDef, names *utils.Na
 		BackupName:            names.KubeDatabaseBackupCron(name),
 		CredentialsSecretName: names.KubeDatabaseCredentials(name),
 		Spec: provider.DatabaseSpec{
-			Engine:   def.Engine,
-			Version:  def.Version,
-			Server:   def.Server,
-			Size:     def.Size,
-			Database: def.Database,
-			Region:   def.Region,
+			Engine:  def.Engine,
+			Version: def.Version,
+			Server:  def.Server,
+			Size:    def.Size,
+			Region:  def.Region,
 		},
 	}
+	// user / password / database — same lockstep as the reconcile path
+	// (see internal/reconcile/databases.go::databaseRequest). Without
+	// resolving def.Database here, `$MAIN_POSTGRES_DB` would reach the
+	// provider unresolved and the DSN would target a non-existent DB.
 	if def.User != "" {
 		v, err := commandResolveRef(def.User, sources)
 		if err != nil {
@@ -262,6 +534,13 @@ func commandDatabaseRequest(name string, def config.DatabaseDef, names *utils.Na
 			return req, fmt.Errorf("databases.%s.password: %w", name, err)
 		}
 		req.Spec.Password = v
+	}
+	if def.Database != "" {
+		v, err := commandResolveRef(def.Database, sources)
+		if err != nil {
+			return req, fmt.Errorf("databases.%s.database: %w", name, err)
+		}
+		req.Spec.Database = v
 	}
 	if def.Backup != nil {
 		req.Spec.Backup = &provider.DatabaseBackupSpec{

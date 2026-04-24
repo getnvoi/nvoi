@@ -146,7 +146,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	databaseCreds, err := Databases(ctx, dc, cfg, secretValues)
+	databaseCreds, pendingMigrations, err := Databases(ctx, dc, cfg, secretValues)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,26 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		}
 	}
 
+	// Pending-migration summary — emitted LAST so it stays visible after
+	// every other deploy event has scrolled past. Deploy itself exits 0
+	// even with pending migrations: the old DB pod keeps serving from
+	// its current node, consumer services stay connected via the pod-
+	// agnostic k8s Service name, and the operator resolves drift
+	// explicitly via `nvoi database migrate <name>` (#67).
+	emitPendingMigrations(dc, pendingMigrations)
 	return nil
+}
+
+func emitPendingMigrations(dc *config.DeployContext, pending []PendingMigration) {
+	if len(pending) == 0 || dc.Cluster.Log() == nil {
+		return
+	}
+	log := dc.Cluster.Log()
+	log.Warning(fmt.Sprintf("Pending migrations (%d):", len(pending)))
+	for _, p := range pending {
+		log.Warning(fmt.Sprintf("    databases.%s     %s → %s", p.Database, p.From, p.To))
+		log.Warning(fmt.Sprintf("    Run: nvoi database migrate %s", p.Database))
+	}
 }
 
 // RouteDomains writes a DNS record per (service, domain) pair via the

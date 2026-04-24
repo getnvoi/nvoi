@@ -1,17 +1,19 @@
-// Shared database backup pipeline.
+// Shared database backup + restore pipeline.
 //
 // Every DatabaseProvider produces backups the same way: gzipped logical
 // dumps land in `nvoi-{app}-{env}-db-{name}-backups`, pushed by a CronJob
 // (scheduled) or a one-shot Job (manual via `nvoi database backup now`).
-// Pull mechanics vary by engine (pg_dump / mysqldump, in-cluster Service
-// for selfhosted, external TLS endpoint for SaaS); put mechanics are
-// identical. `ListBackups` / `DownloadBackup` walk the bucket directly
-// and are engine-agnostic.
+// Restore is symmetric: a one-shot Job pulls an object, gunzips, and
+// pipes into the engine's native restore tool against $DATABASE_URL.
+// Pull/put mechanics vary by engine; direction flips via MODE env var.
+// `ListBackups` / `DownloadBackup` walk the bucket directly and are
+// engine-agnostic.
 //
-// The uniform image (`docker.io/nvoi/backup:<cli-version>`) carries
-// pg_dump + mysqldump + gzip + a sigv4-aware uploader and dispatches
-// based on the `ENGINE` env var. The image's source is `cmd/backup/`;
-// the publish workflow lives in `.github/workflows/release.yml`.
+// The uniform image (`docker.io/nvoi/db:<cli-version>`) carries
+// pg_dump + psql + mysqldump + mysql + gzip + a sigv4-aware client
+// and dispatches based on `MODE` (backup | restore) and `ENGINE`. The
+// image's source is `cmd/db/`; the publish workflow lives in
+// `.github/workflows/release.yml`.
 package provider
 
 import (
@@ -19,24 +21,26 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/getnvoi/nvoi/pkg/utils/s3"
 )
 
-// BackupImage is the uniform image reference for the backup CronJob /
-// one-shot Job. Tagged with the nvoi CLI version so backups are
-// deterministic per deploy — same discipline as user workloads, which
-// carry the deploy-hash as part of the image tag.
+// DBImage is the uniform image reference for the backup CronJob AND
+// the restore one-shot Job. Tagged with the nvoi CLI version so
+// database I/O is deterministic per deploy — same discipline as user
+// workloads, which carry the deploy-hash as part of the image tag.
 //
-// The image is built from cmd/backup/Dockerfile and published to Docker
+// The image is built from cmd/db/Dockerfile and published to Docker
 // Hub on every `v*` git tag. Public repo, no auth required for pull.
-func BackupImage() string {
-	return "docker.io/nvoi/backup:" + utils.Version
+func DBImage() string {
+	return "docker.io/nvoi/db:" + utils.Version
 }
 
 // BuildBackupCronJob returns the uniform CronJob that dumps a database
@@ -90,7 +94,7 @@ func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
 							RestartPolicy: corev1.RestartPolicyNever,
 							Containers: []corev1.Container{{
 								Name:  "backup",
-								Image: BackupImage(),
+								Image: DBImage(),
 								Env: []corev1.EnvVar{
 									{Name: "ENGINE", Value: req.Spec.Engine},
 									{Name: "DATABASE_NAME", Value: req.Name},
@@ -123,6 +127,117 @@ func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
 			},
 		},
 	}
+}
+
+// BuildRestoreJob returns a one-shot Job that replays a bucket-resident
+// backup artifact into the database. Mirrors BuildBackupCronJob's pod
+// spec — same image, same envFrom Secrets — with two additions:
+//
+//   - MODE=restore flips the image's dispatch to the restore pipeline.
+//   - BACKUP_KEY names the bucket object to pull.
+//
+// Used by RunRestoreJob below, which is what every DatabaseProvider's
+// Restore method calls. Single source of truth for the restore Job's
+// shape; engine-specificity (psql vs mysql) lives in the image's
+// dispatch, same layering as backup.
+//
+// The Job is named deterministically with a unix timestamp suffix so
+// concurrent restores from different operators don't collide. The
+// caller (RunRestoreJob) waits for the Job to succeed before returning.
+func BuildRestoreJob(req DatabaseRequest, backupKey string) *batchv1.Job {
+	labels := map[string]string{
+		"app.kubernetes.io/name":       req.FullName,
+		"app.kubernetes.io/managed-by": "nvoi",
+		"nvoi/database":                req.Name,
+		"nvoi/restore-of":              req.Name,
+	}
+	for k, v := range req.Labels {
+		if _, exists := labels[k]; !exists {
+			labels[k] = v
+		}
+	}
+
+	backoff := int32(0) // restores don't auto-retry — a failed restore
+	// leaves the DB in an unknown state; caller decides what to do.
+
+	// Job name embeds a unix timestamp so concurrent `restore` calls
+	// from different operators (or a retry after a crash) don't collide
+	// on the same name.
+	jobName := fmt.Sprintf("%s-restore-%d", req.FullName, time.Now().Unix())
+
+	return &batchv1.Job{
+		TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "Job"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: req.Namespace,
+			Labels:    labels,
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: &backoff,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:  "restore",
+						Image: DBImage(),
+						Env: []corev1.EnvVar{
+							{Name: "MODE", Value: "restore"},
+							{Name: "BACKUP_KEY", Value: backupKey},
+							{Name: "ENGINE", Value: req.Spec.Engine},
+							{Name: "DATABASE_NAME", Value: req.Name},
+							{Name: "DATABASE_FULL_NAME", Value: req.FullName},
+						},
+						EnvFrom: []corev1.EnvFromSource{
+							// DATABASE_URL (and selfhosted user/password/etc.)
+							// — same envFrom discipline as the backup CronJob
+							// so the image's MODE=backup and MODE=restore
+							// branches read from the same Secret shape.
+							{
+								Prefix: "DB_",
+								SecretRef: &corev1.SecretEnvSource{
+									LocalObjectReference: corev1.LocalObjectReference{Name: req.CredentialsSecretName},
+								},
+							},
+							// Bucket creds: BUCKET_ENDPOINT / BUCKET_NAME /
+							// AWS_* for the sigv4 download.
+							{
+								SecretRef: &corev1.SecretEnvSource{
+									LocalObjectReference: corev1.LocalObjectReference{Name: req.BackupCredsSecretName},
+								},
+							},
+						},
+					}},
+				},
+			},
+		},
+	}
+}
+
+// RunRestoreJob applies the restore Job and blocks until it completes.
+// Shared across every DatabaseProvider — each provider's Restore method
+// is a one-liner calling this helper. On Job failure, WaitForJob
+// returns an error with the pod's recent logs attached, which is what
+// the operator sees on the CLI.
+func RunRestoreJob(ctx context.Context, kc *kube.Client, req DatabaseRequest, backupKey string) error {
+	if kc == nil {
+		return fmt.Errorf("restore requires kube client")
+	}
+	if req.BackupCredsSecretName == "" || req.Bucket == nil {
+		return fmt.Errorf("restore requires providers.storage + a backup bucket (did providers.storage get unset between backup and restore?)")
+	}
+	job := BuildRestoreJob(req, backupKey)
+	if err := kc.Apply(ctx, req.Namespace, job); err != nil {
+		return fmt.Errorf("apply restore job %s: %w", job.Name, err)
+	}
+	var progress kube.ProgressEmitter
+	if req.Log != nil {
+		progress = req.Log
+	}
+	if err := kc.WaitForJob(ctx, req.Namespace, job.Name, progress); err != nil {
+		return fmt.Errorf("restore job %s: %w", job.Name, err)
+	}
+	return nil
 }
 
 // BucketListBackups enumerates every dump in the database's backup

@@ -149,6 +149,16 @@ func (p *Provider) DownloadBackup(ctx context.Context, req provider.DatabaseRequ
 	return provider.BucketDownloadBackup(ctx, req, backupID, w)
 }
 
+// Restore delegates to the uniform Job-based substrate. PlanetScale's
+// DATABASE_URL points at `{db}.{org}.psdb.cloud:3306` (external TLS);
+// the restore Job runs `mysql` against it the same way the backup Job
+// runs `mysqldump` against it. No PlanetScale-specific API surface —
+// we treat PlanetScale as a mysql-wire endpoint and replay our own
+// artifact.
+func (p *Provider) Restore(ctx context.Context, req provider.DatabaseRequest, backupKey string) error {
+	return provider.RunRestoreJob(ctx, req.Kube, req, backupKey)
+}
+
 func (p *Provider) ListResources(context.Context) ([]provider.ResourceGroup, error) { return nil, nil }
 func (p *Provider) Close() error                                                    { return nil }
 

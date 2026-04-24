@@ -19,6 +19,18 @@ type DatabaseProvider interface {
 	BackupNow(ctx context.Context, req DatabaseRequest) (*BackupRef, error)
 	ListBackups(ctx context.Context, req DatabaseRequest) ([]BackupRef, error)
 	DownloadBackup(ctx context.Context, req DatabaseRequest, backupID string, w io.Writer) error
+	// Restore replays a backup (identified by its bucket key) into the
+	// database. Every implementation launches the uniform restore Job
+	// (same image as backup, MODE=restore), so selfhosted and SaaS
+	// engines share one transport: the Job connects to $DATABASE_URL
+	// over the wire — in-cluster DNS for selfhosted, external TLS for
+	// neon/planetscale — and pipes the object through `gunzip | psql`
+	// or `gunzip | mysql`. Zero engine-specific restore code outside
+	// the backup image.
+	//
+	// Used by `nvoi database restore` directly and `nvoi database
+	// migrate` as its final step after teardown + apply.
+	Restore(ctx context.Context, req DatabaseRequest, backupKey string) error
 	ListResources(ctx context.Context) ([]ResourceGroup, error)
 	Close() error
 }

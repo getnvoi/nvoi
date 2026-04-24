@@ -52,7 +52,7 @@ func Put(endpoint, accessKey, secretKey, bucket, key string, body []byte) error 
 // UNSIGNED-PAYLOAD for PutObject. The server still validates
 // Content-Length, so the caller MUST pass the exact byte count.
 //
-// Used by cmd/backup, which streams `pg_dump | gzip` from a temp file
+// Used by cmd/db, which streams `pg_dump | gzip` from a temp file
 // after it's fully written (stat → size → upload). Lives next to Put()
 // because both share Sign() / the same endpoint/key URL layout.
 func PutStream(endpoint, accessKey, secretKey, bucket, key string, body io.Reader, size int64, timeout time.Duration) error {

@@ -64,9 +64,12 @@ func TestDatabases_ProvisionsBackupBucketAndCredsSecret(t *testing.T) {
 		"POSTGRES_PASSWORD": "s3cr3t",
 	}
 
-	out, err := Databases(context.Background(), dc, cfg, sources)
+	out, pending, err := Databases(context.Background(), dc, cfg, sources)
 	if err != nil {
 		t.Fatalf("Databases: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("no pending migrations expected on fresh deploy, got %+v", pending)
 	}
 
 	// DATABASE_URL_APP appears in the merged sources map — proof that
@@ -143,7 +146,7 @@ func TestDatabases_NoBackupSkipsBucketProvisioning(t *testing.T) {
 		},
 	}
 
-	if _, err := Databases(context.Background(), dc, cfg, map[string]string{"U": "u", "P": "p"}); err != nil {
+	if _, _, err := Databases(context.Background(), dc, cfg, map[string]string{"U": "u", "P": "p"}); err != nil {
 		t.Fatalf("Databases: %v", err)
 	}
 
@@ -196,7 +199,7 @@ func TestDatabases_ResolvesVarRefsInAllCredFields(t *testing.T) {
 		"PG_DB":   "resolveddb",
 	}
 
-	out, err := Databases(context.Background(), dc, cfg, sources)
+	out, _, err := Databases(context.Background(), dc, cfg, sources)
 	if err != nil {
 		t.Fatalf("Databases: %v", err)
 	}
@@ -249,7 +252,7 @@ func TestDatabases_UnresolvedVarInDatabaseErrors(t *testing.T) {
 		},
 	}
 
-	_, err := Databases(context.Background(), dc, cfg, map[string]string{})
+	_, _, err := Databases(context.Background(), dc, cfg, map[string]string{})
 	if err == nil {
 		t.Fatal("expected error for unresolved $MISSING in database:, got nil")
 	}
@@ -258,35 +261,39 @@ func TestDatabases_UnresolvedVarInDatabaseErrors(t *testing.T) {
 	}
 }
 
-// TestDatabases_HardErrorOnServerChange locks the "local NVMe cannot
-// migrate" invariant. Selfhosted databases pin their data to one node
-// via k3s local-path — flipping databases.X.server: would silently
-// initialize an empty PGDATA on the new node and orphan the old data.
+// TestDatabases_NodeDriftEmitsPendingMigration locks the warning-not-
+// failure contract (#67): when a live StatefulSet's nodeSelector
+// differs from cfg.server, Databases() must:
 //
-// The guard runs BEFORE any provider resolution or kube mutation, so a
-// blocked deploy leaves the cluster untouched. We assert three things:
+//  1. Return success (no error) — deploy must not fail on drift.
+//  2. Emit a PendingMigration for the drifting DB.
+//  3. Preserve DATABASE_URL_X in the sources map by reading from the
+//     existing credentials Secret, so consumer services stay connected
+//     to the old pod while migrate is pending.
+//  4. NOT re-apply the StatefulSet on the new node (would fight the
+//     live workload; destructive work lives in `nvoi database migrate`).
+//  5. NOT provision backup infra for this DB — the guard short-circuits
+//     everything downstream, leaving the live resources untouched.
 //
-//  1. Deploy errors naming both the current and requested nodes so the
-//     operator can see the drift without digging through kubectl.
-//  2. The error message points at the migration path (issue #67) so
-//     this isn't a dead-end — there IS a documented escape hatch.
-//  3. Zero cluster mutations happened for this database — no CronJob,
-//     no credentials Secret, no bucket side-effects. The guard is
-//     purely a read, and it short-circuits everything downstream.
-func TestDatabases_HardErrorOnServerChange(t *testing.T) {
+// This is the architectural opposite of a hard-error: a typo in
+// nvoi.yaml must not trigger silent data movement. The operator resolves
+// drift by running `nvoi database migrate` explicitly.
+func TestDatabases_NodeDriftEmitsPendingMigration(t *testing.T) {
 	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
-	cf.RegisterBucket("test-bucket-guard")
+	cf.RegisterBucket("test-bucket-drift")
 
 	dc := testDC(convergeMock())
 	dc.Creds = testCreds()
 	dc.Storage = app.ProviderRef{
-		Name:  "test-bucket-guard",
+		Name:  "test-bucket-drift",
 		Creds: map[string]string{"api_key": "x", "account_id": "acct"},
 	}
 
-	// Seed a live StatefulSet pinned to "master" — this is the state
-	// that would exist after a prior successful deploy.
 	kf := kfFor(dc)
+
+	// Seed the post-prior-deploy state: a live StatefulSet pinned to
+	// "master" plus its credentials Secret (containing the URL
+	// consumers have cached).
 	existing := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "nvoi-myapp-prod-db-app",
@@ -305,10 +312,16 @@ func TestDatabases_HardErrorOnServerChange(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed existing StatefulSet: %v", err)
 	}
+	if err := kf.Client.EnsureSecret(
+		context.Background(), "nvoi-myapp-prod", "nvoi-myapp-prod-db-app-credentials",
+		map[string]string{"url": "postgres://live@master:5432/myapp"},
+	); err != nil {
+		t.Fatalf("seed credentials Secret: %v", err)
+	}
 
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
-		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-guard"},
+		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-drift"},
 		Databases: map[string]config.DatabaseDef{
 			"app": {
 				Engine:   "postgres",
@@ -322,41 +335,46 @@ func TestDatabases_HardErrorOnServerChange(t *testing.T) {
 		},
 	}
 
-	_, err := Databases(context.Background(), dc, cfg,
+	out, pending, err := Databases(context.Background(), dc, cfg,
 		map[string]string{"U": "u", "P": "p"})
-	if err == nil {
-		t.Fatal("expected hard error on server change, got nil")
-	}
-	msg := err.Error()
-	for _, want := range []string{"master", "db-master", "#67", "databases.app"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error missing %q; got: %s", want, msg)
-		}
+	if err != nil {
+		t.Fatalf("Databases must NOT error on drift (warning-not-failure contract); got: %v", err)
 	}
 
-	// Zero mutations past the guard — the backup bucket must NOT have
-	// been provisioned, the credentials Secret must NOT have been
-	// written, and no CronJob was applied. A future regression that
-	// reorders the guard below any provider op would flip these.
+	// 1. Pending migration is surfaced exactly once, with both nodes
+	// named so the end-of-deploy summary is useful.
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending migration, got %d: %+v", len(pending), pending)
+	}
+	if pending[0].Database != "app" || pending[0].From != "master" || pending[0].To != "db-master" {
+		t.Errorf("pending migration wrong shape: got %+v", pending[0])
+	}
+
+	// 2. URL is preserved from the existing credentials Secret —
+	// consumer services keep working throughout the pending window.
+	if got := out["DATABASE_URL_APP"]; got != "postgres://live@master:5432/myapp" {
+		t.Errorf("DATABASE_URL_APP should mirror existing Secret, got %q", got)
+	}
+
+	// 3. Bucket must NOT have been provisioned — the drift short-
+	// circuit skips the full per-DB reconcile, including backup setup.
 	if cf.HasBucket("nvoi-myapp-prod-db-app-backups") {
-		t.Error("backup bucket must not be provisioned when guard trips")
+		t.Error("backup bucket must not be provisioned on drift")
 	}
 	if kf.HasSecret("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-backup-creds") {
-		t.Error("backup-creds Secret must not be written when guard trips")
-	}
-	if kf.HasSecret("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-credentials") {
-		t.Error("credentials Secret must not be written when guard trips")
+		t.Error("backup-creds Secret must not be written on drift")
 	}
 	if kf.HasCronJob("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-backup") {
-		t.Error("backup CronJob must not be applied when guard trips")
+		t.Error("backup CronJob must not be applied on drift")
 	}
 }
 
-// TestDatabases_FirstDeploySkipsGuard locks the "guard is drift-only,
-// not first-deploy" property. When no live StatefulSet exists yet, the
-// guard must return nil and let reconcile proceed — otherwise no
-// database could ever be deployed for the first time.
-func TestDatabases_FirstDeploySkipsGuard(t *testing.T) {
+// TestDatabases_FirstDeploySkipsDriftDetection locks the "drift check
+// is live-only" property. When no live StatefulSet exists yet, the
+// drift detector must return no pending migrations and let the normal
+// reconcile path run — otherwise no database could be deployed for
+// the first time.
+func TestDatabases_FirstDeploySkipsDriftDetection(t *testing.T) {
 	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
 	cf.RegisterBucket("test-bucket-first")
 
@@ -382,8 +400,12 @@ func TestDatabases_FirstDeploySkipsGuard(t *testing.T) {
 		},
 	}
 
-	if _, err := Databases(context.Background(), dc, cfg,
-		map[string]string{"U": "u", "P": "p"}); err != nil {
+	_, pending, err := Databases(context.Background(), dc, cfg,
+		map[string]string{"U": "u", "P": "p"})
+	if err != nil {
 		t.Fatalf("first-deploy must succeed (no live StatefulSet), got: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("no pending migrations expected on first deploy, got %+v", pending)
 	}
 }

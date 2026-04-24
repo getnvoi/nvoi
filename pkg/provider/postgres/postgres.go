@@ -88,6 +88,17 @@ func (p *Provider) DownloadBackup(ctx context.Context, req provider.DatabaseRequ
 	return provider.BucketDownloadBackup(ctx, req, backupID, w)
 }
 
+// Restore delegates to the uniform Job-based substrate shared by every
+// DatabaseProvider. The `nvoi/db` image in MODE=restore pulls the
+// artifact by key, gunzips, and pipes into `psql $DATABASE_URL` — the
+// same DSN this provider's EnsureCredentials wrote into the credentials
+// Secret. Postgres has no engine-specific restore logic here: the
+// engine-specificity lives in the image's dispatch (cmd/db), same
+// as backup.
+func (p *Provider) Restore(ctx context.Context, req provider.DatabaseRequest, backupKey string) error {
+	return provider.RunRestoreJob(ctx, req.Kube, req, backupKey)
+}
+
 func ExecSQLWithKube(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest, stmt string) (*provider.SQLResult, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

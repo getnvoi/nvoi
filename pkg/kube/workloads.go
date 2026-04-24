@@ -105,6 +105,22 @@ func (c *Client) GetStatefulSet(ctx context.Context, ns, name string) (*appsv1.S
 	return ss, nil
 }
 
+// DeletePVC removes a PersistentVolumeClaim. Idempotent — NotFound is
+// treated as already-gone. Used by `nvoi database migrate` to clear
+// the old node's data volume after the backup has been captured; the
+// underlying PV (local-path hostPath today, ZFS dataset per #68) is
+// reclaimed by the provisioner when the claim goes away.
+func (c *Client) DeletePVC(ctx context.Context, ns, name string) error {
+	err := c.cs.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete pvc %s/%s: %w", ns, name, err)
+	}
+	return nil
+}
+
 // DeleteByName removes the Deployment, StatefulSet, and Service named `name`.
 // Idempotent — NotFound on any of them is treated as already-gone.
 func (c *Client) DeleteByName(ctx context.Context, ns, name string) error {

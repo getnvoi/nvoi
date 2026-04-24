@@ -6,7 +6,7 @@ package utils
 //
 // set in .github/workflows/release.yml on every `v*` tag. The default
 // "main" is what unreleased/dev builds ship with — anything that pins
-// container images by Version (today: docker.io/nvoi/backup:<Version>)
+// container images by Version (today: docker.io/nvoi/db:<Version>)
 // must tolerate a "main" tag locally, or the caller can override before
 // deploy.
 var Version = "main"

@@ -157,6 +157,15 @@ func (p *Provider) DownloadBackup(ctx context.Context, req provider.DatabaseRequ
 	return provider.BucketDownloadBackup(ctx, req, backupID, w)
 }
 
+// Restore delegates to the uniform Job-based substrate. Neon's
+// DATABASE_URL points at `{branch.host}:5432` (external TLS); the
+// restore Job runs `psql` against it exactly the same way the backup
+// Job runs `pg_dump` against it. No Neon-specific API surface — we
+// treat Neon as a pg-wire endpoint and replay our own artifact.
+func (p *Provider) Restore(ctx context.Context, req provider.DatabaseRequest, backupKey string) error {
+	return provider.RunRestoreJob(ctx, req.Kube, req, backupKey)
+}
+
 type neonProject struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
