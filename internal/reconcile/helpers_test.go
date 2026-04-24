@@ -127,6 +127,10 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "sudo DEBIAN_FRONTEND", Result: testutil.MockResult{}},
 			{Prefix: "df --output=avail", Result: testutil.MockResult{Output: []byte("100\n")}},
 			{Prefix: "sudo zpool create", Result: testutil.MockResult{}},
+			// OpenEBS ZFS-LocalPV CSI install — one-shot kubectl apply
+			// on the master. Idempotent in prod; tests just need the
+			// prefix to match so the command succeeds silently.
+			{Prefix: "sudo k3s kubectl apply", Result: testutil.MockResult{}},
 			{Prefix: "sudo mkdir", Result: testutil.MockResult{}},
 			{Prefix: "sudo systemctl", Result: testutil.MockResult{}},
 			{Prefix: "cloud-init", Result: testutil.MockResult{}},

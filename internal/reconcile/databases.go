@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/postgres"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -44,6 +45,19 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 	names, err := dc.Cluster.Names()
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Install the OpenEBS ZFS-LocalPV CSI driver once, up front, when
+	// any selfhosted database is declared. Idempotent — kubectl apply
+	// patches what changed, creates what's new, no-ops the rest. Runs
+	// via the master's SSH (kubectl bundled with k3s) so we don't have
+	// to plumb the CSI's ~400-line manifest through our typed applier.
+	// Skipped when no selfhosted DBs exist (SaaS-only configs never
+	// need the CSI).
+	if hasSelfhostedDatabase(cfg) && dc.Cluster.NodeShell != nil {
+		if err := postgres.EnsureZFSCSI(ctx, dc.Cluster.NodeShell); err != nil {
+			return nil, nil, fmt.Errorf("ensure zfs-localpv csi: %w", err)
+		}
 	}
 
 	out := map[string]string{}
@@ -322,6 +336,20 @@ func detectNodePinDrift(ctx context.Context, dc *config.DeployContext, names *ut
 		From:     current,
 		To:       def.Server,
 	}, nil
+}
+
+// hasSelfhostedDatabase reports whether any DB in cfg uses a
+// selfhosted engine (postgres, mysql). SaaS engines (neon,
+// planetscale) don't need the CSI driver installed cluster-side since
+// they have no in-cluster storage.
+func hasSelfhostedDatabase(cfg *config.AppConfig) bool {
+	for _, db := range cfg.Databases {
+		switch db.Engine {
+		case "postgres", "mysql":
+			return true
+		}
+	}
+	return false
 }
 
 func resolveDatabaseProviderCreds(source provider.CredentialSource, name string) (map[string]string, error) {

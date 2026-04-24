@@ -13,18 +13,25 @@ servers:
     type: cax11
     region: nbg1
     role: master
+  db-master:
+    type: cax21                    # bumped: headroom for ZFS pool + DB working set
+    region: nbg1
+    role: worker
 
-# No volumes block for the database — managed databases pin data to the
-# node's local NVMe via k3s local-path. Network-attached volumes
-# (Hetzner Block Volume) are ~10x slower and the wrong substrate for a
-# primary DB. Durability is handled by databases.main.backup below.
-# Moving the DB to a different server is blocked by reconcile (#67).
+# No volumes block for the database — #68 mandates ZFS-LocalPV on a
+# dedicated node. The postgres provider installs zfsutils-linux and
+# creates a file-backed zpool on db-master during PrepareNode, and the
+# OpenEBS ZFS-LocalPV CSI driver (applied cluster-side via master SSH)
+# carves per-PVC datasets. `size:` below is a hard ZFS quota — writes
+# past it get ENOSPC to the pod, node stays healthy. Durability =
+# backups below. Moving the DB to a different node = `nvoi database
+# migrate main` (see #67).
 
 databases:
   main:
     engine: postgres
     version: "17"
-    server: master
+    server: db-master              # dedicated — #68 forbids DB-on-master
     size: 20
     user: $MAIN_POSTGRES_USER
     password: $MAIN_POSTGRES_PASSWORD

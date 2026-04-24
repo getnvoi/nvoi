@@ -103,6 +103,47 @@ func buildZFSStorageClass() runtime.Object {
 	}
 }
 
+// zfsCSIManifestURL is the pinned OpenEBS ZFS-LocalPV manifest applied
+// to the cluster. Pinned to a specific release tag so deploys are
+// reproducible — bumping the version is a deliberate commit that
+// updates this const. Contains the CSIDriver + CRDs (ZFSVolume,
+// ZFSSnapshot, etc.) + RBAC + controller StatefulSet + node-plugin
+// DaemonSet + namespace.
+//
+// The DaemonSet lands a pod on every node tagged openebs.io/zfs=true
+// (we label the DB node during PrepareNode; the controller ignores
+// the rest). Inspecting a pinned manifest rather than tracking latest
+// avoids the "vendor changed the RBAC surface on Tuesday" failure mode.
+const zfsCSIManifestURL = "https://raw.githubusercontent.com/openebs/zfs-localpv/v2.6.0/deploy/zfs-operator.yaml"
+
+// EnsureZFSCSI installs the OpenEBS ZFS-LocalPV CSI driver if it
+// isn't already present. Runs `sudo k3s kubectl apply -f <pinned-url>`
+// on the master — idempotent because `kubectl apply` is idempotent by
+// design (it patches what's changed, creates what's new, leaves
+// unchanged objects alone).
+//
+// Why via k3s kubectl + master SSH instead of go-client apply: the
+// manifest carries kinds we don't (and shouldn't) plumb through
+// pkg/kube/apply.go piecemeal — CustomResourceDefinition, CSIDriver,
+// ServiceAccount, ClusterRole[Binding], DaemonSet. k3s bundles
+// kubectl; shelling out keeps the CSI install a pure upstream concern
+// without dragging a whole YAML-dispatch layer into nvoi core.
+//
+// Network dependency: the master node must reach raw.githubusercontent.com
+// at deploy time. Same trust boundary as pulling container images —
+// if the network is segmented, operators are responsible for
+// pre-seeding.
+func EnsureZFSCSI(ctx context.Context, masterSSH utils.SSHClient) error {
+	if masterSSH == nil {
+		return fmt.Errorf("postgres.EnsureZFSCSI: master ssh client required")
+	}
+	cmd := fmt.Sprintf(`sudo k3s kubectl apply -f %s`, zfsCSIManifestURL)
+	if _, err := masterSSH.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("apply openebs zfs-localpv manifest: %w", err)
+	}
+	return nil
+}
+
 // PrepareNode installs zfsutils + creates a file-backed zpool on the
 // target node via SSH. Idempotent — every step checks for existing
 // state and short-circuits. The caller (postgres.Reconcile) runs this
