@@ -171,6 +171,14 @@ type BranchResult struct {
 	SnapshotName string
 }
 
+// TODO(#68, ttl): extend BranchSource with a TTL field (time.Duration)
+// and stamp `nvoi/branch-ttl=<RFC3339-expiry>` on every branch
+// workload's labels from buildBranch*. A reconcile sweep (see TODO in
+// internal/reconcile/databases.go) then garbage-collects branches past
+// their expiry. Without it, per-PR preview branches accumulate until
+// the zpool fills. Resurface when branch gets wired into a CI
+// per-PR-preview workflow.
+
 // Branch creates a sibling postgres StatefulSet bound to a clone of
 // the source DB's data. Composes over Snapshot: take a fresh snapshot
 // of the source PVC, create a new PVC with dataSource pointing at it,
@@ -231,6 +239,24 @@ func Branch(ctx context.Context, kc *kube.Client, masterSSH utils.SSHClient, src
 		SnapshotName: snapName,
 	}, nil
 }
+
+// TODO(#68, rollback): add Rollback(ctx, kc, masterSSH, namespace,
+// sourcePVC, snapshotName) that performs an in-place restore of the
+// PRIMARY DB from one of its snapshots. Shape:
+//
+//   1. Scale down the source StatefulSet to 0 (release the PVC).
+//   2. Delete the source PVC.
+//   3. Recreate the source PVC with dataSource pointing at snapshotName
+//      (same buildPVC shape, just with a DataSource added).
+//   4. Scale back up.
+//
+// Different from Branch because it swaps the PRIMARY's PVC — same
+// Service, same DSN, clients don't reconfigure — whereas Branch creates
+// a sibling. Target downtime: O(seconds) for the pod restart + zfs
+// clone. Today the same outcome is reachable via restore --from-backup
+// (slower, dump+restore) or branch-delete+branch (wrong semantics —
+// creates a sibling). Resurface when a concrete "jump backward 15 min"
+// recovery scenario lands.
 
 // DeleteBranch removes every workload created for a branch — the
 // sibling StatefulSet, Service, PVC, and the VolumeSnapshot the PVC

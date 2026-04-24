@@ -60,6 +60,15 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 		}
 	}
 
+	// TODO(#68, ttl): sweep orphan branches. Walk all workloads labeled
+	// `nvoi/branch-of=<src-pvc>` + `nvoi/branch-ttl=<RFC3339>`, compare
+	// the expiry against time.Now(), and call postgres.DeleteBranch for
+	// every expired entry. Runs here (once per deploy) rather than a
+	// sidecar cronjob so the cleanup lifecycle tracks nvoi's own
+	// reconcile cadence — no extra k8s controller to ship. Resurface
+	// when TTL labels start being emitted (paired TODO in
+	// pkg/provider/postgres/branching.go::Branch).
+
 	out := map[string]string{}
 	var pending []PendingMigration
 

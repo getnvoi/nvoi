@@ -31,6 +31,14 @@ func newDatabaseCmd(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newDatabaseSnapshotDeleteCmd(rt))
 	cmd.AddCommand(newDatabaseBranchCmd(rt))
 	cmd.AddCommand(newDatabaseBranchDeleteCmd(rt))
+	// TODO(#68, rollback): register a `rollback` subcommand here
+	// (`nvoi database rollback <name> --to <snap>`) — in-place restore
+	// of the primary DB from one of its own snapshots. Wraps the
+	// future postgres.Rollback helper (see TODO in
+	// pkg/provider/postgres/branching.go). Same Service, same DSN,
+	// clients don't reconfigure. Wanted for "oops, jump backward 15
+	// minutes" recovery scenarios; pre-shipping without a concrete
+	// caller is speculative so it's deferred.
 	return cmd
 }
 
@@ -44,6 +52,12 @@ func newDatabaseCmd(rt *runtime) *cobra.Command {
 // Secret (ZFS clones carry the pg_roles table bit-exact). Dev tools
 // connect to the branch Service instead of the primary.
 func newDatabaseBranchCmd(rt *runtime) *cobra.Command {
+	// TODO(#68, ttl): add `--ttl <duration>` flag (e.g. 7d). When set,
+	// the branch gets `nvoi/branch-ttl=<RFC3339-expiry>` stamped on its
+	// workloads, and the reconcile sweep (see TODO in
+	// internal/reconcile/databases.go) garbage-collects it at expiry.
+	// Load-bearing for per-PR preview workflows — without TTL, CI-
+	// created branches accumulate until the zpool fills.
 	return &cobra.Command{
 		Use:   "branch <name> <branch-name>",
 		Short: "Create a ZFS-cloned branch of a database",
