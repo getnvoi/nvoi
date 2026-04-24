@@ -12,6 +12,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/postgres"
 	"github.com/getnvoi/nvoi/pkg/utils"
 	"github.com/spf13/cobra"
 )
@@ -25,7 +26,126 @@ func newDatabaseCmd(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newDatabaseBackupCmd(rt))
 	cmd.AddCommand(newDatabaseRestoreCmd(rt))
 	cmd.AddCommand(newDatabaseMigrateCmd(rt))
+	cmd.AddCommand(newDatabaseSnapshotCmd(rt))
+	cmd.AddCommand(newDatabaseSnapshotsCmd(rt))
+	cmd.AddCommand(newDatabaseSnapshotDeleteCmd(rt))
 	return cmd
+}
+
+// newDatabaseSnapshotCmd creates a ZFS-backed snapshot of a database's
+// PVC. Thin wrapper over postgres.Snapshot — the VolumeSnapshot object
+// lands immediately, the CSI driver's controller runs `zfs snapshot`
+// out-of-band (O(100ms) for typical pool sizes). Snapshots are the
+// raw material for branch/rollback.
+//
+// SaaS engines (neon, planetscale) have their own native branching
+// and don't go through this path — command refuses with a clear
+// pointer to use the provider's UI.
+func newDatabaseSnapshotCmd(rt *runtime) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "snapshot <name>",
+		Short: "Create a ZFS snapshot of the database's PVC",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDatabaseSnapshot(cmd, rt, args[0])
+		},
+	}
+	cmd.Flags().String("label", "", "human-readable label appended to the snapshot name (default: UTC timestamp)")
+	return cmd
+}
+
+func newDatabaseSnapshotsCmd(rt *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "snapshots <name>",
+		Short: "List ZFS snapshots for a database",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDatabaseSnapshots(cmd, rt, args[0])
+		},
+	}
+}
+
+func newDatabaseSnapshotDeleteCmd(rt *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "snapshot-delete <name> <snapshot-name>",
+		Short: "Delete a ZFS snapshot",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDatabaseSnapshotDelete(cmd, rt, args[0], args[1])
+		},
+	}
+}
+
+func runDatabaseSnapshot(cmd *cobra.Command, rt *runtime, dbName string) error {
+	def, ok := rt.cfg.Databases[dbName]
+	if !ok {
+		return fmt.Errorf("database %q is not defined", dbName)
+	}
+	if def.Server == "" {
+		return fmt.Errorf("databases.%s: snapshots require a selfhosted engine — SaaS providers (neon, planetscale) use their own native branching", dbName)
+	}
+	names, err := rt.dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	masterSSH, _, err := rt.dc.Cluster.SSH(cmd.Context(), config.NewView(rt.cfg))
+	if err != nil {
+		return fmt.Errorf("master SSH: %w", err)
+	}
+	label, _ := cmd.Flags().GetString("label")
+	snapName, err := postgres.Snapshot(cmd.Context(), masterSSH,
+		names.KubeNamespace(), names.KubeDatabasePVC(dbName), label)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(rt.out.Writer(), "%s\n", snapName)
+	return nil
+}
+
+func runDatabaseSnapshots(cmd *cobra.Command, rt *runtime, dbName string) error {
+	def, ok := rt.cfg.Databases[dbName]
+	if !ok {
+		return fmt.Errorf("database %q is not defined", dbName)
+	}
+	if def.Server == "" {
+		return fmt.Errorf("databases.%s: snapshots require a selfhosted engine", dbName)
+	}
+	names, err := rt.dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	masterSSH, _, err := rt.dc.Cluster.SSH(cmd.Context(), config.NewView(rt.cfg))
+	if err != nil {
+		return fmt.Errorf("master SSH: %w", err)
+	}
+	snaps, err := postgres.ListSnapshots(cmd.Context(), masterSSH,
+		names.KubeNamespace(), names.KubeDatabasePVC(dbName))
+	if err != nil {
+		return err
+	}
+	for _, s := range snaps {
+		fmt.Fprintln(rt.out.Writer(), s)
+	}
+	return nil
+}
+
+func runDatabaseSnapshotDelete(cmd *cobra.Command, rt *runtime, dbName, snapName string) error {
+	def, ok := rt.cfg.Databases[dbName]
+	if !ok {
+		return fmt.Errorf("database %q is not defined", dbName)
+	}
+	if def.Server == "" {
+		return fmt.Errorf("databases.%s: snapshots require a selfhosted engine", dbName)
+	}
+	names, err := rt.dc.Cluster.Names()
+	if err != nil {
+		return err
+	}
+	masterSSH, _, err := rt.dc.Cluster.SSH(cmd.Context(), config.NewView(rt.cfg))
+	if err != nil {
+		return fmt.Errorf("master SSH: %w", err)
+	}
+	return postgres.DeleteSnapshot(cmd.Context(), masterSSH, names.KubeNamespace(), snapName)
 }
 
 func newDatabaseSQLCmd(rt *runtime) *cobra.Command {
