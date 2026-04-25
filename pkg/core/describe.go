@@ -534,19 +534,30 @@ func probeDatabaseLive(parent context.Context, p DatabaseProbe) string {
 	return "Up"
 }
 
-// describeSecrets lists every nvoi-managed Secret in the namespace and
-// returns one DescribeSecret per object, with keys sorted alphabetically.
-// Owner is classified from the Secret's name against well-known patterns
-// (see DescribeSecret docs). Caller passes service + cron name lists from
-// cfg so {X}-secrets gets the right owner kind ("service" vs "cron"); a
-// missing match falls back to "workload:X" (orphan from a prior deploy).
+// describeSecrets lists every Secret in the namespace and returns one
+// DescribeSecret per nvoi-recognized object, with keys sorted
+// alphabetically. Owner is classified from the Secret's name against
+// well-known patterns (see DescribeSecret docs). Caller passes service +
+// cron name lists from cfg so {X}-secrets gets the right owner kind
+// ("service" vs "cron"); a missing match falls back to "workload:X"
+// (orphan from a prior deploy).
 //
-// The label selector is NvoiSelector — same filter the rest of describe
-// uses to keep system / user Secrets out of the operator-facing table.
-// Empty list (no nvoi-managed Secrets) returns nil; List errors return
-// nil and are silently dropped (consistent with the rest of describe).
+// We do NOT filter by NvoiSelector at the apiserver. Several of nvoi's
+// historical Secret creation paths (kube.EnsureSecret, the per-DB
+// credentials Secret, the workload {X}-secrets) didn't stamp the
+// `app.kubernetes.io/managed-by=nvoi` label, and existing operators
+// running against pre-fix clusters would lose visibility on those rows
+// after a label-only deploy. Instead: list everything, then filter on
+// classifySecretOwner(name) — empty Owner means "not a known nvoi
+// pattern" and the row is dropped (k8s system Secrets, user-created
+// Secrets unrelated to nvoi). Forward-compat is via EnsureSecret which
+// now stamps the label too, so resources / future tooling can rely on
+// it without breaking describe today.
+//
+// Empty list returns nil; List errors return nil and are silently
+// dropped (consistent with the rest of describe).
 func describeSecrets(ctx context.Context, kc *kube.Client, ns string, names *utils.Names, services, crons []string) []DescribeSecret {
-	list, err := kc.Clientset().CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
+	list, err := kc.Clientset().CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil
 	}
@@ -566,6 +577,13 @@ func describeSecrets(ctx context.Context, kc *kube.Client, ns string, names *uti
 
 	out := make([]DescribeSecret, 0, len(list.Items))
 	for _, s := range list.Items {
+		owner := classifySecretOwner(s.Name, base, svcSet, cronSet)
+		if owner == "" {
+			// Not a known nvoi pattern — k8s system Secret (default
+			// service-account token, etc.) or operator-created.
+			// describe stays scoped to nvoi-recognized state.
+			continue
+		}
 		keys := make([]string, 0, len(s.Data))
 		for k := range s.Data {
 			keys = append(keys, k)
@@ -574,7 +592,7 @@ func describeSecrets(ctx context.Context, kc *kube.Client, ns string, names *uti
 
 		out = append(out, DescribeSecret{
 			Name:  s.Name,
-			Owner: classifySecretOwner(s.Name, base, svcSet, cronSet),
+			Owner: owner,
 			Keys:  keys,
 		})
 	}

@@ -7,10 +7,19 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // EnsureSecret creates the Secret if missing or merges the given keys into it
 // otherwise. Other keys not in `kvs` are left untouched.
+//
+// Every Secret created or updated through this path is stamped with
+// `app.kubernetes.io/managed-by=nvoi`. This is the discovery contract for
+// the rest of the tree — describe / resources / future tooling can list
+// nvoi-owned Secrets via NvoiSelector without per-creation-site label
+// rituals. On Update, missing label is healed in place; pre-fix clusters
+// pick up the label on their next deploy.
 func (c *Client) EnsureSecret(ctx context.Context, ns, name string, kvs map[string]string) error {
 	if c == nil {
 		return fmt.Errorf("kube client not initialized")
@@ -25,10 +34,14 @@ func (c *Client) EnsureSecret(ctx context.Context, ns, name string, kvs map[stri
 			data[k] = []byte(v)
 		}
 		secret := &corev1.Secret{
-			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-			Type:       corev1.SecretTypeOpaque,
-			Data:       data,
+			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels:    map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: data,
 		}
 		_, err := c.cs.CoreV1().Secrets(ns).Create(ctx, secret, metav1.CreateOptions{FieldManager: FieldManager})
 		if err != nil {
@@ -45,6 +58,12 @@ func (c *Client) EnsureSecret(ctx context.Context, ns, name string, kvs map[stri
 	for k, v := range kvs {
 		existing.Data[k] = []byte(v)
 	}
+	// Heal the managed-by label on pre-fix clusters so the next describe
+	// run shows a complete picture without waiting for a fresh Secret.
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	existing.Labels[utils.LabelAppManagedBy] = utils.LabelManagedBy
 	_, err = c.cs.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{FieldManager: FieldManager})
 	if err != nil {
 		return fmt.Errorf("update secret %s/%s: %w", ns, name, err)

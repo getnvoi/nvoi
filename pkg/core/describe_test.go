@@ -500,11 +500,23 @@ func (s *slowProvider) ExecSQL(ctx context.Context, _ provider.DatabaseRequest, 
 
 // ── SECRETS section (namespace-wide, owner-classified) ──────────────────────
 
-// TestDescribeSecrets_ListsAllNvoiManaged locks the new SECRETS section
-// shape: every Secret in the namespace carrying NvoiSelector appears as
-// one row with all its keys (sorted), classified by name pattern.
+// TestDescribeSecrets_ListsAllNvoiManaged locks the SECRETS section
+// shape against REAL cluster state — most nvoi Secrets in production
+// carry NO `app.kubernetes.io/managed-by` label because EnsureSecret
+// (the codepath behind workload {X}-secrets and per-DB credentials
+// Secrets) didn't stamp it pre-fix. This fixture mirrors that reality:
+// most Secrets are unlabeled, only the explicitly-labeled ones
+// (registry-auth via BuildPullSecret, tunnel agents) carry the label.
 //
-// Covers each owner classification we shipped:
+// describe must find both — it filters by name pattern, not label. A
+// label-only filter would silently hide the bulk of the cluster's
+// nvoi-managed Secrets, which is exactly the bug this test prevents.
+//
+// k8s system Secrets (default-token-*) and operator-created Secrets
+// MUST NOT appear — pattern doesn't match, classifySecretOwner returns
+// "" and the row is dropped.
+//
+// Covers each owner classification:
 //   - service:X (workload secret matching a cfg.Services entry)
 //   - cron:X    (workload secret matching a cfg.Crons entry)
 //   - workload:X (orphan — no cfg match, lingering from a previous deploy)
@@ -514,7 +526,7 @@ func (s *slowProvider) ExecSQL(ctx context.Context, _ provider.DatabaseRequest, 
 //   - tunnel:cloudflare / tunnel:ngrok (agent auth Secrets)
 func TestDescribeSecrets_ListsAllNvoiManaged(t *testing.T) {
 	ns := "nvoi-myapp-prod"
-	mkSecret := func(name string, keys ...string) *corev1.Secret {
+	mkSecret := func(name string, labels map[string]string, keys ...string) *corev1.Secret {
 		data := map[string][]byte{}
 		for _, k := range keys {
 			data[k] = []byte("x")
@@ -523,24 +535,26 @@ func TestDescribeSecrets_ListsAllNvoiManaged(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: ns,
-				Labels:    managedLabels(),
+				Labels:    labels,
 			},
 			Data: data,
 		}
 	}
 	objs := []runtime.Object{
-		mkSecret("api-secrets", "DATABASE_URL"),
-		mkSecret("backfill-secrets", "API_TOKEN"),
-		mkSecret("orphan-secrets", "OLD_KEY"),
-		mkSecret("nvoi-myapp-prod-db-main-credentials", "url", "user", "password", "host", "port", "database", "sslmode"),
-		mkSecret("nvoi-myapp-prod-db-main-backup-creds", "BUCKET_ENDPOINT", "BUCKET_NAME", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "ENGINE", "DATABASE_URL"),
-		mkSecret("registry-auth", ".dockerconfigjson"),
-		mkSecret("cloudflared-token", "token"),
-		// Unlabeled Secret must NOT appear.
-		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "user-app-secret", Namespace: ns},
-			Data:       map[string][]byte{"value": []byte("x")},
-		},
+		// EnsureSecret-created (pre-fix): NO label. describe must still find these.
+		mkSecret("api-secrets", nil, "DATABASE_URL"),
+		mkSecret("backfill-secrets", nil, "API_TOKEN"),
+		mkSecret("orphan-secrets", nil, "OLD_KEY"),
+		mkSecret("nvoi-myapp-prod-db-main-credentials", nil, "url", "user", "password", "host", "port", "database", "sslmode"),
+		mkSecret("nvoi-myapp-prod-db-main-backup-creds", nil, "BUCKET_ENDPOINT", "BUCKET_NAME", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "ENGINE", "DATABASE_URL"),
+		// BuildPullSecret-created: properly labeled.
+		mkSecret("registry-auth", managedLabels(), ".dockerconfigjson"),
+		// Tunnel agent Secret: labeled.
+		mkSecret("cloudflared-token", managedLabels(), "token"),
+		// k8s system Secret: unknown name pattern → dropped.
+		mkSecret("default-token-abc12", nil, "ca.crt", "namespace", "token"),
+		// User-created Secret: unknown name pattern → dropped.
+		mkSecret("user-app-secret", nil, "value"),
 	}
 	kc := newKC(objs...)
 	names, err := utils.NewNames("myapp", "prod")
