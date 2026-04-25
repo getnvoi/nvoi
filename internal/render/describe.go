@@ -31,23 +31,17 @@ func RenderDescribe(res *pkgcore.DescribeResult) {
 		t.Row(s.Name, s.Type, s.ClusterIP, s.Ports)
 	}
 
+	if len(res.Crons) > 0 {
+		t = g.Add("CRONS", "NAME", "SCHEDULE", "IMAGE", "STATUS", "AGE")
+		for _, c := range res.Crons {
+			t.Row(c.Name, c.Schedule, c.Image, c.Status, c.Age)
+		}
+	}
+
 	if len(res.Ingress) > 0 {
 		t = g.Add("INGRESS", "DOMAIN", "SERVICE", "PORT")
 		for _, i := range res.Ingress {
 			t.Row(i.Domain, i.Service, fmt.Sprintf("%d", i.Port))
-		}
-	}
-
-	if res.Tunnel != nil {
-		t = g.Add(fmt.Sprintf("TUNNEL (%s)", res.Tunnel.Provider), "DOMAIN", "SERVICE", "PORT")
-		for _, r := range res.Tunnel.Routes {
-			t.Row(r.Domain, r.Service, fmt.Sprintf("%d", r.Port))
-		}
-		if len(res.Tunnel.Agents) > 0 {
-			t = g.Add("TUNNEL AGENTS", "NAME", "STATUS", "RESTARTS", "AGE")
-			for _, a := range res.Tunnel.Agents {
-				t.Row(a.Name, a.Status, fmt.Sprintf("%d", a.Restarts), a.Age)
-			}
 		}
 	}
 

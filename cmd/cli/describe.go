@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"sort"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/render"
@@ -18,33 +17,17 @@ func newDescribeCmd(rt *runtime) *cobra.Command {
 		Short: "Live cluster state",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			j, _ := cmd.Flags().GetBool("json")
-			// Build config-derived tunnel routes so describe can show them
-			// without needing to reach out to the provider API.
-			var tunnelRoutes []app.DescribeIngress
-			if rt.cfg.Providers.Tunnel != "" {
-				for _, svcName := range utils.SortedKeys(rt.cfg.Domains) {
-					svc, ok := rt.cfg.Services[svcName]
-					if !ok {
-						continue
-					}
-					for _, domain := range rt.cfg.Domains[svcName] {
-						tunnelRoutes = append(tunnelRoutes, app.DescribeIngress{
-							Domain: domain, Service: svcName, Port: svc.Port,
-						})
-					}
-				}
-				sort.Slice(tunnelRoutes, func(i, j int) bool {
-					return tunnelRoutes[i].Domain < tunnelRoutes[j].Domain
-				})
-			}
+			// Workloads = every service + cron from cfg, sorted. describe
+			// walks the live `{name}-secrets` Secret for each so auto-
+			// injected keys (DATABASE_URL_X, storage creds) surface
+			// alongside explicit secrets: declarations.
+			workloads := append(utils.SortedKeys(rt.cfg.Services), utils.SortedKeys(rt.cfg.Crons)...)
 
 			req := app.DescribeRequest{
-				Cluster:        rt.dc.Cluster,
-				Cfg:            config.NewView(rt.cfg),
-				StorageNames:   rt.cfg.StorageNames(),
-				ServiceSecrets: rt.cfg.ServiceSecrets(),
-				TunnelProvider: rt.cfg.Providers.Tunnel,
-				TunnelRoutes:   tunnelRoutes,
+				Cluster:      rt.dc.Cluster,
+				Cfg:          config.NewView(rt.cfg),
+				StorageNames: rt.cfg.StorageNames(),
+				Workloads:    workloads,
 			}
 			if j {
 				raw, err := app.DescribeJSON(cmd.Context(), req)

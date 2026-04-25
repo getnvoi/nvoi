@@ -19,15 +19,13 @@ import (
 
 type DescribeRequest struct {
 	Cluster
-	Cfg            provider.ProviderConfigView // forwards to Cluster.Kube for on-demand connect
-	StorageNames   []string                    // from cfg — config is the source of truth
-	ServiceSecrets map[string][]string         // service/cron name → secret keys declared on it
-	// TunnelProvider is non-empty when providers.tunnel is set in nvoi.yaml.
-	// When set, Caddy ingress is skipped and tunnel agent pods are queried instead.
-	TunnelProvider string
-	// TunnelRoutes is the config-derived hostname→service routing table.
-	// Pre-built by the caller from cfg.Domains + cfg.Services.
-	TunnelRoutes []DescribeIngress
+	Cfg          provider.ProviderConfigView // forwards to Cluster.Kube for on-demand connect
+	StorageNames []string                    // from cfg — config is the source of truth
+	// Workloads is every service + cron name from cfg. describe walks
+	// the live `{name}-secrets` Secret for each, so auto-injected keys
+	// (DATABASE_URL_X, storage creds) surface alongside explicit
+	// secrets: declarations.
+	Workloads []string
 }
 
 type DescribeNode struct {
@@ -79,14 +77,6 @@ type DescribeSecret struct {
 	Service string `json:"service"` // which service/cron owns this secret
 }
 
-// DescribeTunnel holds live state of the active tunnel provider.
-// Populated only when providers.tunnel is configured; nil otherwise.
-type DescribeTunnel struct {
-	Provider string            `json:"provider"`
-	Routes   []DescribeIngress `json:"routes"`
-	Agents   []DescribePod     `json:"agents"`
-}
-
 type DescribeResult struct {
 	Namespace string             `json:"namespace"`
 	Nodes     []DescribeNode     `json:"nodes"`
@@ -95,7 +85,6 @@ type DescribeResult struct {
 	Services  []DescribeService  `json:"services"`
 	Crons     []DescribeCron     `json:"crons"`
 	Ingress   []DescribeIngress  `json:"ingress"`
-	Tunnel    *DescribeTunnel    `json:"tunnel,omitempty"`
 	Secrets   []DescribeSecret   `json:"secrets"`
 	Storage   []StorageItem      `json:"storage"`
 }
@@ -133,25 +122,14 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		return result, ctx.Err()
 	}
 
-	if req.TunnelProvider != "" {
-		// Tunnel path: Caddy is not running. Read agent pod health from the cluster.
-		agents, err := describeTunnelAgents(ctx, kc, ns)
-		if err != nil {
-			return result, fmt.Errorf("describe tunnel agents: %w", err)
-		}
-		result.Tunnel = &DescribeTunnel{
-			Provider: req.TunnelProvider,
-			Routes:   req.TunnelRoutes,
-			Agents:   agents,
-		}
-	} else {
-		// Caddy path: read routes from Caddy's live admin API config.
-		// Caddy might not be running yet (first deploy in progress) — that's
-		// not an error for describe; the routes list just stays empty.
-		routes, err := kc.GetCaddyRoutes(ctx)
-		if err != nil {
-			return result, fmt.Errorf("describe ingress: %w", err)
-		}
+	// Ingress section: only meaningful on the Caddy path. When
+	// providers.tunnel is set, ingress lives at the provider edge —
+	// `nvoi resources` surfaces it. describe is cluster-scope and
+	// stays silent here. Caddy might not be running yet (first deploy
+	// in progress) — that's not an error for describe; the routes
+	// list just stays empty.
+	routes, err := kc.GetCaddyRoutes(ctx)
+	if err == nil {
 		for _, r := range routes {
 			for _, d := range r.Domains {
 				result.Ingress = append(result.Ingress, DescribeIngress{
@@ -169,8 +147,14 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		})
 	}
 
-	// Secrets — read live keys from each per-service k8s Secret
-	for _, svc := range utils.SortedKeys(req.ServiceSecrets) {
+	// Secrets — list live keys from each workload's `{name}-secrets`
+	// Secret. Walking the workload set (services + crons from cfg)
+	// rather than just those declaring `secrets:` surfaces auto-
+	// injected keys — DATABASE_URL_X from databases:, storage creds
+	// from storage: — that the reconciler stuffs in alongside what
+	// the operator wrote in YAML. NotFound on a workload's Secret
+	// means it never reconciled and is silently skipped.
+	for _, svc := range req.Workloads {
 		secretName := names.KubeServiceSecrets(svc)
 		keys, err := kc.ListSecretKeys(ctx, ns, secretName)
 		if err != nil {
@@ -371,32 +355,6 @@ func describePods(ctx context.Context, kc *kube.Client, ns string) []DescribePod
 		})
 	}
 	return out
-}
-
-func describeTunnelAgents(ctx context.Context, kc *kube.Client, ns string) ([]DescribePod, error) {
-	rawPods, err := kc.GetTunnelAgentPods(ctx, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]DescribePod, 0, len(rawPods))
-	for _, p := range rawPods {
-		status := string(p.Status.Phase)
-		restarts := 0
-		for _, cs := range p.Status.ContainerStatuses {
-			restarts += int(cs.RestartCount)
-			if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
-				status = cs.State.Waiting.Reason
-			}
-		}
-		out = append(out, DescribePod{
-			Name:     p.Name,
-			Status:   status,
-			Node:     p.Spec.NodeName,
-			Restarts: restarts,
-			Age:      utils.HumanAge(p.CreationTimestamp.Format("2006-01-02T15:04:05Z")),
-		})
-	}
-	return out, nil
 }
 
 func describeServices(ctx context.Context, kc *kube.Client, ns string) []DescribeService {

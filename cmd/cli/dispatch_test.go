@@ -160,10 +160,10 @@ func TestDispatch_Describe_NoWrites(t *testing.T) {
 	cfg := minimalDispatchCfg("dispatch-describe")
 
 	_, _ = app.Describe(context.Background(), app.DescribeRequest{
-		Cluster:        cluster,
-		Cfg:            config.NewView(cfg),
-		StorageNames:   nil,
-		ServiceSecrets: nil,
+		Cluster:      cluster,
+		Cfg:          config.NewView(cfg),
+		StorageNames: nil,
+		Workloads:    nil,
 	})
 
 	assertLookupHappened(t, fake)
