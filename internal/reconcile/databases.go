@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/provider/postgres"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -115,6 +116,58 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 		out[utils.DatabaseEnvName(name)] = url
 	}
 
+	// Orphan sweep — owner=databases is scoped per the discriminator,
+	// so this can never see services / crons / tunnel / caddy / registries
+	// resources. Branches carry owner=database-branches and survive
+	// (their lifecycle is managed by `nvoi database branch ...`).
+	//
+	// Removing `databases.X` from cfg drops every per-DB workload from
+	// the desired sets below, so SweepOwned deletes them on the next
+	// reconcile. Removing only `databases.X.backup` drops the backup
+	// CronJob + backup-creds Secret without touching the StatefulSet.
+	desiredStatefulSets := []string{}
+	desiredServices := []string{}
+	desiredPVCs := []string{}
+	desiredSecrets := []string{}
+	desiredCronJobs := []string{}
+	for _, name := range utils.SortedKeys(cfg.Databases) {
+		def := cfg.Databases[name]
+		// SaaS engines (no Server set) emit no StatefulSet/Service/PVC
+		// — only the credentials Secret + (optional) backup CronJob +
+		// (optional) backup-creds Secret. Selfhosted engines emit all
+		// of the above.
+		if def.Server != "" {
+			desiredStatefulSets = append(desiredStatefulSets, names.Database(name))
+			desiredServices = append(desiredServices, names.Database(name))
+			desiredPVCs = append(desiredPVCs, names.KubeDatabasePVC(name))
+		}
+		desiredSecrets = append(desiredSecrets, names.KubeDatabaseCredentials(name))
+		if def.Backup != nil {
+			desiredCronJobs = append(desiredCronJobs, names.KubeDatabaseBackupCron(name))
+			desiredSecrets = append(desiredSecrets, names.KubeDatabaseBackupCreds(name))
+		}
+	}
+	ns := names.KubeNamespace()
+	kc := dc.Cluster.MasterKube
+	if kc != nil {
+		for _, sweep := range []struct {
+			kind    kube.Kind
+			desired []string
+		}{
+			{kube.KindStatefulSet, desiredStatefulSets},
+			{kube.KindService, desiredServices},
+			{kube.KindPVC, desiredPVCs},
+			{kube.KindSecret, desiredSecrets},
+			{kube.KindCronJob, desiredCronJobs},
+		} {
+			if err := kc.SweepOwned(ctx, ns, utils.OwnerDatabases, sweep.kind, sweep.desired); err != nil {
+				if log := dc.Cluster.Log(); log != nil {
+					log.Warning(fmt.Sprintf("databases sweep %s: %s", sweep.kind, err))
+				}
+			}
+		}
+	}
+
 	return out, pending, nil
 }
 
@@ -221,7 +274,7 @@ func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *co
 		return "", fmt.Errorf("databases.%s.reconcile: %w", name, err)
 	}
 	for _, obj := range plan.Workloads {
-		if err := dc.Cluster.MasterKube.Apply(ctx, names.KubeNamespace(), obj); err != nil {
+		if err := dc.Cluster.MasterKube.ApplyOwned(ctx, names.KubeNamespace(), utils.OwnerDatabases, obj); err != nil {
 			return "", fmt.Errorf("databases.%s.apply: %w", name, err)
 		}
 	}
@@ -286,7 +339,7 @@ func ensureDatabaseBackupBucket(ctx context.Context, dc *config.DeployContext, c
 	credsSecretName := names.KubeDatabaseBackupCreds(dbName)
 	if dc.Cluster.MasterKube != nil {
 		if err := dc.Cluster.MasterKube.EnsureSecret(
-			ctx, names.KubeNamespace(), credsSecretName,
+			ctx, names.KubeNamespace(), utils.OwnerDatabases, credsSecretName,
 			provider.BuildBackupCredsSecretData(bucketName, bucketCreds),
 		); err != nil {
 			return fmt.Errorf("databases.%s.backup: write %s: %w", dbName, credsSecretName, err)

@@ -269,17 +269,20 @@ func Branch(ctx context.Context, kc *kube.Client, masterSSH utils.SSHClient, src
 	}
 
 	// 2. PVC cloned from the snapshot (typed, applied via kube.Client).
-	if err := kc.Apply(ctx, namespace, buildBranchPVC(src, branchWorkload, snapName)); err != nil {
+	//    Owner=database-branches (NOT databases) so reconcile.Databases'
+	//    parent-DB sweep doesn't eat ephemeral branches when the parent
+	//    DB is reconciled.
+	if err := kc.ApplyOwned(ctx, namespace, utils.OwnerDatabaseBranches, buildBranchPVC(src, branchWorkload, snapName)); err != nil {
 		return BranchResult{}, fmt.Errorf("apply branch PVC: %w", err)
 	}
 
 	// 3. Sibling Service (typed).
-	if err := kc.Apply(ctx, namespace, buildBranchService(src, branchWorkload)); err != nil {
+	if err := kc.ApplyOwned(ctx, namespace, utils.OwnerDatabaseBranches, buildBranchService(src, branchWorkload)); err != nil {
 		return BranchResult{}, fmt.Errorf("apply branch Service: %w", err)
 	}
 
 	// 4. Sibling StatefulSet (typed, bound to the clone PVC).
-	if err := kc.Apply(ctx, namespace, buildBranchStatefulSet(src, branchWorkload)); err != nil {
+	if err := kc.ApplyOwned(ctx, namespace, utils.OwnerDatabaseBranches, buildBranchStatefulSet(src, branchWorkload)); err != nil {
 		return BranchResult{}, fmt.Errorf("apply branch StatefulSet: %w", err)
 	}
 

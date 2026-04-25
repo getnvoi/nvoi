@@ -53,7 +53,7 @@ func (p *Provider) ListResources(context.Context) ([]provider.ResourceGroup, err
 func (p *Provider) EnsureCredentials(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest) (provider.DatabaseCredentials, error) {
 	creds := credentials(req)
 	if kc != nil {
-		if err := kc.EnsureSecret(ctx, req.Namespace, req.CredentialsSecretName, map[string]string{
+		if err := kc.EnsureSecret(ctx, req.Namespace, utils.OwnerDatabases, req.CredentialsSecretName, map[string]string{
 			"url":      creds.URL,
 			"host":     creds.Host,
 			"port":     strconv.Itoa(creds.Port),
@@ -189,12 +189,17 @@ func credentials(req provider.DatabaseRequest) provider.DatabaseCredentials {
 	}
 }
 
+// labels returns the kube label set stamped on every postgres-owned
+// k8s object — passes through the caller-supplied req.Labels
+// (managed-by + app + env from names.KubeLabels). Ownership
+// (nvoi/owner=databases) is added at apply time by
+// kube.Client.ApplyOwned, NOT here, so the apply boundary stays the
+// single source of truth for ownership.
 func labels(req provider.DatabaseRequest) map[string]string {
 	labels := map[string]string{}
 	for k, v := range req.Labels {
 		labels[k] = v
 	}
-	labels[utils.LabelNvoiDatabase] = req.Name
 	return labels
 }
 

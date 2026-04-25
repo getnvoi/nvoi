@@ -7,11 +7,13 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 func TestEnsureSecret_CreatesWhenMissing(t *testing.T) {
 	c := newTestClient()
-	err := c.EnsureSecret(context.Background(), "ns", "app-secrets", map[string]string{
+	err := c.EnsureSecret(context.Background(), "ns", utils.OwnerServices, "app-secrets", map[string]string{
 		"DB_PASS": "s3cret",
 	})
 	if err != nil {
@@ -26,46 +28,50 @@ func TestEnsureSecret_CreatesWhenMissing(t *testing.T) {
 	}
 }
 
-// TestEnsureSecret_StampsManagedByLabel locks the discovery contract:
-// every Secret created through EnsureSecret carries
-// `app.kubernetes.io/managed-by=nvoi`. Without this, listing nvoi-owned
-// Secrets via NvoiSelector silently misses workload secrets, per-DB
-// credentials, backup-creds — exactly the visibility gap that broke
-// `nvoi describe` against a real cluster pre-fix.
-func TestEnsureSecret_StampsManagedByLabel(t *testing.T) {
+// TestEnsureSecret_StampsManagedByAndOwner locks the discovery
+// contract: every Secret created through EnsureSecret carries both
+// `app.kubernetes.io/managed-by=nvoi` AND `nvoi/owner=<owner>` so the
+// SweepOwned discriminator works without a separate label-heal pass.
+func TestEnsureSecret_StampsManagedByAndOwner(t *testing.T) {
 	c := newTestClient()
-	if err := c.EnsureSecret(context.Background(), "ns", "app-secrets", map[string]string{"K": "v"}); err != nil {
+	if err := c.EnsureSecret(context.Background(), "ns", utils.OwnerServices, "app-secrets", map[string]string{"K": "v"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	sec, _ := c.cs.CoreV1().Secrets("ns").Get(context.Background(), "app-secrets", metav1.GetOptions{})
-	if got := sec.Labels["app.kubernetes.io/managed-by"]; got != "nvoi" {
+	if got := sec.Labels[utils.LabelAppManagedBy]; got != utils.LabelManagedBy {
 		t.Errorf("managed-by label = %q, want nvoi (Secret was: %+v)", got, sec.Labels)
+	}
+	if got := sec.Labels[utils.LabelNvoiOwner]; got != utils.OwnerServices {
+		t.Errorf("owner label = %q, want %q (Secret was: %+v)", got, utils.OwnerServices, sec.Labels)
 	}
 }
 
-// TestEnsureSecret_HealsMissingLabelOnUpdate locks the migration
-// contract: a pre-fix Secret created without the managed-by label gets
-// the label stamped on the next deploy that touches it. One re-deploy
-// heals describe / resources visibility cluster-wide.
-func TestEnsureSecret_HealsMissingLabelOnUpdate(t *testing.T) {
+// TestEnsureSecret_StampsLabelsOnUpdate is the structural replacement
+// for the old label-heal special case — every Update stamps owner +
+// managed-by unconditionally, so a pre-migration Secret picks up the
+// owner label on its next deploy.
+func TestEnsureSecret_StampsLabelsOnUpdate(t *testing.T) {
 	preFix := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "app-secrets",
 			Namespace: "ns",
-			// No labels — pre-fix EnsureSecret didn't stamp anything.
+			// No labels — pre-migration deploy.
 		},
 		Data: map[string][]byte{"OLD": []byte("keep")},
 	}
 	c := newTestClient(preFix)
 
-	if err := c.EnsureSecret(context.Background(), "ns", "app-secrets", map[string]string{"NEW": "v"}); err != nil {
+	if err := c.EnsureSecret(context.Background(), "ns", utils.OwnerServices, "app-secrets", map[string]string{"NEW": "v"}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	got, _ := c.cs.CoreV1().Secrets("ns").Get(context.Background(), "app-secrets", metav1.GetOptions{})
-	if got.Labels["app.kubernetes.io/managed-by"] != "nvoi" {
-		t.Errorf("update did not heal managed-by label; got labels = %+v", got.Labels)
+	if got.Labels[utils.LabelAppManagedBy] != utils.LabelManagedBy {
+		t.Errorf("update did not stamp managed-by label; got labels = %+v", got.Labels)
 	}
-	// Existing data preserved alongside the label heal.
+	if got.Labels[utils.LabelNvoiOwner] != utils.OwnerServices {
+		t.Errorf("update did not stamp owner label; got labels = %+v", got.Labels)
+	}
+	// Existing data preserved alongside the label stamp.
 	if string(got.Data["OLD"]) != "keep" {
 		t.Errorf("OLD lost: %q", got.Data["OLD"])
 	}
@@ -81,7 +87,7 @@ func TestEnsureSecret_MergesExisting(t *testing.T) {
 	}
 	c := newTestClient(existing)
 
-	err := c.EnsureSecret(context.Background(), "ns", "app-secrets", map[string]string{
+	err := c.EnsureSecret(context.Background(), "ns", utils.OwnerServices, "app-secrets", map[string]string{
 		"NEW": "added",
 	})
 	if err != nil {
@@ -96,9 +102,19 @@ func TestEnsureSecret_MergesExisting(t *testing.T) {
 	}
 }
 
+// TestEnsureSecret_EmptyOwner_Errors locks the API contract — the
+// owner is the entire point of the discipline.
+func TestEnsureSecret_EmptyOwner_Errors(t *testing.T) {
+	c := newTestClient()
+	err := c.EnsureSecret(context.Background(), "ns", "", "x", map[string]string{"K": "v"})
+	if err == nil || !contains(err.Error(), "owner required") {
+		t.Errorf("expected owner-required error, got: %v", err)
+	}
+}
+
 func TestUpsertSecretKey_RoundTrip(t *testing.T) {
 	c := newTestClient()
-	if err := c.UpsertSecretKey(context.Background(), "ns", "app-secrets", "KEY", "val"); err != nil {
+	if err := c.UpsertSecretKey(context.Background(), "ns", utils.OwnerServices, "app-secrets", "KEY", "val"); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	val, err := c.GetSecretValue(context.Background(), "ns", "app-secrets", "KEY")

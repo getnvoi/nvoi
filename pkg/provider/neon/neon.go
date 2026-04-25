@@ -15,6 +15,7 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 type Provider struct {
@@ -326,7 +327,7 @@ func readSecretCredentials(ctx context.Context, kc *kube.Client, req provider.Da
 }
 
 func writeSecretCredentials(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest, creds provider.DatabaseCredentials) error {
-	return kc.EnsureSecret(ctx, req.Namespace, req.CredentialsSecretName, map[string]string{
+	return kc.EnsureSecret(ctx, req.Namespace, utils.OwnerDatabases, req.CredentialsSecretName, map[string]string{
 		"url":      creds.URL,
 		"host":     creds.Host,
 		"user":     creds.User,

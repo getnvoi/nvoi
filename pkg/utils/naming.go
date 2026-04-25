@@ -227,18 +227,33 @@ const (
 	LabelNvoiRole       = "nvoi-role"
 	LabelConfigChecksum = "nvoi/config-checksum"
 	LabelNvoiDeployHash = "nvoi/deploy-hash"
-	// LabelNvoiDatabase marks every k8s object owned by the databases
-	// pipeline (StatefulSet, Service, PVC, credentials Secret, backup
-	// CronJob, branch resources). Stamped by the postgres provider and
-	// by provider.BuildBackupCronJob. Consumers use it to distinguish
-	// "user workload" from "infrastructure workload" — most importantly,
-	// the orphan sweeps in reconcile.Services / reconcile.Crons exclude
-	// these so a config without `crons:` doesn't garbage-collect the
-	// daily backup CronJob.
-	LabelNvoiDatabase = "nvoi/database"
-	RoleMaster        = "master"
-	RoleWorker        = "worker"
-	RoleBuilder       = "builder"
+	// LabelNvoiOwner is the single discriminator stamped by
+	// kube.Client.ApplyOwned on every k8s object reconcile creates.
+	// kube.Client.SweepOwned scopes its list by this label so each
+	// reconcile step's orphan sweep can never see another step's
+	// resources — no exclusions, no special-casing. Owner values
+	// below; one constant per reconcile step.
+	LabelNvoiOwner = "nvoi/owner"
+
+	// Owner values — one per reconcile step. Adding a new step =
+	// adding a constant here + passing it to ApplyOwned/SweepOwned.
+	//
+	// OwnerDatabaseBranches is split out from OwnerDatabases because
+	// branches are managed by `nvoi database branch ...` CLI commands,
+	// not by reconcile.Databases. Stamping them with a separate owner
+	// keeps the parent-DB sweep from eating ephemeral branches; the
+	// CLI's branch-delete owns its own lifecycle.
+	OwnerServices         = "services"
+	OwnerCrons            = "crons"
+	OwnerDatabases        = "databases"
+	OwnerDatabaseBranches = "database-branches"
+	OwnerTunnel           = "tunnel"
+	OwnerCaddy            = "caddy"
+	OwnerRegistries       = "registries"
+
+	RoleMaster  = "master"
+	RoleWorker  = "worker"
+	RoleBuilder = "builder"
 )
 
 // BuilderCacheMountPath is the on-disk mount point for the per-builder cache

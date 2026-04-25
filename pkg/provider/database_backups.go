@@ -58,10 +58,13 @@ func DBImage() string {
 // reads ENGINE + DATABASE_URL + BUCKET_* from the envFrom'd Secrets and
 // picks the right dump tool.
 func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
+	// Ownership (nvoi/owner=databases) is stamped at apply time by
+	// kube.Client.ApplyOwned. This builder only sets the per-workload
+	// identity labels (app.kubernetes.io/name) plus whatever the
+	// caller passed via req.Labels.
 	labels := map[string]string{
 		utils.LabelAppName:      req.FullName,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
-		utils.LabelNvoiDatabase: req.Name,
 	}
 	for k, v := range req.Labels {
 		if _, exists := labels[k]; !exists {
@@ -145,10 +148,12 @@ func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
 // concurrent restores from different operators don't collide. The
 // caller (RunRestoreJob) waits for the Job to succeed before returning.
 func BuildRestoreJob(req DatabaseRequest, backupKey string) *batchv1.Job {
+	// Same labeling discipline as BuildBackupCronJob — ownership is
+	// stamped at apply time by ApplyOwned. `nvoi/restore-of` ties the
+	// Job back to the source DB for log/debug navigation.
 	labels := map[string]string{
 		utils.LabelAppName:      req.FullName,
 		utils.LabelAppManagedBy: utils.LabelManagedBy,
-		utils.LabelNvoiDatabase: req.Name,
 		"nvoi/restore-of":       req.Name,
 	}
 	for k, v := range req.Labels {
@@ -227,7 +232,7 @@ func RunRestoreJob(ctx context.Context, kc *kube.Client, req DatabaseRequest, ba
 		return fmt.Errorf("restore requires providers.storage + a backup bucket (did providers.storage get unset between backup and restore?)")
 	}
 	job := BuildRestoreJob(req, backupKey)
-	if err := kc.Apply(ctx, req.Namespace, job); err != nil {
+	if err := kc.ApplyOwned(ctx, req.Namespace, utils.OwnerDatabases, job); err != nil {
 		return fmt.Errorf("apply restore job %s: %w", job.Name, err)
 	}
 	var progress kube.ProgressEmitter

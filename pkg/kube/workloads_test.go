@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -112,115 +111,5 @@ func TestDeleteByName_AllAbsent_Idempotent(t *testing.T) {
 	c := newTestClient()
 	if err := c.DeleteByName(context.Background(), "ns", "web"); err != nil {
 		t.Fatalf("idempotent delete: %v", err)
-	}
-}
-
-// TestListWorkloadNames_ExcludesDatabaseOwned locks the orphan-sweep
-// safety: DB-owned workloads (carrying utils.LabelNvoiDatabase) MUST
-// NOT appear in the list reconcile.Services iterates for orphan
-// deletion. Without this exclusion, a config with no `databases:` X →
-// no `services: db` X means desired = {api}, live = {api,
-// nvoi-{app}-{env}-db-main}, and the sweep deletes the DB StatefulSet
-// on every deploy. Real-world break, real-world fixture.
-//
-// Fixture mirrors what the postgres provider actually emits via
-// labels(req): managed-by + nvoi/database both set on the StatefulSet.
-func TestListWorkloadNames_ExcludesDatabaseOwned(t *testing.T) {
-	userDeployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "api", Namespace: "ns",
-			Labels: map[string]string{
-				utils.LabelAppManagedBy: utils.LabelManagedBy,
-				utils.LabelAppName:      "api",
-			},
-		},
-	}
-	dbStatefulSet := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "nvoi-myapp-prod-db-main", Namespace: "ns",
-			Labels: map[string]string{
-				utils.LabelAppManagedBy: utils.LabelManagedBy,
-				utils.LabelAppName:      "nvoi-myapp-prod-db-main",
-				utils.LabelNvoiDatabase: "main",
-			},
-		},
-	}
-	c := newTestClient(userDeployment, dbStatefulSet)
-
-	names, err := c.ListWorkloadNames(context.Background(), "ns")
-	if err != nil {
-		t.Fatalf("ListWorkloadNames: %v", err)
-	}
-	if len(names) != 1 {
-		t.Fatalf("len = %d (got %v), want 1 (only the user Deployment)", len(names), names)
-	}
-	if names[0] != "api" {
-		t.Errorf("got %q, want api", names[0])
-	}
-}
-
-// TestListWorkloadNames_DBOwnedDeploymentExcluded covers the
-// Deployment branch (DB sidecars / branches deployed via Deployment
-// rather than StatefulSet — already a possibility for branched DBs).
-func TestListWorkloadNames_DBOwnedDeploymentExcluded(t *testing.T) {
-	dbDeployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "nvoi-myapp-prod-db-main-br-pr1", Namespace: "ns",
-			Labels: map[string]string{
-				utils.LabelAppManagedBy: utils.LabelManagedBy,
-				utils.LabelNvoiDatabase: "main",
-			},
-		},
-	}
-	c := newTestClient(dbDeployment)
-
-	names, err := c.ListWorkloadNames(context.Background(), "ns")
-	if err != nil {
-		t.Fatalf("ListWorkloadNames: %v", err)
-	}
-	if len(names) != 0 {
-		t.Errorf("DB-owned Deployment leaked through: %v", names)
-	}
-}
-
-// TestListCronJobNames_ExcludesDatabaseOwned locks the equivalent
-// guarantee for the cron orphan sweep — the production failure
-// reproduced before the fix: deploy with backup: configured but no
-// `crons:` block, the daily backup CronJob got deleted every reconcile
-// because it matched NvoiSelector but wasn't in cfg.Crons.
-//
-// Fixture mirrors what BuildBackupCronJob emits: app.kubernetes.io/
-// managed-by=nvoi + nvoi/database=main.
-func TestListCronJobNames_ExcludesDatabaseOwned(t *testing.T) {
-	userCron := &batchv1.CronJob{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "cleanup", Namespace: "ns",
-			Labels: map[string]string{
-				utils.LabelAppManagedBy: utils.LabelManagedBy,
-				utils.LabelAppName:      "cleanup",
-			},
-		},
-	}
-	dbBackupCron := &batchv1.CronJob{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "nvoi-myapp-prod-db-main-backup", Namespace: "ns",
-			Labels: map[string]string{
-				utils.LabelAppManagedBy: utils.LabelManagedBy,
-				utils.LabelAppName:      "nvoi-myapp-prod-db-main",
-				utils.LabelNvoiDatabase: "main",
-			},
-		},
-	}
-	c := newTestClient(userCron, dbBackupCron)
-
-	names, err := c.ListCronJobNames(context.Background(), "ns")
-	if err != nil {
-		t.Fatalf("ListCronJobNames: %v", err)
-	}
-	if len(names) != 1 {
-		t.Fatalf("len = %d (got %v), want 1 (only the user cron)", len(names), names)
-	}
-	if names[0] != "cleanup" {
-		t.Errorf("got %q, want cleanup", names[0])
 	}
 }

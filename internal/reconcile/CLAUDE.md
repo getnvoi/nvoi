@@ -26,8 +26,8 @@ Deploy(ctx, dc, cfg)
   → secretValues = Secrets(ctx, dc, cfg)
   → storageCreds = Storage(ctx, dc, cfg)
   → sources = mergeSources(secretValues, storageCreds)
-  → Services(ctx, dc, cfg, sources)         — kc.ListWorkloadNames for orphan sweep, KnownVolumes from cfg
-  → Crons(ctx, dc, cfg, sources)            — kc.ListCronJobNames for orphan sweep
+  → Services(ctx, dc, cfg, sources)         — kc.SweepOwned(owner=services) for orphan sweep, KnownVolumes from cfg
+  → Crons(ctx, dc, cfg, sources)            — kc.SweepOwned(owner=crons) for orphan sweep
   → infra.TeardownOrphans(ctx, bctx)        — drain orphan servers + sweep orphan firewalls + orphan volume delete
   → IF infra.HasPublicIngress() && len(cfg.Domains) > 0:
        RouteDomains(ctx, dc, cfg, infra, bctx) — dns.RouteTo(domain, infra.IngressBinding(svc))
@@ -45,14 +45,26 @@ Each resource type follows:
 
 ```
 for each desired resource:
-    set(resource)                     ← idempotent (create or update)
+    kc.ApplyOwned(ctx, ns, owner, obj)  ← idempotent (create or update); stamps
+                                          app.kubernetes.io/managed-by=nvoi +
+                                          nvoi/owner=<owner>
 
-if live state exists:
-    for each live resource NOT in desired:
-        delete(resource)              ← orphan removal
+kc.SweepOwned(ctx, ns, owner, kind, desired)  ← lists nvoi/owner=<owner>
+                                                  resources of `kind` in ns,
+                                                  deletes anything not in
+                                                  `desired`
 ```
 
 Some steps split the two halves across the flow (Servers, Firewall) because deletion is blocked until later invariants hold.
+
+**Label discipline.** Every k8s object reconcile creates goes through
+`kc.ApplyOwned`, which stamps `nvoi/owner=<step>` from a closed
+taxonomy: `services` / `crons` / `databases` / `database-branches` /
+`tunnel` / `caddy` / `registries`. The owner label is the single
+discriminator for orphan sweep — `kc.SweepOwned` scopes its listing by
+this label, so each step's sweep can never see another step's
+resources. No exclusions, no special-casing, no `LabelNvoiDatabase`-
+style band-aids. Constants live in `pkg/utils/naming.go`.
 
 ## Step notes
 
@@ -105,7 +117,7 @@ Every Deployment / StatefulSet / CronJob gets `nvoi/deploy-hash: <hash>` stamped
 
 `WaitRollout` runs on the last service only — earlier services fire-and-forget so the rollouts pipeline. Terminal states (`CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`) abort immediately with recent logs + events.
 
-Orphan services / crons → `ServiceDelete` / `CronDelete`. Orphan key cleanup inside `{name}-secrets` is per-key.
+Orphan services / crons → `kc.SweepOwned(owner=services|crons, ...)` per kind (Deployment + StatefulSet + Service + Secret for services; CronJob + Secret for crons). Orphan key cleanup inside `{name}-secrets` is per-key (a service that drops keys from its `secrets:` block keeps the Secret but removes those keys).
 
 ### DNS (RouteDomains)
 

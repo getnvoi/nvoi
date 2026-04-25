@@ -318,7 +318,7 @@ func describeWorkloads(ctx context.Context, kc *kube.Client, ns string) []Descri
 	deps, err := kc.Clientset().AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
 	if err == nil {
 		for _, d := range deps.Items {
-			if _, owned := d.Labels[utils.LabelNvoiDatabase]; owned {
+			if d.Labels[utils.LabelNvoiOwner] == utils.OwnerDatabases {
 				continue
 			}
 			image := ""
@@ -342,7 +342,7 @@ func describeWorkloads(ctx context.Context, kc *kube.Client, ns string) []Descri
 	ss, err := kc.Clientset().AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
 	if err == nil {
 		for _, s := range ss.Items {
-			if _, owned := s.Labels[utils.LabelNvoiDatabase]; owned {
+			if s.Labels[utils.LabelNvoiOwner] == utils.OwnerDatabases {
 				continue
 			}
 			image := ""
