@@ -6,11 +6,9 @@ import (
 
 // RenderResources prints resource groups as a table group.
 //
-// When a group carries Ownership info (rg.Ownership populated), the
-// renderer adds an "Owned" column whose cell value is the four-state
-// Ownership string verbatim (`live`, `stale`, `other`, `no`). Same
-// string in TUI, CI, and JSON renderings. Groups without Ownership
-// info render as before.
+// When a group carries Scope info (rg.Scope populated), the renderer
+// adds a "Scope" column whose cell value is `owned` or `external`.
+// Groups without Scope info render as before.
 //
 // Empty groups render with a single placeholder row reading "(none)"
 // across all columns rather than a header-only table.
@@ -25,9 +23,9 @@ func BuildResourceTables(groups []provider.ResourceGroup) *TableGroup {
 	g := NewTableGroup()
 	for _, rg := range groups {
 		columns := rg.Columns
-		hasOwnership := len(rg.Ownership) == len(rg.Rows) && len(rg.Ownership) > 0
-		if hasOwnership {
-			columns = append(append([]string{}, rg.Columns...), "Owned")
+		hasScope := len(rg.Scope) == len(rg.Rows) && len(rg.Scope) > 0
+		if hasScope {
+			columns = append(append([]string{}, rg.Columns...), "Scope")
 		}
 
 		t := g.Add(rg.Name, columns...)
@@ -42,8 +40,8 @@ func BuildResourceTables(groups []provider.ResourceGroup) *TableGroup {
 		}
 
 		for i, row := range rg.Rows {
-			if hasOwnership {
-				row = append(append([]string{}, row...), string(rg.Ownership[i]))
+			if hasScope {
+				row = append(append([]string{}, row...), string(rg.Scope[i]))
 			}
 			t.Row(row...)
 		}

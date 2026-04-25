@@ -23,7 +23,6 @@ func BuildOwnershipContext(cfg *AppConfig) *provider.OwnershipContext {
 	}
 
 	ctx := &provider.OwnershipContext{
-		AppEnv:            names.Base(),
 		ExpectedServers:   map[string]bool{},
 		ExpectedVolumes:   map[string]bool{},
 		ExpectedFirewalls: map[string]bool{},

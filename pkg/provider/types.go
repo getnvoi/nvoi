@@ -1,7 +1,5 @@
 package provider
 
-import "strings"
-
 // Shared resource types that InfraProvider implementations expose AND
 // the higher layer (config, reconcile, render) reads. Lifted out of the
 // (now-deleted) pkg/provider/compute.go which housed both the
@@ -75,38 +73,32 @@ type CreateVolumeRequest struct {
 	Labels           map[string]string
 }
 
-// Ownership is the four-state classification surfaced in the Owned
-// column of `nvoi resources`. Tells the operator what each row's
-// relationship to THIS `./nvoi.yaml` is:
+// Scope is the binary classification surfaced in the Scope column of
+// `nvoi resources`. Tells the operator whether each row is in scope
+// of THIS `./nvoi.yaml` right now:
 //
-//   - OwnershipNone  — not nvoi-shaped (manual / external / other tool).
-//   - OwnershipOther — nvoi-shaped, different app+env (another project).
-//   - OwnershipStale — nvoi-shaped, this app+env, no longer in cfg.
-//   - OwnershipLive  — nvoi-shaped, this app+env, in cfg.
+//   - ScopeOwned    — name appears in cfg's expected-set for its kind.
+//   - ScopeExternal — anything else (manual, another project, prior
+//     deploy with cfg now changed, ambiguous nvoi-shaped names we
+//     can't actually verify).
 //
-// Pure structural — every nvoi-created resource is named
-// `nvoi-{app}-{env}-{...}` (or exactly `nvoi-{app}-{env}` for
-// tunnels), so the AppEnv segment is parseable from the name alone.
-// Provider package emits rows with no ownership data; classification
-// happens in the consumer (pkg/core.Classify) so the per-provider
-// surface stays oblivious.
-type Ownership string
+// We deliberately do NOT try to distinguish "stale orphan" from
+// "different nvoi project" from "manual" — they're all just
+// "external to current cfg". The structural `nvoi-{app}-{env}-...`
+// naming pattern looks like a provenance signal but isn't one (any
+// operator can name a manual bucket that way). Cfg match is the only
+// answer we can give honestly.
+type Scope string
 
 const (
-	OwnershipNone  Ownership = "no"
-	OwnershipOther Ownership = "other"
-	OwnershipStale Ownership = "stale"
-	OwnershipLive  Ownership = "live"
+	ScopeOwned    Scope = "owned"
+	ScopeExternal Scope = "external"
 )
 
-// OwnershipContext is the cfg-derived input the classifier compares
-// each row against. AppEnv is `nvoi-{app}-{env}` (Names.Base()).
-// Expected* sets list the full deterministic names cfg currently asks
-// for, per kind. Empty AppEnv → providers / classifier treat anything
-// nvoi-shaped as OwnershipOther.
+// OwnershipContext is the cfg-derived expected-name set the classifier
+// compares each row against. nil context (no cfg loaded) → every row
+// classifies as ScopeExternal.
 type OwnershipContext struct {
-	AppEnv string
-
 	ExpectedServers   map[string]bool
 	ExpectedVolumes   map[string]bool
 	ExpectedFirewalls map[string]bool
@@ -117,71 +109,24 @@ type OwnershipContext struct {
 }
 
 // ResourceGroup is a named table of resources returned by ListResources.
-// Each provider returns its own groups; classification (`Ownership[i]`)
-// is added at the consumer (pkg/core.Classify) — providers stay
+// Each provider returns its own groups; classification (`Scope[i]`) is
+// added at the consumer (pkg/core.Classify) — providers stay
 // oblivious to the OwnershipContext concept.
 type ResourceGroup struct {
-	Name      string      `json:"name"`
-	Columns   []string    `json:"columns"`
-	Rows      [][]string  `json:"rows"`
-	Ownership []Ownership `json:"ownership,omitempty"`
+	Name    string     `json:"name"`
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
+	Scope   []Scope    `json:"scope,omitempty"`
 }
 
-// ClassifyByName applies the structural four-state rule against
-// nvoi-named resources. Pure name match — no labels, no tags, no
-// comments.
-//
-//   - Doesn't look nvoi-named → no
-//   - Looks nvoi-named, ctx nil/empty AppEnv → other
-//   - Name == ctx.AppEnv OR starts with ctx.AppEnv+"-": this app+env
-//   - in expected → live
-//   - else → stale
-//   - Else (different nvoi project) → other
-func ClassifyByName(name string, ctx *OwnershipContext, expected map[string]bool) Ownership {
-	if !looksNvoiNamed(name) {
-		return OwnershipNone
-	}
-	if ctx == nil || ctx.AppEnv == "" {
-		return OwnershipOther
-	}
-	if name == ctx.AppEnv || strings.HasPrefix(name, ctx.AppEnv+"-") {
-		if expected[name] {
-			return OwnershipLive
-		}
-		return OwnershipStale
-	}
-	return OwnershipOther
-}
-
-// ClassifyByCfgMatch is the simpler classifier for resources whose
-// names DON'T follow the nvoi naming pattern — Cloudflare DNS records
-// being the canonical case (the name is a user-chosen FQDN). Without
-// a structural signal we can only answer "in cfg" vs "not in cfg" →
-// the other/stale distinction is unavailable.
-func ClassifyByCfgMatch(name string, expected map[string]bool) Ownership {
+// ClassifyScope is the only classifier — name in expected-set →
+// owned, otherwise → external. No structural inference, no provenance
+// claims.
+func ClassifyScope(name string, expected map[string]bool) Scope {
 	if expected[name] {
-		return OwnershipLive
+		return ScopeOwned
 	}
-	return OwnershipNone
-}
-
-// looksNvoiNamed reports whether `name` matches the nvoi naming
-// pattern: prefix `nvoi-`, ≥3 non-empty dash-separated segments.
-// Rejects 2-segment manual names like `nvoi-releases`.
-func looksNvoiNamed(name string) bool {
-	if !strings.HasPrefix(name, "nvoi-") {
-		return false
-	}
-	parts := strings.Split(name, "-")
-	if len(parts) < 3 {
-		return false
-	}
-	for _, p := range parts {
-		if p == "" {
-			return false
-		}
-	}
-	return true
+	return ScopeExternal
 }
 
 type HTTPStatusError interface {

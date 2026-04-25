@@ -6,51 +6,38 @@ import (
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
-// TestBuildResourceTables_OwnershipColumnAdded locks the contract that
-// any group carrying Ownership info gets an extra "Owned" column
-// appended, rendering the four-state value verbatim.
-func TestBuildResourceTables_OwnershipColumnAdded(t *testing.T) {
+// TestBuildResourceTables_ScopeColumnAdded locks the Scope column —
+// owned/external string verbatim, appended to the original columns.
+func TestBuildResourceTables_ScopeColumnAdded(t *testing.T) {
 	groups := []provider.ResourceGroup{
 		{
 			Name:    "Servers",
 			Columns: []string{"ID", "Name"},
 			Rows: [][]string{
-				{"1", "live-row"},
-				{"2", "stale-row"},
-				{"3", "other-row"},
-				{"4", "no-row"},
+				{"1", "ours"},
+				{"2", "external"},
 			},
-			Ownership: []provider.Ownership{
-				provider.OwnershipLive,
-				provider.OwnershipStale,
-				provider.OwnershipOther,
-				provider.OwnershipNone,
-			},
+			Scope: []provider.Scope{provider.ScopeOwned, provider.ScopeExternal},
 		},
 	}
 
 	tg := BuildResourceTables(groups)
-	if len(tg.entries) != 1 {
-		t.Fatalf("entries = %d, want 1", len(tg.entries))
-	}
 	tab := tg.entries[0].table
-	wantHeaders := []string{"ID", "Name", "Owned"}
+	wantHeaders := []string{"ID", "Name", "Scope"}
 	if !equalStrings(tab.headers, wantHeaders) {
 		t.Errorf("headers = %v, want %v", tab.headers, wantHeaders)
 	}
-	wantCells := []string{"live", "stale", "other", "no"}
-	for i, want := range wantCells {
-		got := tab.rows[i][len(tab.rows[i])-1]
-		if got != want {
-			t.Errorf("row[%d] Owned cell = %q, want %q", i, got, want)
-		}
+	if got := tab.rows[0][len(tab.rows[0])-1]; got != "owned" {
+		t.Errorf("row[0] Scope cell = %q, want owned", got)
+	}
+	if got := tab.rows[1][len(tab.rows[1])-1]; got != "external" {
+		t.Errorf("row[1] Scope cell = %q, want external", got)
 	}
 }
 
-// TestBuildResourceTables_NoOwnershipColumnWhenAbsent — providers that
-// haven't migrated render with their original columns, no misleading
-// Owned column.
-func TestBuildResourceTables_NoOwnershipColumnWhenAbsent(t *testing.T) {
+// TestBuildResourceTables_NoScopeColumnWhenAbsent — providers/groups
+// without Scope info render with their original columns.
+func TestBuildResourceTables_NoScopeColumnWhenAbsent(t *testing.T) {
 	groups := []provider.ResourceGroup{
 		{
 			Name:    "Volumes",
@@ -93,14 +80,14 @@ func TestBuildResourceTables_EmptyGroupPlaceholder(t *testing.T) {
 }
 
 // TestBuildResourceTables_MixedGroups: each group decides
-// independently whether to show the Owned column.
+// independently whether to show the Scope column.
 func TestBuildResourceTables_MixedGroups(t *testing.T) {
 	groups := []provider.ResourceGroup{
 		{
-			Name:      "Servers",
-			Columns:   []string{"ID"},
-			Rows:      [][]string{{"1"}},
-			Ownership: []provider.Ownership{provider.OwnershipLive},
+			Name:    "Servers",
+			Columns: []string{"ID"},
+			Rows:    [][]string{{"1"}},
+			Scope:   []provider.Scope{provider.ScopeOwned},
 		},
 		{
 			Name:    "Buckets",
@@ -109,10 +96,7 @@ func TestBuildResourceTables_MixedGroups(t *testing.T) {
 		},
 	}
 	tg := BuildResourceTables(groups)
-	if len(tg.entries) != 2 {
-		t.Fatalf("entries = %d", len(tg.entries))
-	}
-	if !equalStrings(tg.entries[0].table.headers, []string{"ID", "Owned"}) {
+	if !equalStrings(tg.entries[0].table.headers, []string{"ID", "Scope"}) {
 		t.Errorf("Servers headers = %v", tg.entries[0].table.headers)
 	}
 	if !equalStrings(tg.entries[1].table.headers, []string{"Name"}) {

@@ -37,9 +37,6 @@ func TestBuildOwnershipContext(t *testing.T) {
 	if ctx == nil {
 		t.Fatal("nil context for valid cfg")
 	}
-	if ctx.AppEnv != "nvoi-myapp-prod" {
-		t.Errorf("AppEnv = %q", ctx.AppEnv)
-	}
 	for _, want := range []string{"nvoi-myapp-prod-master", "nvoi-myapp-prod-build-1"} {
 		if !ctx.ExpectedServers[want] {
 			t.Errorf("ExpectedServers missing %q", want)
