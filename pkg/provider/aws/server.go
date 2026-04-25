@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -114,8 +115,10 @@ func (c *Client) EnsureServer(ctx context.Context, req provider.CreateServerRequ
 
 	instanceID := deref(result.Instances[0].InstanceId)
 
-	// Wait for running
-	if err := utils.Poll(ctx, 5*time.Second, 5*time.Minute, func() (bool, error) {
+	// Wait for running — PollSlow covers AMI pull + first boot. 5s interval
+	// override (not infra.PollInterval=3s): EC2 DescribeInstances is rate-
+	// limited per account and instance boot takes minutes regardless.
+	if err := utils.Poll(ctx, 5*time.Second, infra.PollSlow, func() (bool, error) {
 		resp, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 			InstanceIds: []string{instanceID},
 		})
@@ -198,8 +201,9 @@ func (c *Client) DeleteServer(ctx context.Context, req provider.DeleteServerRequ
 		return fmt.Errorf("terminate instance: %w", err)
 	}
 
-	// Wait for terminated
-	if err := utils.Poll(ctx, 5*time.Second, 2*time.Minute, func() (bool, error) {
+	// Wait for terminated — PollFast is enough, terminate completes in <1min
+	// typically. 5s interval for the same rate-limit reason as the boot wait.
+	if err := utils.Poll(ctx, 5*time.Second, infra.PollFast, func() (bool, error) {
 		resp, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 			InstanceIds: []string{instanceID},
 		})

@@ -1,7 +1,6 @@
 package reconcile
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/config"
@@ -36,17 +35,18 @@ func copyMap(m map[string]string) map[string]string {
 	return cp
 }
 
-// SplitServers separates masters and workers, sorted.
+// SplitServers separates masters and workers, sorted by name.
+// utils.SortedKeys iterates the map in sorted order, so workers and masters
+// end up in alphabetical order without a second pass.
 func SplitServers(servers map[string]config.ServerDef) (masters, workers []config.NamedServer) {
 	for _, name := range utils.SortedKeys(servers) {
 		s := config.NamedServer{Name: name, ServerDef: servers[name]}
-		if s.Role == "worker" {
+		if s.Role == utils.RoleWorker {
 			workers = append(workers, s)
 		} else {
 			masters = append(masters, s)
 		}
 	}
-	sort.Slice(workers, func(i, j int) bool { return workers[i].Name < workers[j].Name })
 	return
 }
 
@@ -70,12 +70,4 @@ func ResolveServers(cfg *config.AppConfig, servers []string, server string, moun
 		}
 	}
 	return nil
-}
-
-func toSet(items []string) map[string]bool {
-	m := make(map[string]bool, len(items))
-	for _, item := range items {
-		m[item] = true
-	}
-	return m
 }

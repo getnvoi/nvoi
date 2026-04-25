@@ -19,6 +19,15 @@ type DeployContext struct {
 	Storage app.ProviderRef
 	Tunnel  app.ProviderRef
 	Creds   provider.CredentialSource // single source for all credential resolution at runtime
+
+	// GitRemote and GitRef carry the operator's current checkout so remote
+	// BuildProviders (ssh, daytona) can clone the exact tree the operator is
+	// deploying. Populated at the cmd/ boundary via `git remote get-url
+	// origin` + `git rev-parse HEAD` — NOT read from nvoi.yaml. Empty when
+	// the cwd is not a git checkout; local builder ignores both, remote
+	// builders error with an actionable message.
+	GitRemote string
+	GitRef    string
 }
 
 // LiveState represents what's currently deployed.
@@ -42,6 +51,7 @@ type AppConfig struct {
 	Volumes   map[string]VolumeDef   `yaml:"volumes,omitempty"`
 	Secrets   []string               `yaml:"secrets,omitempty"`
 	Storage   map[string]StorageDef  `yaml:"storage,omitempty"`
+	Databases map[string]DatabaseDef `yaml:"databases,omitempty"`
 	Registry  map[string]RegistryDef `yaml:"registry,omitempty"`
 	Services  map[string]ServiceDef  `yaml:"services"`
 	Crons     map[string]CronDef     `yaml:"crons,omitempty"`
@@ -148,11 +158,33 @@ type ProvidersDef struct {
 	// Infra is the infra provider key (refactor #47). The legacy
 	// `providers.compute` field was removed in C8 — configs using it
 	// hit an unknown-field unmarshal error with a pointer to this rename.
-	Infra   string      `yaml:"infra"`
-	DNS     string      `yaml:"dns,omitempty"`
+	Infra string `yaml:"infra"`
+	DNS   string `yaml:"dns,omitempty"`
+	// Build selects the BuildProvider — how each service's image gets built.
+	// Each provider is entirely self-contained; the only shared contract is
+	// Build(ctx, req) → imageRef. Unset defaults to "local" (operator's
+	// machine). Values:
+	//   - "local"   — docker buildx on the operator's machine (default)
+	//   - "ssh"     — SSH to a role: builder server, git clone + buildx --push
+	//   - "daytona" — managed DinD sandbox, git clone + buildx --push
+	//
+	// Scalar only — same shape as Infra/DNS/Storage/Tunnel.
+	Build string `yaml:"build,omitempty"`
+
 	Storage string      `yaml:"storage,omitempty"`
 	Secrets *SecretsDef `yaml:"secrets,omitempty"`
 	Tunnel  string      `yaml:"tunnel,omitempty"`
+
+	// Ci selects the CI/CD dispatcher — the substrate that invokes
+	// `nvoi deploy` on every push. Read by exactly one command,
+	// `nvoi ci init`, which moves every credential into the CI
+	// provider's secret store and commits a workflow. `reconcile.Deploy`
+	// never reads this field. Values:
+	//   - "github" — GitHub Actions (today)
+	//   - future: gitlab, bitbucket
+	//
+	// Scalar only — same shape as Infra/DNS/Build/Storage/Tunnel.
+	Ci string `yaml:"ci,omitempty"`
 }
 
 // SecretsDef selects a secrets backend. Unset → nvoi falls back to
@@ -214,6 +246,41 @@ type StorageDef struct {
 	Bucket     string `yaml:"bucket,omitempty"`
 }
 
+type DatabaseDef struct {
+	Engine      string                  `yaml:"engine"`
+	Version     string                  `yaml:"version,omitempty"`
+	Server      string                  `yaml:"server,omitempty"`
+	Size        int                     `yaml:"size,omitempty"`
+	Region      string                  `yaml:"region,omitempty"`
+	Credentials *DatabaseCredentialsDef `yaml:"credentials,omitempty"`
+	Backup      *DatabaseBackupDef      `yaml:"backup,omitempty"`
+}
+
+// DatabaseCredentialsDef nests the three identity/auth fields under a
+// single block. Required for selfhosted engines, rejected for SaaS
+// (Neon / PlanetScale issue and rotate creds on the provider side, not
+// from the YAML). User and Password support `$VAR` references resolved
+// against `cfg.Secrets` / the secrets backend; Database may also be a
+// `$VAR` ref or a literal name.
+type DatabaseCredentialsDef struct {
+	User     string `yaml:"user,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	Database string `yaml:"database,omitempty"`
+}
+
+// DatabaseBackupDef configures the shared backup pipeline.
+//
+// The backup bucket is provisioned implicitly by nvoi per database — there
+// is no `storage:` reference to wire up. Every engine (postgres/mysql
+// selfhosted, neon, planetscale) pulls with engine-specific tooling and
+// pushes gzipped logical dumps to `nvoi-{app}-{env}-db-{name}-backups` on
+// the configured `providers.storage`. The validator requires
+// `providers.storage` whenever any database has `backup:` set.
+type DatabaseBackupDef struct {
+	Schedule  string `yaml:"schedule,omitempty"`
+	Retention int    `yaml:"retention,omitempty"`
+}
+
 type ServiceDef struct {
 	Image     string     `yaml:"image,omitempty"`
 	Port      int        `yaml:"port,omitempty"`
@@ -225,6 +292,7 @@ type ServiceDef struct {
 	Env       []string   `yaml:"env,omitempty"`
 	Secrets   []string   `yaml:"secrets,omitempty"`
 	Storage   []string   `yaml:"storage,omitempty"`
+	Databases []string   `yaml:"databases,omitempty"`
 	Volumes   []string   `yaml:"volumes,omitempty"`
 	DependsOn []string   `yaml:"depends_on,omitempty"` // other services that must be Ready before this one is applied
 	Build     *BuildSpec `yaml:"build,omitempty"`      // nil → pull-only; non-nil → build locally + push + pull

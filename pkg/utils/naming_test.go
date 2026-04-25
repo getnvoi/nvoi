@@ -80,11 +80,15 @@ func TestNamesInfrastructure(t *testing.T) {
 	}{
 		{"Base", n.Base(), "nvoi-dummy-rails-production"},
 		{"Firewall", n.Firewall(), "nvoi-dummy-rails-production-fw"},
+		{"MasterFirewall", n.MasterFirewall(), "nvoi-dummy-rails-production-master-fw"},
+		{"WorkerFirewall", n.WorkerFirewall(), "nvoi-dummy-rails-production-worker-fw"},
+		{"BuilderFirewall", n.BuilderFirewall(), "nvoi-dummy-rails-production-builder-fw"},
 		{"Network", n.Network(), "nvoi-dummy-rails-production-net"},
 		{"Server master", n.Server("master"), "nvoi-dummy-rails-production-master"},
 		{"Server worker1", n.Server("worker1"), "nvoi-dummy-rails-production-worker1"},
 		{"Volume pgdata", n.Volume("pgdata"), "nvoi-dummy-rails-production-pgdata"},
 		{"Bucket assets", n.Bucket("assets"), "nvoi-dummy-rails-production-assets"},
+		{"BuilderCacheVolume primary", n.BuilderCacheVolume("primary"), "nvoi-dummy-rails-production-primary-builder-cache"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -118,6 +122,13 @@ func TestNamesKube(t *testing.T) {
 	}
 }
 
+// TestNamesLabels locks the PROVIDER-side label set. Bare `managed-by`
+// (no `app.kubernetes.io/` prefix) — these labels are written onto
+// Hetzner / Scaleway / AWS resources and matched at lookup time by
+// `infra.Connect`. Renaming the key would orphan every existing
+// deployment (servers exist with the old key, infra.Connect queries
+// with the new key, finds nothing, returns ErrNotBootstrapped). This
+// test exists specifically to lock that NOT happening again.
 func TestNamesLabels(t *testing.T) {
 	n, err := NewNames("dummy-rails", "production")
 	if err != nil {
@@ -145,6 +156,35 @@ func TestNamesLabels(t *testing.T) {
 		if got != want {
 			t.Errorf("labels[%q] = %q, want %q", k, got, want)
 		}
+	}
+}
+
+// TestNamesKubeLabels locks the KUBE-side label set. Properly prefixed
+// `app.kubernetes.io/managed-by` so kube.NvoiSelector matches. The
+// databases pipeline stamps this set onto its StatefulSet / Service /
+// PVC so describe / orphan-sweep can find DB workloads. A revert here
+// would make the DB pod invisible to NvoiSelector — same bug class
+// that masked the orphan-sweep deletion of the backup CronJob until a
+// human ran `nvoi describe`.
+func TestNamesKubeLabels(t *testing.T) {
+	n, err := NewNames("dummy-rails", "production")
+	if err != nil {
+		t.Fatalf("NewNames: %v", err)
+	}
+
+	labels := n.KubeLabels()
+
+	if got := labels[LabelAppManagedBy]; got != LabelManagedBy {
+		t.Errorf("KubeLabels[%q] = %q, want %q", LabelAppManagedBy, got, LabelManagedBy)
+	}
+	if labels["managed-by"] != "" {
+		t.Errorf("KubeLabels must NOT carry bare \"managed-by\" — k8s side uses prefixed key only; got: %v", labels)
+	}
+	if got := labels["app"]; got != "nvoi-dummy-rails-production" {
+		t.Errorf("KubeLabels[app] = %q, want nvoi-dummy-rails-production", got)
+	}
+	if got := labels["env"]; got != "production" {
+		t.Errorf("KubeLabels[env] = %q, want production", got)
 	}
 }
 
@@ -240,6 +280,35 @@ func TestParseVolumeMount(t *testing.T) {
 			}
 			if named != tt.wantNamed {
 				t.Errorf("named = %v, want %v", named, tt.wantNamed)
+			}
+		})
+	}
+}
+
+// TestFirewallForRole locks 3-way role routing: master → master firewall,
+// builder → builder firewall, everything else (worker + unknown) → worker
+// firewall. Unknown-role fallback to worker is deliberate — worker rules are
+// the conservative choice (SSH + internal only), so a typo never leaks ports.
+func TestFirewallForRole(t *testing.T) {
+	n, err := NewNames("app", "env")
+	if err != nil {
+		t.Fatalf("NewNames: %v", err)
+	}
+	tests := []struct {
+		role string
+		want string
+	}{
+		{RoleMaster, n.MasterFirewall()},
+		{RoleWorker, n.WorkerFirewall()},
+		{RoleBuilder, n.BuilderFirewall()},
+		{"", n.WorkerFirewall()},         // empty role falls back to worker (safe default)
+		{"somejunk", n.WorkerFirewall()}, // typo falls back to worker
+	}
+	for _, tt := range tests {
+		t.Run("role="+tt.role, func(t *testing.T) {
+			got := n.FirewallForRole(tt.role)
+			if got != tt.want {
+				t.Errorf("FirewallForRole(%q) = %q, want %q", tt.role, got, tt.want)
 			}
 		})
 	}

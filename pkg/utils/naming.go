@@ -42,15 +42,42 @@ func (n *Names) Env() string { return n.env }
 
 // ── Infrastructure names ───────────────────────────────────────────────────────
 
-func (n *Names) Base() string           { return fmt.Sprintf("nvoi-%s-%s", n.app, n.env) }
-func (n *Names) Firewall() string       { return n.Base() + "-fw" } // legacy — do not use for new code
-func (n *Names) MasterFirewall() string { return n.Base() + "-master-fw" }
-func (n *Names) WorkerFirewall() string { return n.Base() + "-worker-fw" }
+func (n *Names) Base() string            { return fmt.Sprintf("nvoi-%s-%s", n.app, n.env) }
+func (n *Names) Firewall() string        { return n.Base() + "-fw" } // legacy — do not use for new code
+func (n *Names) MasterFirewall() string  { return n.Base() + "-master-fw" }
+func (n *Names) WorkerFirewall() string  { return n.Base() + "-worker-fw" }
+func (n *Names) BuilderFirewall() string { return n.Base() + "-builder-fw" }
+
+// FirewallForRole picks the per-role firewall name. Unknown roles fall back
+// to the worker firewall (base rules: SSH + internal only) — conservative
+// default so typos never open public ports.
 func (n *Names) FirewallForRole(role string) string {
-	if role == RoleMaster {
+	switch role {
+	case RoleMaster:
 		return n.MasterFirewall()
+	case RoleBuilder:
+		return n.BuilderFirewall()
+	default:
+		return n.WorkerFirewall()
 	}
-	return n.WorkerFirewall()
+}
+
+// BuilderCacheVolume is the per-builder Docker data-root volume. Same naming
+// scheme as user volumes (`<base>-<name>`) with a "-builder-cache" suffix so
+// the orphan-sweep pattern keeps working without special casing. One cache
+// volume per builder server keeps buildkit layer reuse scoped to the builder
+// that created them — no cross-builder cache contention.
+func (n *Names) BuilderCacheVolume(serverKey string) string {
+	return fmt.Sprintf("%s-%s-builder-cache", n.Base(), serverKey)
+}
+
+// BuilderCacheVolumeShort returns the cache volume's short form — the name
+// after the `<base>-` prefix is stripped. Providers' orphan-sweep and
+// teardown helpers key on short names (same as user-declared volume keys
+// in cfg.VolumeDefs). Keeping this derivation here avoids rebuilding the
+// "-builder-cache" literal outside naming.go.
+func (n *Names) BuilderCacheVolumeShort(serverKey string) string {
+	return fmt.Sprintf("%s-builder-cache", serverKey)
 }
 func (n *Names) Network() string           { return n.Base() + "-net" }
 func (n *Names) Server(key string) string  { return fmt.Sprintf("%s-%s", n.Base(), key) }
@@ -67,14 +94,102 @@ func (n *Names) KubeWorkload(svc string) string       { return svc }
 func (n *Names) KubeService(svc string) string        { return svc }
 func (n *Names) KubeSecrets() string                  { return "secrets" }
 func (n *Names) KubeServiceSecrets(svc string) string { return svc + "-secrets" }
+func (n *Names) Database(name string) string          { return fmt.Sprintf("%s-db-%s", n.Base(), name) }
+func (n *Names) KubeDatabaseCredentials(name string) string {
+	return n.Database(name) + "-credentials"
+}
+func (n *Names) KubeDatabasePVC(name string) string        { return n.Database(name) + "-data" }
+func (n *Names) KubeDatabaseBackupCron(name string) string { return n.Database(name) + "-backup" }
+func (n *Names) KubeDatabasePod(name string) string        { return n.Database(name) + "-0" }
+
+// KubeDatabaseBackupBucket — one bucket per database, provisioned
+// implicitly on `providers.storage` when `databases.<name>.backup` is set.
+// Prefix-free: one bucket holds exactly one database's dumps, so a single
+// `SetLifecycle(bucket, retention)` governs the whole retention policy.
+func (n *Names) KubeDatabaseBackupBucket(name string) string {
+	return n.Database(name) + "-backups"
+}
+
+// KubeDatabaseBackupCreds — cluster-side Secret envFrom'd by the backup
+// CronJob / one-shot Job. Materializes the bucket's S3-compatible
+// credentials (endpoint, key id, secret, region) so the dump tool
+// uploads without a provider SDK.
+func (n *Names) KubeDatabaseBackupCreds(name string) string {
+	return n.Database(name) + "-backup-creds"
+}
+
+// KubeDatabaseSnapshot returns the VolumeSnapshot object name for a
+// user-requested snapshot of a DB. `label` is free-form metadata
+// (e.g. `pre-migration`); callers must pre-validate it with
+// ValidateName — it lands in a kube object name.
+//
+// Distinct from KubeDatabaseBranchSnapshot below: user snapshots and
+// branch snapshots have different purposes (audit / recovery vs clone
+// lineage) and different lifecycles. Keeping the helpers separate
+// stops the `br-` prefix from bleeding into caller code.
+func (n *Names) KubeDatabaseSnapshot(dbName, label string) string {
+	return n.KubeDatabasePVC(dbName) + "-snap-" + label
+}
+
+// KubeDatabaseBranch returns the base name shared by a branch's
+// sibling StatefulSet, Service, and PVC. Every branch workload is
+// named identically so consumer DNS (`{branch-name}:5432`) is
+// obvious. Callers must pre-validate `branch` with ValidateName.
+func (n *Names) KubeDatabaseBranch(dbName, branch string) string {
+	return n.KubeDatabasePVC(dbName) + "-br-" + branch
+}
+
+// KubeDatabaseBranchSnapshot returns the VolumeSnapshot object name
+// for the snapshot created as part of a Branch operation. Shares the
+// `-br-` segment with KubeDatabaseBranch so `list` operations can
+// trace a branch workload back to its seed snapshot by prefix alone.
+// Callers must pre-validate `branch` with ValidateName.
+func (n *Names) KubeDatabaseBranchSnapshot(dbName, branch string) string {
+	return n.KubeDatabaseBranch(dbName, branch) + "-snap"
+}
+
+// CronJobRunName is the one-shot k8s Job name spawned by `nvoi cron run`.
+// Suffix is unix-nanoseconds (caller passes time.Now().Unix() — here for
+// the signature, CallerProvided so tests can inject deterministic values).
+// Lives in naming.go so every resource nvoi creates gets its name here.
+func (n *Names) CronJobRunName(cronName string, suffix int64) string {
+	return fmt.Sprintf("%s-run-%d", cronName, suffix)
+}
 
 // ── Labels ─────────────────────────────────────────────────────────────────────
 
+// Labels returns the canonical label set for PROVIDER-side resources —
+// Hetzner servers, Scaleway volumes, AWS instances, etc. Bare keys
+// (no `app.kubernetes.io/` prefix) because:
+//   - These labels are matched against existing infra at lookup time
+//     (c.ListServers(ctx, names.Labels())). Changing the key shape
+//     would orphan every existing deployment from `infra.Connect`.
+//   - Cloud-provider label key constraints differ; bare `managed-by`
+//     works on every backend without per-cloud quirks.
+//
+// For KUBE-side resources, use KubeLabels — the proper k8s convention
+// is required there so kube.NvoiSelector matches.
 func (n *Names) Labels() map[string]string {
 	return map[string]string{
 		"managed-by": "nvoi",
 		"app":        n.Base(),
 		"env":        n.env,
+	}
+}
+
+// KubeLabels returns the canonical label set for KUBE-side resources —
+// Deployments, StatefulSets, Services, Secrets, CronJobs, PVCs. The
+// managed-by key uses the `app.kubernetes.io/` prefix so kube.NvoiSelector
+// matches; `app` and `env` mirror Labels() for cross-domain consistency.
+//
+// This is the label set the databases pipeline stamps on its workloads
+// (req.Labels = names.KubeLabels()) so they participate in the same
+// selector-driven queries as user services / crons.
+func (n *Names) KubeLabels() map[string]string {
+	return map[string]string{
+		LabelAppManagedBy: LabelManagedBy,
+		"app":             n.Base(),
+		"env":             n.env,
 	}
 }
 
@@ -112,14 +227,59 @@ const (
 	LabelNvoiRole       = "nvoi-role"
 	LabelConfigChecksum = "nvoi/config-checksum"
 	LabelNvoiDeployHash = "nvoi/deploy-hash"
-	RoleMaster          = "master"
+	// LabelNvoiOwner is the single discriminator stamped by
+	// kube.Client.ApplyOwned on every k8s object reconcile creates.
+	// kube.Client.SweepOwned scopes its list by this label so each
+	// reconcile step's orphan sweep can never see another step's
+	// resources — no exclusions, no special-casing. Owner values
+	// below; one constant per reconcile step.
+	LabelNvoiOwner = "nvoi/owner"
+
+	// Owner values — one per reconcile step. Adding a new step =
+	// adding a constant here + passing it to ApplyOwned/SweepOwned.
+	//
+	// OwnerDatabaseBranches is split out from OwnerDatabases because
+	// branches are managed by `nvoi database branch ...` CLI commands,
+	// not by reconcile.Databases. Stamping them with a separate owner
+	// keeps the parent-DB sweep from eating ephemeral branches; the
+	// CLI's branch-delete owns its own lifecycle.
+	OwnerServices         = "services"
+	OwnerCrons            = "crons"
+	OwnerDatabases        = "databases"
+	OwnerDatabaseBranches = "database-branches"
+	OwnerTunnel           = "tunnel"
+	OwnerCaddy            = "caddy"
+	OwnerRegistries       = "registries"
+
+	RoleMaster  = "master"
+	RoleWorker  = "worker"
+	RoleBuilder = "builder"
 )
+
+// BuilderCacheMountPath is the on-disk mount point for the per-builder cache
+// volume. Docker's data-root points here (see pkg/infra/cloudinit.go's
+// RenderBuilderCloudInit) so buildkit layer cache survives reboots and
+// short-circuits the second-and-later deploys.
+const BuilderCacheMountPath = "/var/lib/nvoi/builder-cache"
+
+// BuilderCacheVolumeSizeGB is the default size of each per-builder cache
+// volume. 50 GB is enough to hold a healthy buildkit cache for several
+// services across repeated deploys without resizing; under that, the cache
+// churns. Hetzner, AWS EBS, and Scaleway BlockStorage all accept 50 GB.
+// Not user-configurable today — cache size is an operator concern, not a
+// workload concern; revisit when we see cache pressure in real usage.
+const BuilderCacheVolumeSizeGB = 50
 
 // ── Storage env naming ─────────────────────────────────────────────────────────
 
 func StorageEnvPrefix(bucketName string) string {
 	upper := strings.ToUpper(bucketName)
 	return "STORAGE_" + strings.ReplaceAll(upper, "-", "_")
+}
+
+func DatabaseEnvName(name string) string {
+	upper := strings.ToUpper(name)
+	return "DATABASE_URL_" + strings.ReplaceAll(upper, "-", "_")
 }
 
 // ── Network CIDRs ──────────────────────────────────────────────────────────────

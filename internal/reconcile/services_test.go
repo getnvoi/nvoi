@@ -59,12 +59,17 @@ func TestServices_OrphanRemoved(t *testing.T) {
 	dc := testDC(ssh)
 
 	// Pre-populate the fake with the orphan so Services can find it and
-	// delete. nvoi labels required — ListWorkloadNames filters by them.
+	// delete. owner=services required — SweepOwned scopes its listing by
+	// nvoi/owner, so orphans MUST carry the same owner label that
+	// ApplyOwned would have stamped on them at creation time.
 	kf := kfFor(dc)
 	existing := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "old-api", Namespace: testNS,
-			Labels: map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+			Labels: map[string]string{
+				utils.LabelAppManagedBy: utils.LabelManagedBy,
+				utils.LabelNvoiOwner:    utils.OwnerServices,
+			},
 		},
 	}
 	if _, err := kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(), existing, metav1.CreateOptions{}); err != nil {
@@ -121,12 +126,17 @@ func TestServices_CompleteReplacement(t *testing.T) {
 	dc := testDC(ssh)
 	kf := kfFor(dc)
 
-	// Pre-populate orphans (with nvoi labels — ListWorkloadNames filters).
+	// Pre-populate orphans with owner=services — the same labels
+	// ApplyOwned would have stamped at creation, so SweepOwned can
+	// see them.
 	for _, name := range []string{"old-web", "old-worker"} {
 		_, err := kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(),
 			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 				Name: name, Namespace: testNS,
-				Labels: map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+				Labels: map[string]string{
+					utils.LabelAppManagedBy: utils.LabelManagedBy,
+					utils.LabelNvoiOwner:    utils.OwnerServices,
+				},
 			}},
 			metav1.CreateOptions{})
 		if err != nil {
@@ -349,15 +359,23 @@ func TestServices_OrphanServiceDeletesItsSecret(t *testing.T) {
 	dc := testDC(ssh)
 	kf := kfFor(dc)
 
-	// Pre-populate orphan + its secret (nvoi labels for orphan listing).
+	// Pre-populate orphan + its secret with owner=services so SweepOwned
+	// sees them in the same scope reconcile.Services applies.
+	servicesOwned := map[string]string{
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiOwner:    utils.OwnerServices,
+	}
 	_, _ = kf.Typed.AppsV1().Deployments(testNS).Create(context.Background(),
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 			Name: "old-api", Namespace: testNS,
-			Labels: map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+			Labels: servicesOwned,
 		}},
 		metav1.CreateOptions{})
 	_, _ = kf.Typed.CoreV1().Secrets(testNS).Create(context.Background(),
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "old-api-secrets", Namespace: testNS}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name: "old-api-secrets", Namespace: testNS,
+			Labels: servicesOwned,
+		}},
 		metav1.CreateOptions{})
 
 	cfg := &config.AppConfig{

@@ -2,11 +2,12 @@ package scaleway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/provider/infra"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -87,15 +88,16 @@ func (c *Client) DeleteFirewall(ctx context.Context, name string) error {
 	}
 	// Retry on "in use" — server deletion auto-drops the SG association but
 	// there may be a brief lag after the server disappears from the API.
-	return utils.Poll(ctx, 2*time.Second, 30*time.Second, func() (bool, error) {
+	return utils.Poll(ctx, infra.PollInterval, infra.PollFast, func() (bool, error) {
 		err := c.doInstance(ctx, "DELETE", fmt.Sprintf("/security_groups/%s", fw.ID), nil, nil)
-		if err == nil || utils.IsNotFound(err) {
+		switch {
+		case err == nil, errors.Is(err, utils.ErrNotFound):
 			return true, nil
-		}
-		if strings.Contains(err.Error(), "in use") {
+		case errors.Is(err, infra.ErrInUse):
 			return false, nil // retry — SG still referenced by a terminating server
+		default:
+			return false, err
 		}
-		return false, err
 	})
 }
 

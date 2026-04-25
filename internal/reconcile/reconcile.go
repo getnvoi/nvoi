@@ -7,6 +7,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Deploy reconciles live infrastructure to match the YAML config.
@@ -63,9 +64,38 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	// operator builds on amd64 but deploys to an arm64 node (e.g. cax11).
 	buildPlatform := "linux/" + infra.ArchForType(masterServerType(cfg))
 
-	// Build services with `build:` declared BEFORE touching infra. A
-	// build failure should never leave us with half-provisioned servers.
-	if err := Build(ctx, dc, cfg, buildPlatform); err != nil {
+	// Some BuildProviders (ssh) require role: builder servers to exist
+	// before BuildImages fires. Provision them first, then hand the SSH
+	// targets to BuildImages via the builders slice. Providers that don't
+	// need builders (local, daytona) are declared RequiresBuilders=false
+	// — ProvisionBuilders is still called but is a no-op on those backends
+	// when no role: builder server is declared (the validator R1 rule
+	// already forced consistency).
+	buildName := cfg.Providers.Build
+	if buildName == "" {
+		buildName = "local"
+	}
+	caps, err := provider.GetBuildCapability(buildName)
+	if err != nil {
+		return fmt.Errorf("resolve build capability: %w", err)
+	}
+	var builders []provider.BuilderTarget
+	if caps.RequiresBuilders {
+		if err := infra.ProvisionBuilders(ctx, bctx); err != nil {
+			return fmt.Errorf("provision builders: %w", err)
+		}
+		t, err := infra.BuilderTargets(ctx, bctx)
+		if err != nil {
+			return fmt.Errorf("builder targets: %w", err)
+		}
+		builders = t
+	}
+
+	// Build images for services with `build:` declared BEFORE touching
+	// the rest of the infra. A build failure should never leave us with
+	// half-provisioned servers. BuildImages resolves the BuildProvider
+	// (local/ssh/daytona) and calls bp.Build once per service.
+	if err := BuildImages(ctx, dc, cfg, buildPlatform, builders); err != nil {
 		return err
 	}
 
@@ -116,7 +146,12 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	sources := mergeSources(secretValues, storageCreds)
+	databaseCreds, pendingMigrations, err := Databases(ctx, dc, cfg, secretValues)
+	if err != nil {
+		return err
+	}
+
+	sources := mergeSources(secretValues, storageCreds, databaseCreds)
 
 	if err := Services(ctx, dc, cfg, sources); err != nil {
 		return err
@@ -149,7 +184,26 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		}
 	}
 
+	// Pending-migration summary — emitted LAST so it stays visible after
+	// every other deploy event has scrolled past. Deploy itself exits 0
+	// even with pending migrations: the old DB pod keeps serving from
+	// its current node, consumer services stay connected via the pod-
+	// agnostic k8s Service name, and the operator resolves drift
+	// explicitly via `nvoi database migrate <name>` (#67).
+	emitPendingMigrations(dc, pendingMigrations)
 	return nil
+}
+
+func emitPendingMigrations(dc *config.DeployContext, pending []PendingMigration) {
+	if len(pending) == 0 || dc.Cluster.Log() == nil {
+		return
+	}
+	log := dc.Cluster.Log()
+	log.Warning(fmt.Sprintf("Pending migrations (%d):", len(pending)))
+	for _, p := range pending {
+		log.Warning(fmt.Sprintf("    databases.%s     %s → %s", p.Database, p.From, p.To))
+		log.Warning(fmt.Sprintf("    Run: nvoi database migrate %s", p.Database))
+	}
 }
 
 // RouteDomains writes a DNS record per (service, domain) pair via the
@@ -170,7 +224,7 @@ func RouteDomains(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	if err != nil {
 		return fmt.Errorf("resolve dns provider: %w", err)
 	}
-	for _, svcName := range sortedDomainKeys(cfg.Domains) {
+	for _, svcName := range utils.SortedKeys(cfg.Domains) {
 		binding, err := infra.IngressBinding(ctx, bctx, provider.ServiceTarget{
 			Name: svcName,
 			Port: cfg.Services[svcName].Port,
@@ -217,22 +271,9 @@ func RouteDomains(ctx context.Context, dc *config.DeployContext, cfg *config.App
 // master is found (ValidateConfig would have caught that already).
 func masterServerType(cfg *config.AppConfig) string {
 	for _, srv := range cfg.Servers {
-		if srv.Role == "master" {
+		if srv.Role == utils.RoleMaster {
 			return srv.Type
 		}
 	}
 	return ""
-}
-
-func sortedDomainKeys(m map[string][]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
-			keys[j-1], keys[j] = keys[j], keys[j-1]
-		}
-	}
-	return keys
 }

@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
@@ -31,6 +32,20 @@ func RenderDescribe(res *pkgcore.DescribeResult) {
 		t.Row(s.Name, s.Type, s.ClusterIP, s.Ports)
 	}
 
+	if len(res.Crons) > 0 {
+		t = g.Add("CRONS", "NAME", "SCHEDULE", "IMAGE", "STATUS", "AGE")
+		for _, c := range res.Crons {
+			t.Row(c.Name, c.Schedule, c.Image, c.Status, c.Age)
+		}
+	}
+
+	if len(res.Databases) > 0 {
+		t = g.Add("DATABASES", "NAME", "ENGINE", "ENDPOINT", "STATE", "LIVE")
+		for _, d := range res.Databases {
+			t.Row(d.Name, d.Engine, d.Endpoint, d.State, d.Live)
+		}
+	}
+
 	if len(res.Ingress) > 0 {
 		t = g.Add("INGRESS", "DOMAIN", "SERVICE", "PORT")
 		for _, i := range res.Ingress {
@@ -38,23 +53,10 @@ func RenderDescribe(res *pkgcore.DescribeResult) {
 		}
 	}
 
-	if res.Tunnel != nil {
-		t = g.Add(fmt.Sprintf("TUNNEL (%s)", res.Tunnel.Provider), "DOMAIN", "SERVICE", "PORT")
-		for _, r := range res.Tunnel.Routes {
-			t.Row(r.Domain, r.Service, fmt.Sprintf("%d", r.Port))
-		}
-		if len(res.Tunnel.Agents) > 0 {
-			t = g.Add("TUNNEL AGENTS", "NAME", "STATUS", "RESTARTS", "AGE")
-			for _, a := range res.Tunnel.Agents {
-				t.Row(a.Name, a.Status, fmt.Sprintf("%d", a.Restarts), a.Age)
-			}
-		}
-	}
-
 	if len(res.Secrets) > 0 {
-		t = g.Add("SECRETS", "KEY", "SERVICE")
+		t = g.Add("SECRETS", "NAME", "OWNER", "KEYS")
 		for _, s := range res.Secrets {
-			t.Row(s.Key, s.Service)
+			t.Row(s.Name, s.Owner, strings.Join(s.Keys, ", "))
 		}
 	}
 

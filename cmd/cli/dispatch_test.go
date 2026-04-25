@@ -160,10 +160,11 @@ func TestDispatch_Describe_NoWrites(t *testing.T) {
 	cfg := minimalDispatchCfg("dispatch-describe")
 
 	_, _ = app.Describe(context.Background(), app.DescribeRequest{
-		Cluster:        cluster,
-		Cfg:            config.NewView(cfg),
-		StorageNames:   nil,
-		ServiceSecrets: nil,
+		Cluster:      cluster,
+		Cfg:          config.NewView(cfg),
+		StorageNames: nil,
+		Services:     nil,
+		Crons:        nil,
 	})
 
 	assertLookupHappened(t, fake)
@@ -196,6 +197,56 @@ func TestDispatch_Resources_NoWrites(t *testing.T) {
 	})
 
 	assertNoWrites(t, fake)
+}
+
+// TestDispatch_Resources_IncludesTunnel locks: when providers.tunnel is
+// set, `nvoi resources` fans out to TunnelProvider.ListResources and
+// includes the returned groups in the output. Regression guard for
+// the gap where tunnel resources were silently dropped from the
+// resources table.
+func TestDispatch_Resources_IncludesTunnel(t *testing.T) {
+	cluster, _ := dispatchSetup(t, "dispatch-resources-tunnel")
+
+	tf := testutil.NewCloudflareTunnelFake(t)
+	tf.SeedTunnel("tun-1", "nvoi-myapp-prod", "tok")
+	tf.Register("dispatch-resources-tunnel-cf")
+
+	groups, err := app.Resources(context.Background(), app.ResourcesRequest{
+		Infra:  app.ProviderRef{Name: cluster.Provider, Creds: cluster.Credentials},
+		Tunnel: app.ProviderRef{Name: "dispatch-resources-tunnel-cf", Creds: map[string]string{"api_token": "x", "account_id": "y"}},
+	})
+	if err != nil {
+		t.Fatalf("Resources: %v", err)
+	}
+
+	var found bool
+	var names []string
+	for _, g := range groups {
+		names = append(names, g.Name)
+		if g.Name == "Cloudflare Tunnels" {
+			found = true
+			if len(g.Rows) != 1 || g.Rows[0][1] != "nvoi-myapp-prod" {
+				t.Fatalf("tunnel group rows = %v, want one row for nvoi-myapp-prod", g.Rows)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("tunnel group missing from resources output; got groups=%v", names)
+	}
+}
+
+// TestDispatch_Resources_HardFailsOnProviderError locks the error
+// semantics: a failing secondary provider (DNS / Storage / Tunnel) must
+// surface as an error from Resources, not be silently swallowed. The
+// pre-split code swallowed DNS/Storage errors — diagnostic regressions
+// hid behind empty tables.
+func TestDispatch_Resources_HardFailsOnProviderError(t *testing.T) {
+	_, err := app.Resources(context.Background(), app.ResourcesRequest{
+		Tunnel: app.ProviderRef{Name: "not-a-registered-tunnel"},
+	})
+	if err == nil {
+		t.Fatal("expected error when tunnel provider resolves fail; got nil")
+	}
 }
 
 // TestDispatch_SSH_NoWrites locks: `nvoi ssh` triggers NodeShell via

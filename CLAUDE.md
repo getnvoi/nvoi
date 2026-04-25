@@ -2,7 +2,7 @@
 
 ## What nvoi is
 
-The foundational engine for reconciling cloud infrastructure + Kubernetes workloads from a single YAML. `nvoi deploy` converges live state to match the config. `nvoi teardown` nukes the provider side. `nvoi describe` reads the cluster live. Packages, databases, build pipelines and anything product-shaped live in an upper layer that consumes this engine — explicitly not part of core.
+The foundational engine for reconciling cloud infrastructure + Kubernetes workloads from a single YAML. `nvoi deploy` converges live state to match the config. `nvoi teardown` nukes the provider side. `nvoi describe` reads the cluster live. Packages, build pipelines and other product-layer concerns stay outside core; database lifecycle is the explicit exception and lands in core via the `databases:` provider surface.
 
 ## Philosophy
 
@@ -10,7 +10,7 @@ The foundational engine for reconciling cloud infrastructure + Kubernetes worklo
 - **No state files.** Infrastructure is the source of truth. No manifest, no local cache.
 - **Naming is the lookup key.** `nvoi-{app}-{env}-{resource}`. Deterministic, no UUIDs — the naming convention finds everything.
 - **Reconcile vs teardown.** Reconcile converges on a diff. Teardown is a hard nuke of external provider resources; k8s dies with the servers. Volumes and storage preserved by default (`--delete-volumes` / `--delete-storage` to nuke).
-- **Two-layer core.** Layer 1: provider infra (servers, firewall, volumes, DNS, buckets). Layer 2: k8s manifests (services, crons, ingress, secrets). Bound by deterministic naming. Nothing else.
+- **Two-layer core.** Layer 1: provider infra (servers, firewall, volumes, DNS, buckets, databases). Layer 2: k8s manifests (services, crons, ingress, secrets). Bound by deterministic naming.
 - **InfraProvider owns its convergence — split contract: Connect (read-only) vs Bootstrap (writes).** Every infra backend (Hetzner / AWS / Scaleway today, Daytona / managed-k8s tomorrow) implements one interface (`pkg/provider/infra.go::InfraProvider`). `reconcile.Deploy` calls `infra.Bootstrap` (drift reconciled, missing resources created). Every other CLI command (`logs`, `exec`, `describe`, `cron run`, `resources`, `ssh`) routes through `Cluster.Kube` / `Cluster.SSH` to `infra.Connect` / `infra.NodeShell` — read-only attach, no provider mutations. Reconcile never branches on provider name.
 - **SSH transport + typed kube client.** When the provider has a host shell (every IaaS), it returns one via `infra.NodeShell` — cached on `Cluster.NodeShell`. The kube client `infra.Bootstrap` (or `infra.Connect`) returns is cached on `Cluster.MasterKube`. Both shared across every reconcile step.
 - **Credentials flow through one `CredentialSource`.** Default `EnvSource` reads `os.Getenv`. When `providers.secrets` is set to `doppler | awssm | infisical`, source switches to `SecretsSource` and every credential (infra, DNS, storage, SSH key, service `$VAR`) fetches from the backend's direct API — no shell-outs.
@@ -76,6 +76,8 @@ providers:
   storage: cloudflare       # cloudflare | aws | scaleway
   secrets: infisical        # optional — doppler | awssm | infisical (see Credential resolution)
   tunnel: cloudflare        # optional — cloudflare | ngrok (see Tunnel ingress)
+  ci: github                # optional — github (only consumed by `nvoi ci init`; see CI onboarding)
+  build: local              # optional — local (default) | ssh | daytona
 
 servers:
   master:
@@ -103,12 +105,27 @@ registry:                   # private container-registry pull creds (optional)
 storage:
   assets: {}
 
+databases:
+  app:
+    engine: postgres
+    version: "16"
+    server: db-master         # selfhosted: dedicated worker, never master
+    size: 20
+    credentials:              # required for selfhosted, rejected for SaaS
+      user: $POSTGRES_APP_USER
+      password: $POSTGRES_APP_PASSWORD
+      database: myapp
+    backup:                   # optional — requires providers.storage
+      schedule: "0 3 * * *"
+      retention: 14           # days applied via BucketProvider.SetLifecycle
+
 services:
   api:
     image: ghcr.io/myorg/api:v1
     build: ./services/api   # bool | string | {context, dockerfile} — requires registry: entry for the image's host
     port: 8080
     secrets: [JWT_SECRET, ENCRYPTION_KEY]
+    databases: [app]        # injects DATABASE_URL_APP
     server: master          # nodeSelector
     # servers: [worker-1, worker-2]  # nodeAffinity + topologySpread
 
@@ -129,10 +146,12 @@ domains:
 - `app` and `env` required; `providers.infra` required (the legacy `providers.compute` key was removed in #47 — use `providers.infra`).
 - At least one server, exactly one master, all have type/region/role. `disk` optional (creation-only, not resizable). Hetzner + `disk` = hard error (fixed per server type).
 - Volumes: size > 0, server exists. `server` / `servers` mutually exclusive. Multiple servers + volume = error.
+- Databases: `engine` required and must be a registered database provider. Selfhosted engines require `credentials:` (with `user` / `password` / `database`) plus `server` / `size`; SaaS engines reject `credentials:` (Neon / PlanetScale manage credentials provider-side) and `server` / `size`. Any `databases.<name>.backup` set requires `providers.storage` — nvoi provisions the backup bucket implicitly per-database (no `backup.storage:` field to wire up; see **Database backups**).
 - Services/crons: `image` required (unless `build:`), referenced `storage`/`volumes` exist. Volume mounts `name:/path`, volume must be on the same server as the workload.
 - Web-facing services (with domains): replicas omitted → 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid.
 - `services.X.build:` requires a `registry:` block AND the image's host must appear as a key. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag.
 - `providers.tunnel` — optional. When set: `providers.dns` required, at least one `domains:` entry required. Valid values: `cloudflare | ngrok`. Credentials validated at startup.
+- `providers.ci` — optional. When set, must be a registered CI provider (today: `github`). Pure metadata consumed ONLY by `nvoi ci init`; `reconcile.Deploy` never reads it. Unknown name = hard validate error.
 
 ## Private registries + local builds
 
@@ -152,6 +171,37 @@ Two independent concerns that compose:
 **Deploy hash tag + label:** `dc.Cluster.DeployHash = YYYYMMDD-HHMMSS` (UTC). User tag preserved and suffixed with the hash (`:v2` → `:v2-<hash>`); no user tag → `:<hash>`. Same hash stamped as `nvoi/deploy-hash: <hash>` on workload metadata AND pod-template metadata (NEVER selectors). Every deploy produces a new `image:` string so rolling updates always trigger without a `:latest` foot-gun.
 
 Chmod / Dockerfile hygiene is the user's responsibility — nvoi does not mutate the build context. Use BuildKit `COPY --chmod=0755` or `RUN chmod +x` inside the Dockerfile.
+
+## Database backups
+
+Every `DatabaseProvider` backs up the same way: a gzipped logical dump lands in an object-store bucket provisioned implicitly per-database. **Pull mechanics vary by engine; put mechanics are identical.**
+
+| Engine | Pull | Put |
+|---|---|---|
+| `postgres` selfhosted | `pg_dump` against the in-cluster Service | s3 PutObject |
+| `mysql` selfhosted | `mysqldump` against the in-cluster Service | s3 PutObject |
+| `neon` | `pg_dump` against `{branch.host}:5432` (external TLS) | s3 PutObject |
+| `planetscale` | `mysqldump` against `{db}.{org}.psdb.cloud:3306` (external TLS) | s3 PutObject |
+
+**Bucket:** `nvoi-{app}-{env}-db-{name}-backups` — one bucket per database, prefix-free layout. Name derivation lives in `pkg/utils/naming.go::Names.KubeDatabaseBackupBucket`. Provisioned on `providers.storage` by `internal/reconcile/databases.go::ensureDatabaseBackupBucket` with the retention policy applied via `BucketProvider.SetLifecycle(name, retention)` once per reconcile.
+
+**Image:** `docker.io/nvoi/backup:<cli-version>` — public Docker Hub repo, built from `cmd/backup/Dockerfile`, published on every `v*` tag by `.github/workflows/release.yml`. The CLI binary bakes its version into `pkg/utils.Version` at build time (`-ldflags -X`), and `provider.BackupImage()` returns the matching tag — binary and image stay in lockstep.
+
+**Entrypoint contract** (`cmd/backup/main.go`):
+
+- `ENGINE` — postgres | mysql | neon | planetscale
+- `DB_URL` — DSN, sourced from the credentials Secret's `url` key via envFrom prefix `DB_`
+- `BUCKET_ENDPOINT` / `BUCKET_NAME` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` — from the `-backup-creds` Secret
+
+The binary picks the dump tool, pipes stdout through gzip into `/tmp/backup.sql.gz`, stats for size, and `s3.PutStream`s with `UNSIGNED-PAYLOAD` SigV4 (avoids hashing the full body — flat memory for large dumps). Key: `<YYYYMMDDTHHMMSSZ>.sql.gz`. Exit non-zero on failure so the k8s Job records Failed and retries per `BackoffLimit`.
+
+**`BackupNow`:** every provider's `BackupNow` kicks a one-shot Job from the scheduled CronJob's template via `kc.CreateJobFromCronJob` — the CronJob IS the source of truth, so scheduled and manual backups run identical code.
+
+**`ListBackups` / `DownloadBackup`:** shared helpers in `pkg/provider/database_backups.go` that walk the bucket directly — engine-agnostic, one implementation across postgres/neon/planetscale.
+
+**Teardown:** `--delete-databases` empties + deletes each backup bucket after `DatabaseProvider.Delete`. Ordering matters — the bucket delete must not race the provider-side database delete.
+
+SaaS-native snapshots (Neon branches, PlanetScale branches) are no longer the backup of record. The trade-off is intentional: zero-cost PITR via branches fragments list/download across providers; gzipped-dumps-in-a-bucket keeps the surface uniform. Operators who want branches still have the Neon/PlanetScale UIs.
 
 ## Architecture
 
@@ -242,6 +292,8 @@ SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guida
 | Storage | `providers.storage` | `BucketProvider` | cloudflare (R2), aws (S3), scaleway |
 | Secrets | `providers.secrets` | `SecretsProvider` | doppler, awssm, infisical |
 | Tunnel | `providers.tunnel` | `TunnelProvider` | cloudflare, ngrok |
+| Build | `providers.build` | `BuildProvider` | local (default); ssh #56-B, daytona #56-C |
+| CI | `providers.ci` | `CIProvider` | github (consumed by `nvoi ci init` only) |
 
 **InfraProvider contract** (`pkg/provider/infra.go`): every backend yields a `*kube.Client` via `Bootstrap` (write — converges drift) or `Connect` (read-only — attach to existing infra). Reconcile branches on none of: provider name, IngressBinding type, NodeShell-or-not, ConsumesBlocks. Adding a new backend = implementing the interface; zero reconcile changes.
 
@@ -297,6 +349,34 @@ The working tree frequently has uncommitted changes — that's normal. The on-di
 - **Local builds are optional and opt-in per service.** `PreflightBuildx` fires once so missing buildx surfaces with an actionable hint. Kamal-style auth via the real `~/.docker/config.json`. Runs PRE-infra via `BuildRunner`.
 - **Firewall orphan sweep deferred until after `ServersRemoveOrphans`.** `Firewall()` reconciles the desired per-role set early so new servers get rules before workloads land. `FirewallRemoveOrphans()` runs later because Hetzner rejects `DeleteFirewall` while a server is still attached — `DeleteServer`'s contract detaches first. `ensureFirewall` never resets rules.
 - **Root disk size is creation-only.** `disk` applies at `EnsureServer`. Changing it on an existing server has no effect — resize requires recreation. Hetzner rejects `disk` at config time (fixed per server type).
+
+## CI onboarding (`nvoi ci init`)
+
+`providers.ci` is **opt-in, non-custody SaaS-mode onboarding**. Never consumed by `reconcile.Deploy` — the field is pure metadata read only by `nvoi ci init`. A config with `providers.ci: github` still deploys identically from the laptop; the only new capability is porting every credential into the CI provider's secret store and committing a deploy workflow so `git push` becomes the deploy trigger.
+
+### Flow
+
+`nvoi ci init` (in `cmd/cli/ci.go::runCIInit`):
+
+1. `ValidateConfig` — same gate as `deploy`. `providers.ci` typo caught here.
+2. `provider.ResolveCI(ciName, ciCreds)` + `ValidateCredentials(ctx)` — fail fast before any mutation. `ciCreds["repo"]` auto-inferred from `git remote get-url origin` when unset.
+3. `collectCISecrets(cfg, source)` walks every source the runner will need:
+   - Each declared provider's schema fields (infra/dns/storage/build/tunnel).
+   - Secrets-backend bootstrap env (the one escape hatch that stays env-native — the backend can't authenticate to itself).
+   - `SSH_PRIVATE_KEY` via the same `resolveSSHKey` the laptop uses — load-bearing. Hard error if empty; the runner can't dial the master without it.
+   - `cfg.Secrets` + service/cron `secrets:` refs — bare `FOO` OR RHS `$VAR` of `ALIAS=$BAR`. The LHS (`ALIAS`) is the service-visible env name and must NOT be ported — the runner resolves `$BAR`.
+   - Registry username / password `$VAR` refs.
+4. `ciProv.SyncSecrets(ctx, secrets)` — uploads every collected secret (libsodium sealed-box via curve25519 on the GitHub path).
+5. `ciProv.RenderWorkflow(...)` — deterministic `.github/workflows/nvoi.yml` with sorted `secretEnv` (byte-identical across re-runs when the set is unchanged → the Contents API diff stays quiet).
+6. `ciProv.CommitFiles(ctx, files, msg)` — direct push to the default branch when it accepts direct pushes; otherwise feature branch (`nvoi/ci-init`) + PR. Protection detection: rulesets first, then classic protection, with 403-on-list treated as protected and 422 "repository rule violations" as the inline fallback trigger. Idempotent re-runs reuse the existing PR.
+
+### Parser sharing
+
+`cmd/cli/ci.go` and `internal/reconcile/envvars.go` both enumerate `$VAR` references — `cmd/` to know which env vars to port into the CI secret store, `reconcile` to resolve them at deploy time on the runner. Diverging rules (cmd thinks `${FOO_BAR}` is a var and reconcile doesn't, or vice versa) would be a silent source of wrong behavior between the laptop and the runner. Both paths share `pkg/utils/envvars.go` (`HasVarRef` / `ExtractVarRefs` / `IsVarStart` / `IsVarChar`) and `kube.ParseSecretRef` — one definition, one source of truth.
+
+### Composition
+
+Every `(build, ci)` pair composes freely — no coupling. `providers.build: ssh` + `providers.ci: github` is the remote-builder-on-CI path; `providers.build: local` + `providers.ci: github` keeps the build on the runner. Validator enforces the two independently.
 
 ## Tunnel ingress
 

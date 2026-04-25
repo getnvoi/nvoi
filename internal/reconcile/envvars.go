@@ -5,29 +5,24 @@ import (
 	"strings"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// envRefPattern matches $VAR or ${VAR} where VAR is a valid env var name.
-// Returns false for things like $100 (digit after $).
-func hasVarRef(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '$' && i+1 < len(s) {
-			next := s[i+1]
-			if next == '{' || isVarStart(next) {
-				return true
-			}
-		}
-	}
-	return false
-}
+// hasVarRef is a thin alias over utils.HasVarRef — kept for readability
+// in the reconcile call sites. Parsing rules live in pkg/utils so
+// cmd/cli/ci.go (which also needs to enumerate $VAR references) shares
+// the same definition of what counts as a reference.
+func hasVarRef(s string) bool { return utils.HasVarRef(s) }
 
-func isVarStart(b byte) bool { return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || b == '_' }
-func isVarChar(b byte) bool  { return isVarStart(b) || (b >= '0' && b <= '9') }
+// extractVarRefs is a thin alias over utils.ExtractVarRefs. Same
+// rationale as hasVarRef — reconcile-side callers keep the short name,
+// the parsing itself lives in the one place.
+func extractVarRefs(s string) []string { return utils.ExtractVarRefs(s) }
 
 // resolveRef replaces $VAR and ${VAR} references in val with values from sources.
 // No $ → returns val unchanged. Unknown $VAR → error.
 func resolveRef(val string, sources map[string]string) (string, error) {
-	if !hasVarRef(val) {
+	if !utils.HasVarRef(val) {
 		return val, nil
 	}
 
@@ -58,9 +53,9 @@ func resolveRef(val string, sources map[string]string) (string, error) {
 		}
 
 		// $VAR form — VAR must start with letter or underscore
-		if isVarStart(next) {
+		if utils.IsVarStart(next) {
 			j := i + 2
-			for j < len(val) && isVarChar(val[j]) {
+			for j < len(val) && utils.IsVarChar(val[j]) {
 				j++
 			}
 			varName := val[i+1 : j]
@@ -78,37 +73,6 @@ func resolveRef(val string, sources map[string]string) (string, error) {
 		i++
 	}
 	return b.String(), nil
-}
-
-// extractVarRefs returns all $VAR and ${VAR} names referenced in s.
-func extractVarRefs(s string) []string {
-	var refs []string
-	i := 0
-	for i < len(s) {
-		if s[i] != '$' || i+1 >= len(s) {
-			i++
-			continue
-		}
-		next := s[i+1]
-		if next == '{' {
-			end := strings.IndexByte(s[i+2:], '}')
-			if end < 0 {
-				break
-			}
-			refs = append(refs, s[i+2:i+2+end])
-			i = i + 2 + end + 1
-		} else if isVarStart(next) {
-			j := i + 2
-			for j < len(s) && isVarChar(s[j]) {
-				j++
-			}
-			refs = append(refs, s[i+1:j])
-			i = j
-		} else {
-			i++
-		}
-	}
-	return refs
 }
 
 // resolveEntry parses a KEY=VALUE or KEY entry and resolves $VAR references.

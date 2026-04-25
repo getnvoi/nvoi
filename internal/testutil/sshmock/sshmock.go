@@ -30,7 +30,11 @@ type MockSSH struct {
 	Prefixes []MockPrefix          // prefix matches, checked in order
 	Uploads  []MockUpload          // recorded uploads
 	Calls    []string              // recorded Run commands
-	Closed   bool
+	// Stdins holds the payload captured from every RunWithStdin call, keyed
+	// by the command string. Used by SSH BuildProvider tests to assert that
+	// env + nvoi.yaml were piped correctly in a single invocation.
+	Stdins map[string][]byte
+	Closed bool
 }
 
 // MockResult is a canned response for an SSH command.
@@ -76,6 +80,31 @@ func (m *MockSSH) Run(_ context.Context, cmd string) ([]byte, error) {
 }
 
 func (m *MockSSH) RunStream(_ context.Context, cmd string, stdout, stderr io.Writer) error {
+	out, err := m.Run(context.Background(), cmd)
+	if err != nil {
+		return err
+	}
+	if stdout != nil && len(out) > 0 {
+		stdout.Write(out)
+	}
+	return nil
+}
+
+// RunWithStdin records the stdin payload and otherwise behaves exactly like
+// RunStream — the canned command response flows to stdout, match rules are
+// the same. Tests assert on m.Stdins[cmd] to verify env/config piping.
+func (m *MockSSH) RunWithStdin(_ context.Context, cmd string, stdin io.Reader, stdout, stderr io.Writer) error {
+	var payload []byte
+	if stdin != nil {
+		payload, _ = io.ReadAll(stdin)
+	}
+	m.mu.Lock()
+	if m.Stdins == nil {
+		m.Stdins = map[string][]byte{}
+	}
+	m.Stdins[cmd] = payload
+	m.mu.Unlock()
+
 	out, err := m.Run(context.Background(), cmd)
 	if err != nil {
 		return err

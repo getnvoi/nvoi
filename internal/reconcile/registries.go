@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Registries reconciles the cluster's image-pull credentials.
@@ -51,7 +52,7 @@ func Registries(ctx context.Context, dc *config.DeployContext, cfg *config.AppCo
 		return nil
 	}
 
-	out.Command("registry", "set", fmt.Sprintf("%d host(s)", len(cfg.Registry)))
+	out.Command("registry", "set", utils.Pluralize(len(cfg.Registry), "host", ""))
 
 	resolved, err := resolveRegistries(dc, cfg)
 	if err != nil {
@@ -62,7 +63,7 @@ func Registries(ctx context.Context, dc *config.DeployContext, cfg *config.AppCo
 	if err != nil {
 		return fmt.Errorf("build pull secret: %w", err)
 	}
-	if err := kc.Apply(ctx, ns, secret); err != nil {
+	if err := kc.ApplyOwned(ctx, ns, utils.OwnerRegistries, secret); err != nil {
 		return fmt.Errorf("apply pull secret: %w", err)
 	}
 	out.Success(fmt.Sprintf("pull secret %s/%s applied", ns, kube.PullSecretName))

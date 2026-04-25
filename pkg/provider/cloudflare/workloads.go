@@ -6,6 +6,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 const (
@@ -46,11 +48,11 @@ func buildDeployment(labels map[string]string) *appsv1.Deployment {
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app.kubernetes.io/name": AgentName},
+				MatchLabels: map[string]string{utils.LabelAppName: AgentName},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{"app.kubernetes.io/name": AgentName},
+					Labels: map[string]string{utils.LabelAppName: AgentName},
 				},
 				Spec: corev1.PodSpec{
 					Affinity: &corev1.Affinity{
@@ -60,7 +62,7 @@ func buildDeployment(labels map[string]string) *appsv1.Deployment {
 									Weight: 100,
 									Preference: corev1.NodeSelectorTerm{
 										MatchExpressions: []corev1.NodeSelectorRequirement{
-											{Key: "nvoi-role", Operator: corev1.NodeSelectorOpIn, Values: []string{"master"}},
+											{Key: utils.LabelNvoiRole, Operator: corev1.NodeSelectorOpIn, Values: []string{utils.RoleMaster}},
 										},
 									},
 								},

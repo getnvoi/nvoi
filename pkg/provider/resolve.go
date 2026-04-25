@@ -100,40 +100,30 @@ func (s CredentialSchema) Validate(creds map[string]string) error {
 //
 // ComputeProvider / RegisterCompute / ResolveCompute were deleted in C10
 // (refactor #47). InfraProvider replaces ComputeProvider; the registry
-// for it lives in infra.go.
-
-type bucketEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) BucketProvider
-}
-
-type dnsEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) DNSProvider
-}
-
-type secretsEntry struct {
-	schema  CredentialSchema
-	factory func(creds map[string]string) SecretsProvider
-}
+// for it lives in infra.go. Every provider-kind registry — including the
+// three in this file — is a thin facade over the generic backing store
+// in registry.go.
 
 var (
-	dnsProviders     = map[string]dnsEntry{}
-	bucketProviders  = map[string]bucketEntry{}
-	secretsProviders = map[string]secretsEntry{}
+	dnsRegistry     = newRegistry[DNSProvider]("DNS")
+	bucketRegistry  = newRegistry[BucketProvider]("storage")
+	secretsRegistry = newRegistry[SecretsProvider]("secrets")
 )
 
 func RegisterDNS(name string, schema CredentialSchema, factory func(creds map[string]string) DNSProvider) {
-	dnsProviders[name] = dnsEntry{schema: schema, factory: factory}
+	dnsRegistry.register(name, schema, factory)
 }
 func RegisterBucket(name string, schema CredentialSchema, factory func(creds map[string]string) BucketProvider) {
-	bucketProviders[name] = bucketEntry{schema: schema, factory: factory}
+	bucketRegistry.register(name, schema, factory)
 }
 func RegisterSecrets(name string, schema CredentialSchema, factory func(creds map[string]string) SecretsProvider) {
-	secretsProviders[name] = secretsEntry{schema: schema, factory: factory}
+	secretsRegistry.register(name, schema, factory)
 }
 
 // GetSchema returns the credential schema for any provider kind + name.
+// The cross-kind dispatcher — used by cmd/cli/context.go and cmd/cli/ci.go
+// to enumerate every configured provider's schema from a YAML kind string.
+// Go generics can't dispatch on a runtime string, so this stays a switch.
 func GetSchema(kind, name string) (CredentialSchema, error) {
 	switch kind {
 	case "infra":
@@ -146,55 +136,35 @@ func GetSchema(kind, name string) (CredentialSchema, error) {
 		return GetSecretsSchema(name)
 	case "tunnel":
 		return GetTunnelSchema(name)
+	case "build":
+		return GetBuildSchema(name)
+	case "ci":
+		return GetCISchema(name)
+	case "database":
+		return GetDatabaseSchema(name)
 	default:
 		return CredentialSchema{}, fmt.Errorf("unknown provider kind %q", kind)
 	}
 }
 
 func GetDNSSchema(name string) (CredentialSchema, error) {
-	entry, ok := dnsProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported DNS provider: %q", name)
-	}
-	return entry.schema, nil
+	return dnsRegistry.getSchema(name)
 }
 
 func ResolveDNS(name string, creds map[string]string) (DNSProvider, error) {
-	entry, ok := dnsProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported DNS provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
+	return dnsRegistry.resolve(name, creds)
 }
 
 func GetBucketSchema(name string) (CredentialSchema, error) {
-	entry, ok := bucketProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported storage provider: %q", name)
-	}
-	return entry.schema, nil
+	return bucketRegistry.getSchema(name)
 }
 
 func ResolveBucket(name string, creds map[string]string) (BucketProvider, error) {
-	entry, ok := bucketProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported storage provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
+	return bucketRegistry.resolve(name, creds)
 }
 
 func GetSecretsSchema(name string) (CredentialSchema, error) {
-	entry, ok := secretsProviders[name]
-	if !ok {
-		return CredentialSchema{}, fmt.Errorf("unsupported secrets provider: %q", name)
-	}
-	return entry.schema, nil
+	return secretsRegistry.getSchema(name)
 }
 
 // ResolveSecrets creates a secrets provider with pre-resolved credentials.
@@ -202,12 +172,5 @@ func GetSecretsSchema(name string) (CredentialSchema, error) {
 // validated before factory construction so a misconfigured provider
 // fails loudly at startup instead of deferring the error mid-deploy.
 func ResolveSecrets(name string, creds map[string]string) (SecretsProvider, error) {
-	entry, ok := secretsProviders[name]
-	if !ok {
-		return nil, fmt.Errorf("unsupported secrets provider: %q", name)
-	}
-	if err := entry.schema.Validate(creds); err != nil {
-		return nil, err
-	}
-	return entry.factory(creds), nil
+	return secretsRegistry.resolve(name, creds)
 }

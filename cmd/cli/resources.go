@@ -19,6 +19,7 @@ func newResourcesCmd(rt *runtime) *cobra.Command {
 				Infra:   app.ProviderRef{Name: rt.dc.Cluster.Provider, Creds: rt.dc.Cluster.Credentials},
 				DNS:     rt.dc.DNS,
 				Storage: rt.dc.Storage,
+				Tunnel:  rt.dc.Tunnel,
 			})
 			if err != nil {
 				return err

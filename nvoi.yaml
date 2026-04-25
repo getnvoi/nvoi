@@ -5,6 +5,7 @@ providers:
   infra: hetzner
   dns: cloudflare
   tunnel: cloudflare
+  storage: cloudflare      # required for databases.*.backup — R2 bucket provisioned implicitly
   secrets: infisical
 
 servers:
@@ -12,36 +13,43 @@ servers:
     type: cax11
     region: nbg1
     role: master
+  db-master:
+    type: cax11                    # bumped: headroom for ZFS pool + DB working set
+    region: nbg1
+    role: worker
 
-volumes:
-  pgdata:
+# No volumes block for the database — #68 mandates ZFS-LocalPV on a
+# dedicated node. The postgres provider installs zfsutils-linux and
+# creates a file-backed zpool on db-master during PrepareNode, and the
+# OpenEBS ZFS-LocalPV CSI driver (applied cluster-side via master SSH)
+# carves per-PVC datasets. `size:` below is a hard ZFS quota — writes
+# past it get ENOSPC to the pod, node stays healthy. Durability =
+# backups below. Moving the DB to a different node = `nvoi database
+# migrate main` (see #67).
+
+databases:
+  main:
+    engine: postgres
+    version: "17"
+    server: db-master              # dedicated — #68 forbids DB-on-master
     size: 20
-    server: master
+    credentials:
+      user: $MAIN_POSTGRES_USER
+      password: $MAIN_POSTGRES_PASSWORD
+      database: $MAIN_POSTGRES_DB
+    backup:
+      schedule: "0 3 * * *"        # daily at 03:00 UTC
+      retention: 14                # days; applied as R2 lifecycle
 
 services:
-  postgres:
-    image: postgres:17
-    port: 5432
-    server: master
-    replicas: 1
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    env:
-      - PGDATA=/var/lib/postgresql/data/pgdata
-    secrets:
-      - POSTGRES_USER=$MAIN_POSTGRES_USER
-      - POSTGRES_PASSWORD=$MAIN_POSTGRES_PASSWORD
-      - POSTGRES_DB=$MAIN_POSTGRES_DB
-
   api:
     image: deemx/nvoi-api         # repo-only — host inferred from registry:, tag auto-appended per deploy
     build:
       context: ./
       dockerfile: ./cmd/api/Dockerfile
     port: 8080
-    depends_on: [postgres]
-    secrets:
-      - DATABASE_URL=postgresql://$MAIN_POSTGRES_USER:$MAIN_POSTGRES_PASSWORD@postgres:5432/$MAIN_POSTGRES_DB?sslmode=disable
+    databases:
+      - DATABASE_URL=main         # alias DATABASE_URL_MAIN → DATABASE_URL (cmd/api reads bare DATABASE_URL)
 
 registry:
   docker.io:

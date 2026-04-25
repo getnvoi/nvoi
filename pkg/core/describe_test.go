@@ -2,6 +2,10 @@ package core
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +17,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -251,91 +256,6 @@ func TestDescribeCrons_Idle(t *testing.T) {
 	}
 }
 
-func TestDescribeTunnelAgents(t *testing.T) {
-	ns := "nvoi-myapp-prod"
-	creation := metav1.NewTime(time.Now().Add(-time.Hour))
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "cloudflared-abc",
-			Namespace:         ns,
-			Labels:            map[string]string{"app.kubernetes.io/name": "cloudflared"},
-			CreationTimestamp: creation,
-		},
-		Spec: corev1.PodSpec{NodeName: "nvoi-myapp-prod-master"},
-		Status: corev1.PodStatus{
-			Phase: corev1.PodRunning,
-			ContainerStatuses: []corev1.ContainerStatus{
-				{RestartCount: 2},
-			},
-		},
-	}
-	kc := newKC(pod)
-
-	agents, err := describeTunnelAgents(context.Background(), kc, ns)
-	if err != nil {
-		t.Fatalf("describeTunnelAgents: %v", err)
-	}
-	if len(agents) != 1 {
-		t.Fatalf("len = %d, want 1", len(agents))
-	}
-	a := agents[0]
-	if a.Name != "cloudflared-abc" {
-		t.Errorf("Name = %q", a.Name)
-	}
-	if a.Status != "Running" {
-		t.Errorf("Status = %q", a.Status)
-	}
-	if a.Restarts != 2 {
-		t.Errorf("Restarts = %d", a.Restarts)
-	}
-	if a.Node != "nvoi-myapp-prod-master" {
-		t.Errorf("Node = %q", a.Node)
-	}
-}
-
-func TestDescribeTunnelAgents_Empty(t *testing.T) {
-	kc := newKC()
-	agents, err := describeTunnelAgents(context.Background(), kc, "nvoi-myapp-prod")
-	if err != nil {
-		t.Fatalf("describeTunnelAgents empty: %v", err)
-	}
-	if len(agents) != 0 {
-		t.Errorf("expected 0 agents, got %d", len(agents))
-	}
-}
-
-func TestDescribeTunnelAgents_WaitingPodStatus(t *testing.T) {
-	ns := "nvoi-myapp-prod"
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cloudflared-pending",
-			Namespace: ns,
-			Labels:    map[string]string{"app.kubernetes.io/name": "cloudflared"},
-		},
-		Status: corev1.PodStatus{
-			Phase: corev1.PodPending,
-			ContainerStatuses: []corev1.ContainerStatus{
-				{State: corev1.ContainerState{
-					Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"},
-				}},
-			},
-		},
-	}
-	kc := newKC(pod)
-
-	agents, err := describeTunnelAgents(context.Background(), kc, ns)
-	if err != nil {
-		t.Fatalf("describeTunnelAgents: %v", err)
-	}
-	if len(agents) != 1 {
-		t.Fatalf("len = %d, want 1", len(agents))
-	}
-	// Waiting reason takes priority over phase.
-	if agents[0].Status != "ImagePullBackOff" {
-		t.Errorf("Status = %q, want ImagePullBackOff", agents[0].Status)
-	}
-}
-
 func TestDescribeWorkloads_FiltersUnmanaged(t *testing.T) {
 	// An unlabeled deployment must not show up — only nvoi-managed workloads.
 	unlabeled := &appsv1.Deployment{
@@ -359,5 +279,456 @@ func TestDescribeWorkloads_FiltersUnmanaged(t *testing.T) {
 	workloads := describeWorkloads(context.Background(), kc, "ns")
 	if len(workloads) != 1 || workloads[0].Name != "web" {
 		t.Errorf("unmanaged not filtered: %+v", workloads)
+	}
+}
+
+// ── DATABASES section (probe-driven, parallel) ──────────────────────────────
+
+// fakeDBProvider is a minimal DatabaseProvider for the describe tests.
+// It satisfies the interface only to the extent needed: ExecSQL is the
+// one method describeDatabases calls. Everything else returns zero values.
+type fakeDBProvider struct {
+	execErr error
+	execCnt int
+}
+
+func (f *fakeDBProvider) ValidateCredentials(context.Context) error { return nil }
+func (f *fakeDBProvider) EnsureCredentials(context.Context, *kube.Client, provider.DatabaseRequest) (provider.DatabaseCredentials, error) {
+	return provider.DatabaseCredentials{}, nil
+}
+func (f *fakeDBProvider) Reconcile(context.Context, provider.DatabaseRequest) (*provider.DatabasePlan, error) {
+	return nil, nil
+}
+func (f *fakeDBProvider) Delete(context.Context, provider.DatabaseRequest) error { return nil }
+func (f *fakeDBProvider) ExecSQL(_ context.Context, _ provider.DatabaseRequest, _ string) (*provider.SQLResult, error) {
+	f.execCnt++
+	return &provider.SQLResult{}, f.execErr
+}
+func (f *fakeDBProvider) BackupNow(context.Context, provider.DatabaseRequest) (*provider.BackupRef, error) {
+	return nil, nil
+}
+func (f *fakeDBProvider) ListBackups(context.Context, provider.DatabaseRequest) ([]provider.BackupRef, error) {
+	return nil, nil
+}
+func (f *fakeDBProvider) DownloadBackup(context.Context, provider.DatabaseRequest, string, io.Writer) error {
+	return nil
+}
+func (f *fakeDBProvider) Restore(context.Context, provider.DatabaseRequest, string) error {
+	return nil
+}
+func (f *fakeDBProvider) ListResources(context.Context) ([]provider.ResourceGroup, error) {
+	return nil, nil
+}
+func (f *fakeDBProvider) Close() error { return nil }
+
+// TestDescribeDatabases_NotReconciled_NoSecret locks the read-only path
+// for the "deploy hasn't run yet" case: credentials Secret missing →
+// State=Not reconciled, Live=—, no probe call (ExecSQL not invoked).
+func TestDescribeDatabases_NotReconciled_NoSecret(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	fp := &fakeDBProvider{}
+	probe := DatabaseProbe{
+		Name:     "main",
+		Engine:   "postgres",
+		Provider: fp,
+		Request: provider.DatabaseRequest{
+			CredentialsSecretName: "nvoi-myapp-prod-db-main-credentials",
+			PodName:               "nvoi-myapp-prod-db-main-0",
+		},
+	}
+	kc := newKC()
+
+	rows := describeDatabases(context.Background(), kc, ns, []DatabaseProbe{probe})
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	if rows[0].State != "Not reconciled" {
+		t.Errorf("State = %q, want Not reconciled", rows[0].State)
+	}
+	if rows[0].Live != "—" {
+		t.Errorf("Live = %q, want —", rows[0].Live)
+	}
+	if fp.execCnt != 0 {
+		t.Errorf("probe ran on Not reconciled DB (ExecSQL called %d times)", fp.execCnt)
+	}
+}
+
+// TestDescribeDatabases_Selfhosted_Up locks the happy path for postgres:
+// Secret + StatefulSet both present, ExecSQL succeeds → State=Ready 1/1,
+// Live=Up, Endpoint shows the in-cluster Service host:port.
+func TestDescribeDatabases_Selfhosted_Up(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	credsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvoi-myapp-prod-db-main-credentials", Namespace: ns,
+		},
+		Data: map[string][]byte{
+			"url":  []byte("postgres://u:p@nvoi-myapp-prod-db-main:5432/myapp"),
+			"host": []byte("nvoi-myapp-prod-db-main"),
+			"port": []byte("5432"),
+		},
+	}
+	one := int32(1)
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-main", Namespace: ns},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &one},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	kc := newKC(credsSecret, sts)
+	fp := &fakeDBProvider{}
+	probe := DatabaseProbe{
+		Name:     "main",
+		Engine:   "postgres",
+		Provider: fp,
+		Request: provider.DatabaseRequest{
+			CredentialsSecretName: "nvoi-myapp-prod-db-main-credentials",
+			PodName:               "nvoi-myapp-prod-db-main-0",
+		},
+	}
+
+	rows := describeDatabases(context.Background(), kc, ns, []DatabaseProbe{probe})
+	if rows[0].State != "Ready 1/1" {
+		t.Errorf("State = %q, want Ready 1/1", rows[0].State)
+	}
+	if rows[0].Live != "Up" {
+		t.Errorf("Live = %q, want Up", rows[0].Live)
+	}
+	if rows[0].Endpoint != "nvoi-myapp-prod-db-main:5432" {
+		t.Errorf("Endpoint = %q", rows[0].Endpoint)
+	}
+	if fp.execCnt != 1 {
+		t.Errorf("ExecSQL called %d times, want 1", fp.execCnt)
+	}
+}
+
+// TestDescribeDatabases_SaaS_Down locks the SaaS path: no PodName (so
+// no StatefulSet lookup), Secret present → State=Ready, but probe
+// returns an error → Live="Down: <reason>".
+func TestDescribeDatabases_SaaS_Down(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	credsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvoi-myapp-prod-db-events-credentials", Namespace: ns,
+		},
+		Data: map[string][]byte{
+			"url":  []byte("postgres://u:p@ep-foo.us-east-1.aws.neon.tech:5432/events?sslmode=require"),
+			"host": []byte("ep-foo.us-east-1.aws.neon.tech"),
+			"port": []byte("5432"),
+		},
+	}
+	kc := newKC(credsSecret)
+	fp := &fakeDBProvider{execErr: errors.New("connection refused")}
+	probe := DatabaseProbe{
+		Name:     "events",
+		Engine:   "neon",
+		Provider: fp,
+		Request: provider.DatabaseRequest{
+			CredentialsSecretName: "nvoi-myapp-prod-db-events-credentials",
+			// No PodName — SaaS engine.
+		},
+	}
+
+	rows := describeDatabases(context.Background(), kc, ns, []DatabaseProbe{probe})
+	if rows[0].State != "Ready" {
+		t.Errorf("State = %q, want Ready", rows[0].State)
+	}
+	if !strings.Contains(rows[0].Live, "Down") {
+		t.Errorf("Live = %q, want Down: <reason>", rows[0].Live)
+	}
+	if !strings.Contains(rows[0].Live, "connection refused") {
+		t.Errorf("Live = %q, expected to surface 'connection refused'", rows[0].Live)
+	}
+	if rows[0].Engine != "neon" {
+		t.Errorf("Engine = %q, want neon", rows[0].Engine)
+	}
+}
+
+// TestDescribeDatabases_ProbeRunsInParallel locks the parallel-probe
+// contract: with 3 probes that each block 200ms, total wall time is
+// ~200ms (parallel), not ~600ms (sequential). 500ms upper bound gives
+// generous slack for CI variance.
+func TestDescribeDatabases_ProbeRunsInParallel(t *testing.T) {
+	ns := "ns"
+	cs := k8sfake.NewSimpleClientset()
+	for i := 0; i < 3; i++ {
+		_, err := cs.CoreV1().Secrets(ns).Create(context.Background(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("creds-%d", i), Namespace: ns},
+			Data:       map[string][]byte{"url": []byte("postgres://u@host/db")},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	kc := kube.NewForTest(cs)
+
+	probes := make([]DatabaseProbe, 3)
+	for i := range probes {
+		probes[i] = DatabaseProbe{
+			Name:     fmt.Sprintf("db%d", i),
+			Engine:   "neon",
+			Provider: &slowProvider{delay: 200 * time.Millisecond},
+			Request: provider.DatabaseRequest{
+				CredentialsSecretName: fmt.Sprintf("creds-%d", i),
+			},
+		}
+	}
+
+	start := time.Now()
+	describeDatabases(context.Background(), kc, ns, probes)
+	elapsed := time.Since(start)
+
+	// Sequential would be ~600ms. Parallel should be ~200ms. Generous
+	// upper bound for CI noise.
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("probes ran sequentially: %v (parallel would be ~200ms)", elapsed)
+	}
+}
+
+type slowProvider struct {
+	fakeDBProvider
+	delay time.Duration
+}
+
+func (s *slowProvider) ExecSQL(ctx context.Context, _ provider.DatabaseRequest, _ string) (*provider.SQLResult, error) {
+	select {
+	case <-time.After(s.delay):
+		return &provider.SQLResult{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// ── SECRETS section (namespace-wide, owner-classified) ──────────────────────
+
+// TestDescribeSecrets_ListsAllNvoiManaged locks the SECRETS section
+// shape against REAL cluster state — most nvoi Secrets in production
+// carry NO `app.kubernetes.io/managed-by` label because EnsureSecret
+// (the codepath behind workload {X}-secrets and per-DB credentials
+// Secrets) didn't stamp it pre-fix. This fixture mirrors that reality:
+// most Secrets are unlabeled, only the explicitly-labeled ones
+// (registry-auth via BuildPullSecret, tunnel agents) carry the label.
+//
+// describe must find both — it filters by name pattern, not label. A
+// label-only filter would silently hide the bulk of the cluster's
+// nvoi-managed Secrets, which is exactly the bug this test prevents.
+//
+// k8s system Secrets (default-token-*) and operator-created Secrets
+// MUST NOT appear — pattern doesn't match, classifySecretOwner returns
+// "" and the row is dropped.
+//
+// Covers each owner classification:
+//   - service:X (workload secret matching a cfg.Services entry)
+//   - cron:X    (workload secret matching a cfg.Crons entry)
+//   - workload:X (orphan — no cfg match, lingering from a previous deploy)
+//   - database:X       (per-DB credentials Secret)
+//   - database:X:bk    (per-DB backup-creds Secret)
+//   - registry         (kubernetes.io/dockerconfigjson)
+//   - tunnel:cloudflare / tunnel:ngrok (agent auth Secrets)
+func TestDescribeSecrets_ListsAllNvoiManaged(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	mkSecret := func(name string, labels map[string]string, keys ...string) *corev1.Secret {
+		data := map[string][]byte{}
+		for _, k := range keys {
+			data[k] = []byte("x")
+		}
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels:    labels,
+			},
+			Data: data,
+		}
+	}
+	objs := []runtime.Object{
+		// EnsureSecret-created (pre-fix): NO label. describe must still find these.
+		mkSecret("api-secrets", nil, "DATABASE_URL"),
+		mkSecret("backfill-secrets", nil, "API_TOKEN"),
+		mkSecret("orphan-secrets", nil, "OLD_KEY"),
+		mkSecret("nvoi-myapp-prod-db-main-credentials", nil, "url", "user", "password", "host", "port", "database", "sslmode"),
+		mkSecret("nvoi-myapp-prod-db-main-backup-creds", nil, "BUCKET_ENDPOINT", "BUCKET_NAME", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "ENGINE", "DATABASE_URL"),
+		// BuildPullSecret-created: properly labeled.
+		mkSecret("registry-auth", managedLabels(), ".dockerconfigjson"),
+		// Tunnel agent Secret: labeled.
+		mkSecret("cloudflared-token", managedLabels(), "token"),
+		// k8s system Secret: unknown name pattern → dropped.
+		mkSecret("default-token-abc12", nil, "ca.crt", "namespace", "token"),
+		// User-created Secret: unknown name pattern → dropped.
+		mkSecret("user-app-secret", nil, "value"),
+	}
+	kc := newKC(objs...)
+	names, err := utils.NewNames("myapp", "prod")
+	if err != nil {
+		t.Fatalf("NewNames: %v", err)
+	}
+
+	rows := describeSecrets(context.Background(), kc, ns, names,
+		[]string{"api"},      // services in cfg
+		[]string{"backfill"}, // crons in cfg
+	)
+
+	want := map[string]string{
+		"api-secrets":                          "service:api",
+		"backfill-secrets":                     "cron:backfill",
+		"orphan-secrets":                       "workload:orphan",
+		"nvoi-myapp-prod-db-main-credentials":  "database:main",
+		"nvoi-myapp-prod-db-main-backup-creds": "database:main:bk",
+		"registry-auth":                        "registry",
+		"cloudflared-token":                    "tunnel:cloudflare",
+	}
+	if len(rows) != len(want) {
+		var got []string
+		for _, r := range rows {
+			got = append(got, r.Name)
+		}
+		t.Fatalf("rows = %v, want %d", got, len(want))
+	}
+	for _, r := range rows {
+		owner, ok := want[r.Name]
+		if !ok {
+			t.Errorf("unexpected Secret in output: %q", r.Name)
+			continue
+		}
+		if r.Owner != owner {
+			t.Errorf("%s: Owner = %q, want %q", r.Name, r.Owner, owner)
+		}
+		if len(r.Keys) == 0 {
+			t.Errorf("%s: Keys empty, want at least one", r.Name)
+		}
+	}
+
+	// Keys are sorted within each Secret — locks the deterministic
+	// rendering contract.
+	for _, r := range rows {
+		for i := 1; i < len(r.Keys); i++ {
+			if r.Keys[i-1] > r.Keys[i] {
+				t.Errorf("%s: Keys not sorted: %v", r.Name, r.Keys)
+				break
+			}
+		}
+	}
+}
+
+// TestDescribeSecrets_EmptyNamespace covers the common "no nvoi-managed
+// Secrets in the namespace" case (e.g. before first deploy). Should
+// return nil cleanly, no panic, no error.
+func TestDescribeSecrets_EmptyNamespace(t *testing.T) {
+	ns := "nvoi-empty"
+	kc := newKC()
+	names, _ := utils.NewNames("empty", "prod")
+	rows := describeSecrets(context.Background(), kc, ns, names, nil, nil)
+	if rows != nil {
+		t.Errorf("rows = %v, want nil", rows)
+	}
+}
+
+func TestClassifySecretOwner_Patterns(t *testing.T) {
+	base := "nvoi-myapp-prod"
+	services := map[string]bool{"api": true}
+	crons := map[string]bool{"cleanup": true}
+	cases := map[string]string{
+		"api-secrets":                          "service:api",
+		"cleanup-secrets":                      "cron:cleanup",
+		"foo-secrets":                          "workload:foo", // orphan
+		"nvoi-myapp-prod-db-main-credentials":  "database:main",
+		"nvoi-myapp-prod-db-main-backup-creds": "database:main:bk",
+		"registry-auth":                        "registry",
+		"cloudflared-token":                    "tunnel:cloudflare",
+		"ngrok-authtoken":                      "tunnel:ngrok",
+		"some-other-secret":                    "", // unknown — empty owner
+	}
+	for name, want := range cases {
+		if got := classifySecretOwner(name, base, services, crons); got != want {
+			t.Errorf("classifySecretOwner(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestDescribeWorkloads_ExcludesDatabaseOwned locks the WORKLOADS
+// section's scope: USER workloads only. DB StatefulSets carry
+// nvoi/owner=databases and surface in the DATABASES section with
+// engine-aware columns; including them in WORKLOADS would be
+// duplicative noise.
+func TestDescribeWorkloads_ExcludesDatabaseOwned(t *testing.T) {
+	userDeployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "api", Namespace: "ns",
+			Labels: managedLabels(utils.LabelNvoiOwner, utils.OwnerServices),
+		},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "myorg/api"}}},
+			},
+		},
+	}
+	dbStatefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvoi-myapp-prod-db-main", Namespace: "ns",
+			Labels: managedLabels(utils.LabelNvoiOwner, utils.OwnerDatabases),
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "postgres:17"}}},
+			},
+		},
+	}
+	kc := newKC(userDeployment, dbStatefulSet)
+
+	rows := describeWorkloads(context.Background(), kc, "ns")
+	if len(rows) != 1 {
+		t.Fatalf("len = %d (got %+v), want 1 (only the user Deployment)", len(rows), rows)
+	}
+	if rows[0].Name != "api" {
+		t.Errorf("got %q, want api", rows[0].Name)
+	}
+}
+
+// TestDescribeCrons_IncludesDatabaseBackupCronJob locks the inverse:
+// CRONS section keeps DB-owned CronJobs (the daily backup is a real
+// cron the operator wants to see — schedule, status, age). The
+// orphan-sweep is owner-scoped (services / crons can never see
+// databases-owned CronJobs); describe must NOT replicate that
+// scoping or operators lose visibility on their backup schedule.
+func TestDescribeCrons_IncludesDatabaseBackupCronJob(t *testing.T) {
+	userCron := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "cleanup", Namespace: "ns",
+			Labels: managedLabels(utils.LabelNvoiOwner, utils.OwnerCrons),
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule: "0 1 * * *",
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "busybox"}}},
+				}},
+			},
+		},
+	}
+	dbBackupCron := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvoi-myapp-prod-db-main-backup", Namespace: "ns",
+			Labels: managedLabels(utils.LabelNvoiOwner, utils.OwnerDatabases),
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule: "0 3 * * *",
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "docker.io/nvoi/db:v0"}}},
+				}},
+			},
+		},
+	}
+	kc := newKC(userCron, dbBackupCron)
+
+	rows := describeCrons(context.Background(), kc, "ns")
+	if len(rows) != 2 {
+		t.Fatalf("len = %d (got %+v), want 2 (user + db-backup)", len(rows), rows)
+	}
+	names := map[string]bool{}
+	for _, r := range rows {
+		names[r.Name] = true
+	}
+	if !names["cleanup"] || !names["nvoi-myapp-prod-db-main-backup"] {
+		t.Errorf("missing expected cron in describeCrons output: %+v", rows)
 	}
 }

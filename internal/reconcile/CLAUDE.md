@@ -17,7 +17,7 @@ Deploy(ctx, dc, cfg)
   → cfg.Resolve()                           — populate VolumeDef.MountPath, firewall names
   → sync Cluster.Provider from cfg.Providers.Infra (legacy callers)
   → dc.Cluster.DeployHash = now.UTC().Format("20060102-150405")
-  → Build(ctx, dc, cfg)                     — LOCAL docker login/build/push for services.X.build; PRE-infra
+  → BuildImages(ctx, dc, cfg, platform)     — LOCAL docker login/build/push for services.X.build; PRE-infra
   → infra = provider.ResolveInfra(...)      — single provider instance for the whole deploy; defer Close()
   → kc = infra.Bootstrap(ctx, bctx)         — provisions servers + firewall + volumes; returns *kube.Client
   → ns = infra.NodeShell(ctx, bctx)          — optional SSH for `nvoi ssh`; nil for sandbox/managed
@@ -26,8 +26,8 @@ Deploy(ctx, dc, cfg)
   → secretValues = Secrets(ctx, dc, cfg)
   → storageCreds = Storage(ctx, dc, cfg)
   → sources = mergeSources(secretValues, storageCreds)
-  → Services(ctx, dc, cfg, sources)         — kc.ListWorkloadNames for orphan sweep, KnownVolumes from cfg
-  → Crons(ctx, dc, cfg, sources)            — kc.ListCronJobNames for orphan sweep
+  → Services(ctx, dc, cfg, sources)         — kc.SweepOwned(owner=services) for orphan sweep, KnownVolumes from cfg
+  → Crons(ctx, dc, cfg, sources)            — kc.SweepOwned(owner=crons) for orphan sweep
   → infra.TeardownOrphans(ctx, bctx)        — drain orphan servers + sweep orphan firewalls + orphan volume delete
   → IF infra.HasPublicIngress() && len(cfg.Domains) > 0:
        RouteDomains(ctx, dc, cfg, infra, bctx) — dns.RouteTo(domain, infra.IngressBinding(svc))
@@ -45,22 +45,42 @@ Each resource type follows:
 
 ```
 for each desired resource:
-    set(resource)                     ← idempotent (create or update)
+    kc.ApplyOwned(ctx, ns, owner, obj)  ← idempotent (create or update); stamps
+                                          app.kubernetes.io/managed-by=nvoi +
+                                          nvoi/owner=<owner>
 
-if live state exists:
-    for each live resource NOT in desired:
-        delete(resource)              ← orphan removal
+kc.SweepOwned(ctx, ns, owner, kind, desired)  ← lists nvoi/owner=<owner>
+                                                  resources of `kind` in ns,
+                                                  deletes anything not in
+                                                  `desired`
 ```
 
 Some steps split the two halves across the flow (Servers, Firewall) because deletion is blocked until later invariants hold.
 
+**Label discipline.** Every k8s object reconcile creates goes through
+`kc.ApplyOwned`, which stamps `nvoi/owner=<step>` from a closed
+taxonomy: `services` / `crons` / `databases` / `database-branches` /
+`tunnel` / `caddy` / `registries`. The owner label is the single
+discriminator for orphan sweep — `kc.SweepOwned` scopes its listing by
+this label, so each step's sweep can never see another step's
+resources. No exclusions, no special-casing, no `LabelNvoiDatabase`-
+style band-aids. Constants live in `pkg/utils/naming.go`.
+
 ## Step notes
 
-### Build (pre-infra)
+### BuildImages (pre-infra)
 
-`build.go`. Runs before any infra. A build failure aborts the deploy before a server is provisioned. Runs locally — shells out to `docker buildx` on the operator's PATH via `pkg/core/build.go::BuildService` (through the `BuildRunner` interface — `DockerRunner` in prod, fakes in tests).
+`images.go`. Runs before any infra. A build failure aborts the deploy before a server is provisioned.
 
-Single-service builds serialize; multi-service builds run via `BuildParallel`. One `PreflightBuildx` at the top of the pass so missing buildx surfaces once with an install hint instead of opaque per-service flag errors. Passwords flow via `--password-stdin`, never argv. Auth writes to the operator's real `~/.docker/config.json` (Kamal-style; DOCKER_CONFIG isolation breaks plugin discovery and context lookup — don't).
+Named `BuildImages` (not `Build`) to free the word "build" for the outer `BuildProvider` family in `pkg/provider/build.go` — the outer "build" is the substrate a deploy runs on (`local` / `ssh` / `daytona`); this inner step is specifically the per-service dispatch loop invoked by `reconcile.Deploy`. `BuildImages` resolves the selected `BuildProvider` once via `provider.ResolveBuild`, then walks `cfg.Services` in sorted order and calls `bp.Build(ctx, req)` per service with a `build:` directive. The returned image ref is what `Services()` stamps on the PodSpec.
+
+Provider-specific mechanics live entirely inside each `BuildProvider`:
+
+- `local` — shells out to `docker login` + `docker buildx build --push` on the operator's machine via `pkg/core/build.go::BuildService` (the `BuildRunner` interface — `DockerRunner` in prod, fakes in tests).
+- `ssh` — dials a `role: builder` server via SSH, clones `req.GitRemote @ req.GitRef`, runs `docker buildx build --push` there.
+- `daytona` — boots a Daytona sandbox, clones the same git ref, runs the buildx-and-push loop inside the sandbox over Daytona's session-exec API.
+
+`reconcile.Deploy` provisions builders (`infra.ProvisionBuilders` + `infra.BuilderTargets`) before `BuildImages` when the resolved provider declares `BuildCapability.RequiresBuilders = true`. The resulting `[]BuilderTarget` is threaded into every `BuildRequest` — `ssh` consumes it, `local`/`daytona` ignore it. Git source (`req.GitRemote`, `req.GitRef`) is inferred by the CLI from the operator's cwd (`git remote get-url origin` + `git rev-parse HEAD`); remote providers (`ssh`, `daytona`) hard-error when those strings are empty.
 
 Image tag resolution (Kamal-style, adapted): host inferred when `image:` has no host and exactly one `registry:` entry is declared; ambiguous with multiple registries; bare shortnames rejected under `build:`. User tag (if any) preserved AND suffixed with `dc.Cluster.DeployHash` → guarantees a new `image:` string every deploy so the rollout controller always restarts pods. Digest-pinned references pass through unmodified. Logic in `image.go`.
 
@@ -97,7 +117,7 @@ Every Deployment / StatefulSet / CronJob gets `nvoi/deploy-hash: <hash>` stamped
 
 `WaitRollout` runs on the last service only — earlier services fire-and-forget so the rollouts pipeline. Terminal states (`CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`) abort immediately with recent logs + events.
 
-Orphan services / crons → `ServiceDelete` / `CronDelete`. Orphan key cleanup inside `{name}-secrets` is per-key.
+Orphan services / crons → `kc.SweepOwned(owner=services|crons, ...)` per kind (Deployment + StatefulSet + Service + Secret for services; CronJob + Secret for crons). Orphan key cleanup inside `{name}-secrets` is per-key (a service that drops keys from its `secrets:` block keeps the Secret but removes those keys).
 
 ### DNS (RouteDomains)
 

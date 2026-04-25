@@ -13,6 +13,15 @@ import (
 // This includes:
 //   - Bare names (no "=") → the key itself is read from the source
 //   - $VAR references on the right side of "=" → each referenced var is read from the source
+//   - $VAR references inside any field that participates in resolveRef
+//     against the sources map (env, databases.X.credentials.*)
+//
+// Every field whose value flows through resolveRef(val, sources) MUST
+// appear here — otherwise the reference can't be resolved at deploy
+// time when providers.secrets is set (the backend is the source, and
+// it's only queried for keys we collect here). The CLI side mirrors
+// this list in cmd/cli/database.go::collectCommandSecrets; keep them
+// in lockstep, or the laptop and the runner drift on what counts.
 //
 // This ensures EMAIL_HOST_USER=$BUGSINK_EMAIL_HOST_USER works without
 // declaring BUGSINK_EMAIL_HOST_USER as a separate bare entry first.
@@ -21,7 +30,7 @@ func collectSecretKeys(cfg *config.AppConfig) []string {
 	for _, key := range cfg.Secrets {
 		seen[key] = true
 	}
-	collect := func(refs []string) {
+	collectRefs := func(refs []string) {
 		for _, ref := range refs {
 			if !strings.Contains(ref, "=") {
 				seen[ref] = true
@@ -33,11 +42,37 @@ func collectSecretKeys(cfg *config.AppConfig) []string {
 			}
 		}
 	}
+	collectVars := func(raw string) {
+		for _, varName := range extractVarRefs(raw) {
+			seen[varName] = true
+		}
+	}
 	for _, svc := range cfg.Services {
-		collect(svc.Secrets)
+		collectRefs(svc.Secrets)
+		// env: entries resolve $VAR refs against the same sources map
+		// (services.go::Services calls resolveEntry → resolveRef). Without
+		// pre-collection, `env: [HOST=$EMAIL_HOST]` would never fetch
+		// EMAIL_HOST from the secrets backend.
+		for _, entry := range svc.Env {
+			collectVars(entry)
+		}
 	}
 	for _, cron := range cfg.Crons {
-		collect(cron.Secrets)
+		collectRefs(cron.Secrets)
+		for _, entry := range cron.Env {
+			collectVars(entry)
+		}
+	}
+	// databases.X.credentials.{user,password,database} also resolve via
+	// resolveRef in databaseRequest. SaaS engines have no credentials
+	// block — nil check skips them.
+	for _, db := range cfg.Databases {
+		if db.Credentials == nil {
+			continue
+		}
+		collectVars(db.Credentials.User)
+		collectVars(db.Credentials.Password)
+		collectVars(db.Credentials.Database)
 	}
 	keys := make([]string, 0, len(seen))
 	for k := range seen {

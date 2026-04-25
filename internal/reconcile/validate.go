@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -42,6 +43,49 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			// supported
 		default:
 			return fmt.Errorf("providers.secrets.kind %q is not supported (expected: doppler | awssm | infisical)", s.Kind)
+		}
+	}
+
+	// providers.build — optional, defaults to "local" (in-process docker
+	// buildx on the operator's machine). Unset is treated as "local" here
+	// so every rule below runs through a single code path — no "if unset
+	// then …" branches duplicating logic.
+	//
+	// Validator rule R1 (symmetric): RequiresBuilders must match the
+	// declared role: builder servers exactly.
+	//   - RequiresBuilders=true  + 0 builders → error (builder missing)
+	//   - RequiresBuilders=false + ≥1 builder → error (idle infra)
+	// local sets RequiresBuilders=false; ssh flips it to true; daytona keeps
+	// it false (runs inside a managed sandbox, not on role:builder servers).
+	buildName := cfg.Providers.Build
+	if buildName == "" {
+		buildName = "local"
+	}
+	caps, err := provider.GetBuildCapability(buildName)
+	if err != nil {
+		return fmt.Errorf("providers.build: %w", err)
+	}
+	builderCount := 0
+	for _, srv := range cfg.Servers {
+		if srv.Role == utils.RoleBuilder {
+			builderCount++
+		}
+	}
+	if caps.RequiresBuilders && builderCount == 0 {
+		return fmt.Errorf("providers.build %q requires at least one server with role: builder", buildName)
+	}
+	if !caps.RequiresBuilders && builderCount > 0 {
+		return fmt.Errorf("providers.build %q does not use builder servers — remove role: builder entries or pick a build provider that does (ssh)", buildName)
+	}
+
+	// providers.ci — optional. When set, must be a registered CI provider
+	// name (today: "github"). Typo detection via GetCISchema — the registry
+	// is the single source of truth for valid names, so new CI providers
+	// require zero changes here. No coupling to providers.build: every
+	// (build, ci) pair composes freely.
+	if ciName := cfg.Providers.Ci; ciName != "" {
+		if _, err := provider.GetCISchema(ciName); err != nil {
+			return fmt.Errorf("providers.ci: %w", err)
 		}
 	}
 
@@ -93,10 +137,10 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			return fmt.Errorf("servers.%s.region is required", name)
 		}
 		if srv.Role == "" {
-			return fmt.Errorf("servers.%s.role is required (master or worker)", name)
+			return fmt.Errorf("servers.%s.role is required (master, worker, or builder)", name)
 		}
-		if srv.Role != "master" && srv.Role != "worker" {
-			return fmt.Errorf("servers.%s.role must be master or worker, got %q", name, srv.Role)
+		if srv.Role != utils.RoleMaster && srv.Role != utils.RoleWorker && srv.Role != utils.RoleBuilder {
+			return fmt.Errorf("servers.%s.role must be master, worker, or builder, got %q", name, srv.Role)
 		}
 		if srv.Disk < 0 {
 			return fmt.Errorf("servers.%s.disk must be >= 0", name)
@@ -104,10 +148,13 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		if srv.Disk > 0 && cfg.Providers.Infra == "hetzner" {
 			return fmt.Errorf("servers.%s.disk: hetzner does not support custom root disk sizes — disk is fixed per server type", name)
 		}
-		if srv.Role == "master" {
+		if srv.Role == utils.RoleMaster {
 			masterCount++
 		}
 	}
+	// A k8s cluster needs exactly one master. Builders are additional (not
+	// substitutes) — declaring builders-only leaves nvoi without a cluster
+	// to deploy workloads into.
 	if masterCount == 0 {
 		return fmt.Errorf("servers: exactly one server must have role: master")
 	}
@@ -135,6 +182,99 @@ func ValidateConfig(cfg *config.AppConfig) error {
 	for name := range cfg.Storage {
 		if err := utils.ValidateName("storage."+name, name); err != nil {
 			return err
+		}
+	}
+
+	// ── Databases ────────────────────────────────────────────────────────
+	for name, db := range cfg.Databases {
+		if err := utils.ValidateName("databases."+name, name); err != nil {
+			return err
+		}
+		if strings.TrimSpace(db.Engine) == "" {
+			return fmt.Errorf("databases.%s.engine is required", name)
+		}
+		if _, err := provider.GetDatabaseSchema(db.Engine); err != nil {
+			return fmt.Errorf("databases.%s.engine: %w", name, err)
+		}
+		if databaseEngineIsSelfHosted(db.Engine) {
+			if db.Credentials == nil {
+				return fmt.Errorf("databases.%s.credentials is required for engine %s (user / password / database)", name, db.Engine)
+			}
+			if db.Credentials.User == "" {
+				return fmt.Errorf("databases.%s.credentials.user is required", name)
+			}
+			if db.Credentials.Password == "" {
+				return fmt.Errorf("databases.%s.credentials.password is required", name)
+			}
+			if db.Credentials.Database == "" {
+				return fmt.Errorf("databases.%s.credentials.database is required", name)
+			}
+			if db.Server == "" {
+				return fmt.Errorf("databases.%s.server is required", name)
+			}
+			if db.Size <= 0 {
+				return fmt.Errorf("databases.%s.size must be > 0", name)
+			}
+			if !hasVarRef(db.Credentials.User) {
+				return fmt.Errorf("databases.%s.credentials.user must be a $VAR reference", name)
+			}
+			if !hasVarRef(db.Credentials.Password) {
+				return fmt.Errorf("databases.%s.credentials.password must be a $VAR reference", name)
+			}
+			if _, ok := cfg.Servers[db.Server]; !ok {
+				return fmt.Errorf("databases.%s.server: %q is not a defined server", name, db.Server)
+			}
+			// Selfhosted databases run on ZFS-LocalPV on a dedicated node.
+			// master carries etcd + kube-apiserver + Caddy and can't
+			// also own a zpool without risking cluster-control-plane
+			// availability. Operators wanting a minimal single-node
+			// footprint use SaaS engines (neon, planetscale).
+			if db.Server == utils.RoleMaster {
+				return fmt.Errorf(
+					"databases.%s.server cannot be %q — selfhosted DBs require a dedicated node (add a worker to servers: and point server: at it, or switch to engine: neon | planetscale)",
+					name, utils.RoleMaster,
+				)
+			}
+			// A DB node runs ZFS + carries the DB's data. Sharing it with
+			// services or crons creates noisy-neighbor risk and makes
+			// disk-budget reasoning per-database impossible. Enforce the
+			// dedicated-node invariant at config time.
+			if shared := servicesSharingServer(cfg, db.Server); len(shared) > 0 {
+				return fmt.Errorf(
+					"databases.%s.server %q is shared with service(s) %v — DB nodes must be dedicated (move the service(s) to a different server:)",
+					name, db.Server, shared,
+				)
+			}
+			if shared := cronsSharingServer(cfg, db.Server); len(shared) > 0 {
+				return fmt.Errorf(
+					"databases.%s.server %q is shared with cron(s) %v — DB nodes must be dedicated (move the cron(s) to a different server:)",
+					name, db.Server, shared,
+				)
+			}
+		}
+		if databaseEngineIsSaaS(db.Engine) {
+			if db.Credentials != nil {
+				return fmt.Errorf("databases.%s.credentials is not valid for SaaS engine %s (Neon / PlanetScale manage credentials on the provider side)", name, db.Engine)
+			}
+			if db.Server != "" {
+				return fmt.Errorf("databases.%s.server is not valid for SaaS engine %s", name, db.Engine)
+			}
+			if db.Size != 0 {
+				return fmt.Errorf("databases.%s.size is not valid for SaaS engine %s", name, db.Engine)
+			}
+		}
+		if db.Backup != nil {
+			// Backups demand an object store to push dumps to. nvoi
+			// provisions the bucket implicitly per-database — the operator
+			// just declares the bucket provider once on providers.storage.
+			// Missing storage here means backups have nowhere to land, so
+			// we fail loudly at validate time rather than mid-reconcile.
+			if cfg.Providers.Storage == "" {
+				return fmt.Errorf("databases.%s.backup set but providers.storage is not configured — backups need a bucket provider", name)
+			}
+			if db.Backup.Schedule != "" && !validCronExpr(db.Backup.Schedule) {
+				return fmt.Errorf("databases.%s.backup.schedule %q is invalid", name, db.Backup.Schedule)
+			}
 		}
 	}
 
@@ -192,6 +332,17 @@ func ValidateConfig(cfg *config.AppConfig) error {
 		for _, ref := range svc.Storage {
 			if _, ok := cfg.Storage[ref]; !ok {
 				return fmt.Errorf("services.%s.storage: %q is not a defined storage", name, ref)
+			}
+		}
+		for _, ref := range svc.Databases {
+			envName, dbName := parseDatabaseRef(ref)
+			if envName != "" {
+				if err := utils.ValidateEnvVarName("services."+name+".databases", envName); err != nil {
+					return err
+				}
+			}
+			if _, ok := cfg.Databases[dbName]; !ok {
+				return fmt.Errorf("services.%s.databases: %q is not a defined database", name, dbName)
 			}
 		}
 		if err := validateVolumeMounts(cfg, "services."+name, svc.Volumes); err != nil {
@@ -440,4 +591,73 @@ func validateSecretRefs(context string, refs []string) error {
 		}
 	}
 	return nil
+}
+
+func databaseEngineIsSelfHosted(engine string) bool {
+	switch engine {
+	case "postgres", "mysql":
+		return true
+	default:
+		return false
+	}
+}
+
+func databaseEngineIsSaaS(engine string) bool {
+	switch engine {
+	case "neon", "planetscale":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseDatabaseRef(ref string) (envName, dbName string) {
+	if left, right, ok := strings.Cut(ref, "="); ok {
+		return left, right
+	}
+	return "", ref
+}
+
+func validCronExpr(s string) bool {
+	return len(strings.Fields(s)) == 5
+}
+
+// servicesSharingServer returns the names of services that target
+// `server` either via Server: (single-server pin) or Servers: (multi-
+// server spread). Used by the DB validator to enforce dedicated DB
+// nodes.
+func servicesSharingServer(cfg *config.AppConfig, server string) []string {
+	var out []string
+	for name, svc := range cfg.Services {
+		if svc.Server == server {
+			out = append(out, name)
+			continue
+		}
+		for _, s := range svc.Servers {
+			if s == server {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// cronsSharingServer mirrors servicesSharingServer for cron entries.
+// Crons also support Server: + Servers: so both fields are checked.
+func cronsSharingServer(cfg *config.AppConfig, server string) []string {
+	var out []string
+	for name, cj := range cfg.Crons {
+		if cj.Server == server {
+			out = append(out, name)
+			continue
+		}
+		for _, s := range cj.Servers {
+			if s == server {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	return out
 }

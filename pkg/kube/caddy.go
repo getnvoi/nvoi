@@ -54,16 +54,16 @@ func SetCaddyTimingForTest(poll, total time.Duration) func() {
 // Get→Create-if-missing→Update so a no-op deploy makes no API writes
 // beyond the GETs.
 func (c *Client) EnsureCaddy(ctx context.Context) error {
-	if err := c.Apply(ctx, CaddyNamespace, buildCaddyPVC()); err != nil {
+	if err := c.ApplyOwned(ctx, CaddyNamespace, utils.OwnerCaddy, buildCaddyPVC()); err != nil {
 		return fmt.Errorf("ensure caddy pvc: %w", err)
 	}
-	if err := c.Apply(ctx, CaddyNamespace, buildCaddyConfigMap()); err != nil {
+	if err := c.ApplyOwned(ctx, CaddyNamespace, utils.OwnerCaddy, buildCaddyConfigMap()); err != nil {
 		return fmt.Errorf("ensure caddy configmap: %w", err)
 	}
-	if err := c.Apply(ctx, CaddyNamespace, buildCaddyService()); err != nil {
+	if err := c.ApplyOwned(ctx, CaddyNamespace, utils.OwnerCaddy, buildCaddyService()); err != nil {
 		return fmt.Errorf("ensure caddy service: %w", err)
 	}
-	if err := c.Apply(ctx, CaddyNamespace, buildCaddyDeployment()); err != nil {
+	if err := c.ApplyOwned(ctx, CaddyNamespace, utils.OwnerCaddy, buildCaddyDeployment()); err != nil {
 		return fmt.Errorf("ensure caddy deployment: %w", err)
 	}
 	return c.waitForCaddyReady(ctx)
@@ -286,25 +286,6 @@ func parseCaddyDial(dial string) (service string, port int) {
 		return "", 0
 	}
 	return first[0], p
-}
-
-// PurgeCaddy deletes all Caddy workloads from kube-system (Deployment,
-// Service, ConfigMap, PVC). Idempotent — NotFound on any resource is success.
-// Called by the tunnel reconcile path when migrating away from Caddy.
-func (c *Client) PurgeCaddy(ctx context.Context) error {
-	if err := IgnoreNotFound(c.cs.AppsV1().Deployments(CaddyNamespace).Delete(ctx, CaddyName, metav1.DeleteOptions{})); err != nil {
-		return fmt.Errorf("purge caddy deployment: %w", err)
-	}
-	if err := IgnoreNotFound(c.cs.CoreV1().Services(CaddyNamespace).Delete(ctx, CaddyName, metav1.DeleteOptions{})); err != nil {
-		return fmt.Errorf("purge caddy service: %w", err)
-	}
-	if err := IgnoreNotFound(c.cs.CoreV1().ConfigMaps(CaddyNamespace).Delete(ctx, CaddyConfigMapName, metav1.DeleteOptions{})); err != nil {
-		return fmt.Errorf("purge caddy configmap: %w", err)
-	}
-	if err := IgnoreNotFound(c.cs.CoreV1().PersistentVolumeClaims(CaddyNamespace).Delete(ctx, CaddyPVCName, metav1.DeleteOptions{})); err != nil {
-		return fmt.Errorf("purge caddy pvc: %w", err)
-	}
-	return nil
 }
 
 // firstCaddyPod returns the name of the Caddy pod. Errors with a clear

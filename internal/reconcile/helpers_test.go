@@ -12,6 +12,15 @@ import (
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	// Register every production BuildProvider so ValidateConfig tests that
+	// set cfg.Providers.Build resolve the real capability bits. Matches the
+	// cmd/cli binary's blank-imports in main.go:
+	//   - local   — RequiresBuilders: false (default)
+	//   - ssh     — RequiresBuilders: true
+	//   - daytona — RequiresBuilders: false (runs in a managed sandbox)
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/ssh"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -103,6 +112,25 @@ func convergeMock() *testutil.MockSSH {
 			{Prefix: "UUID=", Result: testutil.MockResult{}},
 			{Prefix: "xfs_growfs", Result: testutil.MockResult{}},
 			// Misc
+			// ZFS prepare-node phase — postgres.PrepareNode runs over
+			// the per-node SSH. Tests exercise the short-circuit paths
+			// by default: dpkg-query reports zfsutils already
+			// installed, zpool list reports the pool imported, so no
+			// mutating commands fire. Tests that want to exercise the
+			// install/create branches override their own MockSSH.
+			//
+			// MUST come before the "true" catch-all below: MockSSH
+			// matches by Contains, and `zpool list ... || true` would
+			// otherwise hit "true" first and short-circuit empty.
+			{Prefix: "dpkg-query -W", Result: testutil.MockResult{Output: []byte("install ok installed")}},
+			{Prefix: "zpool list", Result: testutil.MockResult{Output: []byte("nvoi-zfs\n")}},
+			{Prefix: "sudo DEBIAN_FRONTEND", Result: testutil.MockResult{}},
+			{Prefix: "df --output=avail", Result: testutil.MockResult{Output: []byte("100\n")}},
+			{Prefix: "sudo zpool create", Result: testutil.MockResult{}},
+			// OpenEBS ZFS-LocalPV CSI install — one-shot kubectl apply
+			// on the master. Idempotent in prod; tests just need the
+			// prefix to match so the command succeeds silently.
+			{Prefix: "sudo k3s kubectl apply", Result: testutil.MockResult{}},
 			{Prefix: "sudo mkdir", Result: testutil.MockResult{}},
 			{Prefix: "sudo systemctl", Result: testutil.MockResult{}},
 			{Prefix: "cloud-init", Result: testutil.MockResult{}},

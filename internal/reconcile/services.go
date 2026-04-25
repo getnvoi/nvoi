@@ -52,6 +52,7 @@ func Services(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 
 		// Expand storage: into per-service secret entries
 		expandStorageCreds(svc.Storage, sources, svcSecretKVs, &svcSecretRefs)
+		expandDatabaseCreds(svc.Databases, sources, svcSecretKVs, &svcSecretRefs)
 
 		// Upsert per-service secrets into k8s
 		if err := upsertServiceSecrets(ctx, dc, names, name, svcSecretKVs); err != nil {
@@ -90,24 +91,29 @@ func Services(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		}
 	}
 
-	// Orphan workloads — query kube directly. Names present in the
-	// namespace but absent from cfg get ServiceDelete'd. (Pre-D3 this
-	// data came from the global DescribeLive's res.Workloads; now each
-	// step does its own lookup, no global state.)
-	live, err := dc.Cluster.MasterKube.ListWorkloadNames(ctx, names.KubeNamespace())
-	if err != nil {
-		dc.Cluster.Log().Warning(fmt.Sprintf("list workloads for orphan sweep: %s", err))
-		return nil
+	// Orphan sweep — every nvoi-owned workload, k8s Service, and per-
+	// service Secret in the namespace whose owner is `services` and
+	// whose name isn't in `desired` gets deleted. The owner-scoped
+	// listing means this can never see databases / tunnel / caddy /
+	// registries resources, so no exclusion logic is needed.
+	ns := names.KubeNamespace()
+	kc := dc.Cluster.MasterKube
+	desiredSecrets := make([]string, 0, len(svcNames))
+	for _, n := range svcNames {
+		desiredSecrets = append(desiredSecrets, names.KubeServiceSecrets(n))
 	}
-	desired := toSet(svcNames)
-	for _, name := range live {
-		if desired[name] {
-			continue
+	for _, sweep := range []struct {
+		kind    kube.Kind
+		desired []string
+	}{
+		{kube.KindDeployment, svcNames},
+		{kube.KindStatefulSet, svcNames},
+		{kube.KindService, svcNames},
+		{kube.KindSecret, desiredSecrets},
+	} {
+		if err := kc.SweepOwned(ctx, ns, utils.OwnerServices, sweep.kind, sweep.desired); err != nil {
+			dc.Cluster.Log().Warning(fmt.Sprintf("services sweep %s: %s", sweep.kind, err))
 		}
-		if err := app.ServiceDelete(ctx, app.ServiceDeleteRequest{Cluster: dc.Cluster, Cfg: config.NewView(cfg), Name: name}); err != nil {
-			dc.Cluster.Log().Warning(fmt.Sprintf("orphan service %s not removed: %s", name, err))
-		}
-		deleteServiceSecret(ctx, dc, names, name)
 	}
 	return nil
 }
@@ -150,6 +156,19 @@ func expandStorageCreds(storageNames []string, sources map[string]string, kvs ma
 	}
 }
 
+func expandDatabaseCreds(databaseRefs []string, sources map[string]string, kvs map[string]string, refs *[]string) {
+	for _, ref := range databaseRefs {
+		envName, dbName := parseDatabaseRef(ref)
+		if envName == "" {
+			envName = utils.DatabaseEnvName(dbName)
+		}
+		if val, ok := sources[utils.DatabaseEnvName(dbName)]; ok {
+			kvs[envName] = val
+			*refs = append(*refs, envName)
+		}
+	}
+}
+
 // upsertServiceSecrets creates/updates the per-service k8s Secret and
 // orphan-removes keys that are no longer declared.
 func upsertServiceSecrets(ctx context.Context, dc *config.DeployContext, names *utils.Names, svcName string, kvs map[string]string) error {
@@ -167,7 +186,7 @@ func upsertServiceSecrets(ctx context.Context, dc *config.DeployContext, names *
 		return kc.DeleteSecret(ctx, ns, secretName)
 	}
 
-	if err := kc.EnsureSecret(ctx, ns, secretName, kvs); err != nil {
+	if err := kc.EnsureSecret(ctx, ns, utils.OwnerServices, secretName, kvs); err != nil {
 		return fmt.Errorf("service %s secret: %w", svcName, err)
 	}
 
@@ -185,18 +204,6 @@ func upsertServiceSecrets(ctx context.Context, dc *config.DeployContext, names *
 		}
 	}
 	return nil
-}
-
-// deleteServiceSecret removes a per-service k8s Secret entirely.
-func deleteServiceSecret(ctx context.Context, dc *config.DeployContext, names *utils.Names, svcName string) {
-	if names == nil {
-		return
-	}
-	kc := dc.Cluster.MasterKube
-	if kc == nil {
-		return
-	}
-	_ = kc.DeleteSecret(ctx, names.KubeNamespace(), names.KubeServiceSecrets(svcName))
 }
 
 // mergeSources builds a unified lookup map for $VAR resolution.

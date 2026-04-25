@@ -45,12 +45,16 @@ func Ingress(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfi
 	}
 	ns := names.KubeNamespace()
 
-	// 0. Migration cleanup: purge any orphaned tunnel agent workloads that may
-	//    have been left behind from a previous providers.tunnel deploy. Runs
-	//    before EnsureCaddy so there is no window where both ingress paths
-	//    are active. Warn-and-continue — on a fresh cluster nothing exists.
-	if err := kc.PurgeTunnelAgents(ctx, ns); err != nil {
-		out.Warning(fmt.Sprintf("purge orphan tunnel agents: %v", err))
+	// 0. Migration cleanup: sweep any orphaned tunnel agent workloads
+	//    left behind from a previous providers.tunnel deploy. Runs
+	//    before EnsureCaddy so there is no window where both ingress
+	//    paths are active. Empty desired = sweep everything for the
+	//    tunnel owner. Warn-and-continue — on a fresh cluster nothing
+	//    exists, sweep is a no-op.
+	for _, kind := range []kube.Kind{kube.KindDeployment, kube.KindSecret, kube.KindConfigMap} {
+		if err := kc.SweepOwned(ctx, ns, utils.OwnerTunnel, kind, nil); err != nil {
+			out.Warning(fmt.Sprintf("sweep orphan tunnel %s: %v", kind, err))
+		}
 	}
 
 	// 1. Caddy must exist and be Ready before we can talk to its admin API.
@@ -179,19 +183,21 @@ func TunnelIngress(ctx context.Context, dc *config.DeployContext, cfg *config.Ap
 
 	// Apply agent workloads into the app namespace.
 	for _, obj := range plan.Workloads {
-		if err := kc.Apply(ctx, ns, obj); err != nil {
+		if err := kc.ApplyOwned(ctx, ns, utils.OwnerTunnel, obj); err != nil {
 			return fmt.Errorf("apply tunnel workload: %w", err)
 		}
 	}
 	out.Success("tunnel agent applied")
 
-	// Migration cleanup: purge any orphaned Caddy workloads that may have
-	// been left behind from a previous non-tunnel deploy. Caddy holds
-	// hostPort 80/443 on the master — removing it ensures no resource is
-	// silently consuming memory after the operator switched to a tunnel.
-	// Warn-and-continue — on a fresh cluster nothing exists.
-	if err := kc.PurgeCaddy(ctx); err != nil {
-		out.Warning(fmt.Sprintf("purge orphan caddy: %v", err))
+	// Migration cleanup: sweep any orphaned Caddy workloads from
+	// kube-system. Caddy holds hostPort 80/443 on the master — removing
+	// it ensures no resource is silently consuming memory after the
+	// operator switched to a tunnel. Empty desired = sweep everything
+	// for the caddy owner.
+	for _, kind := range []kube.Kind{kube.KindDeployment, kube.KindService, kube.KindConfigMap, kube.KindPVC} {
+		if err := kc.SweepOwned(ctx, kube.CaddyNamespace, utils.OwnerCaddy, kind, nil); err != nil {
+			out.Warning(fmt.Sprintf("sweep orphan caddy %s: %v", kind, err))
+		}
 	}
 
 	// Write DNS CNAME records.

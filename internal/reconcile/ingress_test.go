@@ -20,6 +20,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/testutil"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // init clamps Caddy poll loops so reconcile-level tests stay under the
@@ -106,7 +107,7 @@ func installCaddyFixture(t *testing.T, dc *config.DeployContext) *caddyExecRecor
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "caddy-abc",
 			Namespace: kube.CaddyNamespace,
-			Labels:    map[string]string{"app.kubernetes.io/name": kube.CaddyName},
+			Labels:    map[string]string{utils.LabelAppName: kube.CaddyName},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
@@ -420,17 +421,23 @@ func TestTunnelIngress_PurgesOrphanCaddy(t *testing.T) {
 	dc.Tunnel = app.ProviderRef{Name: "test-tunnel-purge-caddy", Creds: map[string]string{}}
 	dc.DNS = app.ProviderRef{Name: "test-dns-purge-caddy", Creds: map[string]string{}}
 
-	// Seed orphan Caddy resources as if a previous non-tunnel deploy left them.
+	// Seed orphan Caddy resources as if a previous non-tunnel deploy left
+	// them. Owner=caddy stamped because that's what ApplyOwned would
+	// have done at creation; SweepOwned scopes its sweep by this label.
 	kf := kfFor(dc)
 	ctx := context.Background()
 	one := int32(1)
+	caddyOwned := map[string]string{
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiOwner:    utils.OwnerCaddy,
+	}
 	seedOrphan := func() {
 		_, _ = kf.Typed.AppsV1().Deployments(kube.CaddyNamespace).Create(ctx, &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: kube.CaddyName, Namespace: kube.CaddyNamespace},
+			ObjectMeta: metav1.ObjectMeta{Name: kube.CaddyName, Namespace: kube.CaddyNamespace, Labels: caddyOwned},
 			Spec:       appsv1.DeploymentSpec{Replicas: &one},
 		}, metav1.CreateOptions{})
 		_, _ = kf.Typed.CoreV1().Services(kube.CaddyNamespace).Create(ctx, &corev1.Service{
-			ObjectMeta: metav1.ObjectMeta{Name: kube.CaddyName, Namespace: kube.CaddyNamespace},
+			ObjectMeta: metav1.ObjectMeta{Name: kube.CaddyName, Namespace: kube.CaddyNamespace, Labels: caddyOwned},
 		}, metav1.CreateOptions{})
 	}
 	seedOrphan()
@@ -469,14 +476,21 @@ func TestIngress_PurgesOrphanTunnelAgent(t *testing.T) {
 	_ = rec
 	seedService(t, dc, "web", 80)
 
-	// Seed orphan cloudflared resources as if a previous tunnel deploy left them.
+	// Seed orphan cloudflared resources as if a previous tunnel deploy
+	// left them. Owner=tunnel stamped because that's what ApplyOwned
+	// would have done at creation; SweepOwned scopes its sweep by this
+	// label.
 	kf := kfFor(dc)
 	ctx := context.Background()
+	tunnelOwned := map[string]string{
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiOwner:    utils.OwnerTunnel,
+	}
 	_, _ = kf.Typed.AppsV1().Deployments(testNS).Create(ctx, &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: kube.CloudflareTunnelAgentName, Namespace: testNS},
+		ObjectMeta: metav1.ObjectMeta{Name: kube.CloudflareTunnelAgentName, Namespace: testNS, Labels: tunnelOwned},
 	}, metav1.CreateOptions{})
 	_, _ = kf.Typed.CoreV1().Secrets(testNS).Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: kube.CloudflareTunnelSecretName, Namespace: testNS},
+		ObjectMeta: metav1.ObjectMeta{Name: kube.CloudflareTunnelSecretName, Namespace: testNS, Labels: tunnelOwned},
 	}, metav1.CreateOptions{})
 
 	cfg := &config.AppConfig{

@@ -17,9 +17,19 @@ import (
 	// Providers — each vendor package registers all its kinds via init().
 	_ "github.com/getnvoi/nvoi/pkg/provider/aws"
 	_ "github.com/getnvoi/nvoi/pkg/provider/cloudflare"
+	_ "github.com/getnvoi/nvoi/pkg/provider/github"
 	_ "github.com/getnvoi/nvoi/pkg/provider/hetzner"
 	_ "github.com/getnvoi/nvoi/pkg/provider/ngrok"
 	_ "github.com/getnvoi/nvoi/pkg/provider/scaleway"
+	// Build backends — `providers.build` family. local = in-process
+	// default; ssh dispatches to a role: builder server over SSH;
+	// daytona runs the build inside a managed DinD sandbox.
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/daytona"
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/local"
+	_ "github.com/getnvoi/nvoi/pkg/provider/build/ssh"
+	_ "github.com/getnvoi/nvoi/pkg/provider/neon"
+	_ "github.com/getnvoi/nvoi/pkg/provider/planetscale"
+	_ "github.com/getnvoi/nvoi/pkg/provider/postgres"
 	// Secrets backends
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/awssm"
 	_ "github.com/getnvoi/nvoi/pkg/provider/secrets/doppler"
@@ -67,6 +77,8 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(newExecCmd(&rt))
 	root.AddCommand(newSSHCmd(&rt))
 	root.AddCommand(newCronCmd(&rt))
+	root.AddCommand(newCICmd(&rt))
+	root.AddCommand(newDatabaseCmd(&rt))
 
 	root.SetErr(newErrorWriter(root))
 	root.SetErrPrefix("")

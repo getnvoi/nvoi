@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/provider"
+	_ "github.com/getnvoi/nvoi/pkg/provider/neon"
+	_ "github.com/getnvoi/nvoi/pkg/provider/postgres"
 )
 
 func TestValidateConfig_Valid(t *testing.T) {
@@ -566,7 +569,8 @@ func validCfgForTest() *config.AppConfig {
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Infra: "hetzner"},
 		Servers: map[string]config.ServerDef{
-			"master": {Type: "cax11", Region: "nbg1", Role: "master"},
+			"master":    {Type: "cax11", Region: "nbg1", Role: "master"},
+			"db-master": {Type: "cax21", Region: "nbg1", Role: "worker"},
 		},
 		Services: map[string]config.ServiceDef{},
 	}
@@ -656,4 +660,414 @@ func TestValidateConfig_TunnelRequiresDomains(t *testing.T) {
 	cfg.Providers.Tunnel = "cloudflare"
 	cfg.Providers.DNS = "cloudflare"
 	assertValidationError(t, cfg, "at least one domain is required")
+}
+
+// ── providers.build validation ───────────────────────────────────────────
+
+// TestValidateConfig_BuildUnset_OK locks the default: omitting providers.build
+// is valid. The in-process path (reconcile.Deploy) runs as it always has.
+func TestValidateConfig_BuildUnset_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("empty providers.build must be valid, got: %v", err)
+	}
+}
+
+// TestValidateConfig_BuildLocal_OK locks the explicit default: providers.build:
+// local is accepted and requires no builders (RequiresBuilders=false).
+func TestValidateConfig_BuildLocal_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "local"
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("providers.build: local must be valid, got: %v", err)
+	}
+}
+
+// TestValidateConfig_BuildUnknownKind_Errors verifies we surface unregistered
+// build providers at validate time — before any credential or infra work.
+// Typos like `providers.build: loocal` must fail loudly.
+func TestValidateConfig_BuildUnknownKind_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "loocal"
+	assertValidationError(t, cfg, "unsupported build provider")
+}
+
+// TestValidateConfig_BuildLocal_WithBuilderServer_Errors locks R1 in the
+// negative direction: `local` does NOT use builders, so declaring a
+// role: builder server alongside `local` is a misconfiguration — the
+// builder would sit idle. The provider-block validation fires before the
+// server-role enum check, so the operator gets the actionable error
+// (name the alternative build providers) instead of a generic "unknown role".
+func TestValidateConfig_BuildLocal_WithBuilderServer_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "local"
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	assertValidationError(t, cfg, "does not use builder servers")
+}
+
+// TestValidateConfig_BuildUnsetWithBuilderServer_Errors mirrors the local
+// case for an unset build provider. Unset defaults to "local", so a stray
+// role: builder server is just as wrong. The uniform "resolve to local"
+// path means the error message names "local" explicitly — no special case.
+func TestValidateConfig_BuildUnsetWithBuilderServer_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = ""
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	assertValidationError(t, cfg, "does not use builder servers")
+}
+
+// ── role: builder enum acceptance ────────────────────────────────────────
+
+// TestValidateConfig_RoleBuilder_AcceptedUnderRequiresBuildersProvider covers
+// the role-enum acceptance of "builder" with a synthetic test-fixture
+// RequiresBuilders=true BuildProvider. The real `ssh` provider is exercised
+// separately (see the TestValidateConfig_BuildSSH_* tests below) — keeping
+// this fixture-based test proves the code path is generic for any
+// RequiresBuilders=true provider (ssh, daytona), not hard-wired to one
+// specific implementation.
+func TestValidateConfig_RoleBuilder_AcceptedUnderRequiresBuildersProvider(t *testing.T) {
+	registerTestBuildProvider(t, "testbuilder", provider.BuildCapability{RequiresBuilders: true})
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "testbuilder"
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("role: builder must be accepted under a RequiresBuilders=true build provider, got: %v", err)
+	}
+}
+
+// TestValidateConfig_RoleUnknown_Errors locks the role enum's rejection of
+// typos. The error message names all three valid roles so the operator
+// knows builder is a first-class option, not an internal-only role.
+func TestValidateConfig_RoleUnknown_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Servers["bad"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "boss"}
+	assertValidationError(t, cfg, "must be master, worker, or builder")
+}
+
+// TestValidateConfig_RequiresBuildersProvider_NoBuilderServer_Errors locks
+// R1 in the positive direction: a build provider that declares
+// RequiresBuilders=true must be matched by ≥1 role: builder server. Same
+// test-fixture build provider as above.
+func TestValidateConfig_RequiresBuildersProvider_NoBuilderServer_Errors(t *testing.T) {
+	registerTestBuildProvider(t, "testbuilder2", provider.BuildCapability{RequiresBuilders: true})
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "testbuilder2"
+	assertValidationError(t, cfg, "requires at least one server with role: builder")
+}
+
+// ── Real `ssh` build provider matrix ─────────────────────────────────────
+//
+// The R1 tests above use a synthetic `testbuilder*` fixture to prove the
+// validation code path is generic. The two tests below lock the actual
+// `ssh` provider's registration-time capability bits by running the real
+// registered entry through ValidateConfig. If someone ever flips
+// `RequiresBuilders` on the ssh provider, these tests fail — the
+// synthetic-fixture tests would still pass because they declare the bits
+// inline.
+
+// TestValidateConfig_BuildSSH_NoBuilderServer_Errors locks the real ssh
+// provider's R1 positive direction: ssh requires ≥1 role: builder server.
+// If a future edit drops RequiresBuilders to false this fails loudly.
+func TestValidateConfig_BuildSSH_NoBuilderServer_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "ssh"
+	// No builder server declared — the default validCfg only has a master.
+	assertValidationError(t, cfg, "requires at least one server with role: builder")
+}
+
+// TestValidateConfig_BuildSSH_WithBuilderServer_OK locks the real ssh
+// provider's R1 happy path: ssh + ≥1 role: builder server validates clean.
+func TestValidateConfig_BuildSSH_WithBuilderServer_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "ssh"
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("ssh + role: builder must validate clean, got: %v", err)
+	}
+}
+
+// TestValidateConfig_BuildDaytona_WithBuilderServer_Errors locks the R1
+// negative direction for daytona: RequiresBuilders=false, so pairing it
+// with a role: builder server is a misconfiguration (idle infra).
+func TestValidateConfig_BuildDaytona_WithBuilderServer_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "daytona"
+	cfg.Servers["builder-1"] = config.ServerDef{Type: "cx23", Region: "fsn1", Role: "builder"}
+	assertValidationError(t, cfg, "does not use builder servers")
+}
+
+// TestValidateConfig_BuildDaytona_NoBuilderServer_OK locks daytona's happy
+// path: no builder servers declared, validates clean.
+func TestValidateConfig_BuildDaytona_NoBuilderServer_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Build = "daytona"
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("daytona + no builder must validate clean, got: %v", err)
+	}
+}
+
+// registerTestBuildProvider registers a throwaway BuildProvider in the
+// provider registry under a unique name. Used by validator tests that need
+// specific BuildCapability bits without pulling in a production provider.
+// The factory returns a nil BuildProvider because the validator only
+// queries GetBuildCapability — it never calls ResolveBuild.
+func registerTestBuildProvider(_ *testing.T, name string, caps provider.BuildCapability) {
+	provider.RegisterBuild(name, provider.CredentialSchema{}, caps, func(map[string]string) provider.BuildProvider {
+		return nil
+	})
+}
+
+// ── providers.ci validation ──────────────────────────────────────────────
+
+// TestValidateConfig_CIUnset_OK locks the default: omitting providers.ci is
+// valid. `nvoi ci init` is opt-in — a config that never sets ci must deploy
+// exactly as it did before the feature landed.
+func TestValidateConfig_CIUnset_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("empty providers.ci must be valid, got: %v", err)
+	}
+}
+
+// TestValidateConfig_CIGitHub_OK locks the happy path for the only CI
+// provider shipped today. If the github package's registration ever breaks
+// this fails loudly before any test that depends on `ci init` running.
+func TestValidateConfig_CIGitHub_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Ci = "github"
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("providers.ci: github must be valid, got: %v", err)
+	}
+}
+
+// TestValidateConfig_CIUnknownKind_Errors surfaces typos at validate time —
+// before any token is read, any secret synced, or any workflow committed.
+// `providers.ci: githob` would otherwise silently pass the CLI layer and
+// fail obscurely inside ResolveCI.
+func TestValidateConfig_CIUnknownKind_Errors(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Ci = "githob"
+	assertValidationError(t, cfg, "providers.ci")
+}
+
+func TestValidateConfig_DatabasePostgresValid(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare" // backup: set → providers.storage required
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$POSTGRES_APP_USER",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
+			Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *"},
+		},
+	}
+	cfg.Services["api"] = config.ServiceDef{Image: "nginx", Databases: []string{"app"}}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("expected valid database config, got %v", err)
+	}
+}
+
+func TestValidateConfig_DatabaseRequiresVarRefs(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "appuser",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
+		},
+	}
+	assertValidationError(t, cfg, "databases.app.credentials.user must be a $VAR reference")
+}
+
+// TestValidateConfig_DatabaseRequiresCredentialsBlock locks the
+// "credentials: required for selfhosted" rule. Omitting the whole
+// block should hard-error before any other field-level check.
+func TestValidateConfig_DatabaseRequiresCredentialsBlock(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+		},
+	}
+	assertValidationError(t, cfg, "databases.app.credentials is required")
+}
+
+// TestValidateConfig_DatabaseBannedOnMaster locks the dedicated-node
+// invariant (#68): selfhosted DBs run on ZFS-LocalPV, and master owns
+// etcd + kube-apiserver + Caddy — can't also host a zpool without
+// risking cluster-control-plane availability. The error message must
+// point at the two escape hatches (dedicated server or SaaS engine)
+// so operators have a clear recovery path.
+func TestValidateConfig_DatabaseBannedOnMaster(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare"
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$U",
+				Password: "$P",
+				Database: "myapp",
+			},
+		},
+	}
+	assertValidationError(t, cfg, "cannot be \"master\"")
+	assertValidationError(t, cfg, "dedicated node")
+}
+
+// TestValidateConfig_DatabaseBannedOnSharedNode locks the other half
+// of the dedicated-node invariant: even on a non-master node, a DB
+// can't share its server with a service. Sharing creates noisy-
+// neighbor risk and makes per-DB disk budgeting (the ZFS pool sized
+// to 2x databases.X.size) unpredictable.
+func TestValidateConfig_DatabaseBannedOnSharedNode(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare"
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$U",
+				Password: "$P",
+				Database: "myapp",
+			},
+		},
+	}
+	cfg.Services["worker"] = config.ServiceDef{
+		Image:  "busybox",
+		Server: "db-master", // collision with databases.app.server
+	}
+	assertValidationError(t, cfg, "shared with service(s)")
+	assertValidationError(t, cfg, "worker")
+}
+
+// TestValidateConfig_DatabaseBannedOnSharedNode_Cron covers crons too
+// — same isolation rule applies, any workload sharing the DB node is
+// rejected.
+func TestValidateConfig_DatabaseBannedOnSharedNode_Cron(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare"
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$U",
+				Password: "$P",
+				Database: "myapp",
+			},
+		},
+	}
+	cfg.Crons = map[string]config.CronDef{
+		"cleanup": {
+			Image:    "busybox",
+			Schedule: "0 3 * * *",
+			Server:   "db-master",
+		},
+	}
+	assertValidationError(t, cfg, "shared with cron(s)")
+	assertValidationError(t, cfg, "cleanup")
+}
+
+func TestValidateConfig_DatabaseNeonRejectsSelfHostedFields(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"analytics": {
+			Engine:      "neon",
+			Credentials: &config.DatabaseCredentialsDef{User: "$USER"},
+		},
+	}
+	assertValidationError(t, cfg, "credentials is not valid for SaaS engine neon")
+}
+
+// Backups need a bucket provider. Declaring `backup:` without
+// `providers.storage` is a hard validation error — we refuse to reconcile
+// a schedule that has nowhere to put its dumps.
+func TestValidateConfig_DatabaseBackupRequiresProvidersStorage(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$POSTGRES_APP_USER",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
+			Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *"},
+		},
+	}
+	assertValidationError(t, cfg, "providers.storage is not configured")
+}
+
+// Same rule applies to SaaS engines — backups are uniform, so the
+// providers.storage requirement isn't engine-specific.
+func TestValidateConfig_DatabaseBackupSaaSRequiresProvidersStorage(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"analytics": {
+			Engine: "neon",
+			Region: "eu-central-1",
+			Backup: &config.DatabaseBackupDef{Retention: 14},
+		},
+	}
+	assertValidationError(t, cfg, "providers.storage is not configured")
+}
+
+// Happy path: backup set + providers.storage set → valid.
+func TestValidateConfig_DatabaseBackupWithProvidersStorage_OK(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Providers.Storage = "cloudflare"
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$POSTGRES_APP_USER",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
+			Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
+		},
+	}
+	if err := ValidateConfig(cfg); err != nil {
+		t.Fatalf("backup with providers.storage must validate clean, got: %v", err)
+	}
+}
+
+func TestValidateConfig_ServiceDatabaseAliasMustBeEnvVar(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$POSTGRES_APP_USER",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
+		},
+	}
+	cfg.Services["api"] = config.ServiceDef{Image: "nginx", Databases: []string{"bad-alias=app"}}
+	assertValidationError(t, cfg, "services.api.databases")
 }

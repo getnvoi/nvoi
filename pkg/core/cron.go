@@ -94,7 +94,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 	if err != nil {
 		return fmt.Errorf("build cronjob: %w", err)
 	}
-	if err := kc.Apply(ctx, ns, cron); err != nil {
+	if err := kc.ApplyOwned(ctx, ns, utils.OwnerCrons, cron); err != nil {
 		return err
 	}
 	out.Success("applied")
@@ -117,7 +117,7 @@ func CronRun(ctx context.Context, req CronRunRequest) error {
 	defer cleanup()
 
 	ns := names.KubeNamespace()
-	jobName := fmt.Sprintf("%s-run-%d", req.Name, time.Now().Unix())
+	jobName := names.CronJobRunName(req.Name, time.Now().Unix())
 
 	out.Command("cron", "run", req.Name, "job", jobName)
 

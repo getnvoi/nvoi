@@ -19,6 +19,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // KubeFake bundles a *kube.Client with a handle to its underlying typed fake
@@ -60,7 +61,7 @@ func (k *KubeFake) SeedReadyPod(ns, service string) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      service + "-abc123",
 			Namespace: ns,
-			Labels:    map[string]string{"app.kubernetes.io/name": service},
+			Labels:    map[string]string{utils.LabelAppName: service},
 		},
 		Spec: corev1.PodSpec{NodeName: "master"},
 		Status: corev1.PodStatus{
@@ -110,13 +111,13 @@ func (k *KubeFake) AutoReadyPods() {
 		labels := map[string]string{}
 		if reqs, selectable := sel.Requirements(); selectable {
 			for _, r := range reqs {
-				if r.Key() == "app.kubernetes.io/name" && len(r.Values().List()) > 0 {
+				if r.Key() == utils.LabelAppName && len(r.Values().List()) > 0 {
 					labels[r.Key()] = r.Values().List()[0]
 				}
 			}
 		}
 		name := "synth-pod"
-		if v, ok := labels["app.kubernetes.io/name"]; ok {
+		if v, ok := labels[utils.LabelAppName]; ok {
 			name = v + "-synth"
 		}
 		pod := corev1.Pod{

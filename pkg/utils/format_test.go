@@ -57,3 +57,26 @@ func TestHumanAgeInvalid(t *testing.T) {
 		t.Errorf("HumanAge(invalid) = %q, want empty string", got)
 	}
 }
+
+func TestPluralize(t *testing.T) {
+	cases := []struct {
+		n        int
+		singular string
+		plural   string
+		want     string
+	}{
+		{1, "host", "", "1 host"},
+		{2, "host", "", "2 hosts"},
+		{0, "secret", "", "0 secrets"},
+		{1, "person", "people", "1 person"},
+		{3, "person", "people", "3 people"},
+		{1, "workload", "", "1 workload"},
+		{5, "workload", "", "5 workloads"},
+	}
+	for _, c := range cases {
+		got := Pluralize(c.n, c.singular, c.plural)
+		if got != c.want {
+			t.Errorf("Pluralize(%d, %q, %q) = %q, want %q", c.n, c.singular, c.plural, got, c.want)
+		}
+	}
+}

@@ -7,13 +7,33 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // EnsureSecret creates the Secret if missing or merges the given keys into it
 // otherwise. Other keys not in `kvs` are left untouched.
-func (c *Client) EnsureSecret(ctx context.Context, ns, name string, kvs map[string]string) error {
+//
+// `owner` is one of utils.OwnerServices / OwnerCrons / OwnerDatabases /
+// OwnerTunnel / OwnerCaddy / OwnerRegistries — same discriminator as
+// ApplyOwned uses. Stamped on Create AND on Update so the labels stay
+// in lockstep with the rest of the reconciler. (The previous
+// label-heal special case is gone — owner is set every time, so there's
+// nothing to heal.)
+//
+// Every Secret created or updated through this path carries:
+//   - app.kubernetes.io/managed-by=nvoi
+//   - nvoi/owner=<owner>
+//
+// This is the discovery contract: SweepOwned, describe, resources, and
+// any future tooling can list nvoi-owned Secrets via the standard
+// owner-scoped selector without per-creation-site label rituals.
+func (c *Client) EnsureSecret(ctx context.Context, ns, owner, name string, kvs map[string]string) error {
 	if c == nil {
 		return fmt.Errorf("kube client not initialized")
+	}
+	if owner == "" {
+		return fmt.Errorf("EnsureSecret: owner required")
 	}
 	existing, err := c.cs.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -25,10 +45,17 @@ func (c *Client) EnsureSecret(ctx context.Context, ns, name string, kvs map[stri
 			data[k] = []byte(v)
 		}
 		secret := &corev1.Secret{
-			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-			Type:       corev1.SecretTypeOpaque,
-			Data:       data,
+			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels: map[string]string{
+					utils.LabelAppManagedBy: utils.LabelManagedBy,
+					utils.LabelNvoiOwner:    owner,
+				},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: data,
 		}
 		_, err := c.cs.CoreV1().Secrets(ns).Create(ctx, secret, metav1.CreateOptions{FieldManager: FieldManager})
 		if err != nil {
@@ -45,6 +72,11 @@ func (c *Client) EnsureSecret(ctx context.Context, ns, name string, kvs map[stri
 	for k, v := range kvs {
 		existing.Data[k] = []byte(v)
 	}
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	existing.Labels[utils.LabelAppManagedBy] = utils.LabelManagedBy
+	existing.Labels[utils.LabelNvoiOwner] = owner
 	_, err = c.cs.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{FieldManager: FieldManager})
 	if err != nil {
 		return fmt.Errorf("update secret %s/%s: %w", ns, name, err)
@@ -53,9 +85,10 @@ func (c *Client) EnsureSecret(ctx context.Context, ns, name string, kvs map[stri
 }
 
 // UpsertSecretKey adds or updates a single key in a Secret. Creates the
-// Secret if it doesn't exist. Idempotent.
-func (c *Client) UpsertSecretKey(ctx context.Context, ns, name, key, value string) error {
-	return c.EnsureSecret(ctx, ns, name, map[string]string{key: value})
+// Secret if it doesn't exist. Idempotent. Forwards to EnsureSecret so
+// owner labels stay consistent.
+func (c *Client) UpsertSecretKey(ctx context.Context, ns, owner, name, key, value string) error {
+	return c.EnsureSecret(ctx, ns, owner, name, map[string]string{key: value})
 }
 
 // DeleteSecretKey removes a single key from a Secret. Idempotent — succeeds

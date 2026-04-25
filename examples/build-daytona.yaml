@@ -1,0 +1,54 @@
+# providers.build: daytona — image builds run inside a Daytona DinD
+# sandbox. The CLI boots a sandbox, clones the operator's git repo at
+# the current HEAD, runs `docker buildx build --push` inside the
+# sandbox, and tears it down. No role: builder server required —
+# Daytona is the substrate.
+#
+# Trade-off vs ssh builder: zero infra to keep around (no idle builder
+# server eating money) at the cost of cold-start time per deploy
+# (sandbox boot + git clone + image pull). Best for low-frequency
+# deploys; ssh wins on repeat builds because the BuildKit cache is
+# persistent on the builder's disk.
+#
+# Required env vars:
+#   HETZNER_TOKEN                       (providers.infra)
+#   CF_API_KEY / CF_ZONE_ID / DNS_ZONE  (providers.dns)
+#   DAYTONA_API_KEY                     (providers.build)
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN (registry — push target)
+#
+# Validator R1: providers.build: daytona has RequiresBuilders=false,
+# so role: builder MUST NOT appear in servers:.
+
+app: myapp
+env: production
+
+providers:
+  infra: hetzner
+  dns: cloudflare
+  build: daytona                      # image builds run inside a Daytona sandbox
+
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+
+firewall: default
+
+registry:
+  docker.io:
+    username: $DOCKERHUB_USERNAME
+    password: $DOCKERHUB_TOKEN
+
+services:
+  api:
+    image: myorg/api                  # repo-only — host inferred from registry:
+    build:
+      context: ./
+      dockerfile: ./cmd/api/Dockerfile
+    port: 8080
+    health: /healthz
+    env: [APP_ENV=production]
+
+domains:
+  api: [api.example.com]

@@ -21,6 +21,19 @@ type HTTPClient struct {
 	HTTPClient *http.Client
 	SetAuth    func(*http.Request)
 	Label      string
+
+	// Classify, when non-nil, maps a non-2xx response to a sentinel
+	// error. Do wraps the raw *APIError with the returned sentinel via
+	// `%w`, so callers branch via errors.Is(err, sentinel) without ever
+	// inspecting err.Error() strings. Return nil to leave the *APIError
+	// un-wrapped (status has no provider-specific meaning). Each REST
+	// provider (hetzner, scaleway, …) registers its own closure at
+	// client construction — one place per provider, zero duplication at
+	// call sites. Why here and not per-provider wrapper: the wrapper
+	// approach would have required every call site to change
+	// `c.api.Do` → `c.do`, which is exactly the kind of parallel
+	// boilerplate the infra refactor set out to kill.
+	Classify func(*APIError) error
 }
 
 func (c *HTTPClient) Do(ctx context.Context, method, path string, body, result any) error {
@@ -60,7 +73,17 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body, result a
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{Status: resp.StatusCode, Body: string(respBody), label: c.Label}
+		apiErr := &APIError{Status: resp.StatusCode, Body: string(respBody), label: c.Label}
+		if c.Classify != nil {
+			if sentinel := c.Classify(apiErr); sentinel != nil {
+				// Double-wrap (Go 1.20+): errors.Is(err, sentinel) AND
+				// errors.As(err, &apiErr) both work. Callers that need
+				// HTTP status still get it; callers that branch on
+				// sentinel meaning get that too.
+				return fmt.Errorf("%w: %w", sentinel, apiErr)
+			}
+		}
+		return apiErr
 	}
 
 	if result != nil && len(respBody) > 0 {
