@@ -151,7 +151,12 @@ func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *co
 		return "", err
 	}
 	req.Namespace = names.KubeNamespace()
-	req.Labels = names.Labels()
+	// KubeLabels (not Labels) — DB workloads land in k8s, not on the
+	// IaaS provider. The kube-side label needs the
+	// `app.kubernetes.io/managed-by` prefix so kube.NvoiSelector
+	// matches; bare `managed-by` (Labels()) is for provider-side
+	// resources only.
+	req.Labels = names.KubeLabels()
 	req.Log = dc.Cluster.Log()
 	req.Kube = dc.Cluster.MasterKube
 

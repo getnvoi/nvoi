@@ -158,14 +158,34 @@ func (n *Names) CronJobRunName(cronName string, suffix int64) string {
 
 // ── Labels ─────────────────────────────────────────────────────────────────────
 
-// Labels returns the canonical label set every nvoi-managed object
-// carries. The managed-by key uses the app.kubernetes.io prefix so it
-// matches kube.NvoiSelector — the same selector used by describe,
-// orphan sweeps, and resource listings. A bare "managed-by" key
-// (without the prefix) was the historical bug: DB workloads built via
-// req.Labels = names.Labels() ended up with the wrong key and became
-// invisible to every selector-driven query.
+// Labels returns the canonical label set for PROVIDER-side resources —
+// Hetzner servers, Scaleway volumes, AWS instances, etc. Bare keys
+// (no `app.kubernetes.io/` prefix) because:
+//   - These labels are matched against existing infra at lookup time
+//     (c.ListServers(ctx, names.Labels())). Changing the key shape
+//     would orphan every existing deployment from `infra.Connect`.
+//   - Cloud-provider label key constraints differ; bare `managed-by`
+//     works on every backend without per-cloud quirks.
+//
+// For KUBE-side resources, use KubeLabels — the proper k8s convention
+// is required there so kube.NvoiSelector matches.
 func (n *Names) Labels() map[string]string {
+	return map[string]string{
+		"managed-by": "nvoi",
+		"app":        n.Base(),
+		"env":        n.env,
+	}
+}
+
+// KubeLabels returns the canonical label set for KUBE-side resources —
+// Deployments, StatefulSets, Services, Secrets, CronJobs, PVCs. The
+// managed-by key uses the `app.kubernetes.io/` prefix so kube.NvoiSelector
+// matches; `app` and `env` mirror Labels() for cross-domain consistency.
+//
+// This is the label set the databases pipeline stamps on its workloads
+// (req.Labels = names.KubeLabels()) so they participate in the same
+// selector-driven queries as user services / crons.
+func (n *Names) KubeLabels() map[string]string {
 	return map[string]string{
 		LabelAppManagedBy: LabelManagedBy,
 		"app":             n.Base(),

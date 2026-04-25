@@ -122,13 +122,13 @@ func TestNamesKube(t *testing.T) {
 	}
 }
 
-// TestNamesLabels locks the canonical label set on every nvoi-managed
-// k8s object. The managed-by key MUST be the prefixed
-// `app.kubernetes.io/managed-by` form — that's what kube.NvoiSelector
-// queries, and a bare `managed-by` (the historical bug) makes the
-// labeled object invisible to every selector-driven listing
-// (describe, orphan sweeps, resources). This test exists specifically
-// to catch a future revert of that fix.
+// TestNamesLabels locks the PROVIDER-side label set. Bare `managed-by`
+// (no `app.kubernetes.io/` prefix) — these labels are written onto
+// Hetzner / Scaleway / AWS resources and matched at lookup time by
+// `infra.Connect`. Renaming the key would orphan every existing
+// deployment (servers exist with the old key, infra.Connect queries
+// with the new key, finds nothing, returns ErrNotBootstrapped). This
+// test exists specifically to lock that NOT happening again.
 func TestNamesLabels(t *testing.T) {
 	n, err := NewNames("dummy-rails", "production")
 	if err != nil {
@@ -138,9 +138,9 @@ func TestNamesLabels(t *testing.T) {
 	labels := n.Labels()
 
 	expected := map[string]string{
-		LabelAppManagedBy: LabelManagedBy,
-		"app":             "nvoi-dummy-rails-production",
-		"env":             "production",
+		"managed-by": "nvoi",
+		"app":        "nvoi-dummy-rails-production",
+		"env":        "production",
 	}
 
 	if len(labels) != len(expected) {
@@ -156,6 +156,35 @@ func TestNamesLabels(t *testing.T) {
 		if got != want {
 			t.Errorf("labels[%q] = %q, want %q", k, got, want)
 		}
+	}
+}
+
+// TestNamesKubeLabels locks the KUBE-side label set. Properly prefixed
+// `app.kubernetes.io/managed-by` so kube.NvoiSelector matches. The
+// databases pipeline stamps this set onto its StatefulSet / Service /
+// PVC so describe / orphan-sweep can find DB workloads. A revert here
+// would make the DB pod invisible to NvoiSelector — same bug class
+// that masked the orphan-sweep deletion of the backup CronJob until a
+// human ran `nvoi describe`.
+func TestNamesKubeLabels(t *testing.T) {
+	n, err := NewNames("dummy-rails", "production")
+	if err != nil {
+		t.Fatalf("NewNames: %v", err)
+	}
+
+	labels := n.KubeLabels()
+
+	if got := labels[LabelAppManagedBy]; got != LabelManagedBy {
+		t.Errorf("KubeLabels[%q] = %q, want %q", LabelAppManagedBy, got, LabelManagedBy)
+	}
+	if labels["managed-by"] != "" {
+		t.Errorf("KubeLabels must NOT carry bare \"managed-by\" — k8s side uses prefixed key only; got: %v", labels)
+	}
+	if got := labels["app"]; got != "nvoi-dummy-rails-production" {
+		t.Errorf("KubeLabels[app] = %q, want nvoi-dummy-rails-production", got)
+	}
+	if got := labels["env"]; got != "production" {
+		t.Errorf("KubeLabels[env] = %q, want production", got)
 	}
 }
 
