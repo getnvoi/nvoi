@@ -110,10 +110,11 @@ func TestRouteTo_AlreadyCorrect(t *testing.T) {
 	mux.HandleFunc("/zones/zone123/dns_records", func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		if r.Method == "GET" {
-			// Return existing record with matching IP
+			// Existing record: matching IP AND ownership comment
+			// already stamped — no update needed.
 			json.NewEncoder(w).Encode(map[string]any{
 				"result": []map[string]any{
-					{"id": "rec1", "type": "A", "name": "app.example.com", "content": "1.2.3.4", "ttl": 300},
+					{"id": "rec1", "type": "A", "name": "app.example.com", "content": "1.2.3.4", "ttl": 300, "comment": ManagedByComment},
 				},
 			})
 			return
@@ -131,6 +132,48 @@ func TestRouteTo_AlreadyCorrect(t *testing.T) {
 	}
 	if requestCount != 1 {
 		t.Errorf("expected 1 request (GET only), got %d", requestCount)
+	}
+}
+
+// TestRouteTo_ReStampsUnstampedRecord locks the migration path: a
+// pre-existing nvoi record without the ownership comment gets an
+// UPDATE on the next deploy (comment stamp added), even when the
+// content + proxied flag are already correct. Without this, operators
+// running on pre-fix clusters would never gain the Owned column for
+// existing records.
+func TestRouteTo_ReStampsUnstampedRecord(t *testing.T) {
+	var sawPUT bool
+	var puttedRecord cfDNSRecord
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zones/zone123/dns_records", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			json.NewEncoder(w).Encode(map[string]any{
+				"result": []map[string]any{
+					{"id": "rec1", "type": "A", "name": "app.example.com", "content": "1.2.3.4", "ttl": 300}, // no comment
+				},
+			})
+			return
+		}
+	})
+	mux.HandleFunc("/zones/zone123/dns_records/rec1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" {
+			t.Errorf("unexpected %s on /dns_records/rec1", r.Method)
+			return
+		}
+		sawPUT = true
+		_ = json.NewDecoder(r.Body).Decode(&puttedRecord)
+	})
+
+	c := testDNSClient(t, mux)
+	binding := provider.IngressBinding{DNSType: "A", DNSTarget: "1.2.3.4"}
+	if err := c.RouteTo(context.Background(), "app.example.com", binding); err != nil {
+		t.Fatalf("RouteTo: %v", err)
+	}
+	if !sawPUT {
+		t.Fatal("expected PUT to re-stamp the comment, got none")
+	}
+	if puttedRecord.Comment != ManagedByComment {
+		t.Errorf("PUT body comment = %q, want %q", puttedRecord.Comment, ManagedByComment)
 	}
 }
 

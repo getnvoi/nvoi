@@ -155,6 +155,35 @@ func TestInvariant_OrphanServer_DeletedAfterWorkloadsMove(t *testing.T) {
 	}
 }
 
+// TestInvariant_OrphanWorkerFirewall_SweptWithoutExplicitRules locks
+// the regression from the dogfood deploy: yaml with only a master and
+// no `firewall:` block leaves a `*-worker-fw` orphan on the provider
+// account because the firewall sweep used to be gated on
+// `cfg.FirewallRules() > 0` — no rules → sweep skipped → orphan
+// persists forever. The fix runs the sweep unconditionally; the
+// desired set is derived from cfg.ServerDefs() alone.
+//
+// convergeDC already seeds `nvoi-myapp-prod-worker-fw`, simulating
+// the historical orphan from a prior deploy that had workers.
+func TestInvariant_OrphanWorkerFirewall_SweptWithoutExplicitRules(t *testing.T) {
+	var log opLog
+	ssh := convergeMock()
+	dc := convergeDC(&log, ssh)
+
+	cfg := minimalCfg() // master only — no workers, no firewall: rules
+
+	if err := Deploy(context.Background(), dc, cfg); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	if !log.has("delete-firewall:nvoi-myapp-prod-worker-fw") {
+		t.Errorf("orphan worker-fw must be swept even without explicit firewall: rules; ops: %v", log.all())
+	}
+	if log.has("delete-firewall:nvoi-myapp-prod-master-fw") {
+		t.Errorf("master-fw must NOT be deleted — master is in cfg")
+	}
+}
+
 // TestInvariant_ValidationGate_MissingInfra_ErrorsBeforeProvisioning
 // locks "validation runs first": misconfigured YAML must fail before
 // any provider API op fires (no half-provisioned resources from a bad

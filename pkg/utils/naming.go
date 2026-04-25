@@ -171,9 +171,9 @@ func (n *Names) CronJobRunName(cronName string, suffix int64) string {
 // is required there so kube.NvoiSelector matches.
 func (n *Names) Labels() map[string]string {
 	return map[string]string{
-		"managed-by": "nvoi",
-		"app":        n.Base(),
-		"env":        n.env,
+		LabelManagedByKey: LabelManagedBy,
+		"app":             n.Base(),
+		"env":             n.env,
 	}
 }
 
@@ -219,8 +219,15 @@ func DeployKeyPath() string    { return fmt.Sprintf("/home/%s/.ssh/nvoi_deploy_k
 // ── K8s label keys ─────────────────────────────────────────────────────────────
 
 const (
-	LabelAppName        = "app.kubernetes.io/name"
-	LabelAppManagedBy   = "app.kubernetes.io/managed-by"
+	LabelAppName      = "app.kubernetes.io/name"
+	LabelAppManagedBy = "app.kubernetes.io/managed-by"
+	// LabelManagedByKey is the bare provider-side key (no
+	// `app.kubernetes.io/` prefix) used on Hetzner / AWS / Scaleway
+	// resources via Names.Labels(). Different cloud APIs have
+	// different label-key constraints; `managed-by` works on every
+	// backend without per-cloud quirks. Provider-side ListResources
+	// uses this key to populate the Owned column.
+	LabelManagedByKey   = "managed-by"
 	LabelManagedBy      = "nvoi"
 	LabelNvoiService    = "nvoi/service"
 	LabelNvoiStack      = "nvoi/stack"

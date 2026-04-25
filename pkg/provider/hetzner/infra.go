@@ -676,25 +676,30 @@ func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapCont
 		}
 	}
 
-	if rules := cfg.FirewallRules(); len(rules) > 0 {
-		desiredFW := map[string]bool{}
-		masters, workers, builders := splitServers(cfg.ServerDefs())
-		if len(masters) > 0 {
-			desiredFW[names.MasterFirewall()] = true
-		}
-		if len(workers) > 0 {
-			desiredFW[names.WorkerFirewall()] = true
-		}
-		if len(builders) > 0 {
-			desiredFW[names.BuilderFirewall()] = true
-		}
-		c.sweepFirewalls(ctx, out, names.Base()+"-", desiredFW)
+	// Firewall orphan sweep — runs unconditionally. The previous gate
+	// (`if cfg.FirewallRules() > 0`) skipped the sweep entirely when
+	// the user had no explicit rules in cfg, leaving worker-fw or
+	// builder-fw orphans on the account forever after a yaml change
+	// dropped a role. The desired set is derived from cfg.ServerDefs()
+	// alone — no rules, no servers of role X → role X's firewall is
+	// not desired and gets swept.
+	desiredFW := map[string]bool{}
+	masters, workers, builders := splitServers(cfg.ServerDefs())
+	if len(masters) > 0 {
+		desiredFW[names.MasterFirewall()] = true
 	}
+	if len(workers) > 0 {
+		desiredFW[names.WorkerFirewall()] = true
+	}
+	if len(builders) > 0 {
+		desiredFW[names.BuilderFirewall()] = true
+	}
+	c.sweepFirewalls(ctx, out, names.Base()+"-", desiredFW)
 
 	// Desired volumes = user-declared + synthetic per-builder caches.
 	// Orphan sweep must preserve cache volumes attached to declared builders
-	// (they are provider-managed, not user-declared in volumes:).
-	_, _, builders := splitServers(cfg.ServerDefs())
+	// (they are provider-managed, not user-declared in volumes:). Reuses
+	// `builders` from the firewall sweep above.
 	desiredVols := volumeNameSet(cfg.VolumeDefs())
 	for _, b := range builders {
 		desiredVols[names.BuilderCacheVolumeShort(b.Name)] = true

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/provider/s3ops"
@@ -153,6 +154,11 @@ func (c *BucketClient) tokenVerify(ctx context.Context) (string, error) {
 	return result.Result.ID, nil
 }
 
+// ListResources lists every R2 bucket on the account. R2 buckets carry
+// no native labels or tags surfaced via the Cloudflare API, so Owned
+// is computed from the deterministic `nvoi-` name prefix that
+// EnsureBucket stamps on creation. Pre-existing buckets that don't
+// match are surfaced with Owned=false.
 func (c *BucketClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
 	var resp struct {
 		Result struct {
@@ -167,6 +173,7 @@ func (c *BucketClient) ListResources(ctx context.Context) ([]provider.ResourceGr
 	g := provider.ResourceGroup{Name: "R2 Buckets", Columns: []string{"Name"}}
 	for _, b := range resp.Result.Buckets {
 		g.Rows = append(g.Rows, []string{b.Name})
+		g.Owned = append(g.Owned, strings.HasPrefix(b.Name, "nvoi-"))
 	}
 	return []provider.ResourceGroup{g}, nil
 }

@@ -16,6 +16,15 @@ type DNSClient struct {
 	zone   string // domain name for FQDN construction
 }
 
+// ManagedByComment is the marker stamped into the Cloudflare DNS
+// record's `comment` field at create/update time. Cloudflare DNS
+// records carry no free-form labels, so the comment is the only
+// stable provider-native ownership signal — any record carrying
+// this marker was created by nvoi (RouteTo for tunnel CNAMEs and
+// public-IP A records). ListResources reads it to populate the
+// Owned column on `nvoi resources`.
+const ManagedByComment = "managed-by:nvoi"
+
 // NewDNS creates a Cloudflare DNS provider.
 func NewDNS(creds map[string]string) *DNSClient {
 	apiKey := creds["api_key"]
@@ -93,10 +102,10 @@ func (d *DNSClient) ensureCNAME(ctx context.Context, domain, target string, prox
 		return err
 	}
 	for _, rec := range existing {
-		if rec.Content == target && rec.Proxied == proxied {
-			return nil // already correct
+		if rec.Content == target && rec.Proxied == proxied && rec.Comment == ManagedByComment {
+			return nil // already correct, ownership stamped
 		}
-		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: "CNAME", Name: fqdn, Content: target, TTL: 300, Proxied: proxied})
+		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: "CNAME", Name: fqdn, Content: target, TTL: 300, Proxied: proxied, Comment: ManagedByComment})
 	}
 	// No CNAME yet — remove any A/AAAA records that would block creation.
 	for _, rtype := range []string{"A", "AAAA"} {
@@ -110,7 +119,7 @@ func (d *DNSClient) ensureCNAME(ctx context.Context, domain, target string, prox
 			}
 		}
 	}
-	return d.createRecord(ctx, cfDNSRecord{Type: "CNAME", Name: fqdn, Content: target, TTL: 300, Proxied: proxied})
+	return d.createRecord(ctx, cfDNSRecord{Type: "CNAME", Name: fqdn, Content: target, TTL: 300, Proxied: proxied, Comment: ManagedByComment})
 }
 
 // ListBindings returns every A/AAAA record currently in the zone.
@@ -151,10 +160,10 @@ func (d *DNSClient) ensureAddress(ctx context.Context, domain, target string, pr
 	}
 
 	for _, rec := range existing {
-		if rec.Content == target && rec.Proxied == proxied {
-			return nil // already correct
+		if rec.Content == target && rec.Proxied == proxied && rec.Comment == ManagedByComment {
+			return nil // already correct, ownership stamped
 		}
-		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: rtype, Name: fqdn, Content: target, TTL: 300, Proxied: proxied})
+		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: rtype, Name: fqdn, Content: target, TTL: 300, Proxied: proxied, Comment: ManagedByComment})
 	}
 
 	// No address record yet — remove any CNAME that would block creation.
@@ -168,7 +177,7 @@ func (d *DNSClient) ensureAddress(ctx context.Context, domain, target string, pr
 		}
 	}
 
-	return d.createRecord(ctx, cfDNSRecord{Type: rtype, Name: fqdn, Content: target, TTL: 300, Proxied: proxied})
+	return d.createRecord(ctx, cfDNSRecord{Type: rtype, Name: fqdn, Content: target, TTL: 300, Proxied: proxied, Comment: ManagedByComment})
 }
 
 // ── API types ────────────────────────────────────────────────────────────────
@@ -180,6 +189,10 @@ type cfDNSRecord struct {
 	Content string `json:"content"`
 	TTL     int    `json:"ttl,omitempty"`
 	Proxied bool   `json:"proxied"`
+	// Comment carries ManagedByComment on records nvoi creates or
+	// updates. Cloudflare ignores the value semantically; we use it
+	// as the ownership marker for `nvoi resources`.
+	Comment string `json:"comment,omitempty"`
 }
 
 // ── API calls ────────────────────────────────────────────────────────────────
@@ -210,14 +223,27 @@ func (d *DNSClient) deleteRecord(ctx context.Context, id string) error {
 	return d.api.Do(ctx, "DELETE", fmt.Sprintf("/zones/%s/dns_records/%s", d.zoneID, id), nil, nil)
 }
 
+// ListResources lists every record in the zone with type A, AAAA, or
+// CNAME — the three nvoi creates. CNAMEs were dropped by the previous
+// implementation (it delegated to ListBindings, which is A/AAAA-only),
+// hiding tunnel records like `api.nvoi.to` from `nvoi resources`. The
+// Owned column reads the record `comment` against ManagedByComment;
+// pre-existing manual records and prior nvoi records that pre-date the
+// comment stamp surface as `Owned=false` until the next deploy
+// re-stamps them.
 func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
-	bindings, err := d.ListBindings(ctx)
-	if err != nil {
-		return nil, err
-	}
 	g := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "Target"}}
-	for _, b := range bindings {
-		g.Rows = append(g.Rows, []string{b.Type, b.Domain, b.Target})
+	for _, rtype := range []string{"A", "AAAA", "CNAME"} {
+		var resp struct {
+			Result []cfDNSRecord `json:"result"`
+		}
+		if err := d.api.Do(ctx, "GET", fmt.Sprintf("/zones/%s/dns_records?type=%s&per_page=1000", d.zoneID, rtype), nil, &resp); err != nil {
+			return nil, err
+		}
+		for _, rec := range resp.Result {
+			g.Rows = append(g.Rows, []string{rec.Type, rec.Name, rec.Content})
+			g.Owned = append(g.Owned, rec.Comment == ManagedByComment)
+		}
 	}
 	return []provider.ResourceGroup{g}, nil
 }

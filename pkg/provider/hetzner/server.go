@@ -29,6 +29,7 @@ type serverJSON struct {
 	ServerType struct {
 		Disk int `json:"disk"`
 	} `json:"server_type"`
+	Labels map[string]string `json:"labels"`
 }
 
 func serverFrom(s serverJSON) *provider.Server {
@@ -36,6 +37,7 @@ func serverFrom(s serverJSON) *provider.Server {
 		ID: strconv.FormatInt(s.ID, 10), Name: s.Name, Status: provider.ServerStatus(s.Status),
 		IPv4: s.PublicNet.IPv4.IP, IPv6: s.PublicNet.IPv6.IP,
 		DiskGB: s.ServerType.Disk,
+		Labels: s.Labels,
 	}
 	if len(s.PrivateNet) > 0 {
 		srv.PrivateIP = s.PrivateNet[0].IP
