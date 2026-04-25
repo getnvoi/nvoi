@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -321,7 +322,7 @@ func TestDatabases_NodeDriftEmitsPendingMigration(t *testing.T) {
 		t.Fatalf("seed existing StatefulSet: %v", err)
 	}
 	if err := kf.Client.EnsureSecret(
-		context.Background(), "nvoi-myapp-prod", "nvoi-myapp-prod-db-app-credentials",
+		context.Background(), "nvoi-myapp-prod", utils.OwnerDatabases, "nvoi-myapp-prod-db-app-credentials",
 		map[string]string{"url": "postgres://live@master:5432/myapp"},
 	); err != nil {
 		t.Fatalf("seed credentials Secret: %v", err)
@@ -540,4 +541,208 @@ func TestDatabases_NoBackup_OnlyTwoSuccesses(t *testing.T) {
 		}
 	}
 	_ = utils.SortedKeys(map[string]string{}) // keeps utils import in use
+}
+
+// TestDatabases_RemovingBackupSweepsBackupArtifacts locks the
+// acceptance criterion that removing `databases.X.backup` from cfg
+// drops the backup CronJob + backup-creds Secret on the next reconcile,
+// without touching the StatefulSet, Service, PVC, or credentials
+// Secret. The owner-scoped sweep is what makes this surgical.
+func TestDatabases_RemovingBackupSweepsBackupArtifacts(t *testing.T) {
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
+	cf.RegisterBucket("test-bucket-bkup-sweep")
+
+	dc := testDC(convergeMock())
+	dc.Creds = testCreds()
+	dc.Storage = app.ProviderRef{
+		Name:  "test-bucket-bkup-sweep",
+		Creds: map[string]string{"api_key": "x", "account_id": "acct"},
+	}
+
+	kf := kfFor(dc)
+	ctx := context.Background()
+	dbOwned := map[string]string{
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiOwner:    utils.OwnerDatabases,
+	}
+
+	// Seed the live cluster as if a previous deploy with backup
+	// configured had landed every DB workload + the backup pair.
+	if _, err := kf.Typed.AppsV1().StatefulSets("nvoi-myapp-prod").Create(ctx,
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.CoreV1().Services("nvoi-myapp-prod").Create(ctx,
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.CoreV1().PersistentVolumeClaims("nvoi-myapp-prod").Create(ctx,
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-data", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.CoreV1().Secrets("nvoi-myapp-prod").Create(ctx,
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-credentials", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// The two artifacts that should be swept when backup is removed:
+	if _, err := kf.Typed.BatchV1().CronJobs("nvoi-myapp-prod").Create(ctx,
+		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-backup", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.CoreV1().Secrets("nvoi-myapp-prod").Create(ctx,
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-backup-creds", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Cfg now has the DB but NO backup block.
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute"},
+		Databases: map[string]config.DatabaseDef{
+			"app": {
+				Engine: "postgres", Server: "master", Size: 20,
+				Credentials: &config.DatabaseCredentialsDef{User: "$U", Password: "$P", Database: "myapp"},
+			},
+		},
+	}
+	if _, _, err := Databases(ctx, dc, cfg, map[string]string{"U": "u", "P": "p"}); err != nil {
+		t.Fatalf("Databases: %v", err)
+	}
+
+	// Backup artifacts swept.
+	if kf.HasCronJob("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-backup") {
+		t.Error("backup CronJob should be swept after removing databases.app.backup")
+	}
+	if kf.HasSecret("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-backup-creds") {
+		t.Error("backup-creds Secret should be swept after removing databases.app.backup")
+	}
+	// DB workloads survive — sweep is desired-set-aware, not a nuke.
+	if !kf.HasStatefulSet("nvoi-myapp-prod", "nvoi-myapp-prod-db-app") {
+		t.Error("DB StatefulSet should survive backup removal")
+	}
+	if !kf.HasService("nvoi-myapp-prod", "nvoi-myapp-prod-db-app") {
+		t.Error("DB Service should survive backup removal")
+	}
+	if !kf.HasSecret("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-credentials") {
+		t.Error("DB credentials Secret should survive backup removal")
+	}
+}
+
+// TestDatabases_RemovingDatabaseSweepsAllArtifacts locks the
+// acceptance criterion that removing the entire `databases.X` from
+// cfg drops every per-DB k8s object on the next reconcile —
+// StatefulSet + Service + PVC + credentials Secret + backup CronJob +
+// backup-creds Secret. Branches (owner=database-branches) survive.
+func TestDatabases_RemovingDatabaseSweepsAllArtifacts(t *testing.T) {
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
+	cf.RegisterBucket("test-bucket-db-sweep")
+
+	dc := testDC(convergeMock())
+	dc.Creds = testCreds()
+	dc.Storage = app.ProviderRef{
+		Name:  "test-bucket-db-sweep",
+		Creds: map[string]string{"api_key": "x", "account_id": "acct"},
+	}
+
+	kf := kfFor(dc)
+	ctx := context.Background()
+	dbOwned := map[string]string{
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiOwner:    utils.OwnerDatabases,
+	}
+	branchOwned := map[string]string{
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiOwner:    utils.OwnerDatabaseBranches,
+	}
+
+	// Live cluster has every DB artifact + an ephemeral branch.
+	if _, err := kf.Typed.AppsV1().StatefulSets("nvoi-myapp-prod").Create(ctx,
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.CoreV1().Services("nvoi-myapp-prod").Create(ctx,
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.CoreV1().PersistentVolumeClaims("nvoi-myapp-prod").Create(ctx,
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-data", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.CoreV1().Secrets("nvoi-myapp-prod").Create(ctx,
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-credentials", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.BatchV1().CronJobs("nvoi-myapp-prod").Create(ctx,
+		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-backup", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := kf.Typed.CoreV1().Secrets("nvoi-myapp-prod").Create(ctx,
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-backup-creds", Namespace: "nvoi-myapp-prod", Labels: dbOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Branch — must survive parent-DB sweep.
+	if _, err := kf.Typed.AppsV1().StatefulSets("nvoi-myapp-prod").Create(ctx,
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-app-data-br-pr1", Namespace: "nvoi-myapp-prod", Labels: branchOwned}},
+		metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Cfg has zero databases — full removal scenario.
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute"},
+	}
+	if _, _, err := Databases(ctx, dc, cfg, nil); err != nil {
+		t.Fatalf("Databases: %v", err)
+	}
+
+	for kind, name := range map[string]string{
+		"StatefulSet":         "nvoi-myapp-prod-db-app",
+		"Service":             "nvoi-myapp-prod-db-app",
+		"PVC":                 "nvoi-myapp-prod-db-app-data",
+		"credentials Secret":  "nvoi-myapp-prod-db-app-credentials",
+		"backup CronJob":      "nvoi-myapp-prod-db-app-backup",
+		"backup-creds Secret": "nvoi-myapp-prod-db-app-backup-creds",
+	} {
+		switch kind {
+		case "StatefulSet":
+			if kf.HasStatefulSet("nvoi-myapp-prod", name) {
+				t.Errorf("%s %s should be swept", kind, name)
+			}
+		case "Service":
+			if kf.HasService("nvoi-myapp-prod", name) {
+				t.Errorf("%s %s should be swept", kind, name)
+			}
+		case "PVC":
+			if _, err := kf.Typed.CoreV1().PersistentVolumeClaims("nvoi-myapp-prod").Get(ctx, name, metav1.GetOptions{}); err == nil {
+				t.Errorf("%s %s should be swept", kind, name)
+			}
+		case "credentials Secret", "backup-creds Secret":
+			if kf.HasSecret("nvoi-myapp-prod", name) {
+				t.Errorf("%s %s should be swept", kind, name)
+			}
+		case "backup CronJob":
+			if kf.HasCronJob("nvoi-myapp-prod", name) {
+				t.Errorf("%s %s should be swept", kind, name)
+			}
+		}
+	}
+
+	// Branch (owner=database-branches) survives — its lifecycle is
+	// managed out-of-band by `nvoi database branch ...` CLI.
+	if !kf.HasStatefulSet("nvoi-myapp-prod", "nvoi-myapp-prod-db-app-data-br-pr1") {
+		t.Error("branch StatefulSet (owner=database-branches) was eaten by parent-DB sweep")
+	}
 }

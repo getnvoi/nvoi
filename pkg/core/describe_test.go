@@ -646,14 +646,14 @@ func TestClassifySecretOwner_Patterns(t *testing.T) {
 
 // TestDescribeWorkloads_ExcludesDatabaseOwned locks the WORKLOADS
 // section's scope: USER workloads only. DB StatefulSets carry
-// utils.LabelNvoiDatabase and surface in the DATABASES section with
+// nvoi/owner=databases and surface in the DATABASES section with
 // engine-aware columns; including them in WORKLOADS would be
 // duplicative noise.
 func TestDescribeWorkloads_ExcludesDatabaseOwned(t *testing.T) {
 	userDeployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "api", Namespace: "ns",
-			Labels: managedLabels(),
+			Labels: managedLabels(utils.LabelNvoiOwner, utils.OwnerServices),
 		},
 		Spec: appsv1.DeploymentSpec{
 			Template: corev1.PodTemplateSpec{
@@ -664,7 +664,7 @@ func TestDescribeWorkloads_ExcludesDatabaseOwned(t *testing.T) {
 	dbStatefulSet := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "nvoi-myapp-prod-db-main", Namespace: "ns",
-			Labels: managedLabels(utils.LabelNvoiDatabase, "main"),
+			Labels: managedLabels(utils.LabelNvoiOwner, utils.OwnerDatabases),
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Template: corev1.PodTemplateSpec{
@@ -686,14 +686,14 @@ func TestDescribeWorkloads_ExcludesDatabaseOwned(t *testing.T) {
 // TestDescribeCrons_IncludesDatabaseBackupCronJob locks the inverse:
 // CRONS section keeps DB-owned CronJobs (the daily backup is a real
 // cron the operator wants to see — schedule, status, age). The
-// orphan-sweep exclusion lives in ListCronJobNames; describe must NOT
-// also exclude them, otherwise operators lose visibility on their
-// backup schedule.
+// orphan-sweep is owner-scoped (services / crons can never see
+// databases-owned CronJobs); describe must NOT replicate that
+// scoping or operators lose visibility on their backup schedule.
 func TestDescribeCrons_IncludesDatabaseBackupCronJob(t *testing.T) {
 	userCron := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "cleanup", Namespace: "ns",
-			Labels: managedLabels(),
+			Labels: managedLabels(utils.LabelNvoiOwner, utils.OwnerCrons),
 		},
 		Spec: batchv1.CronJobSpec{
 			Schedule: "0 1 * * *",
@@ -707,7 +707,7 @@ func TestDescribeCrons_IncludesDatabaseBackupCronJob(t *testing.T) {
 	dbBackupCron := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "nvoi-myapp-prod-db-main-backup", Namespace: "ns",
-			Labels: managedLabels(utils.LabelNvoiDatabase, "main"),
+			Labels: managedLabels(utils.LabelNvoiOwner, utils.OwnerDatabases),
 		},
 		Spec: batchv1.CronJobSpec{
 			Schedule: "0 3 * * *",

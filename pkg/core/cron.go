@@ -94,7 +94,7 @@ func CronSet(ctx context.Context, req CronSetRequest) error {
 	if err != nil {
 		return fmt.Errorf("build cronjob: %w", err)
 	}
-	if err := kc.Apply(ctx, ns, cron); err != nil {
+	if err := kc.ApplyOwned(ctx, ns, utils.OwnerCrons, cron); err != nil {
 		return err
 	}
 	out.Success("applied")

@@ -33,11 +33,15 @@ func TestCrons_OrphanRemoved(t *testing.T) {
 	dc := testDC(ssh)
 	kf := kfFor(dc)
 
-	// Pre-populate orphan CronJob (nvoi labels for orphan listing).
+	// Pre-populate orphan CronJob with owner=crons — same labels
+	// ApplyOwned would have stamped at creation, so SweepOwned sees it.
 	_, err := kf.Typed.BatchV1().CronJobs(testNS).Create(context.Background(),
 		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{
 			Name: "old-job", Namespace: testNS,
-			Labels: map[string]string{utils.LabelAppManagedBy: utils.LabelManagedBy},
+			Labels: map[string]string{
+				utils.LabelAppManagedBy: utils.LabelManagedBy,
+				utils.LabelNvoiOwner:    utils.OwnerCrons,
+			},
 		}},
 		metav1.CreateOptions{})
 	if err != nil {

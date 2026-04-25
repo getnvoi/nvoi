@@ -63,7 +63,7 @@ func Registries(ctx context.Context, dc *config.DeployContext, cfg *config.AppCo
 	if err != nil {
 		return fmt.Errorf("build pull secret: %w", err)
 	}
-	if err := kc.Apply(ctx, ns, secret); err != nil {
+	if err := kc.ApplyOwned(ctx, ns, utils.OwnerRegistries, secret); err != nil {
 		return fmt.Errorf("apply pull secret: %w", err)
 	}
 	out.Success(fmt.Sprintf("pull secret %s/%s applied", ns, kube.PullSecretName))

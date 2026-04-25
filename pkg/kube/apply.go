@@ -56,6 +56,37 @@ func gvkOf(obj runtime.Object) (schema.GroupVersionKind, error) {
 	return gvks[0], nil
 }
 
+// ApplyOwned stamps the standard managed-by + owner labels on `obj` then
+// delegates to Apply. Every k8s object created or updated by reconcile MUST
+// go through this path — discipline enforced structurally, not by review.
+//
+// Stamps:
+//   - app.kubernetes.io/managed-by=nvoi  (idempotent — builders also set it)
+//   - nvoi/owner=<owner>                  (single discriminator for SweepOwned)
+//
+// `owner` is one of utils.OwnerServices / OwnerCrons / OwnerDatabases /
+// OwnerTunnel / OwnerCaddy / OwnerRegistries. Empty owner is a hard error
+// — every nvoi-managed object belongs to exactly one reconcile step.
+//
+// Existing labels on `obj` are preserved (the helper merges; it does not
+// replace). The stamp survives every Update because Apply's typed-clientset
+// path issues an Update with the resolved object, not a strategic merge.
+func (c *Client) ApplyOwned(ctx context.Context, ns, owner string, obj runtime.Object) error {
+	if owner == "" {
+		return fmt.Errorf("ApplyOwned: owner required")
+	}
+	if accessor, ok := obj.(metav1.Object); ok {
+		labels := accessor.GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels[utils.LabelAppManagedBy] = utils.LabelManagedBy
+		labels[utils.LabelNvoiOwner] = owner
+		accessor.SetLabels(labels)
+	}
+	return c.Apply(ctx, ns, obj)
+}
+
 // Apply upserts a typed object as nvoi.
 //
 // Every kind we ship is dispatched through the typed clientset
@@ -65,6 +96,11 @@ func gvkOf(obj runtime.Object) (schema.GroupVersionKind, error) {
 //
 // Unknown kinds error out — there is no dynamic / SSA fallback. Add the kind
 // to applyTyped if you need a new resource type.
+//
+// Most reconcile call sites should use ApplyOwned instead — it stamps the
+// owner label that drives SweepOwned. Apply remains exported because some
+// internal kube.Client helpers (EnsureNamespace) call it for cluster-scoped
+// resources that don't carry an owner.
 func (c *Client) Apply(ctx context.Context, ns string, obj runtime.Object) error {
 	gvk, err := gvkOf(obj)
 	if err != nil {

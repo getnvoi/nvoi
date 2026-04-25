@@ -61,21 +61,20 @@ func Crons(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig,
 		}
 	}
 
-	// Orphan cronjobs — query kube directly. Same pattern as Services.
-	live, err := dc.Cluster.MasterKube.ListCronJobNames(ctx, names.KubeNamespace())
-	if err != nil {
-		dc.Cluster.Log().Warning(fmt.Sprintf("list cronjobs for orphan sweep: %s", err))
-		return nil
+	// Orphan sweep — owner-scoped, so DB backup CronJobs (owner=
+	// databases) can never be seen here. Per-cron secrets follow the
+	// same `<name>-secrets` shape as services.
+	ns := names.KubeNamespace()
+	kc := dc.Cluster.MasterKube
+	desiredSecrets := make([]string, 0, len(cronNames))
+	for _, n := range cronNames {
+		desiredSecrets = append(desiredSecrets, names.KubeServiceSecrets(n))
 	}
-	desired := toSet(cronNames)
-	for _, name := range live {
-		if desired[name] {
-			continue
-		}
-		if err := app.CronDelete(ctx, app.CronDeleteRequest{Cluster: dc.Cluster, Cfg: config.NewView(cfg), Name: name}); err != nil {
-			dc.Cluster.Log().Warning(fmt.Sprintf("orphan cron %s not removed: %s", name, err))
-		}
-		deleteServiceSecret(ctx, dc, names, name)
+	if err := kc.SweepOwned(ctx, ns, utils.OwnerCrons, kube.KindCronJob, cronNames); err != nil {
+		dc.Cluster.Log().Warning(fmt.Sprintf("crons sweep cronjobs: %s", err))
+	}
+	if err := kc.SweepOwned(ctx, ns, utils.OwnerCrons, kube.KindSecret, desiredSecrets); err != nil {
+		dc.Cluster.Log().Warning(fmt.Sprintf("crons sweep secrets: %s", err))
 	}
 	return nil
 }

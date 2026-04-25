@@ -71,11 +71,3 @@ func ResolveServers(cfg *config.AppConfig, servers []string, server string, moun
 	}
 	return nil
 }
-
-func toSet(items []string) map[string]bool {
-	m := make(map[string]bool, len(items))
-	for _, item := range items {
-		m[item] = true
-	}
-	return m
-}
