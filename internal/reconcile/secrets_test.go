@@ -137,3 +137,108 @@ func TestSecrets_MissingGlobalKey_Errors(t *testing.T) {
 		t.Fatalf("expected error for missing global secret, got: %v", err)
 	}
 }
+
+// TestSecrets_CollectsDatabaseCredentialVars locks the bug fix for
+// `bin/deploy → databases.main.user: $MAIN_POSTGRES_USER is not a known
+// env var`. databases.X.credentials.{user,password,database} carry
+// $VAR refs that resolve against the same sources map services use,
+// so the collector must walk them or the secrets backend never gets
+// queried. The CLI side already collected these (cmd/cli/database.go);
+// the reconcile-deploy side was missed — same bug class as #69's
+// ae93378 fix on the resolution side, but on the collection side.
+func TestSecrets_CollectsDatabaseCredentialVars(t *testing.T) {
+	dc := testDCWithCreds(convergeMock(),
+		"MAIN_POSTGRES_USER", "appuser",
+		"MAIN_POSTGRES_PASSWORD", "s3cret",
+		"MAIN_POSTGRES_DB", "myapp",
+	)
+	cfg := &config.AppConfig{
+		Databases: map[string]config.DatabaseDef{
+			"main": {
+				Engine: "postgres",
+				Server: "db-master",
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "$MAIN_POSTGRES_USER",
+					Password: "$MAIN_POSTGRES_PASSWORD",
+					Database: "$MAIN_POSTGRES_DB",
+				},
+			},
+		},
+	}
+
+	vals, err := Secrets(context.Background(), dc, cfg)
+	if err != nil {
+		t.Fatalf("Secrets: %v", err)
+	}
+	for k, want := range map[string]string{
+		"MAIN_POSTGRES_USER":     "appuser",
+		"MAIN_POSTGRES_PASSWORD": "s3cret",
+		"MAIN_POSTGRES_DB":       "myapp",
+	} {
+		if vals[k] != want {
+			t.Errorf("vals[%q] = %q, want %q — collector missed databases.X.credentials", k, vals[k], want)
+		}
+	}
+}
+
+// SaaS engines have no credentials block. The collector must skip them
+// without panicking on the nil pointer.
+func TestSecrets_SaaSDatabaseSkippedNoPanic(t *testing.T) {
+	dc := testDCWithCreds(convergeMock())
+	cfg := &config.AppConfig{
+		Databases: map[string]config.DatabaseDef{
+			"analytics": {Engine: "neon", Region: "eu-central-1"},
+		},
+	}
+	if _, err := Secrets(context.Background(), dc, cfg); err != nil {
+		t.Fatalf("SaaS database with no credentials block must not error: %v", err)
+	}
+}
+
+// TestSecrets_CollectsServiceEnvVars locks the symmetric gap on
+// services.X.env: entries — the reconciler resolves env entries against
+// the same sources map (services.go calls resolveEntry → resolveRef),
+// so the collector must walk RHS $VAR refs there too. Same bug class
+// as the database fields.
+func TestSecrets_CollectsServiceEnvVars(t *testing.T) {
+	dc := testDCWithCreds(convergeMock(), "EMAIL_HOST", "smtp.example.com")
+	cfg := &config.AppConfig{
+		Services: map[string]config.ServiceDef{
+			"api": {
+				Image: "nginx",
+				Env:   []string{"SMTP_HOST=$EMAIL_HOST"},
+			},
+		},
+	}
+
+	vals, err := Secrets(context.Background(), dc, cfg)
+	if err != nil {
+		t.Fatalf("Secrets: %v", err)
+	}
+	if vals["EMAIL_HOST"] != "smtp.example.com" {
+		t.Errorf("vals[EMAIL_HOST] = %q, want %q — collector missed services.X.env", vals["EMAIL_HOST"], "smtp.example.com")
+	}
+}
+
+// TestSecrets_CollectsCronEnvVars — same symmetry for crons.X.env.
+func TestSecrets_CollectsCronEnvVars(t *testing.T) {
+	dc := testDCWithCreds(convergeMock(), "REPORT_BUCKET", "nightly-reports")
+	cfg := &config.AppConfig{
+		Crons: map[string]config.CronDef{
+			"nightly": {
+				Image:    "busybox",
+				Schedule: "0 3 * * *",
+				Env:      []string{"BUCKET=$REPORT_BUCKET"},
+			},
+		},
+	}
+
+	vals, err := Secrets(context.Background(), dc, cfg)
+	if err != nil {
+		t.Fatalf("Secrets: %v", err)
+	}
+	if vals["REPORT_BUCKET"] != "nightly-reports" {
+		t.Errorf("vals[REPORT_BUCKET] = %q, want %q — collector missed crons.X.env", vals["REPORT_BUCKET"], "nightly-reports")
+	}
+}
