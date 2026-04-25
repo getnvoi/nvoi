@@ -103,7 +103,7 @@ func runCIInit(ctx context.Context, rt *runtime, nvoiVersion string) error {
 		return err
 	}
 
-	rt.out.Info(fmt.Sprintf("syncing %d secret(s)", len(secrets)))
+	rt.out.Info(fmt.Sprintf("syncing %s", utils.Pluralize(len(secrets), "secret", "")))
 	if err := ciProv.SyncSecrets(ctx, secrets); err != nil {
 		return err
 	}

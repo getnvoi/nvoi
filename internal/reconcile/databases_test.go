@@ -421,3 +421,123 @@ func TestDatabases_FirstDeploySkipsDriftDetection(t *testing.T) {
 		t.Errorf("no pending migrations expected on first deploy, got %+v", pending)
 	}
 }
+
+// TestDatabases_EmitsOperatorFacingLog locks the deploy-log contract:
+// every database reconcile MUST open a `database/set/<name>` Command
+// group and emit Successes for the steps that ran. Silent reconcile
+// was a real production regression — operators thought databases
+// weren't being reconciled at all because no log lines fired between
+// `registry set` and `service set`. This test catches a future revert.
+//
+// Asserts on the actual MockOutput capture (Commands + Successes
+// arrays) — not on stdout, not on the renderer. The Command/Success
+// shape is the contract; renderers are downstream.
+func TestDatabases_EmitsOperatorFacingLog(t *testing.T) {
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
+	cf.RegisterBucket("test-bucket")
+
+	dc := testDC(convergeMock())
+	dc.Creds = testCreds()
+	dc.Storage = app.ProviderRef{
+		Name:  "test-bucket",
+		Creds: map[string]string{"api_key": "x", "account_id": "acct"},
+	}
+	out := dc.Cluster.Output.(*testutil.MockOutput)
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket"},
+		Databases: map[string]config.DatabaseDef{
+			"app": {
+				Engine: "postgres",
+				Server: "master",
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "$U",
+					Password: "$P",
+					Database: "myapp",
+				},
+				Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
+			},
+		},
+	}
+
+	if _, _, err := Databases(context.Background(), dc, cfg, map[string]string{"U": "u", "P": "p"}); err != nil {
+		t.Fatalf("Databases: %v", err)
+	}
+
+	// Command group — operator sees "database set app" in the deploy log.
+	wantCommand := "database/set/app"
+	found := false
+	for _, c := range out.Commands {
+		if c == wantCommand {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("missing Command %q; got Commands=%v", wantCommand, out.Commands)
+	}
+
+	// Three Successes per DB with backup configured: bucket, credentials,
+	// workloads. Substring match because we don't lock exact wording.
+	wantContains := []string{
+		"backup bucket",      // ensureDatabaseBackupBucket success
+		"credentials secret", // EnsureCredentials success
+		"applied",            // workloads applied
+	}
+	for _, want := range wantContains {
+		hit := false
+		for _, s := range out.Successes {
+			if strings.Contains(s, want) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			t.Errorf("missing Success containing %q; got Successes=%v", want, out.Successes)
+		}
+	}
+}
+
+// TestDatabases_NoBackup_OnlyTwoSuccesses locks the partial-emission
+// contract: a database WITHOUT backup config must NOT emit a "backup
+// bucket" success (because no bucket gets provisioned).
+func TestDatabases_NoBackup_OnlyTwoSuccesses(t *testing.T) {
+	cf := testutil.NewCloudflareFake(t, testutil.CloudflareFakeOptions{})
+	cf.RegisterBucket("test-noop")
+
+	dc := testDC(convergeMock())
+	dc.Creds = testCreds()
+	dc.Storage = app.ProviderRef{
+		Name:  "test-noop",
+		Creds: map[string]string{"api_key": "x", "account_id": "acct"},
+	}
+	out := dc.Cluster.Output.(*testutil.MockOutput)
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Providers: config.ProvidersDef{Infra: "test-compute"},
+		Databases: map[string]config.DatabaseDef{
+			"app": {
+				Engine: "postgres",
+				Server: "master",
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "$U",
+					Password: "$P",
+					Database: "myapp",
+				},
+			},
+		},
+	}
+	if _, _, err := Databases(context.Background(), dc, cfg, map[string]string{"U": "u", "P": "p"}); err != nil {
+		t.Fatalf("Databases: %v", err)
+	}
+	for _, s := range out.Successes {
+		if strings.Contains(s, "backup bucket") {
+			t.Errorf("must NOT emit backup-bucket Success when backup unconfigured; got %q", s)
+		}
+	}
+	_ = utils.SortedKeys(map[string]string{}) // keeps utils import in use
+}

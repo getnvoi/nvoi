@@ -34,3 +34,23 @@ func HumanAge(timestamp string) string {
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
 }
+
+// Pluralize returns "<n> <singular>" when n == 1 and "<n> <plural>" otherwise.
+// If plural is empty, defaults to singular + "s".
+//
+//	Pluralize(1, "host", "")       → "1 host"
+//	Pluralize(2, "host", "")       → "2 hosts"
+//	Pluralize(0, "secret", "")     → "0 secrets"
+//	Pluralize(3, "person", "people") → "3 people"
+//
+// Used by reconcile + cmd/cli output to avoid the "(s)" pseudo-pluralization
+// pattern that reads as bad UX.
+func Pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, singular)
+	}
+	if plural == "" {
+		plural = singular + "s"
+	}
+	return fmt.Sprintf("%d %s", n, plural)
+}

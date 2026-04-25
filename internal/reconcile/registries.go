@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Registries reconciles the cluster's image-pull credentials.
@@ -51,7 +52,7 @@ func Registries(ctx context.Context, dc *config.DeployContext, cfg *config.AppCo
 		return nil
 	}
 
-	out.Command("registry", "set", fmt.Sprintf("%d host(s)", len(cfg.Registry)))
+	out.Command("registry", "set", utils.Pluralize(len(cfg.Registry), "host", ""))
 
 	resolved, err := resolveRegistries(dc, cfg)
 	if err != nil {

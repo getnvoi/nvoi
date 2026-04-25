@@ -132,6 +132,29 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 // recreate the StatefulSet on the new node with fresh PGDATA — which
 // is exactly what migrate wants after it has captured a backup.
 func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, names *utils.Names, name string, def config.DatabaseDef, sources map[string]string) (string, error) {
+	out := dc.Cluster.Log()
+
+	// Open the operator-facing group with engine + topology so the
+	// deploy log shows what's about to converge per database. Mirrors
+	// how `service set api`, `instance set ...`, `firewall set ...`
+	// open their groups — the sibling reconcile steps are loud, this
+	// one used to be silent which made it look like database wasn't
+	// reconciling at all.
+	if def.Server != "" {
+		out.Command("database", "set", name,
+			"engine", def.Engine,
+			"server", def.Server,
+			"size", fmt.Sprintf("%dGiB", def.Size),
+		)
+	} else if def.Region != "" {
+		out.Command("database", "set", name,
+			"engine", def.Engine,
+			"region", def.Region,
+		)
+	} else {
+		out.Command("database", "set", name, "engine", def.Engine)
+	}
+
 	creds, err := resolveDatabaseProviderCreds(dc.Creds, def.Engine)
 	if err != nil {
 		return "", fmt.Errorf("databases.%s.provider: %w", name, err)
@@ -157,7 +180,7 @@ func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *co
 	// matches; bare `managed-by` (Labels()) is for provider-side
 	// resources only.
 	req.Labels = names.KubeLabels()
-	req.Log = dc.Cluster.Log()
+	req.Log = out
 	req.Kube = dc.Cluster.MasterKube
 
 	// Dial SSH to the DB's target node for any host-level setup the
@@ -181,12 +204,18 @@ func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *co
 		if err := ensureDatabaseBackupBucket(ctx, dc, cfg, names, name, def, &req); err != nil {
 			return "", err
 		}
+		out.Success(fmt.Sprintf(
+			"backup bucket %s (schedule: %s, retention: %dd)",
+			names.KubeDatabaseBackupBucket(name), def.Backup.Schedule, def.Backup.Retention,
+		))
 	}
 
 	resolved, err := db.EnsureCredentials(ctx, dc.Cluster.MasterKube, req)
 	if err != nil {
 		return "", fmt.Errorf("databases.%s.ensure credentials: %w", name, err)
 	}
+	out.Success(fmt.Sprintf("credentials secret %s applied", names.KubeDatabaseCredentials(name)))
+
 	plan, err := db.Reconcile(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("databases.%s.reconcile: %w", name, err)
@@ -196,6 +225,8 @@ func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *co
 			return "", fmt.Errorf("databases.%s.apply: %w", name, err)
 		}
 	}
+	out.Success("applied")
+
 	return resolved.URL, nil
 }
 
