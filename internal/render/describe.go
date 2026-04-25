@@ -38,6 +38,13 @@ func RenderDescribe(res *pkgcore.DescribeResult) {
 		}
 	}
 
+	if len(res.Databases) > 0 {
+		t = g.Add("DATABASES", "NAME", "ENGINE", "ENDPOINT", "STATE", "LIVE")
+		for _, d := range res.Databases {
+			t.Row(d.Name, d.Engine, d.Endpoint, d.State, d.Live)
+		}
+	}
+
 	if len(res.Ingress) > 0 {
 		t = g.Add("INGRESS", "DOMAIN", "SERVICE", "PORT")
 		for _, i := range res.Ingress {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -14,6 +16,13 @@ import (
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
+
+// describeDatabaseProbeTimeout caps each ExecSQL("SELECT 1") so describe
+// stays snappy when one DB is unreachable. 3s is enough for cross-region
+// SaaS hops + cold-start auth, short enough that a wedged probe doesn't
+// block the read-only command. Probes run in parallel — total wall-time
+// ≈ slowest probe, not sum.
+const describeDatabaseProbeTimeout = 3 * time.Second
 
 // ── Request / Result types ──────────────────────────────────────────────────────
 
@@ -26,6 +35,21 @@ type DescribeRequest struct {
 	// (DATABASE_URL_X, storage creds) surface alongside explicit
 	// secrets: declarations.
 	Workloads []string
+	// Databases is one DatabaseProbe per cfg.Databases entry, pre-
+	// resolved at the cmd boundary so describe can run a parallel
+	// live ExecSQL ping against each. Empty when cfg has no databases.
+	Databases []DatabaseProbe
+}
+
+// DatabaseProbe carries everything Describe needs to render one row of
+// the DATABASES section + run a 3-second live SELECT 1. Resolution
+// happens at the cmd boundary (where credentials are available); core
+// just calls Provider.ExecSQL through the closure.
+type DatabaseProbe struct {
+	Name     string                    // cfg.Databases key (e.g. "main")
+	Engine   string                    // "postgres" | "neon" | "planetscale"
+	Provider provider.DatabaseProvider // resolved with creds
+	Request  provider.DatabaseRequest  // full request (Kube, Namespace, PodName, Spec, …)
 }
 
 type DescribeNode struct {
@@ -77,6 +101,26 @@ type DescribeSecret struct {
 	Service string `json:"service"` // which service/cron owns this secret
 }
 
+// DescribeDatabase is one row of the DATABASES section. Engine-agnostic
+// columns: NAME, ENGINE, ENDPOINT, STATE (cluster-derived), LIVE (probe).
+//
+// State values:
+//   - "Ready 1/1"      — selfhosted StatefulSet readiness
+//   - "Ready"          — SaaS, credentials Secret present with non-empty url
+//   - "Not reconciled" — credentials Secret absent (deploy hasn't run, or DB step errored)
+//
+// Live values:
+//   - "Up"             — ExecSQL("SELECT 1") returned ok within timeout
+//   - "Down: <reason>" — ExecSQL errored; short reason from the provider
+//   - "—"              — probe skipped (Not reconciled, or no probe configured)
+type DescribeDatabase struct {
+	Name     string `json:"name"`
+	Engine   string `json:"engine"`
+	Endpoint string `json:"endpoint"`
+	State    string `json:"state"`
+	Live     string `json:"live"`
+}
+
 type DescribeResult struct {
 	Namespace string             `json:"namespace"`
 	Nodes     []DescribeNode     `json:"nodes"`
@@ -84,6 +128,7 @@ type DescribeResult struct {
 	Pods      []DescribePod      `json:"pods"`
 	Services  []DescribeService  `json:"services"`
 	Crons     []DescribeCron     `json:"crons"`
+	Databases []DescribeDatabase `json:"databases"`
 	Ingress   []DescribeIngress  `json:"ingress"`
 	Secrets   []DescribeSecret   `json:"secrets"`
 	Storage   []StorageItem      `json:"storage"`
@@ -118,6 +163,10 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		return result, ctx.Err()
 	}
 	result.Crons = describeCrons(ctx, kc, ns)
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
+	result.Databases = describeDatabases(ctx, kc, ns, req.Databases)
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
@@ -355,6 +404,128 @@ func describePods(ctx context.Context, kc *kube.Client, ns string) []DescribePod
 		})
 	}
 	return out
+}
+
+// describeDatabases populates one DescribeDatabase row per probe.
+// Cluster-derived state + a parallel ExecSQL("SELECT 1") liveness ping
+// per DB, each capped at describeDatabaseProbeTimeout.
+//
+// State derivation:
+//   - credentials Secret missing → "Not reconciled", probe skipped (Live="—")
+//   - selfhosted (postgres): StatefulSet ReadyReplicas/Replicas → "Ready X/Y"
+//   - SaaS (neon, planetscale): credentials Secret present with non-empty
+//     `url` → "Ready"; the Secret IS the proof of provider-side state
+func describeDatabases(ctx context.Context, kc *kube.Client, ns string, probes []DatabaseProbe) []DescribeDatabase {
+	if len(probes) == 0 {
+		return nil
+	}
+	out := make([]DescribeDatabase, len(probes))
+	var wg sync.WaitGroup
+	for i, p := range probes {
+		i, p := i, p
+		// Synchronous cluster-side reads (cheap; no outbound). Sets
+		// Endpoint + State + a default Live="—" — the parallel probe
+		// below overwrites Live when it's worth running.
+		out[i] = describeDatabaseFromCluster(ctx, kc, ns, p)
+		if out[i].State == "Not reconciled" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i].Live = probeDatabaseLive(ctx, p)
+		}()
+	}
+	wg.Wait()
+	return out
+}
+
+// describeDatabaseFromCluster populates the cluster-derived fields
+// (Endpoint, State) without reaching out to any provider API. Read-only
+// against the kube apiserver; never blocks longer than a Get.
+func describeDatabaseFromCluster(ctx context.Context, kc *kube.Client, ns string, p DatabaseProbe) DescribeDatabase {
+	row := DescribeDatabase{Name: p.Name, Engine: p.Engine, Live: "—"}
+
+	credsName := p.Request.CredentialsSecretName
+	if credsName == "" {
+		row.State = "Not reconciled"
+		return row
+	}
+	credsSecret, err := kc.Clientset().CoreV1().Secrets(ns).Get(ctx, credsName, metav1.GetOptions{})
+	if err != nil || credsSecret == nil {
+		row.State = "Not reconciled"
+		return row
+	}
+	url := string(credsSecret.Data["url"])
+	host := string(credsSecret.Data["host"])
+	port := string(credsSecret.Data["port"])
+	if url == "" {
+		row.State = "Not reconciled"
+		return row
+	}
+	if host != "" && port != "" {
+		row.Endpoint = fmt.Sprintf("%s:%s", host, port)
+	} else {
+		row.Endpoint = host
+	}
+
+	// Selfhosted: defer to StatefulSet readiness for the State column —
+	// "Ready 1/1" is more precise than the Secret's mere presence
+	// (Secret is created early in Reconcile; StatefulSet readiness
+	// reflects pod availability).
+	if p.Request.PodName != "" {
+		stsName := strings.TrimSuffix(p.Request.PodName, "-0")
+		ss, err := kc.Clientset().AppsV1().StatefulSets(ns).Get(ctx, stsName, metav1.GetOptions{})
+		if err == nil && ss != nil {
+			replicas := int32(0)
+			if ss.Spec.Replicas != nil {
+				replicas = *ss.Spec.Replicas
+			}
+			row.State = fmt.Sprintf("Ready %d/%d", ss.Status.ReadyReplicas, replicas)
+			return row
+		}
+		// StatefulSet missing but credentials Secret present is the
+		// edge case where reconcile got partway through. Treat as
+		// not-yet-ready rather than not-reconciled (the Secret IS
+		// reconciled state).
+		row.State = "Pending"
+		return row
+	}
+
+	// SaaS: Secret presence is the reconciliation signal. Per-provider
+	// branching (Neon project state, PlanetScale db state) belongs in
+	// `nvoi resources`, not here.
+	row.State = "Ready"
+	return row
+}
+
+// probeDatabaseLive runs ExecSQL("SELECT 1") with a hard timeout and
+// returns the Live column value. Errors are short-summarized — the
+// whole reason for the column is "is the DB reachable RIGHT NOW", not
+// a full diagnostic dump.
+func probeDatabaseLive(parent context.Context, p DatabaseProbe) string {
+	if p.Provider == nil {
+		return "—"
+	}
+	ctx, cancel := context.WithTimeout(parent, describeDatabaseProbeTimeout)
+	defer cancel()
+
+	if _, err := p.Provider.ExecSQL(ctx, p.Request, "SELECT 1"); err != nil {
+		// Trim the wrapper noise so the table column stays readable.
+		// "postgres.ExecSQL: rpc error: ..." → "rpc error: ..."
+		msg := err.Error()
+		if i := strings.Index(msg, ": "); i > 0 && i < 30 {
+			msg = msg[i+2:]
+		}
+		if len(msg) > 60 {
+			msg = msg[:57] + "..."
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			return "Down: timeout"
+		}
+		return "Down: " + msg
+	}
+	return "Up"
 }
 
 func describeServices(ctx context.Context, kc *kube.Client, ns string) []DescribeService {

@@ -2,6 +2,10 @@ package core
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +17,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -274,5 +279,221 @@ func TestDescribeWorkloads_FiltersUnmanaged(t *testing.T) {
 	workloads := describeWorkloads(context.Background(), kc, "ns")
 	if len(workloads) != 1 || workloads[0].Name != "web" {
 		t.Errorf("unmanaged not filtered: %+v", workloads)
+	}
+}
+
+// ── DATABASES section (probe-driven, parallel) ──────────────────────────────
+
+// fakeDBProvider is a minimal DatabaseProvider for the describe tests.
+// It satisfies the interface only to the extent needed: ExecSQL is the
+// one method describeDatabases calls. Everything else returns zero values.
+type fakeDBProvider struct {
+	execErr error
+	execCnt int
+}
+
+func (f *fakeDBProvider) ValidateCredentials(context.Context) error { return nil }
+func (f *fakeDBProvider) EnsureCredentials(context.Context, *kube.Client, provider.DatabaseRequest) (provider.DatabaseCredentials, error) {
+	return provider.DatabaseCredentials{}, nil
+}
+func (f *fakeDBProvider) Reconcile(context.Context, provider.DatabaseRequest) (*provider.DatabasePlan, error) {
+	return nil, nil
+}
+func (f *fakeDBProvider) Delete(context.Context, provider.DatabaseRequest) error { return nil }
+func (f *fakeDBProvider) ExecSQL(_ context.Context, _ provider.DatabaseRequest, _ string) (*provider.SQLResult, error) {
+	f.execCnt++
+	return &provider.SQLResult{}, f.execErr
+}
+func (f *fakeDBProvider) BackupNow(context.Context, provider.DatabaseRequest) (*provider.BackupRef, error) {
+	return nil, nil
+}
+func (f *fakeDBProvider) ListBackups(context.Context, provider.DatabaseRequest) ([]provider.BackupRef, error) {
+	return nil, nil
+}
+func (f *fakeDBProvider) DownloadBackup(context.Context, provider.DatabaseRequest, string, io.Writer) error {
+	return nil
+}
+func (f *fakeDBProvider) Restore(context.Context, provider.DatabaseRequest, string) error {
+	return nil
+}
+func (f *fakeDBProvider) ListResources(context.Context) ([]provider.ResourceGroup, error) {
+	return nil, nil
+}
+func (f *fakeDBProvider) Close() error { return nil }
+
+// TestDescribeDatabases_NotReconciled_NoSecret locks the read-only path
+// for the "deploy hasn't run yet" case: credentials Secret missing →
+// State=Not reconciled, Live=—, no probe call (ExecSQL not invoked).
+func TestDescribeDatabases_NotReconciled_NoSecret(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	fp := &fakeDBProvider{}
+	probe := DatabaseProbe{
+		Name:     "main",
+		Engine:   "postgres",
+		Provider: fp,
+		Request: provider.DatabaseRequest{
+			CredentialsSecretName: "nvoi-myapp-prod-db-main-credentials",
+			PodName:               "nvoi-myapp-prod-db-main-0",
+		},
+	}
+	kc := newKC()
+
+	rows := describeDatabases(context.Background(), kc, ns, []DatabaseProbe{probe})
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+	if rows[0].State != "Not reconciled" {
+		t.Errorf("State = %q, want Not reconciled", rows[0].State)
+	}
+	if rows[0].Live != "—" {
+		t.Errorf("Live = %q, want —", rows[0].Live)
+	}
+	if fp.execCnt != 0 {
+		t.Errorf("probe ran on Not reconciled DB (ExecSQL called %d times)", fp.execCnt)
+	}
+}
+
+// TestDescribeDatabases_Selfhosted_Up locks the happy path for postgres:
+// Secret + StatefulSet both present, ExecSQL succeeds → State=Ready 1/1,
+// Live=Up, Endpoint shows the in-cluster Service host:port.
+func TestDescribeDatabases_Selfhosted_Up(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	credsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvoi-myapp-prod-db-main-credentials", Namespace: ns,
+		},
+		Data: map[string][]byte{
+			"url":  []byte("postgres://u:p@nvoi-myapp-prod-db-main:5432/myapp"),
+			"host": []byte("nvoi-myapp-prod-db-main"),
+			"port": []byte("5432"),
+		},
+	}
+	one := int32(1)
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvoi-myapp-prod-db-main", Namespace: ns},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &one},
+		Status:     appsv1.StatefulSetStatus{ReadyReplicas: 1},
+	}
+	kc := newKC(credsSecret, sts)
+	fp := &fakeDBProvider{}
+	probe := DatabaseProbe{
+		Name:     "main",
+		Engine:   "postgres",
+		Provider: fp,
+		Request: provider.DatabaseRequest{
+			CredentialsSecretName: "nvoi-myapp-prod-db-main-credentials",
+			PodName:               "nvoi-myapp-prod-db-main-0",
+		},
+	}
+
+	rows := describeDatabases(context.Background(), kc, ns, []DatabaseProbe{probe})
+	if rows[0].State != "Ready 1/1" {
+		t.Errorf("State = %q, want Ready 1/1", rows[0].State)
+	}
+	if rows[0].Live != "Up" {
+		t.Errorf("Live = %q, want Up", rows[0].Live)
+	}
+	if rows[0].Endpoint != "nvoi-myapp-prod-db-main:5432" {
+		t.Errorf("Endpoint = %q", rows[0].Endpoint)
+	}
+	if fp.execCnt != 1 {
+		t.Errorf("ExecSQL called %d times, want 1", fp.execCnt)
+	}
+}
+
+// TestDescribeDatabases_SaaS_Down locks the SaaS path: no PodName (so
+// no StatefulSet lookup), Secret present → State=Ready, but probe
+// returns an error → Live="Down: <reason>".
+func TestDescribeDatabases_SaaS_Down(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	credsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvoi-myapp-prod-db-events-credentials", Namespace: ns,
+		},
+		Data: map[string][]byte{
+			"url":  []byte("postgres://u:p@ep-foo.us-east-1.aws.neon.tech:5432/events?sslmode=require"),
+			"host": []byte("ep-foo.us-east-1.aws.neon.tech"),
+			"port": []byte("5432"),
+		},
+	}
+	kc := newKC(credsSecret)
+	fp := &fakeDBProvider{execErr: errors.New("connection refused")}
+	probe := DatabaseProbe{
+		Name:     "events",
+		Engine:   "neon",
+		Provider: fp,
+		Request: provider.DatabaseRequest{
+			CredentialsSecretName: "nvoi-myapp-prod-db-events-credentials",
+			// No PodName — SaaS engine.
+		},
+	}
+
+	rows := describeDatabases(context.Background(), kc, ns, []DatabaseProbe{probe})
+	if rows[0].State != "Ready" {
+		t.Errorf("State = %q, want Ready", rows[0].State)
+	}
+	if !strings.Contains(rows[0].Live, "Down") {
+		t.Errorf("Live = %q, want Down: <reason>", rows[0].Live)
+	}
+	if !strings.Contains(rows[0].Live, "connection refused") {
+		t.Errorf("Live = %q, expected to surface 'connection refused'", rows[0].Live)
+	}
+	if rows[0].Engine != "neon" {
+		t.Errorf("Engine = %q, want neon", rows[0].Engine)
+	}
+}
+
+// TestDescribeDatabases_ProbeRunsInParallel locks the parallel-probe
+// contract: with 3 probes that each block 200ms, total wall time is
+// ~200ms (parallel), not ~600ms (sequential). 500ms upper bound gives
+// generous slack for CI variance.
+func TestDescribeDatabases_ProbeRunsInParallel(t *testing.T) {
+	ns := "ns"
+	cs := k8sfake.NewSimpleClientset()
+	for i := 0; i < 3; i++ {
+		_, err := cs.CoreV1().Secrets(ns).Create(context.Background(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("creds-%d", i), Namespace: ns},
+			Data:       map[string][]byte{"url": []byte("postgres://u@host/db")},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	kc := kube.NewForTest(cs)
+
+	probes := make([]DatabaseProbe, 3)
+	for i := range probes {
+		probes[i] = DatabaseProbe{
+			Name:     fmt.Sprintf("db%d", i),
+			Engine:   "neon",
+			Provider: &slowProvider{delay: 200 * time.Millisecond},
+			Request: provider.DatabaseRequest{
+				CredentialsSecretName: fmt.Sprintf("creds-%d", i),
+			},
+		}
+	}
+
+	start := time.Now()
+	describeDatabases(context.Background(), kc, ns, probes)
+	elapsed := time.Since(start)
+
+	// Sequential would be ~600ms. Parallel should be ~200ms. Generous
+	// upper bound for CI noise.
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("probes ran sequentially: %v (parallel would be ~200ms)", elapsed)
+	}
+}
+
+type slowProvider struct {
+	fakeDBProvider
+	delay time.Duration
+}
+
+func (s *slowProvider) ExecSQL(ctx context.Context, _ provider.DatabaseRequest, _ string) (*provider.SQLResult, error) {
+	select {
+	case <-time.After(s.delay):
+		return &provider.SQLResult{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
