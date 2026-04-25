@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,11 +31,12 @@ type DescribeRequest struct {
 	Cluster
 	Cfg          provider.ProviderConfigView // forwards to Cluster.Kube for on-demand connect
 	StorageNames []string                    // from cfg — config is the source of truth
-	// Workloads is every service + cron name from cfg. describe walks
-	// the live `{name}-secrets` Secret for each, so auto-injected keys
-	// (DATABASE_URL_X, storage creds) surface alongside explicit
-	// secrets: declarations.
-	Workloads []string
+	// Services / Crons are the cfg-declared workload names. The SECRETS
+	// section uses these to classify owner (service:X vs cron:X) when a
+	// Secret matches the `{name}-secrets` pattern. Both are passed
+	// because the in-cluster Secret name doesn't carry the kind.
+	Services []string
+	Crons    []string
 	// Databases is one DatabaseProbe per cfg.Databases entry, pre-
 	// resolved at the cmd boundary so describe can run a parallel
 	// live ExecSQL ping against each. Empty when cfg has no databases.
@@ -96,9 +98,22 @@ type DescribeIngress struct {
 	Port    int    `json:"port"`
 }
 
+// DescribeSecret is one row of the SECRETS section — one row per
+// nvoi-managed Secret object in the namespace, with all its keys.
+//
+// Owner classifications (derived from the Secret's name):
+//   - "service:X"        — `{X}-secrets`, X is in cfg.Services
+//   - "cron:X"           — `{X}-secrets`, X is in cfg.Crons
+//   - "workload:X"       — `{X}-secrets`, X not in cfg (orphan from a prior deploy)
+//   - "database:X"       — `{base}-db-{X}-credentials`
+//   - "database:X:bk"    — `{base}-db-{X}-backup-creds`
+//   - "registry"         — `registry-auth` (dockerconfigjson for image pulls)
+//   - "tunnel:cloudflare"/`tunnel:ngrok` — agent auth Secrets
+//   - ""                 — unknown nvoi-managed Secret (shows up with empty owner)
 type DescribeSecret struct {
-	Key     string `json:"key"`
-	Service string `json:"service"` // which service/cron owns this secret
+	Name  string   `json:"name"`
+	Owner string   `json:"owner"`
+	Keys  []string `json:"keys"`
 }
 
 // DescribeDatabase is one row of the DATABASES section. Engine-agnostic
@@ -196,23 +211,14 @@ func Describe(ctx context.Context, req DescribeRequest) (*DescribeResult, error)
 		})
 	}
 
-	// Secrets — list live keys from each workload's `{name}-secrets`
-	// Secret. Walking the workload set (services + crons from cfg)
-	// rather than just those declaring `secrets:` surfaces auto-
-	// injected keys — DATABASE_URL_X from databases:, storage creds
-	// from storage: — that the reconciler stuffs in alongside what
-	// the operator wrote in YAML. NotFound on a workload's Secret
-	// means it never reconciled and is silently skipped.
-	for _, svc := range req.Workloads {
-		secretName := names.KubeServiceSecrets(svc)
-		keys, err := kc.ListSecretKeys(ctx, ns, secretName)
-		if err != nil {
-			continue
-		}
-		for _, key := range keys {
-			result.Secrets = append(result.Secrets, DescribeSecret{Key: key, Service: svc})
-		}
-	}
+	// Secrets — list every nvoi-managed Secret in the namespace, then
+	// classify by name pattern. This is more honest than walking the
+	// per-workload `{name}-secrets` list: the cluster also holds
+	// database credentials Secrets (`{db}-credentials`), backup-creds
+	// Secrets, the dockerconfigjson pull Secret (`registry-auth`), and
+	// tunnel-agent auth Secrets (`cloudflared-token` / `ngrok-authtoken`).
+	// All real cluster-side state, all worth surfacing to the operator.
+	result.Secrets = describeSecrets(ctx, kc, ns, names, req.Services, req.Crons)
 
 	return result, nil
 }
@@ -526,6 +532,96 @@ func probeDatabaseLive(parent context.Context, p DatabaseProbe) string {
 		return "Down: " + msg
 	}
 	return "Up"
+}
+
+// describeSecrets lists every nvoi-managed Secret in the namespace and
+// returns one DescribeSecret per object, with keys sorted alphabetically.
+// Owner is classified from the Secret's name against well-known patterns
+// (see DescribeSecret docs). Caller passes service + cron name lists from
+// cfg so {X}-secrets gets the right owner kind ("service" vs "cron"); a
+// missing match falls back to "workload:X" (orphan from a prior deploy).
+//
+// The label selector is NvoiSelector — same filter the rest of describe
+// uses to keep system / user Secrets out of the operator-facing table.
+// Empty list (no nvoi-managed Secrets) returns nil; List errors return
+// nil and are silently dropped (consistent with the rest of describe).
+func describeSecrets(ctx context.Context, kc *kube.Client, ns string, names *utils.Names, services, crons []string) []DescribeSecret {
+	list, err := kc.Clientset().CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
+	if err != nil {
+		return nil
+	}
+	if len(list.Items) == 0 {
+		return nil
+	}
+
+	svcSet := make(map[string]bool, len(services))
+	for _, s := range services {
+		svcSet[s] = true
+	}
+	cronSet := make(map[string]bool, len(crons))
+	for _, c := range crons {
+		cronSet[c] = true
+	}
+	base := names.Base()
+
+	out := make([]DescribeSecret, 0, len(list.Items))
+	for _, s := range list.Items {
+		keys := make([]string, 0, len(s.Data))
+		for k := range s.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		out = append(out, DescribeSecret{
+			Name:  s.Name,
+			Owner: classifySecretOwner(s.Name, base, svcSet, cronSet),
+			Keys:  keys,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// classifySecretOwner derives the OWNER column from a Secret's name.
+// String-pattern based; no provider knowledge needed beyond the project
+// name prefix. Patterns must stay in sync with the helpers in
+// pkg/utils/naming.go (KubeServiceSecrets, KubeDatabaseCredentials,
+// KubeDatabaseBackupCreds) and the well-known constants in
+// pkg/kube/registry.go (PullSecretName) and pkg/kube/tunnel.go
+// (CloudflareTunnelSecretName / NgrokTunnelSecretName).
+func classifySecretOwner(name, base string, services, crons map[string]bool) string {
+	switch name {
+	case kube.PullSecretName:
+		return "registry"
+	case kube.CloudflareTunnelSecretName:
+		return "tunnel:cloudflare"
+	case kube.NgrokTunnelSecretName:
+		return "tunnel:ngrok"
+	}
+	// Database credentials: `{base}-db-{X}-credentials`
+	if dbPrefix := base + "-db-"; strings.HasPrefix(name, dbPrefix) {
+		rest := strings.TrimPrefix(name, dbPrefix)
+		if strings.HasSuffix(rest, "-credentials") {
+			return "database:" + strings.TrimSuffix(rest, "-credentials")
+		}
+		if strings.HasSuffix(rest, "-backup-creds") {
+			return "database:" + strings.TrimSuffix(rest, "-backup-creds") + ":bk"
+		}
+	}
+	// Workload secrets: `{X}-secrets`. Distinguish service vs cron via
+	// cfg-derived sets; an unmatched X means the cfg lost a workload
+	// it had on a prior deploy (orphan).
+	if strings.HasSuffix(name, "-secrets") {
+		short := strings.TrimSuffix(name, "-secrets")
+		if services[short] {
+			return "service:" + short
+		}
+		if crons[short] {
+			return "cron:" + short
+		}
+		return "workload:" + short
+	}
+	return ""
 }
 
 func describeServices(ctx context.Context, kc *kube.Client, ns string) []DescribeService {

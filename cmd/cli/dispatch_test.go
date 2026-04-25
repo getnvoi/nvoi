@@ -163,7 +163,8 @@ func TestDispatch_Describe_NoWrites(t *testing.T) {
 		Cluster:      cluster,
 		Cfg:          config.NewView(cfg),
 		StorageNames: nil,
-		Workloads:    nil,
+		Services:     nil,
+		Crons:        nil,
 	})
 
 	assertLookupHappened(t, fake)

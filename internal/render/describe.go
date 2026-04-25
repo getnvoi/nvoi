@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	pkgcore "github.com/getnvoi/nvoi/pkg/core"
@@ -53,9 +54,9 @@ func RenderDescribe(res *pkgcore.DescribeResult) {
 	}
 
 	if len(res.Secrets) > 0 {
-		t = g.Add("SECRETS", "KEY", "SERVICE")
+		t = g.Add("SECRETS", "NAME", "OWNER", "KEYS")
 		for _, s := range res.Secrets {
-			t.Row(s.Key, s.Service)
+			t.Row(s.Name, s.Owner, strings.Join(s.Keys, ", "))
 		}
 	}
 

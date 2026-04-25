@@ -18,11 +18,12 @@ func newDescribeCmd(rt *runtime) *cobra.Command {
 		Short: "Live cluster state",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			j, _ := cmd.Flags().GetBool("json")
-			// Workloads = every service + cron from cfg, sorted. describe
-			// walks the live `{name}-secrets` Secret for each so auto-
-			// injected keys (DATABASE_URL_X, storage creds) surface
-			// alongside explicit secrets: declarations.
-			workloads := append(utils.SortedKeys(rt.cfg.Services), utils.SortedKeys(rt.cfg.Crons)...)
+			// Service / cron names — used by the SECRETS section to
+			// classify Secret owners (`{X}-secrets` → service:X vs
+			// cron:X). describe in core lists every nvoi-managed
+			// Secret in the namespace and resolves owner from these.
+			services := utils.SortedKeys(rt.cfg.Services)
+			crons := utils.SortedKeys(rt.cfg.Crons)
 
 			// Database probes — one per cfg.Databases entry. Resolved
 			// at the cmd boundary so describe (in pkg/core) doesn't
@@ -39,7 +40,8 @@ func newDescribeCmd(rt *runtime) *cobra.Command {
 				Cluster:      rt.dc.Cluster,
 				Cfg:          config.NewView(rt.cfg),
 				StorageNames: rt.cfg.StorageNames(),
-				Workloads:    workloads,
+				Services:     services,
+				Crons:        crons,
 				Databases:    probes,
 			}
 			if j {

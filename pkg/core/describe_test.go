@@ -497,3 +497,135 @@ func (s *slowProvider) ExecSQL(ctx context.Context, _ provider.DatabaseRequest, 
 		return nil, ctx.Err()
 	}
 }
+
+// ── SECRETS section (namespace-wide, owner-classified) ──────────────────────
+
+// TestDescribeSecrets_ListsAllNvoiManaged locks the new SECRETS section
+// shape: every Secret in the namespace carrying NvoiSelector appears as
+// one row with all its keys (sorted), classified by name pattern.
+//
+// Covers each owner classification we shipped:
+//   - service:X (workload secret matching a cfg.Services entry)
+//   - cron:X    (workload secret matching a cfg.Crons entry)
+//   - workload:X (orphan — no cfg match, lingering from a previous deploy)
+//   - database:X       (per-DB credentials Secret)
+//   - database:X:bk    (per-DB backup-creds Secret)
+//   - registry         (kubernetes.io/dockerconfigjson)
+//   - tunnel:cloudflare / tunnel:ngrok (agent auth Secrets)
+func TestDescribeSecrets_ListsAllNvoiManaged(t *testing.T) {
+	ns := "nvoi-myapp-prod"
+	mkSecret := func(name string, keys ...string) *corev1.Secret {
+		data := map[string][]byte{}
+		for _, k := range keys {
+			data[k] = []byte("x")
+		}
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels:    managedLabels(),
+			},
+			Data: data,
+		}
+	}
+	objs := []runtime.Object{
+		mkSecret("api-secrets", "DATABASE_URL"),
+		mkSecret("backfill-secrets", "API_TOKEN"),
+		mkSecret("orphan-secrets", "OLD_KEY"),
+		mkSecret("nvoi-myapp-prod-db-main-credentials", "url", "user", "password", "host", "port", "database", "sslmode"),
+		mkSecret("nvoi-myapp-prod-db-main-backup-creds", "BUCKET_ENDPOINT", "BUCKET_NAME", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "ENGINE", "DATABASE_URL"),
+		mkSecret("registry-auth", ".dockerconfigjson"),
+		mkSecret("cloudflared-token", "token"),
+		// Unlabeled Secret must NOT appear.
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "user-app-secret", Namespace: ns},
+			Data:       map[string][]byte{"value": []byte("x")},
+		},
+	}
+	kc := newKC(objs...)
+	names, err := utils.NewNames("myapp", "prod")
+	if err != nil {
+		t.Fatalf("NewNames: %v", err)
+	}
+
+	rows := describeSecrets(context.Background(), kc, ns, names,
+		[]string{"api"},      // services in cfg
+		[]string{"backfill"}, // crons in cfg
+	)
+
+	want := map[string]string{
+		"api-secrets":                          "service:api",
+		"backfill-secrets":                     "cron:backfill",
+		"orphan-secrets":                       "workload:orphan",
+		"nvoi-myapp-prod-db-main-credentials":  "database:main",
+		"nvoi-myapp-prod-db-main-backup-creds": "database:main:bk",
+		"registry-auth":                        "registry",
+		"cloudflared-token":                    "tunnel:cloudflare",
+	}
+	if len(rows) != len(want) {
+		var got []string
+		for _, r := range rows {
+			got = append(got, r.Name)
+		}
+		t.Fatalf("rows = %v, want %d", got, len(want))
+	}
+	for _, r := range rows {
+		owner, ok := want[r.Name]
+		if !ok {
+			t.Errorf("unexpected Secret in output: %q", r.Name)
+			continue
+		}
+		if r.Owner != owner {
+			t.Errorf("%s: Owner = %q, want %q", r.Name, r.Owner, owner)
+		}
+		if len(r.Keys) == 0 {
+			t.Errorf("%s: Keys empty, want at least one", r.Name)
+		}
+	}
+
+	// Keys are sorted within each Secret — locks the deterministic
+	// rendering contract.
+	for _, r := range rows {
+		for i := 1; i < len(r.Keys); i++ {
+			if r.Keys[i-1] > r.Keys[i] {
+				t.Errorf("%s: Keys not sorted: %v", r.Name, r.Keys)
+				break
+			}
+		}
+	}
+}
+
+// TestDescribeSecrets_EmptyNamespace covers the common "no nvoi-managed
+// Secrets in the namespace" case (e.g. before first deploy). Should
+// return nil cleanly, no panic, no error.
+func TestDescribeSecrets_EmptyNamespace(t *testing.T) {
+	ns := "nvoi-empty"
+	kc := newKC()
+	names, _ := utils.NewNames("empty", "prod")
+	rows := describeSecrets(context.Background(), kc, ns, names, nil, nil)
+	if rows != nil {
+		t.Errorf("rows = %v, want nil", rows)
+	}
+}
+
+func TestClassifySecretOwner_Patterns(t *testing.T) {
+	base := "nvoi-myapp-prod"
+	services := map[string]bool{"api": true}
+	crons := map[string]bool{"cleanup": true}
+	cases := map[string]string{
+		"api-secrets":                          "service:api",
+		"cleanup-secrets":                      "cron:cleanup",
+		"foo-secrets":                          "workload:foo", // orphan
+		"nvoi-myapp-prod-db-main-credentials":  "database:main",
+		"nvoi-myapp-prod-db-main-backup-creds": "database:main:bk",
+		"registry-auth":                        "registry",
+		"cloudflared-token":                    "tunnel:cloudflare",
+		"ngrok-authtoken":                      "tunnel:ngrok",
+		"some-other-secret":                    "", // unknown — empty owner
+	}
+	for name, want := range cases {
+		if got := classifySecretOwner(name, base, services, crons); got != want {
+			t.Errorf("classifySecretOwner(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
