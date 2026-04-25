@@ -6,15 +6,14 @@ import (
 
 // RenderResources prints resource groups as a table group.
 //
-// When any group carries Owned info (rg.Owned populated), the renderer
-// adds an "Owned" column to that group. Owned values render as
-// "yes"/"no" — readable in CI/JSON, easy to scan in TUI. Groups
-// without Owned info render as before.
+// When a group carries Ownership info (rg.Ownership populated), the
+// renderer adds an "Owned" column whose cell value is the four-state
+// Ownership string verbatim (`live`, `stale`, `other`, `no`). Same
+// string in TUI, CI, and JSON renderings. Groups without Ownership
+// info render as before.
 //
 // Empty groups render with a single placeholder row reading "(none)"
-// across all columns rather than a header-only table — confirms the
-// section was checked and is genuinely empty rather than silently
-// dropped.
+// across all columns rather than a header-only table.
 func RenderResources(groups []provider.ResourceGroup) {
 	BuildResourceTables(groups).Print()
 }
@@ -26,8 +25,8 @@ func BuildResourceTables(groups []provider.ResourceGroup) *TableGroup {
 	g := NewTableGroup()
 	for _, rg := range groups {
 		columns := rg.Columns
-		hasOwned := len(rg.Owned) == len(rg.Rows) && len(rg.Owned) > 0
-		if hasOwned {
+		hasOwnership := len(rg.Ownership) == len(rg.Rows) && len(rg.Ownership) > 0
+		if hasOwnership {
 			columns = append(append([]string{}, rg.Columns...), "Owned")
 		}
 
@@ -43,20 +42,11 @@ func BuildResourceTables(groups []provider.ResourceGroup) *TableGroup {
 		}
 
 		for i, row := range rg.Rows {
-			if hasOwned {
-				row = append(append([]string{}, row...), ownedLabel(rg.Owned[i]))
+			if hasOwnership {
+				row = append(append([]string{}, row...), string(rg.Ownership[i]))
 			}
 			t.Row(row...)
 		}
 	}
 	return g
-}
-
-// ownedLabel maps the Owned bool to the table cell value. Plain text
-// so the same string lands in TUI, CI, and JSON renderings.
-func ownedLabel(owned bool) string {
-	if owned {
-		return "yes"
-	}
-	return "no"
 }

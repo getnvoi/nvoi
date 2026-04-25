@@ -67,9 +67,8 @@ func (c *Client) ensureNetwork(ctx context.Context, name, location string, label
 func (c *Client) ListAllNetworks(ctx context.Context) ([]*provider.Network, error) {
 	var resp struct {
 		Networks []struct {
-			ID     int64             `json:"id"`
-			Name   string            `json:"name"`
-			Labels map[string]string `json:"labels"`
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
 		} `json:"networks"`
 	}
 	if err := c.api.Do(ctx, "GET", "/networks?per_page=50", nil, &resp); err != nil {
@@ -77,7 +76,7 @@ func (c *Client) ListAllNetworks(ctx context.Context) ([]*provider.Network, erro
 	}
 	out := make([]*provider.Network, 0, len(resp.Networks))
 	for _, n := range resp.Networks {
-		out = append(out, &provider.Network{ID: strconv.FormatInt(n.ID, 10), Name: n.Name, Labels: n.Labels})
+		out = append(out, &provider.Network{ID: strconv.FormatInt(n.ID, 10), Name: n.Name})
 	}
 	return out, nil
 }

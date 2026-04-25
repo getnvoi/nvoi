@@ -182,9 +182,8 @@ func (c *Client) reconcileServerFirewall(ctx context.Context, serverID, desiredF
 func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, error) {
 	var resp struct {
 		Firewalls []struct {
-			ID     int64             `json:"id"`
-			Name   string            `json:"name"`
-			Labels map[string]string `json:"labels"`
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
 		} `json:"firewalls"`
 	}
 	if err := c.api.Do(ctx, "GET", "/firewalls?per_page=50", nil, &resp); err != nil {
@@ -192,7 +191,7 @@ func (c *Client) ListAllFirewalls(ctx context.Context) ([]*provider.Firewall, er
 	}
 	out := make([]*provider.Firewall, 0, len(resp.Firewalls))
 	for _, fw := range resp.Firewalls {
-		out = append(out, &provider.Firewall{ID: strconv.FormatInt(fw.ID, 10), Name: fw.Name, Labels: fw.Labels})
+		out = append(out, &provider.Firewall{ID: strconv.FormatInt(fw.ID, 10), Name: fw.Name})
 	}
 	return out, nil
 }

@@ -20,9 +20,8 @@ type volumeJSON struct {
 	Location struct {
 		Name string `json:"name"`
 	} `json:"location"`
-	Labels      map[string]string `json:"labels"`
-	LinuxDevice string            `json:"linux_device"`
-	Status      string            `json:"status"`
+	LinuxDevice string `json:"linux_device"`
+	Status      string `json:"status"`
 }
 
 func volumeFrom(v volumeJSON) *provider.Volume {
@@ -32,7 +31,6 @@ func volumeFrom(v volumeJSON) *provider.Volume {
 		Size:       v.Size,
 		DevicePath: v.LinuxDevice,
 		Location:   v.Location.Name,
-		Labels:     v.Labels,
 	}
 	if v.Server != nil {
 		vol.ServerID = strconv.FormatInt(*v.Server, 10)
@@ -240,16 +238,11 @@ func (c *Client) ResolveDevicePath(vol *provider.Volume) string {
 }
 
 // ListResources returns the per-kind tables shown by `nvoi resources`.
-// Listing is unscoped (no label filter) — the operator wants to see
-// every resource the credentials can access, not just nvoi's. Each row
-// gets an Owned bool computed from the Hetzner-side labels stamped at
-// create time (`managed-by=nvoi`); pre-existing manual resources land
-// in the same table with `Owned=false`.
+// Listing is unscoped — every resource the Hetzner token can see lands
+// in a row, including resources from other apps/envs and resources
+// nvoi never created. Ownership classification is added at the
+// consumer (pkg/core.Classify) — provider stays oblivious.
 func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
-	ownedByLabels := func(labels map[string]string) bool {
-		return labels[utils.LabelManagedByKey] == utils.LabelManagedBy
-	}
-
 	servers, err := c.ListServers(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -257,7 +250,6 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 	srvGroup := provider.ResourceGroup{Name: "Servers", Columns: []string{"ID", "Name", "Status", "IPv4", "Private IP"}}
 	for _, s := range servers {
 		srvGroup.Rows = append(srvGroup.Rows, []string{s.ID, s.Name, string(s.Status), s.IPv4, s.PrivateIP})
-		srvGroup.Owned = append(srvGroup.Owned, ownedByLabels(s.Labels))
 	}
 
 	firewalls, err := c.ListAllFirewalls(ctx)
@@ -267,7 +259,6 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 	fwGroup := provider.ResourceGroup{Name: "Firewalls", Columns: []string{"ID", "Name"}}
 	for _, fw := range firewalls {
 		fwGroup.Rows = append(fwGroup.Rows, []string{fw.ID, fw.Name})
-		fwGroup.Owned = append(fwGroup.Owned, ownedByLabels(fw.Labels))
 	}
 
 	networks, err := c.ListAllNetworks(ctx)
@@ -277,7 +268,6 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 	netGroup := provider.ResourceGroup{Name: "Networks", Columns: []string{"ID", "Name"}}
 	for _, n := range networks {
 		netGroup.Rows = append(netGroup.Rows, []string{n.ID, n.Name})
-		netGroup.Owned = append(netGroup.Owned, ownedByLabels(n.Labels))
 	}
 
 	volumes, err := c.ListVolumes(ctx, nil)
@@ -287,7 +277,6 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 	volGroup := provider.ResourceGroup{Name: "Volumes", Columns: []string{"ID", "Name", "Size", "Server", "Device"}}
 	for _, v := range volumes {
 		volGroup.Rows = append(volGroup.Rows, []string{v.ID, v.Name, fmt.Sprintf("%dGB", v.Size), v.ServerID, v.DevicePath})
-		volGroup.Owned = append(volGroup.Owned, ownedByLabels(v.Labels))
 	}
 
 	return []provider.ResourceGroup{srvGroup, fwGroup, netGroup, volGroup}, nil

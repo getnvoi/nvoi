@@ -3,7 +3,6 @@ package cloudflare
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -140,10 +139,8 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 }
 
 // ListResources lists every active (non-soft-deleted) Cloudflare
-// Tunnel on the account. Cloudflare Tunnels carry no free-form labels
-// or comments via the API, so Owned is computed from the deterministic
-// `nvoi-` name prefix Reconcile stamps on creation. Tunnels named
-// outside that pattern surface with Owned=false.
+// Tunnel on the account. Ownership classification happens at the
+// consumer (pkg/core.Classify).
 func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
 	var resp cfTunnelListResponse
 	path := fmt.Sprintf("/accounts/%s/cfd_tunnel?is_deleted=false", c.accountID)
@@ -153,7 +150,6 @@ func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, e
 	g := provider.ResourceGroup{Name: "Cloudflare Tunnels", Columns: []string{"ID", "Name", "Status"}}
 	for _, t := range resp.Result {
 		g.Rows = append(g.Rows, []string{t.ID, t.Name, t.Status})
-		g.Owned = append(g.Owned, strings.HasPrefix(t.Name, "nvoi-"))
 	}
 	return []provider.ResourceGroup{g}, nil
 }
