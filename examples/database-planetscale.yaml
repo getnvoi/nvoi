@@ -1,0 +1,66 @@
+# PlanetScale SaaS MySQL.
+#
+# The DB lives on planetscale.com — provisioned and rotated provider-side,
+# no in-cluster StatefulSet, no role: worker server, no ZFS pool. The
+# `databases.X.credentials` block is REJECTED by the validator for SaaS
+# engines (PlanetScale issues credentials on its own side). `server:` and
+# `size:` are also rejected for the same reason.
+#
+# Pull/restore: `mysqldump` against {db}.{org}.psdb.cloud:3306 (external
+# TLS). PlanetScale `ExecSQL` rides the HTTP Data API — symmetric with
+# Neon, no cluster dependency. Backups put gzipped logical dumps to
+# the bucket nvoi-{app}-{env}-db-{name}-backups on providers.storage.
+#
+# Required env vars:
+#   HETZNER_TOKEN                       (providers.infra)
+#   CF_API_KEY / CF_ZONE_ID / DNS_ZONE  (providers.dns)
+#   CF_API_KEY / CF_ACCOUNT_ID          (providers.storage — backup bucket)
+#   PLANETSCALE_SERVICE_TOKEN
+#   PLANETSCALE_ORG                     (your PlanetScale org slug)
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN (registry — push target)
+#
+# Optional:
+#   PLANETSCALE_BASE_URL                (override default https://api.planetscale.com/v1)
+
+app: myapp
+env: production
+
+providers:
+  infra: hetzner
+  dns: cloudflare
+  storage: cloudflare                 # required for databases.events.backup
+
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master                      # no db-master needed — PlanetScale is offsite
+
+firewall: default
+
+databases:
+  events:
+    engine: planetscale
+    region: eu-west                   # PlanetScale region; NOT a server name
+    # NO `server:`, NO `size:`, NO `credentials:` — PlanetScale owns these
+    backup:
+      schedule: "0 3 * * *"
+      retention: 14
+
+registry:
+  docker.io:
+    username: $DOCKERHUB_USERNAME
+    password: $DOCKERHUB_TOKEN
+
+services:
+  api:
+    image: myorg/api
+    build:
+      context: ./
+      dockerfile: ./cmd/api/Dockerfile
+    port: 8080
+    health: /healthz
+    databases: [DATABASE_URL=events]      # alias DATABASE_URL_EVENTS → DATABASE_URL
+
+domains:
+  api: [api.example.com]

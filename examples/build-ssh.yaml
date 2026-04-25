@@ -1,0 +1,56 @@
+# providers.build: ssh — image builds run on a remote builder server,
+# never on the operator's laptop. The builder is provisioned by the
+# infra provider with role: builder, gets a docker-data-root mounted
+# on a cache volume (BuildKit layer cache survives reboots), and is
+# reached over SSH. No Daytona / no third-party sandbox.
+#
+# Required env vars:
+#   HETZNER_TOKEN                       (providers.infra)
+#   CF_API_KEY / CF_ZONE_ID / DNS_ZONE  (providers.dns)
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN (registry — push target)
+#
+# Builder credentials: same SSH key the operator uses for the master
+# (resolveSSHKey: $SSH_PRIVATE_KEY → $SSH_KEY_PATH → ~/.ssh/id_ed25519
+# → ~/.ssh/id_rsa). The builder server gets the operator's public key
+# injected via cloud-init at provision time.
+#
+# Validator R1: providers.build: ssh requires at least one role: builder
+# in servers:. Mismatch is a hard error before any infra is touched.
+
+app: myapp
+env: production
+
+providers:
+  infra: hetzner
+  dns: cloudflare
+  build: ssh                          # image builds run on a role: builder server
+
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+  builder-1:
+    type: cax21                       # bigger box: BuildKit + multi-arch is heavy
+    region: nbg1
+    role: builder
+
+firewall: default
+
+registry:
+  docker.io:
+    username: $DOCKERHUB_USERNAME
+    password: $DOCKERHUB_TOKEN
+
+services:
+  api:
+    image: myorg/api                  # repo-only — host inferred from registry:
+    build:                            # build runs on the role: builder server,
+      context: ./                     # NOT on the operator's machine.
+      dockerfile: ./cmd/api/Dockerfile
+    port: 8080
+    health: /healthz
+    env: [APP_ENV=production]
+
+domains:
+  api: [api.example.com]

@@ -1,11 +1,26 @@
+# Scaleway cluster + Cloudflare DNS + Scaleway Object Storage.
+# Single-node deploy of a Rails-style web service that pushes built
+# images to Docker Hub.
+#
+# Required env vars:
+#   SCW_SECRET_KEY / SCW_DEFAULT_ORGANIZATION_ID
+#                                       (providers.infra)
+#   CF_API_KEY / CF_ZONE_ID / DNS_ZONE  (providers.dns)
+#   SCW_ACCESS_KEY / SCW_SECRET_KEY / SCW_REGION
+#                                       (providers.storage)
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN (registry — push target for build:)
+#   RAILS_MASTER_KEY                    (service secret)
+#
+# SSH key: nvoi reads $SSH_PRIVATE_KEY, falls back to $SSH_KEY_PATH,
+# then ~/.ssh/id_ed25519, then ~/.ssh/id_rsa.
+
 app: dummy-rails
 env: production
 
 providers:
   infra: scaleway
   dns: cloudflare
-  storage: cloudflare
-  build: daytona
+  storage: scaleway
 
 servers:
   master:
@@ -15,43 +30,27 @@ servers:
 
 firewall: default
 
-volumes:
-  pgdata:
-    size: 20
-    server: master
-
-build:
-  web: benbonnet/dummy-rails
-
 secrets:
   - RAILS_MASTER_KEY
-  - POSTGRES_PASSWORD
-  - POSTGRES_USER
-  - POSTGRES_DB
 
 storage:
   assets:
     cors: true
 
+registry:
+  docker.io:
+    username: $DOCKERHUB_USERNAME
+    password: $DOCKERHUB_TOKEN
+
 services:
-  db:
-    image: postgres:17
-    port: 5432
-    volumes: ["pgdata:/var/lib/postgresql/data"]
-    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB]
   web:
-    build: web
+    image: benbonnet/dummy-rails  # repo-only — host inferred from registry: (one entry)
+    build: ./                     # build context = repo root, Dockerfile = ./Dockerfile
     port: 80
-    replicas: 2
     health: /up
-    env: [RAILS_ENV=production, POSTGRES_HOST=db]
-    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB, RAILS_MASTER_KEY]
+    env: [RAILS_ENV=production]
+    secrets: [RAILS_MASTER_KEY]
     storage: [assets]
-  jobs:
-    build: web
-    command: bin/jobs
-    env: [RAILS_ENV=production, POSTGRES_HOST=db]
-    secrets: [POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB, RAILS_MASTER_KEY]
 
 domains:
   web: [scw.nvoi.to]

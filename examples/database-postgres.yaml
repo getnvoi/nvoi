@@ -1,0 +1,77 @@
+# Selfhosted Postgres on OpenEBS ZFS-LocalPV (#68).
+#
+# The DB lives on a dedicated worker (db-master), NEVER on the cluster
+# master — selfhosted DBs need ZFS, and master already carries etcd +
+# kube-apiserver + Caddy. The validator hard-errors on DB-on-master and
+# on DB-nodes-shared-with-other-services / crons.
+#
+# size: is a hard ZFS quota — writes past it get ENOSPC at the pod, the
+# node stays healthy. Backups go to the bucket nvoi-{app}-{env}-db-{name}-
+# backups on providers.storage, provisioned implicitly when backup: is
+# set; retention is applied via BucketProvider.SetLifecycle.
+#
+# Required env vars:
+#   HETZNER_TOKEN                       (providers.infra)
+#   CF_API_KEY / CF_ZONE_ID / DNS_ZONE  (providers.dns)
+#   CF_API_KEY / CF_ACCOUNT_ID          (providers.storage — backup bucket)
+#   APP_POSTGRES_USER / _PASSWORD / _DB (databases.app.credentials.*)
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN (registry — push target)
+#
+# Operations:
+#   nvoi database sql app                              — psql against the in-cluster Service
+#   nvoi database backup now app                       — kick a one-shot Job from the CronJob template
+#   nvoi database backup list app                      — list bucket-resident dumps
+#   nvoi database snapshot app --label pre-deploy      — VolumeSnapshot via ZFS-LocalPV
+#   nvoi database branch app pr142                     — clone the PVC into a sibling DB (CoW, ms latency)
+
+app: myapp
+env: production
+
+providers:
+  infra: hetzner
+  dns: cloudflare
+  storage: cloudflare                 # required for databases.app.backup
+
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master
+  db-master:
+    type: cax21                       # headroom for ZFS pool + working set
+    region: nbg1
+    role: worker                      # not a different role — just a dedicated node
+
+firewall: default
+
+databases:
+  app:
+    engine: postgres
+    version: "17"
+    server: db-master                 # dedicated; #68 forbids DB-on-master
+    size: 20                          # hard ZFS quota in GiB
+    credentials:
+      user: $APP_POSTGRES_USER
+      password: $APP_POSTGRES_PASSWORD
+      database: $APP_POSTGRES_DB
+    backup:
+      schedule: "0 3 * * *"           # daily at 03:00 UTC
+      retention: 14                   # days; lifecycle applied to the bucket
+
+registry:
+  docker.io:
+    username: $DOCKERHUB_USERNAME
+    password: $DOCKERHUB_TOKEN
+
+services:
+  api:
+    image: myorg/api
+    build:
+      context: ./
+      dockerfile: ./cmd/api/Dockerfile
+    port: 8080
+    health: /healthz
+    databases: [DATABASE_URL=app]     # alias DATABASE_URL_APP → DATABASE_URL
+
+domains:
+  api: [api.example.com]

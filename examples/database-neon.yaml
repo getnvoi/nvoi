@@ -1,0 +1,67 @@
+# Neon SaaS Postgres.
+#
+# The DB lives on neon.tech — provisioned and rotated provider-side, no
+# in-cluster StatefulSet, no role: worker server, no ZFS pool. The
+# `databases.X.credentials` block is REJECTED by the validator for SaaS
+# engines (Neon issues credentials on its own side). `server:` and `size:`
+# are also rejected for the same reason.
+#
+# Backups still happen — they go to the bucket nvoi-{app}-{env}-db-{name}-
+# backups on providers.storage, provisioned implicitly when backup: is
+# set. The pull mechanism is `pg_dump` against the Neon branch host
+# ({branch.host}:5432, external TLS); the put mechanism is identical to
+# the selfhosted case (gzipped logical dump, S3 PutObject). One uniform
+# list/download surface across selfhosted and SaaS.
+#
+# Required env vars:
+#   HETZNER_TOKEN                       (providers.infra)
+#   CF_API_KEY / CF_ZONE_ID / DNS_ZONE  (providers.dns)
+#   CF_API_KEY / CF_ACCOUNT_ID          (providers.storage — backup bucket)
+#   NEON_API_KEY                        (providers.database — neon)
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN (registry — push target)
+#
+# Optional:
+#   NEON_BASE_URL                       (override default https://console.neon.tech/api/v2)
+
+app: myapp
+env: production
+
+providers:
+  infra: hetzner
+  dns: cloudflare
+  storage: cloudflare                 # required for databases.analytics.backup
+
+servers:
+  master:
+    type: cax11
+    region: nbg1
+    role: master                      # no db-master needed — Neon is offsite
+
+firewall: default
+
+databases:
+  analytics:
+    engine: neon
+    region: eu-central-1              # Neon region; NOT a server name
+    # NO `server:`, NO `size:`, NO `credentials:` — Neon owns these
+    backup:
+      schedule: "0 3 * * *"
+      retention: 14
+
+registry:
+  docker.io:
+    username: $DOCKERHUB_USERNAME
+    password: $DOCKERHUB_TOKEN
+
+services:
+  api:
+    image: myorg/api
+    build:
+      context: ./
+      dockerfile: ./cmd/api/Dockerfile
+    port: 8080
+    health: /healthz
+    databases: [DATABASE_URL=analytics]   # alias DATABASE_URL_ANALYTICS → DATABASE_URL
+
+domains:
+  api: [api.example.com]
