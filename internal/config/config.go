@@ -247,15 +247,25 @@ type StorageDef struct {
 }
 
 type DatabaseDef struct {
-	Engine   string             `yaml:"engine"`
-	Version  string             `yaml:"version,omitempty"`
-	Server   string             `yaml:"server,omitempty"`
-	Size     int                `yaml:"size,omitempty"`
-	User     string             `yaml:"user,omitempty"`
-	Password string             `yaml:"password,omitempty"`
-	Database string             `yaml:"database,omitempty"`
-	Region   string             `yaml:"region,omitempty"`
-	Backup   *DatabaseBackupDef `yaml:"backup,omitempty"`
+	Engine      string                  `yaml:"engine"`
+	Version     string                  `yaml:"version,omitempty"`
+	Server      string                  `yaml:"server,omitempty"`
+	Size        int                     `yaml:"size,omitempty"`
+	Region      string                  `yaml:"region,omitempty"`
+	Credentials *DatabaseCredentialsDef `yaml:"credentials,omitempty"`
+	Backup      *DatabaseBackupDef      `yaml:"backup,omitempty"`
+}
+
+// DatabaseCredentialsDef nests the three identity/auth fields under a
+// single block. Required for selfhosted engines, rejected for SaaS
+// (Neon / PlanetScale issue and rotate creds on the provider side, not
+// from the YAML). User and Password support `$VAR` references resolved
+// against `cfg.Secrets` / the secrets backend; Database may also be a
+// `$VAR` ref or a literal name.
+type DatabaseCredentialsDef struct {
+	User     string `yaml:"user,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	Database string `yaml:"database,omitempty"`
 }
 
 // DatabaseBackupDef configures the shared backup pipeline.

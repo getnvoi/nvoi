@@ -109,11 +109,12 @@ databases:
   app:
     engine: postgres
     version: "16"
-    server: master
+    server: db-master         # selfhosted: dedicated worker, never master
     size: 20
-    user: $POSTGRES_APP_USER
-    password: $POSTGRES_APP_PASSWORD
-    database: myapp
+    credentials:              # required for selfhosted, rejected for SaaS
+      user: $POSTGRES_APP_USER
+      password: $POSTGRES_APP_PASSWORD
+      database: myapp
     backup:                   # optional — requires providers.storage
       schedule: "0 3 * * *"
       retention: 14           # days applied via BucketProvider.SetLifecycle
@@ -145,7 +146,7 @@ domains:
 - `app` and `env` required; `providers.infra` required (the legacy `providers.compute` key was removed in #47 — use `providers.infra`).
 - At least one server, exactly one master, all have type/region/role. `disk` optional (creation-only, not resizable). Hetzner + `disk` = hard error (fixed per server type).
 - Volumes: size > 0, server exists. `server` / `servers` mutually exclusive. Multiple servers + volume = error.
-- Databases: `engine` required and must be a registered database provider. Selfhosted engines require `user` / `password` / `database` / `server` / `size`; SaaS engines reject those fields. Any `databases.<name>.backup` set requires `providers.storage` — nvoi provisions the backup bucket implicitly per-database (no `backup.storage:` field to wire up; see **Database backups**).
+- Databases: `engine` required and must be a registered database provider. Selfhosted engines require `credentials:` (with `user` / `password` / `database`) plus `server` / `size`; SaaS engines reject `credentials:` (Neon / PlanetScale manage credentials provider-side) and `server` / `size`. Any `databases.<name>.backup` set requires `providers.storage` — nvoi provisions the backup bucket implicitly per-database (no `backup.storage:` field to wire up; see **Database backups**).
 - Services/crons: `image` required (unless `build:`), referenced `storage`/`volumes` exist. Volume mounts `name:/path`, volume must be on the same server as the workload.
 - Web-facing services (with domains): replicas omitted → 2. Explicit `replicas: 1` → hard error. 2 replicas on a single `server:` node is valid.
 - `services.X.build:` requires a `registry:` block AND the image's host must appear as a key. Bare image names (`nginx`, `alpine:3.19`) are rejected for built services — push needs a fully qualified tag.

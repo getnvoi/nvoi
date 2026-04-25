@@ -284,31 +284,35 @@ func databaseRequest(dc *config.DeployContext, names *utils.Names, name string, 
 			Retention: def.Backup.Retention,
 		}
 	}
-	// user / password / database all support $VAR references resolved
-	// against the same source map the services/crons pipeline uses.
-	// Keeping the three fields in lockstep avoids the foot-gun where
+	// credentials.user / .password / .database all support $VAR references
+	// resolved against the same source map the services/crons pipeline
+	// uses. Keeping the three fields in lockstep avoids the foot-gun where
 	// $MAIN_POSTGRES_USER resolves but $MAIN_POSTGRES_DB gets passed
 	// through literally and postgres rejects the DSN at connect time.
-	if def.User != "" {
-		v, err := resolveRef(def.User, sources)
-		if err != nil {
-			return req, fmt.Errorf("databases.%s.user: %w", name, err)
+	// SaaS engines have no credentials block (validator rejects it) — the
+	// nil check here is what skips this path for them.
+	if def.Credentials != nil {
+		if def.Credentials.User != "" {
+			v, err := resolveRef(def.Credentials.User, sources)
+			if err != nil {
+				return req, fmt.Errorf("databases.%s.credentials.user: %w", name, err)
+			}
+			req.Spec.User = v
 		}
-		req.Spec.User = v
-	}
-	if def.Password != "" {
-		v, err := resolveRef(def.Password, sources)
-		if err != nil {
-			return req, fmt.Errorf("databases.%s.password: %w", name, err)
+		if def.Credentials.Password != "" {
+			v, err := resolveRef(def.Credentials.Password, sources)
+			if err != nil {
+				return req, fmt.Errorf("databases.%s.credentials.password: %w", name, err)
+			}
+			req.Spec.Password = v
 		}
-		req.Spec.Password = v
-	}
-	if def.Database != "" {
-		v, err := resolveRef(def.Database, sources)
-		if err != nil {
-			return req, fmt.Errorf("databases.%s.database: %w", name, err)
+		if def.Credentials.Database != "" {
+			v, err := resolveRef(def.Credentials.Database, sources)
+			if err != nil {
+				return req, fmt.Errorf("databases.%s.credentials.database: %w", name, err)
+			}
+			req.Spec.Database = v
 		}
-		req.Spec.Database = v
 	}
 	return req, nil
 }

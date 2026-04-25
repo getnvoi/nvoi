@@ -710,11 +710,16 @@ func collectCommandSecrets(cfg *config.AppConfig, source provider.CredentialSour
 		}
 	}
 	for _, db := range cfg.Databases {
-		// user / password / database all support $VAR references (same
-		// as the reconcile path). Missing `database` from this loop
-		// would silently drop the DSN's dbname when cmd/ calls
-		// commandDatabaseRequest, producing a broken req.Spec.Database.
-		for _, raw := range []string{db.User, db.Password, db.Database} {
+		// credentials.user / .password / .database all support $VAR
+		// references (same as the reconcile path). Missing `database`
+		// from this loop would silently drop the DSN's dbname when cmd/
+		// calls commandDatabaseRequest, producing a broken
+		// req.Spec.Database. SaaS engines have no credentials block —
+		// nil check is what skips them.
+		if db.Credentials == nil {
+			continue
+		}
+		for _, raw := range []string{db.Credentials.User, db.Credentials.Password, db.Credentials.Database} {
 			for _, key := range utils.ExtractVarRefs(raw) {
 				v, err := source.Get(key)
 				if err != nil {
@@ -745,30 +750,33 @@ func commandDatabaseRequest(name string, def config.DatabaseDef, names *utils.Na
 			Region:  def.Region,
 		},
 	}
-	// user / password / database — same lockstep as the reconcile path
-	// (see internal/reconcile/databases.go::databaseRequest). Without
-	// resolving def.Database here, `$MAIN_POSTGRES_DB` would reach the
-	// provider unresolved and the DSN would target a non-existent DB.
-	if def.User != "" {
-		v, err := commandResolveRef(def.User, sources)
-		if err != nil {
-			return req, fmt.Errorf("databases.%s.user: %w", name, err)
+	// credentials.user / .password / .database — same lockstep as the
+	// reconcile path (see internal/reconcile/databases.go::databaseRequest).
+	// Without resolving credentials.database here, `$MAIN_POSTGRES_DB`
+	// would reach the provider unresolved and the DSN would target a
+	// non-existent DB. SaaS engines have no credentials block.
+	if def.Credentials != nil {
+		if def.Credentials.User != "" {
+			v, err := commandResolveRef(def.Credentials.User, sources)
+			if err != nil {
+				return req, fmt.Errorf("databases.%s.credentials.user: %w", name, err)
+			}
+			req.Spec.User = v
 		}
-		req.Spec.User = v
-	}
-	if def.Password != "" {
-		v, err := commandResolveRef(def.Password, sources)
-		if err != nil {
-			return req, fmt.Errorf("databases.%s.password: %w", name, err)
+		if def.Credentials.Password != "" {
+			v, err := commandResolveRef(def.Credentials.Password, sources)
+			if err != nil {
+				return req, fmt.Errorf("databases.%s.credentials.password: %w", name, err)
+			}
+			req.Spec.Password = v
 		}
-		req.Spec.Password = v
-	}
-	if def.Database != "" {
-		v, err := commandResolveRef(def.Database, sources)
-		if err != nil {
-			return req, fmt.Errorf("databases.%s.database: %w", name, err)
+		if def.Credentials.Database != "" {
+			v, err := commandResolveRef(def.Credentials.Database, sources)
+			if err != nil {
+				return req, fmt.Errorf("databases.%s.credentials.database: %w", name, err)
+			}
+			req.Spec.Database = v
 		}
-		req.Spec.Database = v
 	}
 	if def.Backup != nil {
 		req.Spec.Backup = &provider.DatabaseBackupSpec{

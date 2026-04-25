@@ -48,13 +48,15 @@ func TestDatabases_ProvisionsBackupBucketAndCredsSecret(t *testing.T) {
 		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket"},
 		Databases: map[string]config.DatabaseDef{
 			"app": {
-				Engine:   "postgres",
-				Server:   "master",
-				Size:     20,
-				User:     "$POSTGRES_USER",
-				Password: "$POSTGRES_PASSWORD",
-				Database: "myapp",
-				Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
+				Engine: "postgres",
+				Server: "master",
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "$POSTGRES_USER",
+					Password: "$POSTGRES_PASSWORD",
+					Database: "myapp",
+				},
+				Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
 			},
 		},
 	}
@@ -136,12 +138,14 @@ func TestDatabases_NoBackupSkipsBucketProvisioning(t *testing.T) {
 		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-noop"},
 		Databases: map[string]config.DatabaseDef{
 			"app": {
-				Engine:   "postgres",
-				Server:   "master",
-				Size:     20,
-				User:     "$U",
-				Password: "$P",
-				Database: "myapp",
+				Engine: "postgres",
+				Server: "master",
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "$U",
+					Password: "$P",
+					Database: "myapp",
+				},
 			},
 		},
 	}
@@ -183,12 +187,14 @@ func TestDatabases_ResolvesVarRefsInAllCredFields(t *testing.T) {
 		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-vars"},
 		Databases: map[string]config.DatabaseDef{
 			"app": {
-				Engine:   "postgres",
-				Server:   "master",
-				Size:     20,
-				User:     "$PG_USER",
-				Password: "$PG_PASS",
-				Database: "$PG_DB",
+				Engine: "postgres",
+				Server: "master",
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "$PG_USER",
+					Password: "$PG_PASS",
+					Database: "$PG_DB",
+				},
 			},
 		},
 	}
@@ -242,21 +248,23 @@ func TestDatabases_UnresolvedVarInDatabaseErrors(t *testing.T) {
 		Providers: config.ProvidersDef{Infra: "test-compute"},
 		Databases: map[string]config.DatabaseDef{
 			"app": {
-				Engine:   "postgres",
-				Server:   "master",
-				Size:     20,
-				User:     "u",
-				Password: "p",
-				Database: "$MISSING",
+				Engine: "postgres",
+				Server: "master",
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "u",
+					Password: "p",
+					Database: "$MISSING",
+				},
 			},
 		},
 	}
 
 	_, _, err := Databases(context.Background(), dc, cfg, map[string]string{})
 	if err == nil {
-		t.Fatal("expected error for unresolved $MISSING in database:, got nil")
+		t.Fatal("expected error for unresolved $MISSING in credentials.database, got nil")
 	}
-	if !strings.Contains(err.Error(), "databases.app.database") {
+	if !strings.Contains(err.Error(), "databases.app.credentials.database") {
 		t.Errorf("error should be field-qualified; got: %s", err.Error())
 	}
 }
@@ -324,13 +332,15 @@ func TestDatabases_NodeDriftEmitsPendingMigration(t *testing.T) {
 		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-drift"},
 		Databases: map[string]config.DatabaseDef{
 			"app": {
-				Engine:   "postgres",
-				Server:   "db-master", // changed from "master"
-				Size:     20,
-				User:     "$U",
-				Password: "$P",
-				Database: "myapp",
-				Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
+				Engine: "postgres",
+				Server: "db-master", // changed from "master"
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "$U",
+					Password: "$P",
+					Database: "myapp",
+				},
+				Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
 			},
 		},
 	}
@@ -390,12 +400,14 @@ func TestDatabases_FirstDeploySkipsDriftDetection(t *testing.T) {
 		Providers: config.ProvidersDef{Infra: "test-compute", Storage: "test-bucket-first"},
 		Databases: map[string]config.DatabaseDef{
 			"app": {
-				Engine:   "postgres",
-				Server:   "master",
-				Size:     20,
-				User:     "$U",
-				Password: "$P",
-				Database: "myapp",
+				Engine: "postgres",
+				Server: "master",
+				Size:   20,
+				Credentials: &config.DatabaseCredentialsDef{
+					User:     "$U",
+					Password: "$P",
+					Database: "myapp",
+				},
 			},
 		},
 	}

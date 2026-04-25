@@ -14,7 +14,7 @@ servers:
     region: nbg1
     role: master
   db-master:
-    type: cax21                    # bumped: headroom for ZFS pool + DB working set
+    type: cax11                    # bumped: headroom for ZFS pool + DB working set
     region: nbg1
     role: worker
 
@@ -33,9 +33,10 @@ databases:
     version: "17"
     server: db-master              # dedicated — #68 forbids DB-on-master
     size: 20
-    user: $MAIN_POSTGRES_USER
-    password: $MAIN_POSTGRES_PASSWORD
-    database: $MAIN_POSTGRES_DB
+    credentials:
+      user: $MAIN_POSTGRES_USER
+      password: $MAIN_POSTGRES_PASSWORD
+      database: $MAIN_POSTGRES_DB
     backup:
       schedule: "0 3 * * *"        # daily at 03:00 UTC
       retention: 14                # days; applied as R2 lifecycle

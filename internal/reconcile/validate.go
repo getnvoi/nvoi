@@ -197,14 +197,17 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			return fmt.Errorf("databases.%s.engine: %w", name, err)
 		}
 		if databaseEngineIsSelfHosted(db.Engine) {
-			if db.User == "" {
-				return fmt.Errorf("databases.%s.user is required", name)
+			if db.Credentials == nil {
+				return fmt.Errorf("databases.%s.credentials is required for engine %s (user / password / database)", name, db.Engine)
 			}
-			if db.Password == "" {
-				return fmt.Errorf("databases.%s.password is required", name)
+			if db.Credentials.User == "" {
+				return fmt.Errorf("databases.%s.credentials.user is required", name)
 			}
-			if db.Database == "" {
-				return fmt.Errorf("databases.%s.database is required", name)
+			if db.Credentials.Password == "" {
+				return fmt.Errorf("databases.%s.credentials.password is required", name)
+			}
+			if db.Credentials.Database == "" {
+				return fmt.Errorf("databases.%s.credentials.database is required", name)
 			}
 			if db.Server == "" {
 				return fmt.Errorf("databases.%s.server is required", name)
@@ -212,11 +215,11 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			if db.Size <= 0 {
 				return fmt.Errorf("databases.%s.size must be > 0", name)
 			}
-			if !hasVarRef(db.User) {
-				return fmt.Errorf("databases.%s.user must be a $VAR reference", name)
+			if !hasVarRef(db.Credentials.User) {
+				return fmt.Errorf("databases.%s.credentials.user must be a $VAR reference", name)
 			}
-			if !hasVarRef(db.Password) {
-				return fmt.Errorf("databases.%s.password must be a $VAR reference", name)
+			if !hasVarRef(db.Credentials.Password) {
+				return fmt.Errorf("databases.%s.credentials.password must be a $VAR reference", name)
 			}
 			if _, ok := cfg.Servers[db.Server]; !ok {
 				return fmt.Errorf("databases.%s.server: %q is not a defined server", name, db.Server)
@@ -250,14 +253,8 @@ func ValidateConfig(cfg *config.AppConfig) error {
 			}
 		}
 		if databaseEngineIsSaaS(db.Engine) {
-			if db.User != "" {
-				return fmt.Errorf("databases.%s.user is not valid for SaaS engine %s", name, db.Engine)
-			}
-			if db.Password != "" {
-				return fmt.Errorf("databases.%s.password is not valid for SaaS engine %s", name, db.Engine)
-			}
-			if db.Database != "" {
-				return fmt.Errorf("databases.%s.database is not valid for SaaS engine %s", name, db.Engine)
+			if db.Credentials != nil {
+				return fmt.Errorf("databases.%s.credentials is not valid for SaaS engine %s (Neon / PlanetScale manage credentials on the provider side)", name, db.Engine)
 			}
 			if db.Server != "" {
 				return fmt.Errorf("databases.%s.server is not valid for SaaS engine %s", name, db.Engine)

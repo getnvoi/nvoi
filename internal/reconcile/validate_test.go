@@ -855,13 +855,15 @@ func TestValidateConfig_DatabasePostgresValid(t *testing.T) {
 	cfg.Providers.Storage = "cloudflare" // backup: set → providers.storage required
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
-			Engine:   "postgres",
-			Server:   "db-master",
-			Size:     20,
-			User:     "$POSTGRES_APP_USER",
-			Password: "$POSTGRES_APP_PASSWORD",
-			Database: "myapp",
-			Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *"},
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$POSTGRES_APP_USER",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
+			Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *"},
 		},
 	}
 	cfg.Services["api"] = config.ServiceDef{Image: "nginx", Databases: []string{"app"}}
@@ -874,15 +876,32 @@ func TestValidateConfig_DatabaseRequiresVarRefs(t *testing.T) {
 	cfg := validCfgForTest()
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
-			Engine:   "postgres",
-			Server:   "db-master",
-			Size:     20,
-			User:     "appuser",
-			Password: "$POSTGRES_APP_PASSWORD",
-			Database: "myapp",
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "appuser",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
 		},
 	}
-	assertValidationError(t, cfg, "databases.app.user must be a $VAR reference")
+	assertValidationError(t, cfg, "databases.app.credentials.user must be a $VAR reference")
+}
+
+// TestValidateConfig_DatabaseRequiresCredentialsBlock locks the
+// "credentials: required for selfhosted" rule. Omitting the whole
+// block should hard-error before any other field-level check.
+func TestValidateConfig_DatabaseRequiresCredentialsBlock(t *testing.T) {
+	cfg := validCfgForTest()
+	cfg.Databases = map[string]config.DatabaseDef{
+		"app": {
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+		},
+	}
+	assertValidationError(t, cfg, "databases.app.credentials is required")
 }
 
 // TestValidateConfig_DatabaseBannedOnMaster locks the dedicated-node
@@ -896,12 +915,14 @@ func TestValidateConfig_DatabaseBannedOnMaster(t *testing.T) {
 	cfg.Providers.Storage = "cloudflare"
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
-			Engine:   "postgres",
-			Server:   "master",
-			Size:     20,
-			User:     "$U",
-			Password: "$P",
-			Database: "myapp",
+			Engine: "postgres",
+			Server: "master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$U",
+				Password: "$P",
+				Database: "myapp",
+			},
 		},
 	}
 	assertValidationError(t, cfg, "cannot be \"master\"")
@@ -918,12 +939,14 @@ func TestValidateConfig_DatabaseBannedOnSharedNode(t *testing.T) {
 	cfg.Providers.Storage = "cloudflare"
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
-			Engine:   "postgres",
-			Server:   "db-master",
-			Size:     20,
-			User:     "$U",
-			Password: "$P",
-			Database: "myapp",
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$U",
+				Password: "$P",
+				Database: "myapp",
+			},
 		},
 	}
 	cfg.Services["worker"] = config.ServiceDef{
@@ -942,12 +965,14 @@ func TestValidateConfig_DatabaseBannedOnSharedNode_Cron(t *testing.T) {
 	cfg.Providers.Storage = "cloudflare"
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
-			Engine:   "postgres",
-			Server:   "db-master",
-			Size:     20,
-			User:     "$U",
-			Password: "$P",
-			Database: "myapp",
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$U",
+				Password: "$P",
+				Database: "myapp",
+			},
 		},
 	}
 	cfg.Crons = map[string]config.CronDef{
@@ -965,11 +990,11 @@ func TestValidateConfig_DatabaseNeonRejectsSelfHostedFields(t *testing.T) {
 	cfg := validCfgForTest()
 	cfg.Databases = map[string]config.DatabaseDef{
 		"analytics": {
-			Engine: "neon",
-			User:   "$USER",
+			Engine:      "neon",
+			Credentials: &config.DatabaseCredentialsDef{User: "$USER"},
 		},
 	}
-	assertValidationError(t, cfg, "not valid for SaaS engine neon")
+	assertValidationError(t, cfg, "credentials is not valid for SaaS engine neon")
 }
 
 // Backups need a bucket provider. Declaring `backup:` without
@@ -979,13 +1004,15 @@ func TestValidateConfig_DatabaseBackupRequiresProvidersStorage(t *testing.T) {
 	cfg := validCfgForTest()
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
-			Engine:   "postgres",
-			Server:   "db-master",
-			Size:     20,
-			User:     "$POSTGRES_APP_USER",
-			Password: "$POSTGRES_APP_PASSWORD",
-			Database: "myapp",
-			Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *"},
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$POSTGRES_APP_USER",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
+			Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *"},
 		},
 	}
 	assertValidationError(t, cfg, "providers.storage is not configured")
@@ -1011,13 +1038,15 @@ func TestValidateConfig_DatabaseBackupWithProvidersStorage_OK(t *testing.T) {
 	cfg.Providers.Storage = "cloudflare"
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
-			Engine:   "postgres",
-			Server:   "db-master",
-			Size:     20,
-			User:     "$POSTGRES_APP_USER",
-			Password: "$POSTGRES_APP_PASSWORD",
-			Database: "myapp",
-			Backup:   &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$POSTGRES_APP_USER",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
+			Backup: &config.DatabaseBackupDef{Schedule: "0 3 * * *", Retention: 14},
 		},
 	}
 	if err := ValidateConfig(cfg); err != nil {
@@ -1029,12 +1058,14 @@ func TestValidateConfig_ServiceDatabaseAliasMustBeEnvVar(t *testing.T) {
 	cfg := validCfgForTest()
 	cfg.Databases = map[string]config.DatabaseDef{
 		"app": {
-			Engine:   "postgres",
-			Server:   "db-master",
-			Size:     20,
-			User:     "$POSTGRES_APP_USER",
-			Password: "$POSTGRES_APP_PASSWORD",
-			Database: "myapp",
+			Engine: "postgres",
+			Server: "db-master",
+			Size:   20,
+			Credentials: &config.DatabaseCredentialsDef{
+				User:     "$POSTGRES_APP_USER",
+				Password: "$POSTGRES_APP_PASSWORD",
+				Database: "myapp",
+			},
 		},
 	}
 	cfg.Services["api"] = config.ServiceDef{Image: "nginx", Databases: []string{"bad-alias=app"}}
