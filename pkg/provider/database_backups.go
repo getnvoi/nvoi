@@ -59,9 +59,9 @@ func DBImage() string {
 // picks the right dump tool.
 func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
 	labels := map[string]string{
-		"app.kubernetes.io/name":       req.FullName,
-		"app.kubernetes.io/managed-by": "nvoi",
-		"nvoi/database":                req.Name,
+		utils.LabelAppName:      req.FullName,
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiDatabase: req.Name,
 	}
 	for k, v := range req.Labels {
 		if _, exists := labels[k]; !exists {
@@ -146,10 +146,10 @@ func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
 // caller (RunRestoreJob) waits for the Job to succeed before returning.
 func BuildRestoreJob(req DatabaseRequest, backupKey string) *batchv1.Job {
 	labels := map[string]string{
-		"app.kubernetes.io/name":       req.FullName,
-		"app.kubernetes.io/managed-by": "nvoi",
-		"nvoi/database":                req.Name,
-		"nvoi/restore-of":              req.Name,
+		utils.LabelAppName:      req.FullName,
+		utils.LabelAppManagedBy: utils.LabelManagedBy,
+		utils.LabelNvoiDatabase: req.Name,
+		"nvoi/restore-of":       req.Name,
 	}
 	for k, v := range req.Labels {
 		if _, exists := labels[k]; !exists {

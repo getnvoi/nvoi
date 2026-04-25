@@ -122,6 +122,13 @@ func TestNamesKube(t *testing.T) {
 	}
 }
 
+// TestNamesLabels locks the canonical label set on every nvoi-managed
+// k8s object. The managed-by key MUST be the prefixed
+// `app.kubernetes.io/managed-by` form — that's what kube.NvoiSelector
+// queries, and a bare `managed-by` (the historical bug) makes the
+// labeled object invisible to every selector-driven listing
+// (describe, orphan sweeps, resources). This test exists specifically
+// to catch a future revert of that fix.
 func TestNamesLabels(t *testing.T) {
 	n, err := NewNames("dummy-rails", "production")
 	if err != nil {
@@ -131,9 +138,9 @@ func TestNamesLabels(t *testing.T) {
 	labels := n.Labels()
 
 	expected := map[string]string{
-		"managed-by": "nvoi",
-		"app":        "nvoi-dummy-rails-production",
-		"env":        "production",
+		LabelAppManagedBy: LabelManagedBy,
+		"app":             "nvoi-dummy-rails-production",
+		"env":             "production",
 	}
 
 	if len(labels) != len(expected) {

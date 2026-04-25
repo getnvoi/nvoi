@@ -308,12 +308,19 @@ func describeNodes(ctx context.Context, kc *kube.Client) []DescribeNode {
 	return out
 }
 
+// describeWorkloads returns USER workloads (Deployments + StatefulSets).
+// Database-owned StatefulSets are excluded — they appear in the
+// DATABASES section with engine-aware columns (Endpoint, Live probe).
+// Showing them in WORKLOADS would be redundant noise.
 func describeWorkloads(ctx context.Context, kc *kube.Client, ns string) []DescribeWorkload {
 	var out []DescribeWorkload
 
 	deps, err := kc.Clientset().AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
 	if err == nil {
 		for _, d := range deps.Items {
+			if _, owned := d.Labels[utils.LabelNvoiDatabase]; owned {
+				continue
+			}
 			image := ""
 			if len(d.Spec.Template.Spec.Containers) > 0 {
 				image = d.Spec.Template.Spec.Containers[0].Image
@@ -335,6 +342,9 @@ func describeWorkloads(ctx context.Context, kc *kube.Client, ns string) []Descri
 	ss, err := kc.Clientset().AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{LabelSelector: kube.NvoiSelector})
 	if err == nil {
 		for _, s := range ss.Items {
+			if _, owned := s.Labels[utils.LabelNvoiDatabase]; owned {
+				continue
+			}
 			image := ""
 			if len(s.Spec.Template.Spec.Containers) > 0 {
 				image = s.Spec.Template.Spec.Containers[0].Image

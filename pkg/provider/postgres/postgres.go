@@ -19,6 +19,7 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // defaultPostgresVersion is the fallback tag when cfg omits a
@@ -193,7 +194,7 @@ func labels(req provider.DatabaseRequest) map[string]string {
 	for k, v := range req.Labels {
 		labels[k] = v
 	}
-	labels["nvoi/database"] = req.Name
+	labels[utils.LabelNvoiDatabase] = req.Name
 	return labels
 }
 

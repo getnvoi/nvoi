@@ -7,6 +7,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // FirstPod returns the name of the first pod for a service. Errors when no
@@ -41,10 +43,17 @@ func (c *Client) GetServicePort(ctx context.Context, ns, name string) (int, erro
 }
 
 // ListWorkloadNames returns the deduplicated set of nvoi-managed
-// workload names in the namespace (Deployments + StatefulSets,
+// USER workload names in the namespace (Deployments + StatefulSets,
 // label-filtered to the nvoi selector). Used by reconcile.Services for
 // orphan detection — names present in kube but absent from cfg get
 // ServiceDelete'd.
+//
+// Workloads carrying utils.LabelNvoiDatabase are excluded — they're
+// infrastructure objects owned by the databases pipeline (StatefulSet
+// for the DB pod, etc.), not user services. Including them here would
+// cause reconcile.Services orphan sweep to delete them on every deploy
+// (cfg.Services never lists DB names). DB lifecycle lives in the
+// databases pipeline.
 func (c *Client) ListWorkloadNames(ctx context.Context, ns string) ([]string, error) {
 	seen := make(map[string]bool)
 	deps, err := c.cs.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: NvoiSelector})
@@ -52,6 +61,9 @@ func (c *Client) ListWorkloadNames(ctx context.Context, ns string) ([]string, er
 		return nil, fmt.Errorf("list deployments: %w", err)
 	}
 	for _, d := range deps.Items {
+		if _, owned := d.Labels[utils.LabelNvoiDatabase]; owned {
+			continue
+		}
 		seen[d.Name] = true
 	}
 	ss, err := c.cs.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{LabelSelector: NvoiSelector})
@@ -59,6 +71,9 @@ func (c *Client) ListWorkloadNames(ctx context.Context, ns string) ([]string, er
 		return nil, fmt.Errorf("list statefulsets: %w", err)
 	}
 	for _, s := range ss.Items {
+		if _, owned := s.Labels[utils.LabelNvoiDatabase]; owned {
+			continue
+		}
 		seen[s.Name] = true
 	}
 	out := make([]string, 0, len(seen))
@@ -68,9 +83,16 @@ func (c *Client) ListWorkloadNames(ctx context.Context, ns string) ([]string, er
 	return out, nil
 }
 
-// ListCronJobNames returns the nvoi-managed CronJob names in the
+// ListCronJobNames returns the nvoi-managed USER CronJob names in the
 // namespace. Mirror of ListWorkloadNames for reconcile.Crons orphan
 // detection.
+//
+// CronJobs carrying utils.LabelNvoiDatabase are excluded — they're
+// infrastructure objects owned by the databases pipeline (the daily
+// backup CronJob for each DB). Including them here would cause
+// reconcile.Crons orphan sweep to delete them on every deploy when
+// cfg has no `crons:` block. DB backup lifecycle lives in the
+// databases pipeline alongside the StatefulSet / PVC.
 func (c *Client) ListCronJobNames(ctx context.Context, ns string) ([]string, error) {
 	cjs, err := c.cs.BatchV1().CronJobs(ns).List(ctx, metav1.ListOptions{LabelSelector: NvoiSelector})
 	if err != nil {
@@ -78,6 +100,9 @@ func (c *Client) ListCronJobNames(ctx context.Context, ns string) ([]string, err
 	}
 	out := make([]string, 0, len(cjs.Items))
 	for _, cj := range cjs.Items {
+		if _, owned := cj.Labels[utils.LabelNvoiDatabase]; owned {
+			continue
+		}
 		out = append(out, cj.Name)
 	}
 	return out, nil

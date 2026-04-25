@@ -158,11 +158,18 @@ func (n *Names) CronJobRunName(cronName string, suffix int64) string {
 
 // ── Labels ─────────────────────────────────────────────────────────────────────
 
+// Labels returns the canonical label set every nvoi-managed object
+// carries. The managed-by key uses the app.kubernetes.io prefix so it
+// matches kube.NvoiSelector — the same selector used by describe,
+// orphan sweeps, and resource listings. A bare "managed-by" key
+// (without the prefix) was the historical bug: DB workloads built via
+// req.Labels = names.Labels() ended up with the wrong key and became
+// invisible to every selector-driven query.
 func (n *Names) Labels() map[string]string {
 	return map[string]string{
-		"managed-by": "nvoi",
-		"app":        n.Base(),
-		"env":        n.env,
+		LabelAppManagedBy: LabelManagedBy,
+		"app":             n.Base(),
+		"env":             n.env,
 	}
 }
 
@@ -200,9 +207,18 @@ const (
 	LabelNvoiRole       = "nvoi-role"
 	LabelConfigChecksum = "nvoi/config-checksum"
 	LabelNvoiDeployHash = "nvoi/deploy-hash"
-	RoleMaster          = "master"
-	RoleWorker          = "worker"
-	RoleBuilder         = "builder"
+	// LabelNvoiDatabase marks every k8s object owned by the databases
+	// pipeline (StatefulSet, Service, PVC, credentials Secret, backup
+	// CronJob, branch resources). Stamped by the postgres provider and
+	// by provider.BuildBackupCronJob. Consumers use it to distinguish
+	// "user workload" from "infrastructure workload" — most importantly,
+	// the orphan sweeps in reconcile.Services / reconcile.Crons exclude
+	// these so a config without `crons:` doesn't garbage-collect the
+	// daily backup CronJob.
+	LabelNvoiDatabase = "nvoi/database"
+	RoleMaster        = "master"
+	RoleWorker        = "worker"
+	RoleBuilder       = "builder"
 )
 
 // BuilderCacheMountPath is the on-disk mount point for the per-builder cache

@@ -643,3 +643,92 @@ func TestClassifySecretOwner_Patterns(t *testing.T) {
 		}
 	}
 }
+
+// TestDescribeWorkloads_ExcludesDatabaseOwned locks the WORKLOADS
+// section's scope: USER workloads only. DB StatefulSets carry
+// utils.LabelNvoiDatabase and surface in the DATABASES section with
+// engine-aware columns; including them in WORKLOADS would be
+// duplicative noise.
+func TestDescribeWorkloads_ExcludesDatabaseOwned(t *testing.T) {
+	userDeployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "api", Namespace: "ns",
+			Labels: managedLabels(),
+		},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "myorg/api"}}},
+			},
+		},
+	}
+	dbStatefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvoi-myapp-prod-db-main", Namespace: "ns",
+			Labels: managedLabels(utils.LabelNvoiDatabase, "main"),
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "postgres:17"}}},
+			},
+		},
+	}
+	kc := newKC(userDeployment, dbStatefulSet)
+
+	rows := describeWorkloads(context.Background(), kc, "ns")
+	if len(rows) != 1 {
+		t.Fatalf("len = %d (got %+v), want 1 (only the user Deployment)", len(rows), rows)
+	}
+	if rows[0].Name != "api" {
+		t.Errorf("got %q, want api", rows[0].Name)
+	}
+}
+
+// TestDescribeCrons_IncludesDatabaseBackupCronJob locks the inverse:
+// CRONS section keeps DB-owned CronJobs (the daily backup is a real
+// cron the operator wants to see — schedule, status, age). The
+// orphan-sweep exclusion lives in ListCronJobNames; describe must NOT
+// also exclude them, otherwise operators lose visibility on their
+// backup schedule.
+func TestDescribeCrons_IncludesDatabaseBackupCronJob(t *testing.T) {
+	userCron := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "cleanup", Namespace: "ns",
+			Labels: managedLabels(),
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule: "0 1 * * *",
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "busybox"}}},
+				}},
+			},
+		},
+	}
+	dbBackupCron := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvoi-myapp-prod-db-main-backup", Namespace: "ns",
+			Labels: managedLabels(utils.LabelNvoiDatabase, "main"),
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule: "0 3 * * *",
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: "docker.io/nvoi/db:v0"}}},
+				}},
+			},
+		},
+	}
+	kc := newKC(userCron, dbBackupCron)
+
+	rows := describeCrons(context.Background(), kc, "ns")
+	if len(rows) != 2 {
+		t.Fatalf("len = %d (got %+v), want 2 (user + db-backup)", len(rows), rows)
+	}
+	names := map[string]bool{}
+	for _, r := range rows {
+		names[r.Name] = true
+	}
+	if !names["cleanup"] || !names["nvoi-myapp-prod-db-main-backup"] {
+		t.Errorf("missing expected cron in describeCrons output: %+v", rows)
+	}
+}
