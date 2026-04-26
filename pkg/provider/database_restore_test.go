@@ -45,7 +45,7 @@ func TestBuildRestoreJob(t *testing.T) {
 
 	// Image must be the version-pinned nvoi/db — same image as backup,
 	// different MODE. The CLI binary version and this image version
-	// stay in lockstep via utils.DBImageTag.
+	// stay in lockstep via provider.DBImageTag.
 	if got, want := c.Image, DBImage(); got != want {
 		t.Errorf("image = %q, want %q", got, want)
 	}

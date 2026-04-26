@@ -263,24 +263,6 @@ const (
 	RoleBuilder = "builder"
 )
 
-// DBImageTag is the tag suffix nvoi appends to the backup container
-// image reference (`docker.io/nvoi/db:<DBImageTag>`) emitted by every
-// DatabaseProvider's backup CronJob and one-shot restore Job.
-// Overridden at build time:
-//
-//	-ldflags "-X github.com/getnvoi/nvoi/pkg/utils.DBImageTag=v1.2.3"
-//
-// set in .github/workflows/release.yml on every `v*` tag. The default
-// "latest" makes local/dev builds (bin/nvoi) pull
-// docker.io/nvoi/db:latest — which release.yml publishes on every
-// tagged release alongside the version-pinned tag. Tagged release
-// builds inject the matching `vX.Y.Z` so prod CLI and image stay in
-// lockstep. Local deploys "just work" without ldflags juggling.
-//
-// Renamed from `Version` (which read like CLI-version metadata):
-// this string is specifically the DB image tag.
-var DBImageTag = "latest"
-
 // BuilderCacheMountPath is the on-disk mount point for the per-builder cache
 // volume. Docker's data-root points here (see pkg/infra/cloudinit.go's
 // RenderBuilderCloudInit) so buildkit layer cache survives reboots and

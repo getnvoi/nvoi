@@ -1,2 +1,14 @@
 #!/usr/bin/env bash
-exec "$(dirname "$0")/nvoi" deploy "$@"
+# bin/deploy — local dev shorthand for `bin/nvoi deploy`.
+#
+# Builds + pushes the uniform nvoi/db backup image before deploying so
+# any cmd/db edit ships transparently. buildx layer cache makes no-op
+# runs sub-second. First time: `docker login` + `docker buildx create --use`.
+#
+# Image ref must match pkg/provider/database_backups.go::DBImageRepo + DBImageTag.
+# Production releases go through .github/workflows/release.yml.
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+docker buildx build --platform linux/amd64,linux/arm64 --pull --push \
+  -t docker.io/nvoi/db:latest "$ROOT_DIR/cmd/db"
+exec "$ROOT_DIR/bin/nvoi" deploy "$@"

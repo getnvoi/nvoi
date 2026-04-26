@@ -32,15 +32,33 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils/s3"
 )
 
-// DBImage is the uniform image reference for the backup CronJob AND
-// the restore one-shot Job. Tagged with utils.DBImageTag so database
-// I/O is deterministic per deploy — same discipline as user
-// workloads, which carry the deploy-hash as part of the image tag.
+// DBImageRepo is the registry path of the uniform backup + restore
+// container image. Built from cmd/db/Dockerfile, published to Docker
+// Hub on every `v*` tag by .github/workflows/release.yml AND on every
+// local `bin/deploy` (operators with push perms). Public repo, no
+// auth required for pull.
 //
-// The image is built from cmd/db/Dockerfile and published to Docker
-// Hub on every `v*` git tag. Public repo, no auth required for pull.
+// Lives here, not in pkg/utils/naming.go: the image is external
+// infrastructure nvoi REFERENCES, not a resource nvoi creates. The
+// repo path matches whatever bin/deploy passes to docker buildx.
+const DBImageRepo = "docker.io/nvoi/db"
+
+// DBImageTag is the tag nvoi appends to DBImageRepo. Overridden at
+// build time:
+//
+//	-ldflags "-X github.com/getnvoi/nvoi/pkg/provider.DBImageTag=v1.2.3"
+//
+// set in .github/workflows/release.yml on every `v*` tag. Default
+// "latest" makes local builds (bin/nvoi) pull the most recent stable
+// image — release.yml publishes both `:vX.Y.Z` and `:latest` per
+// release. Tagged builds inject the pinned tag so prod CLI and image
+// stay in lockstep.
+var DBImageTag = "latest"
+
+// DBImage is the uniform image reference for the backup CronJob AND
+// the restore one-shot Job.
 func DBImage() string {
-	return "docker.io/nvoi/db:" + utils.DBImageTag
+	return DBImageRepo + ":" + DBImageTag
 }
 
 // BuildBackupCronJob returns the uniform CronJob that dumps a database

@@ -41,7 +41,7 @@ jobs:
           # is the same discipline we apply to user workloads
           # (deploy-hash tags).
           go build \
-            -ldflags="-s -w -X github.com/getnvoi/nvoi/pkg/utils.DBImageTag=${{ github.ref_name }}" \
+            -ldflags="-s -w -X github.com/getnvoi/nvoi/pkg/provider.DBImageTag=${{ github.ref_name }}" \
             -o "dist/nvoi-${GOOS}-${GOARCH}${ext}" ./cmd/cli
       - uses: actions/upload-artifact@v4
         with:
