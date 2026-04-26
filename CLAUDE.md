@@ -279,7 +279,7 @@ pkg/
 - `infra.Close()` releases the cached SSH at end of command.
 - Reconcile stores both on `dc.Cluster.NodeShell` / `dc.Cluster.MasterKube` and shares them via `borrowedSSH` / no-op cleanup across every step.
 
-**On-demand contract.** `Cluster.Kube(ctx, cfg)` and `Cluster.SSH(ctx, cfg)` route to `infra.Connect` / `infra.NodeShell` when their fields are nil. Tests NEVER pre-inject `Cluster.MasterKube` or `Cluster.NodeShell` — the on-demand path is mandatory coverage. CI gate: `grep -rE 'Cluster\.MasterKube\s*=|Cluster\.NodeShell\s*=' cmd/ pkg/core/ | grep '_test\.go'` returns zero hits.
+**On-demand contract.** `Cluster.Kube(ctx, cfg)` and `Cluster.SSH(ctx, cfg)` route to `infra.Connect` / `infra.NodeShell` when their fields are nil. Tests NEVER pre-inject `Cluster.MasterKube` or `Cluster.NodeShell`, AND CLI command code NEVER reads those fields directly (they're nil at dispatch time). CI gates: `grep -rE 'Cluster\.MasterKube\s*=|Cluster\.NodeShell\s*=' cmd/ pkg/core/ | grep '_test\.go'` returns zero hits (write side); `grep -rE '\.Cluster\.MasterKube|\.Cluster\.NodeShell' cmd/cli/ | grep -v _test.go | grep -v '^\s*//'` returns zero hits (read side; mirrored in `cmd/cli/dispatch_test.go::TestDispatch_NoDirectKubeFieldRead`).
 
 SSH errors: `ErrHostKeyChanged` + `ErrAuthFailed` surface immediately with guidance. Stale known hosts auto-cleared on server creation.
 
