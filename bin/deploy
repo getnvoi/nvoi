@@ -20,5 +20,7 @@ if ! docker buildx inspect nvoi >/dev/null 2>&1; then
 fi
 
 docker buildx build --builder nvoi --platform linux/amd64,linux/arm64 --pull --push \
-  -t docker.io/nvoi/db:latest "$ROOT_DIR/cmd/db"
+  -t docker.io/nvoi/db:latest \
+  -f "$ROOT_DIR/cmd/db/Dockerfile" \
+  "$ROOT_DIR"
 exec "$ROOT_DIR/bin/nvoi" deploy "$@"

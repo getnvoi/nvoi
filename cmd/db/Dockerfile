@@ -14,19 +14,17 @@
 #
 # Tag discipline: published on every `v*` git tag by
 # .github/workflows/release.yml; the nvoi CLI pins
-# `docker.io/nvoi/db:<utils.Version>` so the image version and the
-# binary version always match.
+# `docker.io/nvoi/db:<provider.DBImageTag>` so the image version and
+# the CLI binary version always match. The image binary itself
+# carries no version string — the tag IS the version.
 
-ARG GO_VERSION=1.23
+ARG GO_VERSION=1.25
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG NVOI_VERSION=main
-RUN CGO_ENABLED=0 go build \
-    -ldflags="-s -w -X github.com/getnvoi/nvoi/pkg/utils.Version=${NVOI_VERSION}" \
-    -o /out/nvoi-db ./cmd/db
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/nvoi-db ./cmd/db
 
 FROM alpine:3.19
 RUN apk add --no-cache \

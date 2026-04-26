@@ -89,8 +89,6 @@ jobs:
           context: .
           file: cmd/db/Dockerfile
           platforms: linux/amd64,linux/arm64
-          build-args: |
-            NVOI_VERSION=${{ github.ref_name }}
           # Two tags: exact version (what the CLI pins) and `latest`
           # (ops can watch with `docker pull nvoi/db:latest` when
           # debugging). The CLI only references the exact version.
