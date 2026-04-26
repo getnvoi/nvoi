@@ -94,7 +94,7 @@ func (d *DNSClient) ensureCNAME(ctx context.Context, domain, target string, prox
 	}
 	for _, rec := range existing {
 		if rec.Content == target && rec.Proxied == proxied {
-			return nil // already correct
+			return nil
 		}
 		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: "CNAME", Name: fqdn, Content: target, TTL: 300, Proxied: proxied})
 	}
@@ -152,7 +152,7 @@ func (d *DNSClient) ensureAddress(ctx context.Context, domain, target string, pr
 
 	for _, rec := range existing {
 		if rec.Content == target && rec.Proxied == proxied {
-			return nil // already correct
+			return nil
 		}
 		return d.updateRecord(ctx, rec.ID, cfDNSRecord{Type: rtype, Name: fqdn, Content: target, TTL: 300, Proxied: proxied})
 	}
@@ -210,14 +210,20 @@ func (d *DNSClient) deleteRecord(ctx context.Context, id string) error {
 	return d.api.Do(ctx, "DELETE", fmt.Sprintf("/zones/%s/dns_records/%s", d.zoneID, id), nil, nil)
 }
 
+// ListResources lists every A, AAAA, and CNAME record in the zone.
+// Ownership classification happens at the consumer (pkg/core.Classify).
 func (d *DNSClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
-	bindings, err := d.ListBindings(ctx)
-	if err != nil {
-		return nil, err
-	}
 	g := provider.ResourceGroup{Name: "DNS Records", Columns: []string{"Type", "Domain", "Target"}}
-	for _, b := range bindings {
-		g.Rows = append(g.Rows, []string{b.Type, b.Domain, b.Target})
+	for _, rtype := range []string{"A", "AAAA", "CNAME"} {
+		var resp struct {
+			Result []cfDNSRecord `json:"result"`
+		}
+		if err := d.api.Do(ctx, "GET", fmt.Sprintf("/zones/%s/dns_records?type=%s&per_page=1000", d.zoneID, rtype), nil, &resp); err != nil {
+			return nil, err
+		}
+		for _, rec := range resp.Result {
+			g.Rows = append(g.Rows, []string{rec.Type, rec.Name, rec.Content})
+		}
 	}
 	return []provider.ResourceGroup{g}, nil
 }

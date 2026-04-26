@@ -20,9 +20,8 @@ type volumeJSON struct {
 	Location struct {
 		Name string `json:"name"`
 	} `json:"location"`
-	Labels      map[string]string `json:"labels"`
-	LinuxDevice string            `json:"linux_device"`
-	Status      string            `json:"status"`
+	LinuxDevice string `json:"linux_device"`
+	Status      string `json:"status"`
 }
 
 func volumeFrom(v volumeJSON) *provider.Volume {
@@ -238,6 +237,11 @@ func (c *Client) ResolveDevicePath(vol *provider.Volume) string {
 	return vol.DevicePath
 }
 
+// ListResources returns the per-kind tables shown by `nvoi resources`.
+// Listing is unscoped — every resource the Hetzner token can see lands
+// in a row, including resources from other apps/envs and resources
+// nvoi never created. Ownership classification is added at the
+// consumer (pkg/core.Classify) — provider stays oblivious.
 func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
 	servers, err := c.ListServers(ctx, nil)
 	if err != nil {

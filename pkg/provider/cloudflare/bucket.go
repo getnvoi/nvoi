@@ -153,6 +153,8 @@ func (c *BucketClient) tokenVerify(ctx context.Context) (string, error) {
 	return result.Result.ID, nil
 }
 
+// ListResources lists every R2 bucket on the account. Ownership
+// classification happens at the consumer (pkg/core.Classify).
 func (c *BucketClient) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
 	var resp struct {
 		Result struct {

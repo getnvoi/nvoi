@@ -73,12 +73,60 @@ type CreateVolumeRequest struct {
 	Labels           map[string]string
 }
 
+// Scope is the binary classification surfaced in the Scope column of
+// `nvoi resources`. Tells the operator whether each row is in scope
+// of THIS `./nvoi.yaml` right now:
+//
+//   - ScopeOwned    — name appears in cfg's expected-set for its kind.
+//   - ScopeExternal — anything else (manual, another project, prior
+//     deploy with cfg now changed, ambiguous nvoi-shaped names we
+//     can't actually verify).
+//
+// We deliberately do NOT try to distinguish "stale orphan" from
+// "different nvoi project" from "manual" — they're all just
+// "external to current cfg". The structural `nvoi-{app}-{env}-...`
+// naming pattern looks like a provenance signal but isn't one (any
+// operator can name a manual bucket that way). Cfg match is the only
+// answer we can give honestly.
+type Scope string
+
+const (
+	ScopeOwned    Scope = "owned"
+	ScopeExternal Scope = "external"
+)
+
+// OwnershipContext is the cfg-derived expected-name set the classifier
+// compares each row against. nil context (no cfg loaded) → every row
+// classifies as ScopeExternal.
+type OwnershipContext struct {
+	ExpectedServers   map[string]bool
+	ExpectedVolumes   map[string]bool
+	ExpectedFirewalls map[string]bool
+	ExpectedNetworks  map[string]bool
+	ExpectedDNS       map[string]bool
+	ExpectedBuckets   map[string]bool
+	ExpectedTunnels   map[string]bool
+}
+
 // ResourceGroup is a named table of resources returned by ListResources.
-// Each provider returns its own groups — the provider knows what it created.
+// Each provider returns its own groups; classification (`Scope[i]`) is
+// added at the consumer (pkg/core.Classify) — providers stay
+// oblivious to the OwnershipContext concept.
 type ResourceGroup struct {
 	Name    string     `json:"name"`
 	Columns []string   `json:"columns"`
 	Rows    [][]string `json:"rows"`
+	Scope   []Scope    `json:"scope,omitempty"`
+}
+
+// ClassifyScope is the only classifier — name in expected-set →
+// owned, otherwise → external. No structural inference, no provenance
+// claims.
+func ClassifyScope(name string, expected map[string]bool) Scope {
+	if expected[name] {
+		return ScopeOwned
+	}
+	return ScopeExternal
 }
 
 type HTTPStatusError interface {

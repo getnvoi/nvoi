@@ -1,2 +1,72 @@
 #!/usr/bin/env bash
-exec "$(dirname "$0")/nvoi" deploy "$@"
+# bin/deploy — local dev shorthand for `bin/nvoi deploy`.
+#
+# Builds + pushes the uniform nvoi/db backup image before deploying so
+# any cmd/db edit ships transparently. buildx layer cache makes no-op
+# runs sub-second.
+#
+# Image ref must match pkg/provider/database_backups.go::DBImageRepo + DBImageTag.
+# Production releases go through .github/workflows/release.yml.
+#
+# Auth isolation: this script writes its docker auth into a repo-local
+# DOCKER_CONFIG dir. Why: macOS Docker Desktop / OrbStack run a
+# credential-sync agent that periodically rewrites ~/.docker/config.json
+# AND ~/Library/Keychains based on its own preferred login — observed
+# silently restoring a stale `deemx` auth over a freshly-written `nvoi`
+# auth, breaking the push every few minutes. A scoped DOCKER_CONFIG
+# dir is invisible to that agent, so creds we write here stay put.
+# First-time setup is one prompt: `bin/deploy` calls `docker login`
+# the first time the scoped dir is empty.
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Source .env so DB_DOCKER_REGISTRY_USER / DB_DOCKER_REGISTRY_PASSWORD
+# (and any other operator-scoped vars) are visible. Same .env every
+# bin/nvoi command sources — single credential surface.
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a; . "$ROOT_DIR/.env"; set +a
+fi
+: "${DB_DOCKER_REGISTRY_USER:?bin/deploy: set DB_DOCKER_REGISTRY_USER in .env (nvoi/db push account)}"
+: "${DB_DOCKER_REGISTRY_PASSWORD:?bin/deploy: set DB_DOCKER_REGISTRY_PASSWORD in .env (nvoi/db push PAT)}"
+
+# Repo-local docker config — completely outside ~/.docker so OrbStack /
+# Docker Desktop's credential-sync agent can't touch it. Re-seeded on
+# every run from .env so the PAT is always the source of truth (no
+# stale state to surprise us next time). Gitignored so we don't leak.
+export DOCKER_CONFIG="$ROOT_DIR/.docker"
+mkdir -p "$DOCKER_CONFIG"
+# CLI plugins (buildx, compose, …) live in $DOCKER_CONFIG/cli-plugins.
+# Symlink the operator's plugin set so we don't have to install our
+# own buildx — but we keep auth scoped via config.json above.
+[ -e "$DOCKER_CONFIG/cli-plugins" ] || ln -s "$HOME/.docker/cli-plugins" "$DOCKER_CONFIG/cli-plugins"
+# Inline base64 auth, no credsStore. printf -- avoids the trailing \n
+# `base64` would otherwise emit, which Docker rejects as bogus bytes
+# on the auth header (401 Unauthorized).
+auth=$(printf '%s:%s' "$DB_DOCKER_REGISTRY_USER" "$DB_DOCKER_REGISTRY_PASSWORD" | base64 | tr -d '\n')
+cat > "$DOCKER_CONFIG/config.json" <<EOF
+{
+	"auths": {
+		"https://index.docker.io/v1/": { "auth": "$auth" }
+	}
+}
+EOF
+chmod 600 "$DOCKER_CONFIG/config.json"
+
+# Multi-platform builds need the docker-container driver; the default
+# `docker` driver can't do linux/amd64 + linux/arm64 in one shot. The
+# nvoi builder picks up DOCKER_CONFIG on its next invocation, so the
+# scoped auth flows through transparently.
+if ! docker buildx inspect nvoi >/dev/null 2>&1; then
+  docker buildx create --name nvoi --driver docker-container --bootstrap >/dev/null
+fi
+
+docker buildx build --builder nvoi --platform linux/amd64,linux/arm64 --pull --push \
+  -t docker.io/nvoi/db:latest \
+  -f "$ROOT_DIR/cmd/db/Dockerfile" \
+  "$ROOT_DIR"
+
+# Drop DOCKER_CONFIG before invoking bin/nvoi — the deploy itself uses
+# the operator's normal kube/SSH/provider creds, none of which live
+# under DOCKER_CONFIG.
+unset DOCKER_CONFIG
+exec "$ROOT_DIR/bin/nvoi" deploy "$@"

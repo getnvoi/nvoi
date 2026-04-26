@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
+	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/internal/render"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/spf13/cobra"
@@ -20,6 +21,7 @@ func newResourcesCmd(rt *runtime) *cobra.Command {
 				DNS:     rt.dc.DNS,
 				Storage: rt.dc.Storage,
 				Tunnel:  rt.dc.Tunnel,
+				Owner:   config.BuildOwnershipContext(rt.cfg),
 			})
 			if err != nil {
 				return err

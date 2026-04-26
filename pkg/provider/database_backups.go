@@ -18,8 +18,10 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -32,15 +34,192 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils/s3"
 )
 
-// DBImage is the uniform image reference for the backup CronJob AND
-// the restore one-shot Job. Tagged with the nvoi CLI version so
-// database I/O is deterministic per deploy — same discipline as user
-// workloads, which carry the deploy-hash as part of the image tag.
+// DBImageRepo is the registry path of the uniform backup + restore
+// container image. Built from cmd/db/Dockerfile, published to Docker
+// Hub on every `v*` tag by .github/workflows/release.yml AND on every
+// local `bin/deploy` (operators with push perms). Public repo, no
+// auth required for pull.
 //
-// The image is built from cmd/db/Dockerfile and published to Docker
-// Hub on every `v*` git tag. Public repo, no auth required for pull.
+// Lives here, not in pkg/utils/naming.go: the image is external
+// infrastructure nvoi REFERENCES, not a resource nvoi creates. The
+// repo path matches whatever bin/deploy passes to docker buildx.
+const DBImageRepo = "docker.io/nvoi/db"
+
+// DBImageTag is the tag nvoi appends to DBImageRepo. Overridden at
+// build time:
+//
+//	-ldflags "-X github.com/getnvoi/nvoi/pkg/provider.DBImageTag=v1.2.3"
+//
+// set in .github/workflows/release.yml on every `v*` tag. Default
+// "latest" makes local builds (bin/nvoi) pull the most recent stable
+// image — release.yml publishes both `:vX.Y.Z` and `:latest` per
+// release. Tagged builds inject the pinned tag so prod CLI and image
+// stay in lockstep.
+var DBImageTag = "latest"
+
+// DBImage is the unresolved (`:tag`) reference. Used as a fallback
+// when DatabaseRequest.DBImageRef is empty — tests that build Jobs
+// without exercising a live registry, or callers that explicitly
+// don't need digest-pinning. Production reconcile always resolves
+// via ResolveDBImage and threads the digest-pinned ref through
+// req.DBImageRef.
 func DBImage() string {
-	return "docker.io/nvoi/db:" + utils.Version
+	return DBImageRepo + ":" + DBImageTag
+}
+
+// dbImageFor returns req.DBImageRef when set, else DBImage(). Single
+// source of "what image string lands on the CronJob/Job" so the
+// fallback rule lives in one place.
+func dbImageFor(req DatabaseRequest) string {
+	if req.DBImageRef != "" {
+		return req.DBImageRef
+	}
+	return DBImage()
+}
+
+// dbCredsEnv returns the explicit env-var mappings the cmd/db image's
+// entrypoint reads, sourcing each from the credentials Secret named
+// `secret`. Used by BuildBackupCronJob and BuildRestoreJob.
+//
+// Why this isn't an `envFrom prefix=DB_`: Kubernetes envFrom binds
+// each Secret key as an env var with name = prefix + key, *verbatim*
+// — keys are NOT uppercased. The Go-side providers write the
+// credentials Secret with lowercase keys (`url`, `host`, `user`, …)
+// because every other call site reads them via
+// `kc.GetSecretValue(..., "url")`. envFrom-prefix would therefore
+// produce `DB_url` (lowercase), and cmd/db's `mustEnv("DB_URL")`
+// would always fail at runtime — silently, until someone looks at
+// pod logs hours later.
+//
+// Why every field is bound (not just DB_URL): cmd/db used to take
+// the URL alone and re-parse it back into host/user/password/
+// database for mysqldump's `-h/-u/--password=` flags. That parser
+// (parseMySQLDSN, deleted) silently dropped the port and any
+// query-string options — info the Secret already carries as
+// dedicated keys. Round-trip waste AND lossy. cmd/db now reads
+// each field directly from its corresponding env var; the parser
+// is gone.
+//
+// Mapping locked by the per-provider TestReconcile_EmitsBackupCronJob
+// suites + TestBuildBackupCronJob_DBURLBinding /
+// TestBuildRestoreJob_HonorsDBImageRef in pkg/provider — any future
+// regression on the env contract fails at unit-test time.
+func dbCredsEnv(secret string) []corev1.EnvVar {
+	ref := func(envName, secretKey string) corev1.EnvVar {
+		return corev1.EnvVar{
+			Name: envName,
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: secret},
+					Key:                  secretKey,
+				},
+			},
+		}
+	}
+	return []corev1.EnvVar{
+		ref("DB_URL", "url"),
+		ref("DB_HOST", "host"),
+		ref("DB_PORT", "port"),
+		ref("DB_USER", "user"),
+		ref("DB_PASSWORD", "password"),
+		ref("DB_DATABASE", "database"),
+		ref("DB_SSLMODE", "sslmode"),
+	}
+}
+
+// ResolveDBImage returns the digest-pinned reference
+// (`docker.io/nvoi/db@sha256:<digest>`) for DBImageTag by HEAD-ing
+// the Docker Hub manifest endpoint. Reconcile calls this once per
+// deploy and threads the result into every DatabaseRequest, so
+// kubelet sees a fresh image string whenever the underlying image
+// content changed. `:latest` alone never invalidates the kubelet
+// cache — a single bad push leaves backup pods in ImagePullBackOff
+// indefinitely.
+//
+// Failure modes (all hard errors — better to fail the deploy than
+// apply a CronJob whose image we couldn't verify):
+//   - tag not found on Docker Hub → push silently failed, pre-deploy
+//   - registry unreachable      → fix internet, then redeploy
+//   - missing digest header     → registry implementation oddity
+//
+// Package var so reconcile/cmd tests can stub the registry round-trip
+// without hitting the network.
+var ResolveDBImage = registryResolveDBImage
+
+func registryResolveDBImage(ctx context.Context) (string, error) {
+	digest, err := registryDigest(ctx, "nvoi/db", DBImageTag)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s:%s digest: %w", DBImageRepo, DBImageTag, err)
+	}
+	return DBImageRepo + "@" + digest, nil
+}
+
+// registryDigest queries Docker Hub for the current
+// `Docker-Content-Digest` of <repo>:<tag>. Anonymous, public-repo
+// only — nvoi/db is published as a public image. Two-step protocol:
+//
+//  1. GET auth.docker.io/token?service=registry.docker.io&scope=...
+//     → bearer token
+//  2. HEAD registry-1.docker.io/v2/<repo>/manifests/<tag> with the
+//     Bearer token + Accept covering OCI image-index AND Docker
+//     manifest-list (buildx pushes OCI; older registries / buildx
+//     versions may push Docker — both shapes accepted).
+func registryDigest(ctx context.Context, repo, tag string) (string, error) {
+	tokenURL := fmt.Sprintf(
+		"https://auth.docker.io/token?service=registry.docker.io&scope=repository:%s:pull",
+		repo,
+	)
+	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build token request: %w", err)
+	}
+	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	if err != nil {
+		return "", fmt.Errorf("fetch token: %w", err)
+	}
+	defer tokenResp.Body.Close()
+	if tokenResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("token endpoint returned %d", tokenResp.StatusCode)
+	}
+	var tokenBody struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenBody); err != nil {
+		return "", fmt.Errorf("decode token: %w", err)
+	}
+	if tokenBody.Token == "" {
+		return "", fmt.Errorf("empty token")
+	}
+
+	manifestURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/manifests/%s", repo, tag)
+	manReq, err := http.NewRequestWithContext(ctx, http.MethodHead, manifestURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build manifest request: %w", err)
+	}
+	manReq.Header.Set("Authorization", "Bearer "+tokenBody.Token)
+	manReq.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", "))
+	manResp, err := http.DefaultClient.Do(manReq)
+	if err != nil {
+		return "", fmt.Errorf("HEAD manifest: %w", err)
+	}
+	defer manResp.Body.Close()
+	if manResp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("tag %s:%s not found — was the image actually pushed? (try `docker buildx imagetools inspect %s:%s`)",
+			repo, tag, repo, tag)
+	}
+	if manResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("manifest %s:%s returned %d", repo, tag, manResp.StatusCode)
+	}
+	digest := manResp.Header.Get("Docker-Content-Digest")
+	if digest == "" {
+		return "", fmt.Errorf("missing Docker-Content-Digest header for %s:%s", repo, tag)
+	}
+	return digest, nil
 }
 
 // BuildBackupCronJob returns the uniform CronJob that dumps a database
@@ -97,26 +276,33 @@ func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
 							RestartPolicy: corev1.RestartPolicyNever,
 							Containers: []corev1.Container{{
 								Name:  "backup",
-								Image: DBImage(),
-								Env: []corev1.EnvVar{
-									{Name: "ENGINE", Value: req.Spec.Engine},
-									{Name: "DATABASE_NAME", Value: req.Name},
-									{Name: "DATABASE_FULL_NAME", Value: req.FullName},
-								},
-								EnvFrom: []corev1.EnvFromSource{
-									// The credentials Secret carries `url` (and
-									// selfhosted: user/password/host/port/database);
-									// the image reads DATABASE_URL from the `url` key.
-									{
-										Prefix: "DB_",
-										SecretRef: &corev1.SecretEnvSource{
-											LocalObjectReference: corev1.LocalObjectReference{Name: req.CredentialsSecretName},
-										},
+								Image: dbImageFor(req),
+								Env: append(
+									[]corev1.EnvVar{
+										{Name: "ENGINE", Value: req.Spec.Engine},
+										{Name: "DATABASE_NAME", Value: req.Name},
+										{Name: "DATABASE_FULL_NAME", Value: req.FullName},
 									},
+									// DB_URL: explicit mapping from the credentials
+									// Secret's `url` key. NOT envFrom-prefix —
+									// envFrom doesn't uppercase keys, so prefix
+									// "DB_" + key "url" produces env var "DB_url"
+									// (lowercase), which doesn't match cmd/db's
+									// mustEnv("DB_URL"). The lowercase Secret keys
+									// can't change without ripping up every
+									// GetSecretValue("...", "url") read site, so
+									// the explicit Name → SecretKeyRef.Key mapping
+									// is the correct discipline here. Same in
+									// BuildRestoreJob.
+									dbCredsEnv(req.CredentialsSecretName)...,
+								),
+								EnvFrom: []corev1.EnvFromSource{
 									// Bucket creds: BUCKET_ENDPOINT / BUCKET_NAME /
 									// AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
-									// AWS_REGION. No prefix — sigv4 tooling reads
-									// the AWS_* names directly.
+									// AWS_REGION. envFrom works here because the
+									// bucket Secret's keys are already uppercase
+									// (BuildBackupCredsSecretData). No prefix —
+									// sigv4 tooling reads the AWS_* names directly.
 									{
 										SecretRef: &corev1.SecretEnvSource{
 											LocalObjectReference: corev1.LocalObjectReference{Name: req.BackupCredsSecretName},
@@ -185,27 +371,24 @@ func BuildRestoreJob(req DatabaseRequest, backupKey string) *batchv1.Job {
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:  "restore",
-						Image: DBImage(),
-						Env: []corev1.EnvVar{
-							{Name: "MODE", Value: "restore"},
-							{Name: "BACKUP_KEY", Value: backupKey},
-							{Name: "ENGINE", Value: req.Spec.Engine},
-							{Name: "DATABASE_NAME", Value: req.Name},
-							{Name: "DATABASE_FULL_NAME", Value: req.FullName},
-						},
-						EnvFrom: []corev1.EnvFromSource{
-							// DATABASE_URL (and selfhosted user/password/etc.)
-							// — same envFrom discipline as the backup CronJob
-							// so the image's MODE=backup and MODE=restore
-							// branches read from the same Secret shape.
-							{
-								Prefix: "DB_",
-								SecretRef: &corev1.SecretEnvSource{
-									LocalObjectReference: corev1.LocalObjectReference{Name: req.CredentialsSecretName},
-								},
+						Image: dbImageFor(req),
+						Env: append(
+							[]corev1.EnvVar{
+								{Name: "MODE", Value: "restore"},
+								{Name: "BACKUP_KEY", Value: backupKey},
+								{Name: "ENGINE", Value: req.Spec.Engine},
+								{Name: "DATABASE_NAME", Value: req.Name},
+								{Name: "DATABASE_FULL_NAME", Value: req.FullName},
 							},
+							// DB_URL: explicit mapping — see BuildBackupCronJob
+							// for why envFrom-prefix doesn't work here (envFrom
+							// keys aren't uppercased).
+							dbCredsEnv(req.CredentialsSecretName)...,
+						),
+						EnvFrom: []corev1.EnvFromSource{
 							// Bucket creds: BUCKET_ENDPOINT / BUCKET_NAME /
-							// AWS_* for the sigv4 download.
+							// AWS_* for the sigv4 download. Uppercase keys =
+							// envFrom-clean.
 							{
 								SecretRef: &corev1.SecretEnvSource{
 									LocalObjectReference: corev1.LocalObjectReference{Name: req.BackupCredsSecretName},

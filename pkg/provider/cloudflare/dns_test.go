@@ -110,7 +110,6 @@ func TestRouteTo_AlreadyCorrect(t *testing.T) {
 	mux.HandleFunc("/zones/zone123/dns_records", func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		if r.Method == "GET" {
-			// Return existing record with matching IP
 			json.NewEncoder(w).Encode(map[string]any{
 				"result": []map[string]any{
 					{"id": "rec1", "type": "A", "name": "app.example.com", "content": "1.2.3.4", "ttl": 300},
@@ -118,7 +117,6 @@ func TestRouteTo_AlreadyCorrect(t *testing.T) {
 			})
 			return
 		}
-		// No POST or PUT should be made when record is already correct
 		t.Errorf("unexpected %s request — record is already correct, no update needed", r.Method)
 		w.WriteHeader(500)
 	})

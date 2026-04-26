@@ -138,6 +138,9 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// ListResources lists every active (non-soft-deleted) Cloudflare
+// Tunnel on the account. Ownership classification happens at the
+// consumer (pkg/core.Classify).
 func (c *Client) ListResources(ctx context.Context) ([]provider.ResourceGroup, error) {
 	var resp cfTunnelListResponse
 	path := fmt.Sprintf("/accounts/%s/cfd_tunnel?is_deleted=false", c.accountID)
