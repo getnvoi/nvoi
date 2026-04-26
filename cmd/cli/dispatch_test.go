@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/getnvoi/nvoi/internal/config"
@@ -345,4 +348,60 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestDispatch_NoDirectKubeFieldRead enforces the on-demand contract
+// for CLI command code: every dispatch path MUST go through
+// Cluster.Kube(ctx, cfg) / Cluster.SSH(ctx, cfg), which lazily route
+// to infra.Connect / NodeShell. Reading dc.Cluster.MasterKube /
+// dc.Cluster.NodeShell directly bypasses that path — the cached
+// fields are nil at dispatch time, so the command bails with "kube
+// client required" on a perfectly healthy cluster (regression
+// `nvoi database migrate` shipped with).
+//
+// CLAUDE.md's existing gate scans for ASSIGNMENTS in test files (so
+// nobody pre-injects via `Cluster.MasterKube = kf.Client` in a test).
+// This test scans non-test cmd/cli sources for READS, which the
+// migrate regression slipped past. Together the two gates cover both
+// directions: tests can't pre-inject, runtime can't peek.
+//
+// Reconcile reads MasterKube directly inside its own package because
+// reconcile is the path that DIALS them via Bootstrap and stores them
+// on dc.Cluster — that's the legitimate write side, scoped to one
+// package, gated by the existing taxonomy.
+func TestDispatch_NoDirectKubeFieldRead(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	patterns := []string{
+		".Cluster.MasterKube",
+		".Cluster.NodeShell",
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Skip pure comment lines so the explanatory `// Reading
+		// dc.Cluster.MasterKube directly would …` lines that
+		// document the contract don't trip the gate.
+		for i, line := range strings.Split(string(body), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//") {
+				continue
+			}
+			for _, p := range patterns {
+				if strings.Contains(line, p) {
+					t.Errorf(
+						"%s:%d: direct read of %s — go through Cluster.Kube(ctx, cfg) / Cluster.SSH(ctx, cfg) instead so the on-demand Connect path fires:\n  %s",
+						f, i+1, p, trimmed,
+					)
+				}
+			}
+		}
+	}
 }
