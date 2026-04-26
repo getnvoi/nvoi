@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -330,6 +331,7 @@ func writeSecretCredentials(ctx context.Context, kc *kube.Client, req provider.D
 	return kc.EnsureSecret(ctx, req.Namespace, utils.OwnerDatabases, req.CredentialsSecretName, map[string]string{
 		"url":      creds.URL,
 		"host":     creds.Host,
+		"port":     strconv.Itoa(creds.Port),
 		"user":     creds.User,
 		"password": creds.Password,
 		"database": creds.Database,

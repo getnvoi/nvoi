@@ -77,6 +77,56 @@ func dbImageFor(req DatabaseRequest) string {
 	return DBImage()
 }
 
+// dbCredsEnv returns the explicit env-var mappings the cmd/db image's
+// entrypoint reads, sourcing each from the credentials Secret named
+// `secret`. Used by BuildBackupCronJob and BuildRestoreJob.
+//
+// Why this isn't an `envFrom prefix=DB_`: Kubernetes envFrom binds
+// each Secret key as an env var with name = prefix + key, *verbatim*
+// — keys are NOT uppercased. The Go-side providers write the
+// credentials Secret with lowercase keys (`url`, `host`, `user`, …)
+// because every other call site reads them via
+// `kc.GetSecretValue(..., "url")`. envFrom-prefix would therefore
+// produce `DB_url` (lowercase), and cmd/db's `mustEnv("DB_URL")`
+// would always fail at runtime — silently, until someone looks at
+// pod logs hours later.
+//
+// Why every field is bound (not just DB_URL): cmd/db used to take
+// the URL alone and re-parse it back into host/user/password/
+// database for mysqldump's `-h/-u/--password=` flags. That parser
+// (parseMySQLDSN, deleted) silently dropped the port and any
+// query-string options — info the Secret already carries as
+// dedicated keys. Round-trip waste AND lossy. cmd/db now reads
+// each field directly from its corresponding env var; the parser
+// is gone.
+//
+// Mapping locked by the per-provider TestReconcile_EmitsBackupCronJob
+// suites + TestBuildBackupCronJob_DBURLBinding /
+// TestBuildRestoreJob_HonorsDBImageRef in pkg/provider — any future
+// regression on the env contract fails at unit-test time.
+func dbCredsEnv(secret string) []corev1.EnvVar {
+	ref := func(envName, secretKey string) corev1.EnvVar {
+		return corev1.EnvVar{
+			Name: envName,
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: secret},
+					Key:                  secretKey,
+				},
+			},
+		}
+	}
+	return []corev1.EnvVar{
+		ref("DB_URL", "url"),
+		ref("DB_HOST", "host"),
+		ref("DB_PORT", "port"),
+		ref("DB_USER", "user"),
+		ref("DB_PASSWORD", "password"),
+		ref("DB_DATABASE", "database"),
+		ref("DB_SSLMODE", "sslmode"),
+	}
+}
+
 // ResolveDBImage returns the digest-pinned reference
 // (`docker.io/nvoi/db@sha256:<digest>`) for DBImageTag by HEAD-ing
 // the Docker Hub manifest endpoint. Reconcile calls this once per
@@ -227,25 +277,32 @@ func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
 							Containers: []corev1.Container{{
 								Name:  "backup",
 								Image: dbImageFor(req),
-								Env: []corev1.EnvVar{
-									{Name: "ENGINE", Value: req.Spec.Engine},
-									{Name: "DATABASE_NAME", Value: req.Name},
-									{Name: "DATABASE_FULL_NAME", Value: req.FullName},
-								},
-								EnvFrom: []corev1.EnvFromSource{
-									// The credentials Secret carries `url` (and
-									// selfhosted: user/password/host/port/database);
-									// the image reads DATABASE_URL from the `url` key.
-									{
-										Prefix: "DB_",
-										SecretRef: &corev1.SecretEnvSource{
-											LocalObjectReference: corev1.LocalObjectReference{Name: req.CredentialsSecretName},
-										},
+								Env: append(
+									[]corev1.EnvVar{
+										{Name: "ENGINE", Value: req.Spec.Engine},
+										{Name: "DATABASE_NAME", Value: req.Name},
+										{Name: "DATABASE_FULL_NAME", Value: req.FullName},
 									},
+									// DB_URL: explicit mapping from the credentials
+									// Secret's `url` key. NOT envFrom-prefix —
+									// envFrom doesn't uppercase keys, so prefix
+									// "DB_" + key "url" produces env var "DB_url"
+									// (lowercase), which doesn't match cmd/db's
+									// mustEnv("DB_URL"). The lowercase Secret keys
+									// can't change without ripping up every
+									// GetSecretValue("...", "url") read site, so
+									// the explicit Name → SecretKeyRef.Key mapping
+									// is the correct discipline here. Same in
+									// BuildRestoreJob.
+									dbCredsEnv(req.CredentialsSecretName)...,
+								),
+								EnvFrom: []corev1.EnvFromSource{
 									// Bucket creds: BUCKET_ENDPOINT / BUCKET_NAME /
 									// AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
-									// AWS_REGION. No prefix — sigv4 tooling reads
-									// the AWS_* names directly.
+									// AWS_REGION. envFrom works here because the
+									// bucket Secret's keys are already uppercase
+									// (BuildBackupCredsSecretData). No prefix —
+									// sigv4 tooling reads the AWS_* names directly.
 									{
 										SecretRef: &corev1.SecretEnvSource{
 											LocalObjectReference: corev1.LocalObjectReference{Name: req.BackupCredsSecretName},
@@ -315,26 +372,23 @@ func BuildRestoreJob(req DatabaseRequest, backupKey string) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name:  "restore",
 						Image: dbImageFor(req),
-						Env: []corev1.EnvVar{
-							{Name: "MODE", Value: "restore"},
-							{Name: "BACKUP_KEY", Value: backupKey},
-							{Name: "ENGINE", Value: req.Spec.Engine},
-							{Name: "DATABASE_NAME", Value: req.Name},
-							{Name: "DATABASE_FULL_NAME", Value: req.FullName},
-						},
-						EnvFrom: []corev1.EnvFromSource{
-							// DATABASE_URL (and selfhosted user/password/etc.)
-							// — same envFrom discipline as the backup CronJob
-							// so the image's MODE=backup and MODE=restore
-							// branches read from the same Secret shape.
-							{
-								Prefix: "DB_",
-								SecretRef: &corev1.SecretEnvSource{
-									LocalObjectReference: corev1.LocalObjectReference{Name: req.CredentialsSecretName},
-								},
+						Env: append(
+							[]corev1.EnvVar{
+								{Name: "MODE", Value: "restore"},
+								{Name: "BACKUP_KEY", Value: backupKey},
+								{Name: "ENGINE", Value: req.Spec.Engine},
+								{Name: "DATABASE_NAME", Value: req.Name},
+								{Name: "DATABASE_FULL_NAME", Value: req.FullName},
 							},
+							// DB_URL: explicit mapping — see BuildBackupCronJob
+							// for why envFrom-prefix doesn't work here (envFrom
+							// keys aren't uppercased).
+							dbCredsEnv(req.CredentialsSecretName)...,
+						),
+						EnvFrom: []corev1.EnvFromSource{
 							// Bucket creds: BUCKET_ENDPOINT / BUCKET_NAME /
-							// AWS_* for the sigv4 download.
+							// AWS_* for the sigv4 download. Uppercase keys =
+							// envFrom-clean.
 							{
 								SecretRef: &corev1.SecretEnvSource{
 									LocalObjectReference: corev1.LocalObjectReference{Name: req.BackupCredsSecretName},

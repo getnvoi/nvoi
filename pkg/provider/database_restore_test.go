@@ -70,16 +70,26 @@ func TestBuildRestoreJob(t *testing.T) {
 		}
 	}
 
-	// envFrom must include:
-	//   1. Credentials Secret with DB_ prefix (so the image reads
-	//      DB_URL, matching the backup CronJob's shape).
-	//   2. Backup-creds Secret without prefix (so AWS_* lands with
-	//      its native names for sigv4).
-	if len(c.EnvFrom) != 2 {
-		t.Fatalf("expected 2 envFrom entries, got %d", len(c.EnvFrom))
+	// envFrom is bucket-creds only: BUCKET_ENDPOINT / BUCKET_NAME /
+	// AWS_* — those keys are uppercase in the Secret, so envFrom
+	// produces uppercase env vars cmd/db's mustEnv reads directly.
+	if len(c.EnvFrom) != 1 {
+		t.Fatalf("expected 1 envFrom entry (bucket-creds), got %d", len(c.EnvFrom))
 	}
-	assertEnvFrom(t, c.EnvFrom[0], "DB_", req.CredentialsSecretName)
-	assertEnvFrom(t, c.EnvFrom[1], "", req.BackupCredsSecretName)
+	assertEnvFrom(t, c.EnvFrom[0], "", req.BackupCredsSecretName)
+
+	// Every cmd/db field is bound EXPLICITLY (not via envFrom-
+	// prefix) because envFrom doesn't uppercase keys — prefix "DB_"
+	// + Secret key "url" would produce "DB_url" and cmd/db's
+	// mustEnv("DB_URL") would always fail. Same for host/port/etc.
+	//
+	// This assertion locks the full contract: any future change to
+	// BuildRestoreJob's env wiring that loses an explicit
+	// DB_X → SecretKeyRef.Key="x" mapping fails here, at unit-test
+	// time, not at 3am when the cron pod logs the missing-env error.
+	for _, b := range expectedDBEnvBindings(req.CredentialsSecretName) {
+		assertSecretKeyEnv(t, c.Env, b.envName, req.CredentialsSecretName, b.secretKey)
+	}
 
 	// RestartPolicy must be Never — Jobs use OnFailure/Never; Never
 	// paired with BackoffLimit=0 means a failed restore doesn't auto-
@@ -103,6 +113,49 @@ func assertEnvFrom(t *testing.T, ef corev1.EnvFromSource, wantPrefix, wantSecret
 	if ef.SecretRef.Name != wantSecret {
 		t.Errorf("envFrom secret = %q, want %q", ef.SecretRef.Name, wantSecret)
 	}
+}
+
+// expectedDBEnvBindings is the canonical list of cmd/db DB_* env vars
+// and their corresponding lowercase Secret keys. The mapping is owned
+// by provider.dbCredsEnv; this list is the test-side mirror so any
+// drift between the spec and what cmd/db reads breaks the suite.
+//
+// Add a new pair here when cmd/db starts reading another field.
+func expectedDBEnvBindings(_ string) []struct{ envName, secretKey string } {
+	return []struct{ envName, secretKey string }{
+		{"DB_URL", "url"},
+		{"DB_HOST", "host"},
+		{"DB_PORT", "port"},
+		{"DB_USER", "user"},
+		{"DB_PASSWORD", "password"},
+		{"DB_DATABASE", "database"},
+		{"DB_SSLMODE", "sslmode"},
+	}
+}
+
+// assertSecretKeyEnv finds an env var by name and asserts it sources
+// from the named Secret's named key. Used to lock the cmd/db env
+// contract — a regression that drops the binding (or points at the
+// wrong key) fails here rather than at runtime in the cron pod.
+func assertSecretKeyEnv(t *testing.T, envs []corev1.EnvVar, wantName, wantSecret, wantKey string) {
+	t.Helper()
+	for _, e := range envs {
+		if e.Name != wantName {
+			continue
+		}
+		if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil {
+			t.Fatalf("env %s: missing ValueFrom.SecretKeyRef (must source from Secret, not literal Value)", wantName)
+		}
+		ref := e.ValueFrom.SecretKeyRef
+		if ref.Name != wantSecret {
+			t.Errorf("env %s: SecretKeyRef.Name = %q, want %q", wantName, ref.Name, wantSecret)
+		}
+		if ref.Key != wantKey {
+			t.Errorf("env %s: SecretKeyRef.Key = %q, want %q (k8s envFrom doesn't uppercase keys — explicit mapping is the only way)", wantName, ref.Key, wantKey)
+		}
+		return
+	}
+	t.Errorf("env %s: not found in container env (cmd/db's mustEnv(%q) will fail at runtime)", wantName, wantName)
 }
 
 // TestBuildRestoreJob_HonorsDBImageRef locks the digest-pinning
@@ -141,6 +194,47 @@ func TestBuildRestoreJob_HonorsDBImageRef(t *testing.T) {
 	cronImage := cron.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
 	if cronImage != pinned {
 		t.Errorf("cron image = %q, want %q", cronImage, pinned)
+	}
+}
+
+// TestBuildBackupCronJob_DBURLBinding locks the cmd/db env contract
+// at unit-test time. The image's main() does mustEnv("DB_URL"); if
+// the CronJob spec doesn't bind DB_URL to the credentials Secret's
+// "url" key, every backup pod fails at runtime with "missing required
+// env var DB_URL" — silent until someone reads pod logs hours later.
+//
+// envFrom-prefix CANNOT supply this binding because k8s envFrom
+// doesn't uppercase Secret keys (`url` stays lowercase). The fix is
+// an explicit SecretKeyRef mapping; this test is what stops a
+// future refactor from regressing to the broken envFrom-prefix shape.
+func TestBuildBackupCronJob_DBURLBinding(t *testing.T) {
+	req := DatabaseRequest{
+		Name:                  "app",
+		FullName:              "nvoi-myapp-prod-db-app",
+		Namespace:             "nvoi-myapp-prod",
+		CredentialsSecretName: "nvoi-myapp-prod-db-app-credentials",
+		BackupCredsSecretName: "nvoi-myapp-prod-db-app-backup-creds",
+		Spec: DatabaseSpec{
+			Engine: "postgres",
+			Backup: &DatabaseBackupSpec{Schedule: "0 3 * * *"},
+		},
+	}
+
+	cron := BuildBackupCronJob(req)
+	c := cron.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+
+	// Bucket creds via envFrom (uppercase keys → safe).
+	if len(c.EnvFrom) != 1 {
+		t.Fatalf("expected 1 envFrom entry (bucket-creds only), got %d", len(c.EnvFrom))
+	}
+	assertEnvFrom(t, c.EnvFrom[0], "", req.BackupCredsSecretName)
+
+	// Explicit DB_* → lowercase-key mappings — the full contract,
+	// not just DB_URL. cmd/db reads each field directly (no DSN
+	// parsing); a missing binding fails the pod with
+	// `missing required env var DB_X` at runtime.
+	for _, b := range expectedDBEnvBindings(req.CredentialsSecretName) {
+		assertSecretKeyEnv(t, c.Env, b.envName, req.CredentialsSecretName, b.secretKey)
 	}
 }
 

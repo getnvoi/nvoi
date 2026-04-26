@@ -120,18 +120,50 @@ func TestReconcile_EmitsBackupCronJob(t *testing.T) {
 		t.Fatalf("schedule = %q", cj.Spec.Schedule)
 	}
 	envFrom := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].EnvFrom
-	if len(envFrom) != 2 {
-		t.Fatalf("expected 2 envFrom sources (creds + backup-creds), got %d", len(envFrom))
-	}
-	if !containsSecretRef(envFrom, "nvoi-myapp-prod-db-app-credentials") {
-		t.Fatalf("envFrom missing credentials secret: %#v", envFrom)
+	// Bucket-creds is the only envFrom source (uppercase keys).
+	// Credentials Secret is bound via explicit Env entry (DB_URL →
+	// SecretKeyRef.Key="url") because envFrom doesn't uppercase
+	// keys and the credentials Secret uses lowercase keys.
+	if len(envFrom) != 1 {
+		t.Fatalf("expected 1 envFrom source (backup-creds), got %d", len(envFrom))
 	}
 	if !containsSecretRef(envFrom, "nvoi-myapp-prod-db-app-backup-creds") {
 		t.Fatalf("envFrom missing backup-creds secret: %#v", envFrom)
 	}
+	if containsSecretRef(envFrom, "nvoi-myapp-prod-db-app-credentials") {
+		t.Fatalf("credentials Secret must NOT be in envFrom (envFrom prefix \"DB_\" + key \"url\" produces \"DB_url\", not \"DB_URL\"): %#v", envFrom)
+	}
 	env := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env
 	if !containsEnv(env, "ENGINE", "planetscale") {
 		t.Fatalf("ENGINE=planetscale missing in env: %#v", env)
+	}
+	// Every DB_* env var cmd/db reads must source from the
+	// credentials Secret's matching lowercase key. cmd/db reads
+	// host/port/user/password/database directly for mysqldump's
+	// flags — no DSN parsing — so any missing binding fails the
+	// pod at runtime.
+	for _, b := range []struct{ envName, secretKey string }{
+		{"DB_URL", "url"},
+		{"DB_HOST", "host"},
+		{"DB_PORT", "port"},
+		{"DB_USER", "user"},
+		{"DB_PASSWORD", "password"},
+		{"DB_DATABASE", "database"},
+		{"DB_SSLMODE", "sslmode"},
+	} {
+		var found bool
+		for _, e := range env {
+			if e.Name == b.envName && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil &&
+				e.ValueFrom.SecretKeyRef.Name == "nvoi-myapp-prod-db-app-credentials" &&
+				e.ValueFrom.SecretKeyRef.Key == b.secretKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s not bound to credentials Secret's %q key — cmd/db's mustEnv(%q) will fail at runtime: %#v",
+				b.envName, b.secretKey, b.envName, env)
+		}
 	}
 }
 

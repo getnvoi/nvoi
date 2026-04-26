@@ -26,10 +26,14 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/nvoi-db ./cmd/db
 
-FROM alpine:3.19
+FROM alpine:3.21
+# pg_dump must be >= the postgres server version, so we pin
+# postgresql17-client (Alpine 3.21 ships it). 3.19's postgresql16-client
+# can't dump a 17.x server — it aborts with `server version mismatch`.
+# Bump in lockstep when nvoi starts supporting a newer postgres major.
 RUN apk add --no-cache \
       ca-certificates \
-      postgresql16-client \
+      postgresql17-client \
       mysql-client
 COPY --from=build /out/nvoi-db /usr/local/bin/nvoi-db
 # No shell entrypoint — the Go binary handles env validation, dispatch,

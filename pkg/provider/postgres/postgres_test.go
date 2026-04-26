@@ -159,15 +159,47 @@ func TestReconcile_EmitsStatefulSetPlusBackupCronJob(t *testing.T) {
 		t.Fatalf("expected *batchv1.CronJob as last workload, got %T", plan.Workloads[4])
 	}
 	envFrom := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].EnvFrom
-	if !envFromHas(envFrom, "nvoi-myapp-prod-db-app-credentials") {
-		t.Fatalf("credentials Secret missing from envFrom: %#v", envFrom)
-	}
+	// Bucket-creds is the only envFrom — uppercase keys (BUCKET_*,
+	// AWS_*) flow through cleanly. The credentials Secret is bound
+	// via explicit Env entries (see DB_URL assertion below) because
+	// envFrom doesn't uppercase keys and the credentials Secret uses
+	// lowercase keys (`url`, `host`, …).
 	if !envFromHas(envFrom, "nvoi-myapp-prod-db-app-backup-creds") {
 		t.Fatalf("backup-creds Secret missing from envFrom: %#v", envFrom)
+	}
+	if envFromHas(envFrom, "nvoi-myapp-prod-db-app-credentials") {
+		t.Fatalf("credentials Secret must NOT be in envFrom (would produce DB_url, not DB_URL): %#v", envFrom)
 	}
 	env := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env
 	if !envHas(env, "ENGINE", "postgres") {
 		t.Fatalf("ENGINE=postgres missing in env: %#v", env)
+	}
+	// Every DB_* env var cmd/db reads must source from the
+	// credentials Secret's matching lowercase key. Missing any one
+	// of these fails the pod at runtime with a `missing required
+	// env var DB_X` message.
+	for _, b := range []struct{ envName, secretKey string }{
+		{"DB_URL", "url"},
+		{"DB_HOST", "host"},
+		{"DB_PORT", "port"},
+		{"DB_USER", "user"},
+		{"DB_PASSWORD", "password"},
+		{"DB_DATABASE", "database"},
+		{"DB_SSLMODE", "sslmode"},
+	} {
+		var found bool
+		for _, e := range env {
+			if e.Name == b.envName && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil &&
+				e.ValueFrom.SecretKeyRef.Name == "nvoi-myapp-prod-db-app-credentials" &&
+				e.ValueFrom.SecretKeyRef.Key == b.secretKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s not bound to credentials Secret's %q key — cmd/db's mustEnv(%q) will fail at runtime: %#v",
+				b.envName, b.secretKey, b.envName, env)
+		}
 	}
 }
 

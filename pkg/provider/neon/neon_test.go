@@ -101,6 +101,34 @@ func TestReconcile_EmitsBackupCronJob(t *testing.T) {
 	if !envContains(env, "ENGINE", "neon") {
 		t.Fatalf("ENGINE=neon missing in env: %#v", env)
 	}
+	// Every DB_* env var cmd/db reads must source from the
+	// credentials Secret's matching lowercase key. Neon writes
+	// every key including `port` (5432) so the binding works
+	// uniformly across selfhosted + SaaS — no provider-specific
+	// branching in the spec or in cmd/db.
+	for _, b := range []struct{ envName, secretKey string }{
+		{"DB_URL", "url"},
+		{"DB_HOST", "host"},
+		{"DB_PORT", "port"},
+		{"DB_USER", "user"},
+		{"DB_PASSWORD", "password"},
+		{"DB_DATABASE", "database"},
+		{"DB_SSLMODE", "sslmode"},
+	} {
+		var found bool
+		for _, e := range env {
+			if e.Name == b.envName && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil &&
+				e.ValueFrom.SecretKeyRef.Name == "nvoi-myapp-prod-db-analytics-credentials" &&
+				e.ValueFrom.SecretKeyRef.Key == b.secretKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s not bound to credentials Secret's %q key — cmd/db's mustEnv(%q) will fail at runtime: %#v",
+				b.envName, b.secretKey, b.envName, env)
+		}
+	}
 }
 
 // Reconcile returns no workloads when backups aren't configured — Neon

@@ -11,8 +11,15 @@
 //	  ENGINE              postgres | mysql | neon | planetscale
 //	  DATABASE_NAME       logical name (the YAML key, e.g. "app")
 //	  DATABASE_FULL_NAME  nvoi-{app}-{env}-db-{name}
-//	  DB_URL              DSN — sourced from the database credentials
-//	                      Secret's `url` key, prefixed `DB_` by envFrom
+//	  DB_HOST             hostname / Service name
+//	  DB_PORT             port (5432 / 3306 / SaaS-specific)
+//	  DB_USER             SQL user
+//	  DB_PASSWORD         SQL password
+//	  DB_DATABASE         logical SQL database name
+//	  DB_SSLMODE          (optional) postgres-style sslmode value;
+//	                      passed to PGSSLMODE for pg_dump/psql.
+//	                      mysql/planetscale ignore this — they always
+//	                      enforce TLS via --ssl-mode=REQUIRED.
 //	  BUCKET_ENDPOINT     S3-compatible base URL
 //	  BUCKET_NAME         target bucket (one-per-database)
 //	  BACKUP_KEY          (restore mode only) S3 object key to replay
@@ -20,12 +27,24 @@
 //	  AWS_SECRET_ACCESS_KEY
 //	  AWS_REGION          S3 region ("auto" for R2)
 //
+// Each DB_* variable is bound to a single Secret key in the CronJob /
+// Job spec via SecretKeyRef (see provider.dbCredsEnv). NOT envFrom —
+// envFrom doesn't uppercase Secret keys, and the credentials Secret
+// uses lowercase keys (`url`, `host`, `user`, …) for Go-side reads.
+//
+// No DSN handling here. Earlier revisions read DB_URL and parsed it
+// back into host/user/password/database for mysqldump's flag set —
+// pure round-trip waste, AND lossy (the parser dropped the port and
+// any query-string options). The Secret already carries every field
+// separately, so we read each directly and pass them straight to
+// pg_dump / mysqldump / psql / mysql.
+//
 // Pipelines:
 //
 //	MODE=backup (default):
-//	  1. Pick dump tool (pg_dump for postgres/neon; mysqldump for mysql/
-//	     planetscale). SaaS engines dump against the external endpoint
-//	     over TLS — same tool, different DSN.
+//	  1. Pick dump tool (pg_dump for postgres/neon; mysqldump for
+//	     mysql/planetscale). SaaS engines dump against the external
+//	     endpoint over TLS — same tool, different host.
 //	  2. Stream dump → gzip → temp file at /tmp/backup.sql.gz.
 //	  3. Stat the file for content-length.
 //	  4. PUT to s3://$BUCKET_NAME/<YYYYMMDDTHHMMSSZ>.sql.gz via sigv4.
@@ -34,12 +53,14 @@
 //	MODE=restore:
 //	  1. s3.GetStream(BUCKET_NAME, BACKUP_KEY) → io.ReadCloser.
 //	  2. Pipe through gzip.NewReader (decompression).
-//	  3. Pipe into engine's restore tool (psql / mysql) against DB_URL.
+//	  3. Pipe into engine's restore tool (psql / mysql) connected to
+//	     the same host the dump came from (or whatever DB_HOST points
+//	     at — typically the same DB you backed up).
 //	  4. Exit 0 on success, non-zero + stderr on failure.
 //
 // Uniformity is load-bearing — the same image handles both directions,
-// the same envFrom Secrets feed both, list/download are bucket-level.
-// Every DatabaseProvider — selfhosted or SaaS — routes through here.
+// the same Secret feeds both, list/download are bucket-level. Every
+// DatabaseProvider — selfhosted or SaaS — routes through here.
 package main
 
 import (
@@ -58,6 +79,30 @@ const (
 	tmpPath       = "/tmp/backup.sql.gz"
 	uploadTimeout = 30 * time.Minute
 )
+
+// dbCreds is the runtime view of the credentials Secret. Populated
+// from DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_DATABASE /
+// DB_SSLMODE — every key bound by provider.dbCredsEnv. Single struct
+// so dumpCommand / restoreCommand take one arg, not five.
+type dbCreds struct {
+	host     string
+	port     string
+	user     string
+	password string
+	database string
+	sslmode  string // optional — empty for engines that don't expose it
+}
+
+func loadDBCreds() dbCreds {
+	return dbCreds{
+		host:     mustEnv("DB_HOST"),
+		port:     mustEnv("DB_PORT"),
+		user:     mustEnv("DB_USER"),
+		password: mustEnv("DB_PASSWORD"),
+		database: mustEnv("DB_DATABASE"),
+		sslmode:  os.Getenv("DB_SSLMODE"),
+	}
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -83,7 +128,7 @@ func run() error {
 
 func runBackup() error {
 	engine := mustEnv("ENGINE")
-	dsn := mustEnv("DB_URL") // CronJob envFrom prefixes with DB_
+	creds := loadDBCreds()
 	bucketEndpoint := mustEnv("BUCKET_ENDPOINT")
 	bucketName := mustEnv("BUCKET_NAME")
 	accessKey := mustEnv("AWS_ACCESS_KEY_ID")
@@ -94,7 +139,7 @@ func runBackup() error {
 	}
 
 	// 1) Pick dump tool.
-	dumpCmd, err := dumpCommand(engine, dsn)
+	dumpCmd, err := dumpCommand(engine, creds)
 	if err != nil {
 		return err
 	}
@@ -138,18 +183,19 @@ func runBackup() error {
 }
 
 // runRestore pulls a backup object from the bucket, gunzips, and pipes
-// into the engine's native restore tool against $DB_URL. Same image,
-// same envFrom Secrets as backup — just the direction flips. Works
-// identically for selfhosted (in-cluster Service DSN) and SaaS (external
-// TLS DSN) because the DSN is opaque to this tool.
+// into the engine's native restore tool against the database. Same
+// image, same Secret as backup — just the direction flips. Works
+// identically for selfhosted (in-cluster Service) and SaaS (external
+// TLS) because the host/port/user/password are read from env, not
+// inferred from a DSN.
 //
 // Exit discipline: the restore tool's exit code is the Job's exit code.
-// ON_ERROR_STOP=1 (psql) / --force=false (mysql default) means the
+// ON_ERROR_STOP=1 (psql) / mysql's default abort-on-error means the
 // first SQL error stops the replay, so a partial restore fails loudly
 // rather than leaving a half-populated database.
 func runRestore() error {
 	engine := mustEnv("ENGINE")
-	dsn := mustEnv("DB_URL")
+	creds := loadDBCreds()
 	bucketEndpoint := mustEnv("BUCKET_ENDPOINT")
 	bucketName := mustEnv("BUCKET_NAME")
 	backupKey := mustEnv("BACKUP_KEY")
@@ -171,7 +217,7 @@ func runRestore() error {
 	}
 	defer gzr.Close()
 
-	restoreCmd, err := restoreCommand(engine, dsn)
+	restoreCmd, err := restoreCommand(engine, creds)
 	if err != nil {
 		return err
 	}
@@ -186,27 +232,38 @@ func runRestore() error {
 }
 
 // restoreCommand returns the exec.Cmd that reads SQL from stdin and
-// applies it to the database at dsn. Mirrors dumpCommand in structure
-// — the image owns tool selection, nvoi core does not.
+// applies it to the database described by creds. Mirrors dumpCommand
+// in structure — the image owns tool selection, nvoi core does not.
 //
-// postgres / neon → `psql <DSN>` with ON_ERROR_STOP=1.
-// mysql / planetscale → `mysql` with DSN parsed into -h/-u/-p flags
-// (mysql's stdin-replay shape matches mysqldump's stdout-capture shape).
-func restoreCommand(engine, dsn string) (*exec.Cmd, error) {
+// postgres / neon → `psql -h/-p/-U/-d` with PGPASSWORD set on env;
+//
+//	ON_ERROR_STOP=1 aborts the replay on the first SQL
+//	error rather than leaving a half-populated DB.
+//
+// mysql / planetscale → `mysql -h/-P/-u/--password= db`,
+//
+//	--ssl-mode=REQUIRED (planetscale enforces it; vanilla
+//	mysql connects with TLS when offered, errors when not).
+func restoreCommand(engine string, creds dbCreds) (*exec.Cmd, error) {
 	switch engine {
 	case "postgres", "neon":
-		return exec.Command("psql", "-v", "ON_ERROR_STOP=1", dsn), nil
+		cmd := exec.Command("psql",
+			"-v", "ON_ERROR_STOP=1",
+			"-h", creds.host,
+			"-p", creds.port,
+			"-U", creds.user,
+			"-d", creds.database,
+		)
+		cmd.Env = pgEnv(creds)
+		return cmd, nil
 	case "mysql", "planetscale":
-		host, user, password, db, err := parseMySQLDSN(dsn)
-		if err != nil {
-			return nil, err
-		}
 		args := []string{
 			"--ssl-mode=REQUIRED",
-			"-h", host,
-			"-u", user,
-			"--password=" + password,
-			db,
+			"-h", creds.host,
+			"-P", creds.port,
+			"-u", creds.user,
+			"--password=" + creds.password,
+			creds.database,
 		}
 		return exec.Command("mysql", args...), nil
 	default:
@@ -215,89 +272,60 @@ func restoreCommand(engine, dsn string) (*exec.Cmd, error) {
 }
 
 // dumpCommand returns the exec.Cmd that produces a SQL dump on stdout
-// for the requested engine. Kept here (not in pkg/) because this is the
-// image's contract — the image owns dump-tool selection; nvoi core does
-// not.
+// for the requested engine. Kept here (not in pkg/) because this is
+// the image's contract — the image owns dump-tool selection; nvoi
+// core does not.
 //
-// postgres / neon → `pg_dump <DSN>` (neon exposes a pg-wire endpoint).
-// mysql / planetscale → `mysqldump` with DSN parsed into -h/-u/-p flags
-// (mysqldump doesn't accept a single DSN URL the way pg_dump does).
-func dumpCommand(engine, dsn string) (*exec.Cmd, error) {
+// postgres / neon → `pg_dump -h/-p/-U/-d` with PGPASSWORD set on env.
+//
+//	--no-owner / --no-acl strip role-specific metadata so
+//	the dump replays cleanly into any target user.
+//
+// mysql / planetscale → `mysqldump --ssl-mode=REQUIRED ...`.
+//
+//	--single-transaction = consistent snapshot without
+//	locking. --set-gtid-purged=OFF avoids GTID metadata
+//	planetscale doesn't accept on import.
+func dumpCommand(engine string, creds dbCreds) (*exec.Cmd, error) {
 	switch engine {
 	case "postgres", "neon":
-		return exec.Command("pg_dump", "--no-owner", "--no-acl", dsn), nil
+		cmd := exec.Command("pg_dump",
+			"--no-owner", "--no-acl",
+			"-h", creds.host,
+			"-p", creds.port,
+			"-U", creds.user,
+			"-d", creds.database,
+		)
+		cmd.Env = pgEnv(creds)
+		return cmd, nil
 	case "mysql", "planetscale":
-		host, user, password, db, err := parseMySQLDSN(dsn)
-		if err != nil {
-			return nil, err
-		}
 		args := []string{
+			"--ssl-mode=REQUIRED",
 			"--single-transaction",
 			"--set-gtid-purged=OFF",
-			"-h", host,
-			"-u", user,
-			"--password=" + password,
-			db,
+			"-h", creds.host,
+			"-P", creds.port,
+			"-u", creds.user,
+			"--password=" + creds.password,
+			creds.database,
 		}
-		// PlanetScale requires TLS — mysqldump doesn't enforce it by
-		// default, so pass --ssl-mode=REQUIRED explicitly. Safe for
-		// vanilla MySQL too (connects with TLS when the server offers
-		// it; errors when it doesn't, which is the correct default for
-		// a tool that exfiltrates data).
-		args = append([]string{"--ssl-mode=REQUIRED"}, args...)
 		return exec.Command("mysqldump", args...), nil
 	default:
 		return nil, fmt.Errorf("unknown ENGINE %q (expected: postgres | mysql | neon | planetscale)", engine)
 	}
 }
 
-// parseMySQLDSN tears apart `mysql://user:pass@host[:port]/db[?…]` into
-// the fields mysqldump wants as separate flags. Intentionally small —
-// we don't pull in a mysql driver just to parse a URL.
-func parseMySQLDSN(dsn string) (host, user, pass, db string, err error) {
-	const prefix = "mysql://"
-	if !strings.HasPrefix(dsn, prefix) {
-		err = fmt.Errorf("mysql DSN must start with mysql:// (got %q)", shorten(dsn))
-		return
+// pgEnv layers PGPASSWORD (and PGSSLMODE when DB_SSLMODE is set) on
+// top of the parent process env, which is the canonical way to feed
+// libpq tooling — passing the password on argv would leak it via
+// /proc/<pid>/cmdline. Used by both pg_dump (backup) and psql
+// (restore) so the contract is identical.
+func pgEnv(creds dbCreds) []string {
+	env := append(os.Environ(), "PGPASSWORD="+creds.password)
+	if creds.sslmode != "" {
+		env = append(env, "PGSSLMODE="+creds.sslmode)
 	}
-	rest := dsn[len(prefix):]
-
-	// userinfo
-	at := strings.LastIndex(rest, "@")
-	if at < 0 {
-		err = fmt.Errorf("mysql DSN missing user@host separator")
-		return
-	}
-	userinfo, rest := rest[:at], rest[at+1:]
-	if i := strings.Index(userinfo, ":"); i >= 0 {
-		user, pass = userinfo[:i], userinfo[i+1:]
-	} else {
-		user = userinfo
-	}
-
-	// strip query string
-	if q := strings.Index(rest, "?"); q >= 0 {
-		rest = rest[:q]
-	}
-
-	// host / db
-	slash := strings.Index(rest, "/")
-	if slash < 0 {
-		err = fmt.Errorf("mysql DSN missing /database path")
-		return
-	}
-	host, db = rest[:slash], rest[slash+1:]
-	if host == "" || db == "" {
-		err = fmt.Errorf("mysql DSN missing host or database (host=%q db=%q)", host, db)
-		return
-	}
-	// Drop :port if present — mysqldump accepts `-h host:port` but
-	// prefer the explicit -P flag if we ever need it. Today everyone's
-	// on 3306.
-	if i := strings.Index(host, ":"); i >= 0 {
-		host = host[:i]
-	}
-	return
+	return env
 }
 
 // runDumpToGzippedFile runs the dump command, piping its stdout through
@@ -343,16 +371,4 @@ func mustEnv(key string) string {
 		os.Exit(1)
 	}
 	return v
-}
-
-// shorten redacts all but the scheme for error messages — DSNs contain
-// credentials, and this tool runs under k8s logs the operator may share.
-func shorten(s string) string {
-	if i := strings.Index(s, "://"); i >= 0 {
-		return s[:i+3] + "…"
-	}
-	if len(s) > 8 {
-		return s[:8] + "…"
-	}
-	return s
 }
