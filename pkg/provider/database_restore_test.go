@@ -105,6 +105,45 @@ func assertEnvFrom(t *testing.T, ef corev1.EnvFromSource, wantPrefix, wantSecret
 	}
 }
 
+// TestBuildRestoreJob_HonorsDBImageRef locks the digest-pinning
+// contract: when the caller resolved a digest-pinned image upstream
+// (reconcile or the restore CLI both call provider.ResolveDBImage
+// once per command and stash the result on req.DBImageRef), the
+// builder uses THAT ref — not the bare `:latest` fallback. This is
+// what stops kubelet's `:latest`-cache failure mode where a single
+// bad push silently jams every backup pod into ImagePullBackOff.
+func TestBuildRestoreJob_HonorsDBImageRef(t *testing.T) {
+	const pinned = "docker.io/nvoi/db@sha256:" +
+		"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+	req := DatabaseRequest{
+		Name:                  "app",
+		FullName:              "nvoi-myapp-prod-db-app",
+		Namespace:             "nvoi-myapp-prod",
+		CredentialsSecretName: "nvoi-myapp-prod-db-app-credentials",
+		BackupCredsSecretName: "nvoi-myapp-prod-db-app-backup-creds",
+		Spec: DatabaseSpec{
+			Engine: "postgres",
+			Backup: &DatabaseBackupSpec{Schedule: "0 3 * * *"},
+		},
+		DBImageRef: pinned,
+	}
+
+	job := BuildRestoreJob(req, "20260423T030000Z.sql.gz")
+	got := job.Spec.Template.Spec.Containers[0].Image
+	if got != pinned {
+		t.Errorf("image = %q, want %q (DBImageRef must override DBImage())", got, pinned)
+	}
+
+	// The CronJob path goes through the same fallback helper —
+	// assert by symmetry so a future drift between the two builders
+	// gets caught.
+	cron := BuildBackupCronJob(req)
+	cronImage := cron.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
+	if cronImage != pinned {
+		t.Errorf("cron image = %q, want %q", cronImage, pinned)
+	}
+}
+
 // TestRunRestoreJob_RejectsMissingBucket locks the precondition check:
 // RunRestoreJob bails early if the caller forgot to wire the bucket
 // handle or backup-creds Secret. Without both, the Job would launch and

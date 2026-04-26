@@ -666,6 +666,18 @@ func resolveDatabaseCommand(cmd *cobra.Command, rt *runtime, name string) (provi
 		cleanup = func() {}
 	}
 
+	// Pin the restore Job's image by digest — same kubelet-cache
+	// invalidation discipline as reconcile (every push of cmd/db
+	// produces a new digest, so kubelet pulls fresh content). Hard
+	// errors up if the tag doesn't resolve, so a bad push surfaces
+	// here rather than silently as ImagePullBackOff on the Job pod.
+	imageRef, err := provider.ResolveDBImage(cmd.Context())
+	if err != nil {
+		cleanup()
+		return provider.DatabaseRequest{}, nil, nil, err
+	}
+	req.DBImageRef = imageRef
+
 	creds, err := resolveProviderCreds(rt.dc.Creds, "database", def.Engine)
 	if err != nil {
 		cleanup()

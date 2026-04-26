@@ -53,11 +53,24 @@ type DatabaseRequest struct {
 	// Plus ENGINE (per-database) and DATABASE_URL (mirrored from the
 	// credentials Secret so the backup tool has a single source).
 	BackupCredsSecretName string
-	Labels                map[string]string
-	Spec                  DatabaseSpec
-	Bucket                *BucketHandle
-	DeleteVolumes         bool
-	Kube                  *kube.Client
+	// DBImageRef is the digest-pinned reference for the uniform
+	// backup/restore image (`docker.io/nvoi/db@sha256:<digest>`).
+	// Resolved once per deploy by provider.ResolveDBImage and stamped
+	// onto every CronJob / one-shot Job by BuildBackupCronJob /
+	// BuildRestoreJob. Empty falls back to the `:latest` string form,
+	// which exists for tests that don't need real registry resolution.
+	//
+	// Why digest, not `:latest`: kubelet caches by image string. With
+	// `:latest` the string never changes, so a single bad push silently
+	// jams every backup pod into ImagePullBackOff for as long as
+	// kubelet's exponential backoff lasts. Same kubelet-cache discipline
+	// we apply to user workloads (deploy-hash baked into image tag).
+	DBImageRef    string
+	Labels        map[string]string
+	Spec          DatabaseSpec
+	Bucket        *BucketHandle
+	DeleteVolumes bool
+	Kube          *kube.Client
 	// NodeSSH is an SSH client to the DB's target node (as named by
 	// Spec.Server). Set by the reconciler via
 	// InfraProvider.SSHToNode — nil for SaaS engines and for callers

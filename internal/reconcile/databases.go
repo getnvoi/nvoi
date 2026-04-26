@@ -222,10 +222,24 @@ func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *co
 		return "", fmt.Errorf("databases.%s: %w", name, err)
 	}
 
+	// Resolve the backup-image digest once per deploy, before any Job
+	// gets stamped with it. Pinning by digest is what forces kubelet to
+	// repull when bin/deploy pushes a new build of cmd/db — the tag
+	// alone (`:latest`) never invalidates the kubelet cache, so a
+	// single bad push silently jams every backup pod into
+	// ImagePullBackOff. Hard-fails the deploy if the registry doesn't
+	// resolve the tag (image was never pushed, registry down, etc.) —
+	// fail at deploy time, not at 3am when cron fires.
+	imageRef, err := provider.ResolveDBImage(ctx)
+	if err != nil {
+		return "", fmt.Errorf("databases.%s: %w", name, err)
+	}
+
 	req, err := databaseRequest(dc, names, name, def, sources)
 	if err != nil {
 		return "", err
 	}
+	req.DBImageRef = imageRef
 	req.Namespace = names.KubeNamespace()
 	// KubeLabels (not Labels) — DB workloads land in k8s, not on the
 	// IaaS provider. The kube-side label needs the

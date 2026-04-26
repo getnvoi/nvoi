@@ -47,6 +47,14 @@ func init() {
 	f := testutil.NewHetznerFake(nil)
 	f.SeedServer("nvoi-myapp-prod-master", "1.2.3.4", "10.0.1.1")
 	f.Register("test-compute")
+
+	// Stub the Docker Hub round-trip so reconcile tests that exercise
+	// databases never touch the network. Returns a plausible
+	// digest-pinned ref. Tests that need to assert the image string on
+	// emitted CronJobs/Jobs see this exact value.
+	provider.ResolveDBImage = func(context.Context) (string, error) {
+		return "docker.io/nvoi/db@sha256:" + strings.Repeat("0", 64), nil
+	}
 }
 
 // ── Shared test setup ─────────────────────────────────────────────────────────

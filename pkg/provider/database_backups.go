@@ -18,8 +18,10 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -55,10 +57,119 @@ const DBImageRepo = "docker.io/nvoi/db"
 // stay in lockstep.
 var DBImageTag = "latest"
 
-// DBImage is the uniform image reference for the backup CronJob AND
-// the restore one-shot Job.
+// DBImage is the unresolved (`:tag`) reference. Used as a fallback
+// when DatabaseRequest.DBImageRef is empty — tests that build Jobs
+// without exercising a live registry, or callers that explicitly
+// don't need digest-pinning. Production reconcile always resolves
+// via ResolveDBImage and threads the digest-pinned ref through
+// req.DBImageRef.
 func DBImage() string {
 	return DBImageRepo + ":" + DBImageTag
+}
+
+// dbImageFor returns req.DBImageRef when set, else DBImage(). Single
+// source of "what image string lands on the CronJob/Job" so the
+// fallback rule lives in one place.
+func dbImageFor(req DatabaseRequest) string {
+	if req.DBImageRef != "" {
+		return req.DBImageRef
+	}
+	return DBImage()
+}
+
+// ResolveDBImage returns the digest-pinned reference
+// (`docker.io/nvoi/db@sha256:<digest>`) for DBImageTag by HEAD-ing
+// the Docker Hub manifest endpoint. Reconcile calls this once per
+// deploy and threads the result into every DatabaseRequest, so
+// kubelet sees a fresh image string whenever the underlying image
+// content changed. `:latest` alone never invalidates the kubelet
+// cache — a single bad push leaves backup pods in ImagePullBackOff
+// indefinitely.
+//
+// Failure modes (all hard errors — better to fail the deploy than
+// apply a CronJob whose image we couldn't verify):
+//   - tag not found on Docker Hub → push silently failed, pre-deploy
+//   - registry unreachable      → fix internet, then redeploy
+//   - missing digest header     → registry implementation oddity
+//
+// Package var so reconcile/cmd tests can stub the registry round-trip
+// without hitting the network.
+var ResolveDBImage = registryResolveDBImage
+
+func registryResolveDBImage(ctx context.Context) (string, error) {
+	digest, err := registryDigest(ctx, "nvoi/db", DBImageTag)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s:%s digest: %w", DBImageRepo, DBImageTag, err)
+	}
+	return DBImageRepo + "@" + digest, nil
+}
+
+// registryDigest queries Docker Hub for the current
+// `Docker-Content-Digest` of <repo>:<tag>. Anonymous, public-repo
+// only — nvoi/db is published as a public image. Two-step protocol:
+//
+//  1. GET auth.docker.io/token?service=registry.docker.io&scope=...
+//     → bearer token
+//  2. HEAD registry-1.docker.io/v2/<repo>/manifests/<tag> with the
+//     Bearer token + Accept covering OCI image-index AND Docker
+//     manifest-list (buildx pushes OCI; older registries / buildx
+//     versions may push Docker — both shapes accepted).
+func registryDigest(ctx context.Context, repo, tag string) (string, error) {
+	tokenURL := fmt.Sprintf(
+		"https://auth.docker.io/token?service=registry.docker.io&scope=repository:%s:pull",
+		repo,
+	)
+	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build token request: %w", err)
+	}
+	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	if err != nil {
+		return "", fmt.Errorf("fetch token: %w", err)
+	}
+	defer tokenResp.Body.Close()
+	if tokenResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("token endpoint returned %d", tokenResp.StatusCode)
+	}
+	var tokenBody struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenBody); err != nil {
+		return "", fmt.Errorf("decode token: %w", err)
+	}
+	if tokenBody.Token == "" {
+		return "", fmt.Errorf("empty token")
+	}
+
+	manifestURL := fmt.Sprintf("https://registry-1.docker.io/v2/%s/manifests/%s", repo, tag)
+	manReq, err := http.NewRequestWithContext(ctx, http.MethodHead, manifestURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build manifest request: %w", err)
+	}
+	manReq.Header.Set("Authorization", "Bearer "+tokenBody.Token)
+	manReq.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", "))
+	manResp, err := http.DefaultClient.Do(manReq)
+	if err != nil {
+		return "", fmt.Errorf("HEAD manifest: %w", err)
+	}
+	defer manResp.Body.Close()
+	if manResp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("tag %s:%s not found — was the image actually pushed? (try `docker buildx imagetools inspect %s:%s`)",
+			repo, tag, repo, tag)
+	}
+	if manResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("manifest %s:%s returned %d", repo, tag, manResp.StatusCode)
+	}
+	digest := manResp.Header.Get("Docker-Content-Digest")
+	if digest == "" {
+		return "", fmt.Errorf("missing Docker-Content-Digest header for %s:%s", repo, tag)
+	}
+	return digest, nil
 }
 
 // BuildBackupCronJob returns the uniform CronJob that dumps a database
@@ -115,7 +226,7 @@ func BuildBackupCronJob(req DatabaseRequest) *batchv1.CronJob {
 							RestartPolicy: corev1.RestartPolicyNever,
 							Containers: []corev1.Container{{
 								Name:  "backup",
-								Image: DBImage(),
+								Image: dbImageFor(req),
 								Env: []corev1.EnvVar{
 									{Name: "ENGINE", Value: req.Spec.Engine},
 									{Name: "DATABASE_NAME", Value: req.Name},
@@ -203,7 +314,7 @@ func BuildRestoreJob(req DatabaseRequest, backupKey string) *batchv1.Job {
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
 						Name:  "restore",
-						Image: DBImage(),
+						Image: dbImageFor(req),
 						Env: []corev1.EnvVar{
 							{Name: "MODE", Value: "restore"},
 							{Name: "BACKUP_KEY", Value: backupKey},
