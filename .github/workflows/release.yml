@@ -41,7 +41,7 @@ jobs:
           # is the same discipline we apply to user workloads
           # (deploy-hash tags).
           go build \
-            -ldflags="-s -w -X github.com/getnvoi/nvoi/pkg/utils.Version=${{ github.ref_name }}" \
+            -ldflags="-s -w -X github.com/getnvoi/nvoi/pkg/utils.DBImageTag=${{ github.ref_name }}" \
             -o "dist/nvoi-${GOOS}-${GOARCH}${ext}" ./cmd/cli
       - uses: actions/upload-artifact@v4
         with:
@@ -69,8 +69,8 @@ jobs:
         run: ./worker/deploy.sh release "${{ github.ref_name }}" dist
 
   # docker.io/nvoi/db — the uniform database backup + restore runner
-  # every DatabaseProvider's CronJob / one-shot Job invokes. Version
-  # must match the CLI binary (both baked with -X pkg/utils.Version=<tag>),
+  # every DatabaseProvider's CronJob / one-shot Job invokes. Tag
+  # must match the CLI binary (both baked with -X pkg/utils.DBImageTag=<tag>),
   # so this job only runs on tags and the tag is the version.
   db-image:
     needs: build

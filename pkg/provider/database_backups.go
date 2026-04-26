@@ -33,14 +33,14 @@ import (
 )
 
 // DBImage is the uniform image reference for the backup CronJob AND
-// the restore one-shot Job. Tagged with the nvoi CLI version so
-// database I/O is deterministic per deploy — same discipline as user
+// the restore one-shot Job. Tagged with utils.DBImageTag so database
+// I/O is deterministic per deploy — same discipline as user
 // workloads, which carry the deploy-hash as part of the image tag.
 //
 // The image is built from cmd/db/Dockerfile and published to Docker
 // Hub on every `v*` git tag. Public repo, no auth required for pull.
 func DBImage() string {
-	return "docker.io/nvoi/db:" + utils.Version
+	return "docker.io/nvoi/db:" + utils.DBImageTag
 }
 
 // BuildBackupCronJob returns the uniform CronJob that dumps a database
