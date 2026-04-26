@@ -280,17 +280,26 @@ func restoreCommand(engine string, creds dbCreds) (*exec.Cmd, error) {
 //
 //	--no-owner / --no-acl strip role-specific metadata so
 //	the dump replays cleanly into any target user.
+//	--clean --if-exists emit `DROP … IF EXISTS` before each
+//	`CREATE`, so a restore onto a populated database
+//	replaces existing objects instead of erroring with
+//	"relation already exists". `restore` semantics across
+//	the surface are "replay this snapshot", which only
+//	works if the dump is idempotent.
 //
 // mysql / planetscale → `mysqldump --ssl-mode=REQUIRED ...`.
 //
 //	--single-transaction = consistent snapshot without
 //	locking. --set-gtid-purged=OFF avoids GTID metadata
-//	planetscale doesn't accept on import.
+//	planetscale doesn't accept on import. --add-drop-table
+//	(default true, set explicit for symmetry with pg) so
+//	`restore` is idempotent against an existing DB.
 func dumpCommand(engine string, creds dbCreds) (*exec.Cmd, error) {
 	switch engine {
 	case "postgres", "neon":
 		cmd := exec.Command("pg_dump",
 			"--no-owner", "--no-acl",
+			"--clean", "--if-exists",
 			"-h", creds.host,
 			"-p", creds.port,
 			"-U", creds.user,
@@ -303,6 +312,7 @@ func dumpCommand(engine string, creds dbCreds) (*exec.Cmd, error) {
 			"--ssl-mode=REQUIRED",
 			"--single-transaction",
 			"--set-gtid-purged=OFF",
+			"--add-drop-table",
 			"-h", creds.host,
 			"-P", creds.port,
 			"-u", creds.user,

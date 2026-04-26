@@ -502,7 +502,12 @@ func runDatabaseMigrate(cmd *cobra.Command, rt *runtime, dbName string) error {
 	if err != nil {
 		return err
 	}
-	kc := rt.dc.Cluster.MasterKube
+	// resolveDatabaseCommand already dialed the on-demand kube client
+	// and parked it on req.Kube (same path every other database
+	// command uses). Reading dc.Cluster.MasterKube directly would
+	// require pre-injection, which violates the dispatch contract
+	// (see CLAUDE.md: "Tests NEVER pre-inject Cluster.MasterKube").
+	kc := req.Kube
 	if kc == nil {
 		return fmt.Errorf("kube client required for migrate — are you connected to the cluster?")
 	}
