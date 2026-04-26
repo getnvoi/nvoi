@@ -3,12 +3,22 @@
 #
 # Builds + pushes the uniform nvoi/db backup image before deploying so
 # any cmd/db edit ships transparently. buildx layer cache makes no-op
-# runs sub-second. First time: `docker login` + `docker buildx create --use`.
+# runs sub-second. First time only: `docker login` (the buildx builder
+# is created on demand below).
 #
 # Image ref must match pkg/provider/database_backups.go::DBImageRepo + DBImageTag.
 # Production releases go through .github/workflows/release.yml.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-docker buildx build --platform linux/amd64,linux/arm64 --pull --push \
+
+# Multi-platform builds need the docker-container driver; the default
+# `docker` driver can't do linux/amd64 + linux/arm64 in one shot.
+# Create a dedicated `nvoi` builder once, reuse it forever — keeps our
+# layer cache scoped and doesn't disturb the operator's default builder.
+if ! docker buildx inspect nvoi >/dev/null 2>&1; then
+  docker buildx create --name nvoi --driver docker-container --bootstrap >/dev/null
+fi
+
+docker buildx build --builder nvoi --platform linux/amd64,linux/arm64 --pull --push \
   -t docker.io/nvoi/db:latest "$ROOT_DIR/cmd/db"
 exec "$ROOT_DIR/bin/nvoi" deploy "$@"
