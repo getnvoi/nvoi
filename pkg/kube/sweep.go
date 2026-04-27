@@ -146,3 +146,77 @@ func (c *Client) SweepOwned(ctx context.Context, ns, owner string, kind Kind, de
 	}
 	return nil
 }
+
+// ListOwned returns the names of every resource of `kind` in `ns`
+// carrying nvoi/owner=<owner>. Read-only mirror of SweepOwned — same
+// label-scoping discipline, no deletes. Used by the plan engine to
+// diff cfg-vs-live without mutating the cluster.
+func (c *Client) ListOwned(ctx context.Context, ns, owner string, kind Kind) ([]string, error) {
+	if owner == "" {
+		return nil, fmt.Errorf("ListOwned: owner required")
+	}
+	selector := fmt.Sprintf("%s=%s", utils.LabelNvoiOwner, owner)
+	listOpts := metav1.ListOptions{LabelSelector: selector}
+	var names []string
+	switch kind {
+	case KindDeployment:
+		list, err := c.cs.AppsV1().Deployments(ns).List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("list deployments (owner=%s): %w", owner, err)
+		}
+		for _, item := range list.Items {
+			names = append(names, item.Name)
+		}
+	case KindStatefulSet:
+		list, err := c.cs.AppsV1().StatefulSets(ns).List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("list statefulsets (owner=%s): %w", owner, err)
+		}
+		for _, item := range list.Items {
+			names = append(names, item.Name)
+		}
+	case KindService:
+		list, err := c.cs.CoreV1().Services(ns).List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("list services (owner=%s): %w", owner, err)
+		}
+		for _, item := range list.Items {
+			names = append(names, item.Name)
+		}
+	case KindSecret:
+		list, err := c.cs.CoreV1().Secrets(ns).List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("list secrets (owner=%s): %w", owner, err)
+		}
+		for _, item := range list.Items {
+			names = append(names, item.Name)
+		}
+	case KindConfigMap:
+		list, err := c.cs.CoreV1().ConfigMaps(ns).List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("list configmaps (owner=%s): %w", owner, err)
+		}
+		for _, item := range list.Items {
+			names = append(names, item.Name)
+		}
+	case KindCronJob:
+		list, err := c.cs.BatchV1().CronJobs(ns).List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("list cronjobs (owner=%s): %w", owner, err)
+		}
+		for _, item := range list.Items {
+			names = append(names, item.Name)
+		}
+	case KindPVC:
+		list, err := c.cs.CoreV1().PersistentVolumeClaims(ns).List(ctx, listOpts)
+		if err != nil {
+			return nil, fmt.Errorf("list pvcs (owner=%s): %w", owner, err)
+		}
+		for _, item := range list.Items {
+			names = append(names, item.Name)
+		}
+	default:
+		return nil, fmt.Errorf("ListOwned: unsupported kind %q", kind)
+	}
+	return names, nil
+}
