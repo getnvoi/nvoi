@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/getnvoi/nvoi/internal/reconcile"
+	"github.com/getnvoi/nvoi/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -18,21 +22,71 @@ import (
 // Before calling Deploy, we infer the operator's git checkout via
 // `git remote get-url origin` + `git rev-parse HEAD` and stash both on
 // DeployContext. Remote builders (ssh, daytona) need this to `git clone`
-// the exact tree being deployed onto the remote build host. Local
-// builders ignore it. Empty values (cwd not a git checkout) surface as a
-// hard error inside the remote builder's validateBuildRequest — no silent
-// fallback to a possibly-stale remote default branch.
+// the exact tree being deployed onto the remote build host.
+//
+// `--auto-approve` (alias `-y`) skips the plan prompt. `--ci` (root
+// flag) implies `--auto-approve` — CI runs would otherwise hang on the
+// confirmation prompt.
 func newDeployCmd(rt *runtime) *cobra.Command {
-	return &cobra.Command{
+	var autoApprove bool
+	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy from config YAML",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			rt.dc.GitRemote = gitOrigin(ctx)
 			rt.dc.GitRef = gitHeadSHA(ctx)
-			return reconcile.Deploy(ctx, rt.dc, rt.cfg)
+
+			// --ci implies auto-approve so CI runs don't hang on prompt.
+			ciFlag, _ := cmd.Root().PersistentFlags().GetBool("ci")
+			if ciFlag {
+				autoApprove = true
+			}
+
+			return reconcile.Deploy(ctx, rt.dc, rt.cfg,
+				reconcile.WithOnPlan(func(plan *reconcile.Plan) (bool, error) {
+					render.RenderPlan(plan)
+					if autoApprove || len(plan.Promptable()) == 0 {
+						return true, nil
+					}
+					if !isStdinTTY() {
+						return false, fmt.Errorf("plan has %d change(s) requiring confirmation; pass --auto-approve / -y, or --ci", len(plan.Promptable()))
+					}
+					return promptYes("Continue? [y/N]: "), nil
+				}),
+			)
 		},
 	}
+	cmd.Flags().BoolVarP(&autoApprove, "auto-approve", "y", false, "skip the plan confirmation prompt (CI uses --ci which implies this)")
+	return cmd
+}
+
+// promptYes reads one line from stdin and returns true on "y" / "yes"
+// (case-insensitive). Empty input → false (default no, matches the
+// `[y/N]` capitalization convention).
+func promptYes(prompt string) bool {
+	fmt.Print(prompt)
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	}
+	return false
+}
+
+// isStdinTTY reports whether stdin is a character device. Used to
+// distinguish interactive runs (operator at a terminal) from
+// pipes / redirects (CI, scripts) where prompting would hang.
+func isStdinTTY() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // gitOrigin returns the URL of the operator's `origin` remote, or "" when

@@ -6,31 +6,63 @@ import (
 	"time"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
+// DeployOpts controls Deploy's prompt + plan-output behavior. Zero
+// value = no callback = proceed silently (test default). Production
+// CLI passes WithOnPlan to render the plan + prompt the operator.
+type DeployOpts struct {
+	// OnPlan, when non-nil, is called once the cfg-vs-live diff has
+	// been computed (and is non-empty). The callback returns
+	// (true, nil) to proceed with apply, (false, nil) to abort
+	// cleanly (Deploy returns nil), or (_, err) to fail the deploy.
+	// The callback owns rendering AND the prompt — engine stays UI-
+	// free.
+	OnPlan func(plan *Plan) (proceed bool, err error)
+}
+
+// Option mutates DeployOpts via the functional-options pattern so
+// adding new knobs later is non-breaking.
+type Option func(*DeployOpts)
+
+// WithOnPlan registers the OnPlan callback. CLI passes a closure that
+// renders the plan and prompts; tests pass nothing and proceed silently.
+func WithOnPlan(fn func(*Plan) (bool, error)) Option {
+	return func(o *DeployOpts) { o.OnPlan = fn }
+}
+
 // Deploy reconciles live infrastructure to match the YAML config.
 //
-// Linear flow per refactor #47 — zero per-provider branching. Each
-// step that needs live state queries it directly: Services/Crons hit
-// kube via kc.ListWorkloadNames/ListCronJobNames, TeardownOrphans
-// hits the provider via infra.LiveSnapshot internally.
+// Phase 2 flow:
 //
 //  1. ValidateConfig + cfg.Resolve()
 //  2. Stamp DeployHash
 //  3. Build local images (pre-infra; failure aborts before any provisioning)
-//  4. infra.Bootstrap → returns *kube.Client; provider owns servers/firewall/volumes
-//  5. infra.NodeShell → optional SSH client for `nvoi ssh`
-//  6. EnsureNamespace + Registries + Secrets + Storage
-//  7. Services + Crons (each does its own kube-side orphan lookup)
-//  8. infra.TeardownOrphans (provider does its own LiveSnapshot lookup)
-//  9. Ingress (gated): RouteDomains via dns.RouteTo + EnsureCaddy + cert/HTTPS waits
+//  4. ComputePlan against live state (read-only)
+//     - Empty plan → "No changes." early return.
+//     - Non-empty → call opts.OnPlan; abort if operator says no.
+//  5. Loud-path branch (plan.HasInfraChanges()):
+//     - true: infra.Bootstrap → drift reconciled, full per-resource output
+//     - false: infra.Connect → read-only attach, no provider mutation
+//  6. EnsureNamespace + Registries + Secrets
+//  7. Storage + Databases (loud path only — provider-side is silent
+//     in steady state; quiet path skips entirely)
+//  8. Services + Crons (always — image-tag updates land here)
+//  9. infra.TeardownOrphans (loud path only)
+//  10. Ingress (gated, loud path only for RouteDomains; Caddy reload
+//     always when domains present)
 //
-// The reconciler never branches on "what kind of provider is this" — gates
-// (HasPublicIngress, returned-nil NodeShell, ConsumesBlocks) carry every
-// distinction.
-func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) error {
+// The reconciler never branches on "what kind of provider is this" —
+// gates (HasPublicIngress, returned-nil NodeShell, ConsumesBlocks)
+// carry every distinction.
+func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig, opts ...Option) error {
+	deployOpts := DeployOpts{}
+	for _, opt := range opts {
+		opt(&deployOpts)
+	}
 	if err := ValidateConfig(cfg); err != nil {
 		return err
 	}
@@ -99,13 +131,46 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	// Bootstrap: provider provisions servers/firewall/volumes (or sandbox,
-	// or auths against a managed control plane), returns a working kube
-	// client. WRITE contract — drift reconciled, missing resources
-	// created. Caller treats as opaque.
-	kc, err := infra.Bootstrap(ctx, bctx)
+	// Compute the cfg-vs-live diff. Read-only — uses Connect under the
+	// hood. Drives both the prompt (OnPlan callback) and the loud/quiet
+	// path branch (Bootstrap vs Connect for the apply phase).
+	plan, err := ComputePlan(ctx, dc, cfg)
 	if err != nil {
-		return fmt.Errorf("infra.Bootstrap: %w", err)
+		return fmt.Errorf("plan: %w", err)
+	}
+	if plan.IsEmpty() {
+		dc.Cluster.Log().Success("No changes.")
+		return nil
+	}
+	if deployOpts.OnPlan != nil {
+		proceed, err := deployOpts.OnPlan(plan)
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			dc.Cluster.Log().Info("aborted")
+			return nil
+		}
+	}
+
+	// Loud-path branch: infra.Bootstrap reconciles drift (servers /
+	// firewall rules / volumes) AND emits per-resource output. When no
+	// infra entry sits in the plan, infra.Connect attaches read-only
+	// without the per-resource churn — same *kube.Client, no output
+	// noise, no provider mutations.
+	loud := plan.HasInfraChanges()
+	var kc *kube.Client
+	if loud {
+		kc, err = infra.Bootstrap(ctx, bctx)
+		if err != nil {
+			return fmt.Errorf("infra.Bootstrap: %w", err)
+		}
+	} else {
+		dc.Cluster.Log().Success("infra unchanged")
+		kc, err = infra.Connect(ctx, bctx)
+		if err != nil {
+			return fmt.Errorf("infra.Connect: %w", err)
+		}
 	}
 	defer kc.Close()
 	dc.Cluster.MasterKube = kc
@@ -141,17 +206,35 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	storageCreds, err := Storage(ctx, dc, cfg)
-	if err != nil {
-		return err
+	// Storage + Databases provider-side reconcile + provider-side
+	// orphan sweep are infra concerns — only run them when the plan
+	// flagged infra changes. On the quiet path we read existing
+	// credentials back from the cluster so Services/Crons still get
+	// DATABASE_URL_* + STORAGE_* for their per-service Secrets.
+	var sources map[string]string
+	var pendingMigrations []PendingMigration
+	if loud {
+		storageCreds, err := Storage(ctx, dc, cfg)
+		if err != nil {
+			return err
+		}
+		databaseCreds, pm, err := Databases(ctx, dc, cfg, secretValues)
+		if err != nil {
+			return err
+		}
+		pendingMigrations = pm
+		sources = mergeSources(secretValues, storageCreds, databaseCreds)
+	} else {
+		storageCreds, err := readExistingStorageCreds(ctx, dc, cfg)
+		if err != nil {
+			return fmt.Errorf("read existing storage creds: %w", err)
+		}
+		databaseCreds, err := readExistingDatabaseURLs(ctx, dc, cfg)
+		if err != nil {
+			return fmt.Errorf("read existing database URLs: %w", err)
+		}
+		sources = mergeSources(secretValues, storageCreds, databaseCreds)
 	}
-
-	databaseCreds, pendingMigrations, err := Databases(ctx, dc, cfg, secretValues)
-	if err != nil {
-		return err
-	}
-
-	sources := mergeSources(secretValues, storageCreds, databaseCreds)
 
 	if err := Services(ctx, dc, cfg, sources); err != nil {
 		return err
@@ -160,25 +243,31 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 		return err
 	}
 
-	// Workloads have moved. Now safe for the provider to drain + delete
-	// orphan servers / firewalls / volumes — it does its own LiveSnapshot
-	// lookup internally (no live param threaded through).
-	if err := infra.TeardownOrphans(ctx, bctx); err != nil {
-		return err
+	// Provider-side orphan sweep: only meaningful when infra changed.
+	// Quiet path leaves provider state alone by definition.
+	if loud {
+		if err := infra.TeardownOrphans(ctx, bctx); err != nil {
+			return err
+		}
 	}
 
 	// Ingress: tunnel providers (#49) replace Caddy entirely when
 	// cfg.Providers.Tunnel is set. Otherwise, Caddy handles ingress when
 	// the infra provider has a public IP and domains are configured.
+	// On the quiet path, RouteDomains is skipped (DNS targets master IP
+	// which can't have changed if no infra changed); Caddy reload still
+	// runs because cfg.Domains may have changed even without infra.
 	if cfg.Providers.Tunnel != "" {
 		if err := TunnelIngress(ctx, dc, cfg); err != nil {
 			return err
 		}
 	} else if infra.HasPublicIngress() && len(cfg.Domains) > 0 {
-		if err := RouteDomains(ctx, dc, cfg, infra, bctx); err != nil {
-			return err
+		if loud {
+			if err := RouteDomains(ctx, dc, cfg, infra, bctx); err != nil {
+				return err
+			}
+			verifyDNSPropagation(ctx, dc, cfg)
 		}
-		verifyDNSPropagation(ctx, dc, cfg)
 		if err := Ingress(ctx, dc, cfg); err != nil {
 			return err
 		}
@@ -193,6 +282,82 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	emitPendingMigrations(dc, pendingMigrations)
 	return nil
 }
+
+// readExistingStorageCreds rebuilds the sources map fragment that
+// Storage() would have produced, WITHOUT touching the bucket
+// provider's "ensure" path or emitting per-storage output. Used on the
+// quiet deploy path so Services/Crons still get their STORAGE_*
+// env keys when no infra changed.
+//
+// Safe-by-default: a missing storage entry yields an empty cred set
+// for that entry — Services' expandStorageCreds skips silently when
+// keys aren't present, matching today's behavior on first deploy.
+func readExistingStorageCreds(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) (map[string]string, error) {
+	if dc.Storage.Name == "" || len(cfg.Storage) == 0 {
+		return map[string]string{}, nil
+	}
+	bucket, err := provider.ResolveBucket(dc.Storage.Name, dc.Storage.Creds)
+	if err != nil {
+		return nil, err
+	}
+	creds, err := bucket.Credentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for n, def := range cfg.Storage {
+		bucketName := def.Bucket
+		if bucketName == "" {
+			bucketName = names.Bucket(n)
+		}
+		prefix := utils.StorageEnvPrefix(n)
+		out[prefix+"_ENDPOINT"] = creds.Endpoint
+		out[prefix+"_BUCKET"] = bucketName
+		out[prefix+"_ACCESS_KEY_ID"] = creds.AccessKeyID
+		out[prefix+"_SECRET_ACCESS_KEY"] = creds.SecretAccessKey
+	}
+	return out, nil
+}
+
+// readExistingDatabaseURLs returns DATABASE_URL_<NAME> for every
+// database in cfg by reading the existing per-DB credentials Secret.
+// Used on the quiet deploy path so Services/Crons that envFrom these
+// URLs continue to resolve them in their per-service Secret rebuild.
+//
+// Safe-by-default: a missing credentials Secret means the database
+// hasn't been provisioned yet — but if the plan didn't flag it as a
+// change, we expect it to exist. A missing Secret here returns ""
+// for that DB; downstream Services' expandDatabaseCreds will skip the
+// key, matching the first-deploy behavior.
+func readExistingDatabaseURLs(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) (map[string]string, error) {
+	if dc.Cluster.MasterKube == nil || len(cfg.Databases) == 0 {
+		return map[string]string{}, nil
+	}
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for name := range cfg.Databases {
+		url, err := dc.Cluster.MasterKube.GetSecretValue(
+			ctx, names.KubeNamespace(),
+			names.KubeDatabaseCredentials(name), "url",
+		)
+		if err != nil {
+			continue // missing — skip; downstream tolerates absent keys
+		}
+		out[utils.DatabaseEnvName(name)] = url
+	}
+	return out, nil
+}
+
+// kube import is load-bearing for the kc variable type hoisted out of
+// the if/else above the switch. Without it the package doesn't build.
+var _ = (*kube.Client)(nil)
 
 func emitPendingMigrations(dc *config.DeployContext, pending []PendingMigration) {
 	if len(pending) == 0 || dc.Cluster.Log() == nil {
