@@ -4,28 +4,51 @@ import (
 	"fmt"
 	"sort"
 
+	"charm.land/lipgloss/v2"
 	"github.com/getnvoi/nvoi/internal/reconcile"
 	"github.com/getnvoi/nvoi/pkg/provider"
 )
 
-// RenderPlan prints a Plan as plain text. Output format:
+// Plan-output styles, layered on top of the existing TUI palette so the
+// `nvoi plan` and `nvoi deploy` plan-preamble visually match the rest
+// of the deploy stream:
 //
-//	Plan: 4 to add, 1 to change, 2 to delete
+//   - planHeader      → mirror of tuiCommand (Bold + MarginLeft 2). Same
+//     weight as "registry set 1 host" group headers.
+//   - planAddGlyph    → bold green for `+`, like a stylized "✓" success.
+//   - planUpdateGlyph → bold orange for `~`, mirror of tuiWarning's hue.
+//   - planDeleteGlyph → bold red for `-`, mirror of tuiError's hue.
+//   - planEntry       → MarginLeft 4 (matches tuiSuccess body indent).
+//   - planAuto        → DimStyle annotation for `(image-tag, auto)` and
+//     the footer summary line.
+var (
+	planHeader      = lipgloss.NewStyle().Bold(true).MarginLeft(2)
+	planAddGlyph    = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
+	planUpdateGlyph = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	planDeleteGlyph = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	planEntry       = lipgloss.NewStyle().MarginLeft(4)
+	planAuto        = DimStyle
+)
+
+// RenderPlan prints a Plan styled with the same lipgloss palette the
+// TUI Output uses for live deploy events. Visual rhythm:
 //
-//	  + server worker-2  (cax21 nbg1)
-//	  + firewall nvoi-myapp-prod-worker-fw
-//	  ~ firewall-rule nvoi-myapp-prod-master-fw:80  was [0.0.0.0/0]
-//	    ⚠ removes existing access
-//	  - dns api.example.com
-//	  ~ workload api  (image rebuilt, image-tag, auto)
+//	Plan: 0 to add, 1 to change, 0 to delete       ← bold, 2-space margin
 //
-//	1 change auto-applies; 5 will require confirmation on `nvoi deploy`
+//	  ~ workload api  image rebuilt  (image-tag, auto)
+//	    └ glyph colored          └ dim annotation
 //
-// Auto-skip entries (Reason set) are tagged so the operator sees both
-// what'll happen AND which entries will skip the prompt.
+//	All changes will auto-apply on `nvoi deploy`.   ← dim
+//
+// Empty plan → "No changes." (success-style ✓ in TUI; bare in plain).
+//
+// Color choices mirror tui.go's palette:
+//   - 42  (green)  for +  → "creation, safe"
+//   - 214 (amber)  for ~  → matches tuiWarning's hue (change is potentially destructive)
+//   - 196 (red)   for -  → matches tuiError's hue (deletion)
 func RenderPlan(plan *reconcile.Plan) {
 	if plan == nil || plan.IsEmpty() {
-		fmt.Println("No changes.")
+		fmt.Println(planEntry.Render("✓ No changes."))
 		return
 	}
 
@@ -40,14 +63,11 @@ func RenderPlan(plan *reconcile.Plan) {
 			upd++
 		}
 	}
-	fmt.Printf("Plan: %s, %s, %s\n\n",
-		pluralizeChange(add, "to add"),
-		pluralizeChange(upd, "to change"),
-		pluralizeChange(del, "to delete"),
-	)
+	header := fmt.Sprintf("Plan: %d to add, %d to change, %d to delete",
+		add, upd, del)
+	fmt.Println(planHeader.Render(header))
+	fmt.Println()
 
-	// Group entries by Resource so the output reads top-to-bottom in a
-	// human-friendly order. Stable sort within each group by Name.
 	grouped := groupByResource(plan.Entries)
 	for _, res := range resourceOrder() {
 		entries, ok := grouped[res]
@@ -55,32 +75,45 @@ func RenderPlan(plan *reconcile.Plan) {
 			continue
 		}
 		for _, e := range entries {
-			line := fmt.Sprintf("  %s %s %s", e.Kind.Glyph(), e.Resource, e.Name)
-			if e.Detail != "" {
-				line += "  " + e.Detail
-			}
-			if e.Reason != "" {
-				line += fmt.Sprintf("  (%s, auto)", e.Reason)
-			}
-			fmt.Println(line)
+			fmt.Println(planEntry.Render(formatEntry(e)))
 		}
 	}
 
 	prompted := len(plan.Promptable())
 	auto := len(plan.Entries) - prompted
 	fmt.Println()
+	var footer string
 	switch {
 	case prompted == 0:
-		fmt.Println("All changes will auto-apply on `nvoi deploy`.")
+		footer = "All changes will auto-apply on `nvoi deploy`."
 	case auto == 0:
-		fmt.Printf("All %d changes will require confirmation on `nvoi deploy`.\n", prompted)
+		footer = fmt.Sprintf("All %d changes will require confirmation on `nvoi deploy`.", prompted)
 	default:
-		fmt.Printf("%d auto-applies; %d will require confirmation on `nvoi deploy`.\n", auto, prompted)
+		footer = fmt.Sprintf("%d auto-applies; %d will require confirmation on `nvoi deploy`.", auto, prompted)
 	}
+	fmt.Println(planEntry.Render(planAuto.Render(footer)))
 }
 
-func pluralizeChange(n int, suffix string) string {
-	return fmt.Sprintf("%d %s", n, suffix)
+// formatEntry renders one plan line: kind-colored glyph, resource,
+// name, optional Detail, optional dim "(reason, auto)" annotation.
+func formatEntry(e provider.PlanEntry) string {
+	glyph := e.Kind.Glyph()
+	switch e.Kind {
+	case provider.PlanAdd:
+		glyph = planAddGlyph.Render(glyph)
+	case provider.PlanUpdate:
+		glyph = planUpdateGlyph.Render(glyph)
+	case provider.PlanDelete:
+		glyph = planDeleteGlyph.Render(glyph)
+	}
+	line := fmt.Sprintf("%s %s %s", glyph, e.Resource, e.Name)
+	if e.Detail != "" {
+		line += "  " + e.Detail
+	}
+	if e.Reason != "" {
+		line += planAuto.Render(fmt.Sprintf("  (%s, auto)", e.Reason))
+	}
+	return line
 }
 
 func groupByResource(entries []provider.PlanEntry) map[string][]provider.PlanEntry {
