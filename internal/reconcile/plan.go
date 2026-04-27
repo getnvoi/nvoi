@@ -50,7 +50,7 @@ func (p *Plan) IsEmpty() bool { return len(p.Entries) == 0 }
 func (p *Plan) Changes() []provider.PlanEntry {
 	out := make([]provider.PlanEntry, 0, len(p.Entries))
 	for _, e := range p.Entries {
-		if e.Kind != provider.PlanNoChange {
+		if e.Status != provider.PlanNoChange {
 			out = append(out, e)
 		}
 	}
@@ -62,10 +62,10 @@ func (p *Plan) Changes() []provider.PlanEntry {
 // real diffs trigger the loud/quiet path branch in Deploy.
 func (p *Plan) HasInfraChanges() bool {
 	for _, e := range p.Entries {
-		if e.Kind == provider.PlanNoChange {
+		if e.Status == provider.PlanNoChange {
 			continue
 		}
-		if isInfraResource(e.Resource) {
+		if e.Kind.IsInfra() {
 			return true
 		}
 	}
@@ -78,7 +78,7 @@ func (p *Plan) HasInfraChanges() bool {
 func (p *Plan) Promptable() []provider.PlanEntry {
 	out := make([]provider.PlanEntry, 0, len(p.Entries))
 	for _, e := range p.Entries {
-		if e.Kind == provider.PlanNoChange {
+		if e.Status == provider.PlanNoChange {
 			continue
 		}
 		if e.Promptable() {
@@ -86,25 +86,6 @@ func (p *Plan) Promptable() []provider.PlanEntry {
 		}
 	}
 	return out
-}
-
-// isInfraResource classifies a plan entry's Resource as provider-side
-// (true) or workload-side (false). The split drives the loud/quiet
-// path decision in reconcile.Deploy.
-func isInfraResource(resource string) bool {
-	switch resource {
-	case provider.ResServer,
-		provider.ResFirewall,
-		provider.ResFirewallRule,
-		provider.ResVolume,
-		provider.ResNetwork,
-		provider.ResDNS,
-		provider.ResBucket,
-		provider.ResDatabase,
-		provider.ResTunnel:
-		return true
-	}
-	return false
 }
 
 // ComputePlan walks every reconcile step's planner against live state
@@ -253,7 +234,7 @@ func planRegistries(ctx context.Context, dc *config.DeployContext, cfg *config.A
 	}
 	ns := names.KubeNamespace()
 
-	existing, err := kc.ListOwned(ctx, ns, utils.OwnerRegistries, kube.KindSecret)
+	existing, err := provider.ListOwned(ctx, kc, ns, provider.KindRegistrySecret, kube.KindSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -269,23 +250,23 @@ func planRegistries(ctx context.Context, dc *config.DeployContext, cfg *config.A
 	switch {
 	case wantSecret && !hasSecret:
 		return []provider.PlanEntry{{
-			Kind:     provider.PlanAdd,
-			Resource: provider.ResRegistrySecret,
-			Name:     kube.PullSecretName,
-			Detail:   fmt.Sprintf("%d host(s)", len(cfg.Registry)),
+			Status: provider.PlanAdd,
+			Kind:   provider.KindRegistrySecret,
+			Name:   kube.PullSecretName,
+			Detail: fmt.Sprintf("%d host(s)", len(cfg.Registry)),
 		}}, nil
 	case !wantSecret && hasSecret:
 		return []provider.PlanEntry{{
-			Kind:     provider.PlanDelete,
-			Resource: provider.ResRegistrySecret,
-			Name:     kube.PullSecretName,
+			Status: provider.PlanDelete,
+			Kind:   provider.KindRegistrySecret,
+			Name:   kube.PullSecretName,
 		}}, nil
 	case wantSecret && hasSecret:
 		return []provider.PlanEntry{{
-			Kind:     provider.PlanNoChange,
-			Resource: provider.ResRegistrySecret,
-			Name:     kube.PullSecretName,
-			Detail:   fmt.Sprintf("%d host(s)", len(cfg.Registry)),
+			Status: provider.PlanNoChange,
+			Kind:   provider.KindRegistrySecret,
+			Name:   kube.PullSecretName,
+			Detail: fmt.Sprintf("%d host(s)", len(cfg.Registry)),
 		}}, nil
 	}
 	return nil, nil
@@ -341,12 +322,12 @@ func planRouteDomains(ctx context.Context, dc *config.DeployContext, cfg *config
 	for _, d := range desiredSorted {
 		if liveDomains[d] {
 			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanNoChange, Resource: provider.ResDNS, Name: d,
+				Status: provider.PlanNoChange, Kind: provider.KindDNSRecord, Name: d,
 			})
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanAdd, Resource: provider.ResDNS, Name: d,
+			Status: provider.PlanAdd, Kind: provider.KindDNSRecord, Name: d,
 		})
 	}
 
@@ -372,9 +353,9 @@ func planRouteDomains(ctx context.Context, dc *config.DeployContext, cfg *config
 				continue // not nvoi's, leave alone
 			}
 			entries = append(entries, provider.PlanEntry{
-				Kind:     provider.PlanDelete,
-				Resource: provider.ResDNS,
-				Name:     d,
+				Status: provider.PlanDelete,
+				Kind:   provider.KindDNSRecord,
+				Name:   d,
 			})
 		}
 	}
@@ -435,7 +416,7 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		desired[n] = true
 	}
 
-	live, err := combinedWorkloadNames(ctx, kc, ns, utils.OwnerServices)
+	live, err := combinedWorkloadNames(ctx, kc, ns, provider.KindServiceWorkload)
 	if err != nil {
 		return nil, err
 	}
@@ -446,10 +427,10 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 	for _, name := range utils.SortedKeys(cfg.Services) {
 		if !live[name] {
 			entries = append(entries, provider.PlanEntry{
-				Kind:     provider.PlanAdd,
-				Resource: provider.ResWorkload,
-				Name:     name,
-				Detail:   "service",
+				Status: provider.PlanAdd,
+				Kind:   provider.KindServiceWorkload,
+				Name:   name,
+				Detail: "service",
 			})
 			continue
 		}
@@ -492,11 +473,11 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 			if stripDeployHash(liveImage) == stripDeployHash(desiredImage) {
 				if !planOnly {
 					entries = append(entries, provider.PlanEntry{
-						Kind:     provider.PlanUpdate,
-						Resource: provider.ResWorkload,
-						Name:     name,
-						Detail:   "image rebuilt",
-						Reason:   "image-tag",
+						Status: provider.PlanUpdate,
+						Kind:   provider.KindServiceWorkload,
+						Name:   name,
+						Detail: "image rebuilt",
+						Reason: "image-tag",
 					})
 					changed = true
 				}
@@ -505,17 +486,17 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 				// shows the service with status=unchanged.
 			} else {
 				entries = append(entries, provider.PlanEntry{
-					Kind:     provider.PlanUpdate,
-					Resource: provider.ResWorkload,
-					Name:     name,
-					Detail:   fmt.Sprintf("image: %s → %s", liveImage, desiredImage),
+					Status: provider.PlanUpdate,
+					Kind:   provider.KindServiceWorkload,
+					Name:   name,
+					Detail: fmt.Sprintf("image: %s → %s", liveImage, desiredImage),
 				})
 				changed = true
 			}
 		}
 		if !changed {
 			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanNoChange, Resource: provider.ResWorkload,
+				Status: provider.PlanNoChange, Kind: provider.KindServiceWorkload,
 				Name: name, Detail: "service",
 			})
 		}
@@ -532,7 +513,7 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanDelete, Resource: provider.ResWorkload, Name: n, Detail: "service",
+			Status: provider.PlanDelete, Kind: provider.KindServiceWorkload, Name: n, Detail: "service",
 		})
 	}
 
@@ -567,7 +548,7 @@ func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 	}
 	ns := names.KubeNamespace()
 
-	liveNames, err := kc.ListOwned(ctx, ns, utils.OwnerCrons, kube.KindCronJob)
+	liveNames, err := provider.ListOwned(ctx, kc, ns, provider.KindCronWorkload, kube.KindCronJob)
 	if err != nil {
 		return nil, err
 	}
@@ -584,7 +565,7 @@ func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 	for _, name := range utils.SortedKeys(cfg.Crons) {
 		if !live[name] {
 			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanAdd, Resource: provider.ResCronJob, Name: name,
+				Status: provider.PlanAdd, Kind: provider.KindCronWorkload, Name: name,
 				Detail: cfg.Crons[name].Schedule,
 			})
 			continue
@@ -597,7 +578,7 @@ func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 		if err == nil {
 			if cj.Spec.Schedule != cfg.Crons[name].Schedule {
 				entries = append(entries, provider.PlanEntry{
-					Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+					Status: provider.PlanUpdate, Kind: provider.KindCronWorkload, Name: name,
 					Detail: fmt.Sprintf("schedule: %s → %s", cj.Spec.Schedule, cfg.Crons[name].Schedule),
 				})
 				changed = true
@@ -610,14 +591,14 @@ func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 						// Same suppression as planServices.
 						if dc.Cluster.DeployHash != "" {
 							entries = append(entries, provider.PlanEntry{
-								Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+								Status: provider.PlanUpdate, Kind: provider.KindCronWorkload, Name: name,
 								Detail: "image rebuilt", Reason: "image-tag",
 							})
 							changed = true
 						}
 					} else {
 						entries = append(entries, provider.PlanEntry{
-							Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+							Status: provider.PlanUpdate, Kind: provider.KindCronWorkload, Name: name,
 							Detail: fmt.Sprintf("image: %s → %s", liveImage, desiredImage),
 						})
 						changed = true
@@ -627,7 +608,7 @@ func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 		}
 		if !changed {
 			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanNoChange, Resource: provider.ResCronJob, Name: name,
+				Status: provider.PlanNoChange, Kind: provider.KindCronWorkload, Name: name,
 				Detail: cfg.Crons[name].Schedule,
 			})
 		}
@@ -637,7 +618,7 @@ func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanDelete, Resource: provider.ResCronJob, Name: n,
+			Status: provider.PlanDelete, Kind: provider.KindCronWorkload, Name: n,
 		})
 	}
 	for _, name := range utils.SortedKeys(cfg.Crons) {
@@ -703,12 +684,12 @@ func planStorage(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 	for _, n := range sortedKeys(desired) {
 		if liveSet[n] {
 			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanNoChange, Resource: provider.ResBucket, Name: n,
+				Status: provider.PlanNoChange, Kind: provider.KindBucket, Name: n,
 			})
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanAdd, Resource: provider.ResBucket, Name: n,
+			Status: provider.PlanAdd, Kind: provider.KindBucket, Name: n,
 		})
 	}
 	// No DELETE entries: Storage() never deletes buckets (user data —
@@ -743,7 +724,7 @@ func planDatabases(ctx context.Context, dc *config.DeployContext, cfg *config.Ap
 
 	// Live: every credentials Secret carrying owner=databases tells us a
 	// database currently exists. Suffix-match to derive the DB name.
-	liveSecrets, err := kc.ListOwned(ctx, ns, utils.OwnerDatabases, kube.KindSecret)
+	liveSecrets, err := provider.ListOwned(ctx, kc, ns, provider.KindDatabase, kube.KindSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -774,12 +755,12 @@ func planDatabases(ctx context.Context, dc *config.DeployContext, cfg *config.Ap
 		}
 		if !liveDBs[n] {
 			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanAdd, Resource: provider.ResDatabase, Name: n, Detail: detail,
+				Status: provider.PlanAdd, Kind: provider.KindDatabase, Name: n, Detail: detail,
 			})
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanNoChange, Resource: provider.ResDatabase, Name: n, Detail: detail,
+			Status: provider.PlanNoChange, Kind: provider.KindDatabase, Name: n, Detail: detail,
 		})
 	}
 	for _, n := range sortedKeys(liveDBs) {
@@ -787,7 +768,7 @@ func planDatabases(ctx context.Context, dc *config.DeployContext, cfg *config.Ap
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanDelete, Resource: provider.ResDatabase, Name: n,
+			Status: provider.PlanDelete, Kind: provider.KindDatabase, Name: n,
 		})
 	}
 	return entries, nil
@@ -808,7 +789,7 @@ func planIngress(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 	}
 
 	// Caddy bootstrap presence — Deployment in kube-system w/ owner=caddy.
-	caddyDeploys, err := kc.ListOwned(ctx, kube.CaddyNamespace, utils.OwnerCaddy, kube.KindDeployment)
+	caddyDeploys, err := provider.ListOwned(ctx, kc, kube.CaddyNamespace, provider.KindCaddyIngress, kube.KindDeployment)
 	if err != nil {
 		return nil, err
 	}
@@ -816,12 +797,12 @@ func planIngress(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 	caddyDetail := "ingress controller (kube-system)"
 	if len(caddyDeploys) == 0 {
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanAdd, Resource: provider.ResCaddyRoute, Name: "caddy",
+			Status: provider.PlanAdd, Kind: provider.KindCaddyIngress, Name: "caddy",
 			Detail: caddyDetail,
 		})
 	} else {
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanNoChange, Resource: provider.ResCaddyRoute, Name: "caddy",
+			Status: provider.PlanNoChange, Kind: provider.KindCaddyIngress, Name: "caddy",
 			Detail: caddyDetail,
 		})
 	}
@@ -844,12 +825,12 @@ func planIngress(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 	for _, d := range sortedKeys(desired) {
 		if live[d] {
 			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanNoChange, Resource: provider.ResCaddyRoute, Name: d,
+				Status: provider.PlanNoChange, Kind: provider.KindCaddyIngress, Name: d,
 			})
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanAdd, Resource: provider.ResCaddyRoute, Name: d,
+			Status: provider.PlanAdd, Kind: provider.KindCaddyIngress, Name: d,
 		})
 	}
 	for _, d := range sortedKeys(live) {
@@ -857,7 +838,7 @@ func planIngress(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind: provider.PlanDelete, Resource: provider.ResCaddyRoute, Name: d,
+			Status: provider.PlanDelete, Kind: provider.KindCaddyIngress, Name: d,
 		})
 	}
 	return entries, nil
@@ -879,31 +860,31 @@ func planTunnelIngress(ctx context.Context, dc *config.DeployContext, cfg *confi
 		return nil, err
 	}
 	ns := names.KubeNamespace()
-	agents, err := kc.ListOwned(ctx, ns, utils.OwnerTunnel, kube.KindDeployment)
+	agents, err := provider.ListOwned(ctx, kc, ns, provider.KindTunnelAgent, kube.KindDeployment)
 	if err != nil {
 		return nil, err
 	}
 	if len(agents) == 0 && cfg.Providers.Tunnel != "" {
 		return []provider.PlanEntry{{
-			Kind:     provider.PlanAdd,
-			Resource: provider.ResTunnel,
-			Name:     cfg.Providers.Tunnel,
-			Detail:   "tunnel agent + provider-side tunnel",
+			Status: provider.PlanAdd,
+			Kind:   provider.KindTunnelAgent,
+			Name:   cfg.Providers.Tunnel,
+			Detail: "tunnel agent + provider-side tunnel",
 		}}, nil
 	}
 	if len(agents) > 0 && cfg.Providers.Tunnel == "" {
 		return []provider.PlanEntry{{
-			Kind:     provider.PlanDelete,
-			Resource: provider.ResTunnel,
-			Name:     "tunnel",
+			Status: provider.PlanDelete,
+			Kind:   provider.KindTunnelAgent,
+			Name:   "tunnel",
 		}}, nil
 	}
 	if len(agents) > 0 && cfg.Providers.Tunnel != "" {
 		return []provider.PlanEntry{{
-			Kind:     provider.PlanNoChange,
-			Resource: provider.ResTunnel,
-			Name:     cfg.Providers.Tunnel,
-			Detail:   "tunnel agent + provider-side tunnel",
+			Status: provider.PlanNoChange,
+			Kind:   provider.KindTunnelAgent,
+			Name:   cfg.Providers.Tunnel,
+			Detail: "tunnel agent + provider-side tunnel",
 		}}, nil
 	}
 	return nil, nil
@@ -912,14 +893,14 @@ func planTunnelIngress(ctx context.Context, dc *config.DeployContext, cfg *confi
 // ── shared helpers used by the workload planners ──────────────────────
 
 // combinedWorkloadNames returns the union of Deployment + StatefulSet
-// names for the given owner. Services emit one of the two depending on
+// names for the given Kind. Services emit one of the two depending on
 // whether they declare `volumes:` (StatefulSet) or not (Deployment).
-func combinedWorkloadNames(ctx context.Context, kc *kube.Client, ns, owner string) (map[string]bool, error) {
-	deps, err := kc.ListOwned(ctx, ns, owner, kube.KindDeployment)
+func combinedWorkloadNames(ctx context.Context, kc *kube.Client, ns string, kind provider.Kind) (map[string]bool, error) {
+	deps, err := provider.ListOwned(ctx, kc, ns, kind, kube.KindDeployment)
 	if err != nil {
 		return nil, err
 	}
-	stsNames, err := kc.ListOwned(ctx, ns, owner, kube.KindStatefulSet)
+	stsNames, err := provider.ListOwned(ctx, kc, ns, kind, kube.KindStatefulSet)
 	if err != nil {
 		return nil, err
 	}
@@ -1007,22 +988,22 @@ func secretKeyDiff(workload string, desired, live []string) []provider.PlanEntry
 	for _, k := range desired {
 		if l[k] {
 			out = append(out, provider.PlanEntry{
-				Kind: provider.PlanNoChange, Resource: provider.ResSecretKey,
+				Status: provider.PlanNoChange, Kind: provider.KindSecretKey,
 				Name: workload + ":" + k,
 			})
 			continue
 		}
 		out = append(out, provider.PlanEntry{
-			Kind: provider.PlanAdd, Resource: provider.ResSecretKey,
+			Status: provider.PlanAdd, Kind: provider.KindSecretKey,
 			Name: workload + ":" + k,
 		})
 	}
 	for _, k := range live {
 		if !d[k] {
 			out = append(out, provider.PlanEntry{
-				Kind:     provider.PlanDelete,
-				Resource: provider.ResSecretKey,
-				Name:     workload + ":" + k,
+				Status: provider.PlanDelete,
+				Kind:   provider.KindSecretKey,
+				Name:   workload + ":" + k,
 			})
 		}
 	}

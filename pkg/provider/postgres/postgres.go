@@ -19,7 +19,6 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
-	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // defaultPostgresVersion is the fallback tag when cfg omits a
@@ -53,7 +52,7 @@ func (p *Provider) ListResources(context.Context) ([]provider.ResourceGroup, err
 func (p *Provider) EnsureCredentials(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest) (provider.DatabaseCredentials, error) {
 	creds := credentials(req)
 	if kc != nil {
-		if err := kc.EnsureSecret(ctx, req.Namespace, utils.OwnerDatabases, req.CredentialsSecretName, map[string]string{
+		if err := provider.EnsureSecret(ctx, kc, req.Namespace, provider.KindDatabase, req.CredentialsSecretName, map[string]string{
 			"url":      creds.URL,
 			"host":     creds.Host,
 			"port":     strconv.Itoa(creds.Port),

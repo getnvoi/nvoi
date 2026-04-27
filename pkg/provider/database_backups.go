@@ -415,7 +415,7 @@ func RunRestoreJob(ctx context.Context, kc *kube.Client, req DatabaseRequest, ba
 		return fmt.Errorf("restore requires providers.storage + a backup bucket (did providers.storage get unset between backup and restore?)")
 	}
 	job := BuildRestoreJob(req, backupKey)
-	if err := kc.ApplyOwned(ctx, req.Namespace, utils.OwnerDatabases, job); err != nil {
+	if err := ApplyOwned(ctx, kc, req.Namespace, KindDatabase, job); err != nil {
 		return fmt.Errorf("apply restore job %s: %w", job.Name, err)
 	}
 	var progress kube.ProgressEmitter

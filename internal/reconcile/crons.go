@@ -7,6 +7,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -70,10 +71,10 @@ func Crons(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig,
 	for _, n := range cronNames {
 		desiredSecrets = append(desiredSecrets, names.KubeServiceSecrets(n))
 	}
-	if err := kc.SweepOwned(ctx, ns, utils.OwnerCrons, kube.KindCronJob, cronNames); err != nil {
+	if err := provider.SweepOwned(ctx, kc, ns, provider.KindCronWorkload, kube.KindCronJob, cronNames); err != nil {
 		dc.Cluster.Log().Warning(fmt.Sprintf("crons sweep cronjobs: %s", err))
 	}
-	if err := kc.SweepOwned(ctx, ns, utils.OwnerCrons, kube.KindSecret, desiredSecrets); err != nil {
+	if err := provider.SweepOwned(ctx, kc, ns, provider.KindCronWorkload, kube.KindSecret, desiredSecrets); err != nil {
 		dc.Cluster.Log().Warning(fmt.Sprintf("crons sweep secrets: %s", err))
 	}
 	return nil

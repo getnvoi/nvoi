@@ -8,49 +8,42 @@ import (
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
-// Plan resource constants — every PlanEntry's Resource field is one of these.
-// Constants live here so producers (provider impls, reconcile step planners)
-// and consumers (renderer, prompt logic) agree on the same string set.
-const (
-	ResServer         = "server"
-	ResFirewall       = "firewall"
-	ResFirewallRule   = "firewall-rule"
-	ResVolume         = "volume"
-	ResNetwork        = "network"
-	ResDNS            = "dns"
-	ResBucket         = "bucket"
-	ResDatabase       = "database"
-	ResTunnel         = "tunnel"
-	ResNamespace      = "namespace"
-	ResRegistrySecret = "registry-secret"
-	ResWorkload       = "workload"
-	ResSecretKey      = "secret-key"
-	ResCronJob        = "cronjob"
-	ResCaddyRoute     = "caddy-route"
-)
-
-// PlanKind labels each entry as add / delete / update. The string value is
-// stable for JSON output; renderers map to glyphs via Glyph().
-type PlanKind string
+// PlanStatus labels each entry as add / delete / update / unchanged.
+// The verb axis of a plan; orthogonal to Kind (the noun axis). The
+// string value is stable for JSON output; renderers map to glyphs via
+// Glyph().
+type PlanStatus string
 
 const (
-	PlanAdd      PlanKind = "add"
-	PlanDelete   PlanKind = "delete"
-	PlanUpdate   PlanKind = "update"
-	PlanNoChange PlanKind = "unchanged"
+	StatusAdd      PlanStatus = "add"
+	StatusDelete   PlanStatus = "remove"
+	StatusUpdate   PlanStatus = "change"
+	StatusNoChange PlanStatus = "unchanged"
 )
 
-// Glyph returns the renderer symbol for this kind (+ / - / ~).
+// Backwards-compat aliases — the old PlanKind type/values were used
+// pervasively before the typed-Kind refactor. New code should use the
+// PlanStatus name; aliases stay until next cleanup pass.
+type PlanKind = PlanStatus
+
+const (
+	PlanAdd      = StatusAdd
+	PlanDelete   = StatusDelete
+	PlanUpdate   = StatusUpdate
+	PlanNoChange = StatusNoChange
+)
+
+// Glyph returns the renderer symbol for this status (+ / - / ~).
 // `~` doubles for change AND unchanged — the Word column disambiguates
 // in the standalone plan inventory; the deploy preamble filters out
-// PlanNoChange so the conflation never matters there.
-func (k PlanKind) Glyph() string {
-	switch k {
-	case PlanAdd:
+// StatusNoChange so the conflation never matters there.
+func (s PlanStatus) Glyph() string {
+	switch s {
+	case StatusAdd:
 		return "+"
-	case PlanDelete:
+	case StatusDelete:
 		return "-"
-	case PlanUpdate, PlanNoChange:
+	case StatusUpdate, StatusNoChange:
 		return "~"
 	default:
 		return "?"
@@ -59,32 +52,37 @@ func (k PlanKind) Glyph() string {
 
 // Word returns the human-readable status word for the inventory
 // table's STATUS column ("add" / "change" / "unchanged" / "remove").
-func (k PlanKind) Word() string {
-	switch k {
-	case PlanAdd:
+func (s PlanStatus) Word() string {
+	switch s {
+	case StatusAdd:
 		return "add"
-	case PlanDelete:
+	case StatusDelete:
 		return "remove"
-	case PlanUpdate:
+	case StatusUpdate:
 		return "change"
-	case PlanNoChange:
+	case StatusNoChange:
 		return "unchanged"
 	default:
-		return string(k)
+		return string(s)
 	}
 }
 
-// PlanEntry is one diff-line in the plan output. Reason is the
-// auto-skip flag: when non-empty, this entry does NOT contribute to the
-// confirmation prompt — it'll be applied silently. Today the only
-// auto-skip reason is "image-tag" (a service whose only delta is the
-// per-deploy hash in its image tag, which churns every deploy).
+// PlanEntry is one row in the plan output. Three axes:
+//
+//   - Status (verb) — what's happening: add / change / unchanged / remove
+//   - Kind   (noun) — the resource taxonomy: server / workload / database / etc.
+//   - Layer  (axis) — implied by Kind.Layer(): infra vs cluster
+//
+// Reason is the auto-skip flag: when non-empty, this entry does NOT
+// contribute to the confirmation prompt — it'll be applied silently.
+// Today the only auto-skip reason is "image-tag" (a workload whose
+// only delta is the per-deploy hash in its image tag).
 type PlanEntry struct {
-	Kind     PlanKind
-	Resource string // one of the Res* constants
-	Name     string // resource short name (e.g. "master", "master-fw:80")
-	Detail   string // human-readable annotation; renderer uses verbatim
-	Reason   string // non-empty → auto-skip from prompt
+	Status PlanStatus // add/change/unchanged/remove
+	Kind   Kind       // server/workload/database/...; provides Layer() via Kind.Layer()
+	Name   string     // resource short name (e.g. "master", "master-fw:80")
+	Detail string     // human-readable annotation; renderer uses verbatim
+	Reason string     // non-empty → auto-skip from prompt
 }
 
 // Promptable returns true when this entry requires confirmation.
@@ -120,12 +118,12 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 		detail := fmt.Sprintf("%s %s", s.Type, s.Region)
 		if !liveServers[s.Name] {
 			entries = append(entries, PlanEntry{
-				Kind: PlanAdd, Resource: ResServer, Name: s.Name, Detail: detail,
+				Status: PlanAdd, Kind: KindServer, Name: s.Name, Detail: detail,
 			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind: PlanNoChange, Resource: ResServer, Name: s.Name, Detail: detail,
+			Status: PlanNoChange, Kind: KindServer, Name: s.Name, Detail: detail,
 		})
 	}
 	if snap != nil {
@@ -136,7 +134,7 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 				continue
 			}
 			entries = append(entries, PlanEntry{
-				Kind: PlanDelete, Resource: ResServer, Name: name,
+				Status: PlanDelete, Kind: KindServer, Name: name,
 			})
 		}
 	}
@@ -161,12 +159,12 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 		detail := fmt.Sprintf("%dGB on %s", v.Size, v.Server)
 		if !liveVols[v.Name] {
 			entries = append(entries, PlanEntry{
-				Kind: PlanAdd, Resource: ResVolume, Name: v.Name, Detail: detail,
+				Status: PlanAdd, Kind: KindVolume, Name: v.Name, Detail: detail,
 			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind: PlanNoChange, Resource: ResVolume, Name: v.Name, Detail: detail,
+			Status: PlanNoChange, Kind: KindVolume, Name: v.Name, Detail: detail,
 		})
 	}
 	for _, s := range cfg.ServerDefs() {
@@ -177,12 +175,12 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 		detail := fmt.Sprintf("%dGB on %s (builder cache)", utils.BuilderCacheVolumeSizeGB, s.Name)
 		if !liveVols[cacheName] {
 			entries = append(entries, PlanEntry{
-				Kind: PlanAdd, Resource: ResVolume, Name: cacheName, Detail: detail,
+				Status: PlanAdd, Kind: KindVolume, Name: cacheName, Detail: detail,
 			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind: PlanNoChange, Resource: ResVolume, Name: cacheName, Detail: detail,
+			Status: PlanNoChange, Kind: KindVolume, Name: cacheName, Detail: detail,
 		})
 	}
 	if snap != nil {
@@ -193,7 +191,7 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 				continue
 			}
 			entries = append(entries, PlanEntry{
-				Kind: PlanDelete, Resource: ResVolume, Name: name,
+				Status: PlanDelete, Kind: KindVolume, Name: name,
 			})
 		}
 	}
@@ -220,12 +218,12 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 	for _, fw := range desiredFWSorted {
 		if !liveFW[fw] {
 			entries = append(entries, PlanEntry{
-				Kind: PlanAdd, Resource: ResFirewall, Name: fw,
+				Status: PlanAdd, Kind: KindFirewall, Name: fw,
 			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind: PlanNoChange, Resource: ResFirewall, Name: fw,
+			Status: PlanNoChange, Kind: KindFirewall, Name: fw,
 		})
 	}
 	for _, fw := range sortedKeys(liveFW) {
@@ -233,7 +231,7 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind: PlanDelete, Resource: ResFirewall, Name: fw,
+			Status: PlanDelete, Kind: KindFirewall, Name: fw,
 		})
 	}
 
@@ -285,27 +283,27 @@ func diffRules(fwName string, desired, live PortAllowList) []PlanEntry {
 		liveCIDRs, exists := live[port]
 		if !exists {
 			entries = append(entries, PlanEntry{
-				Kind:     PlanAdd,
-				Resource: ResFirewallRule,
-				Name:     fwName + ":" + port,
-				Detail:   fmt.Sprintf("%v", desired[port]),
+				Status: PlanAdd,
+				Kind:   KindFirewallRule,
+				Name:   fwName + ":" + port,
+				Detail: fmt.Sprintf("%v", desired[port]),
 			})
 			continue
 		}
 		if !cidrEqual(liveCIDRs, desired[port]) {
 			entries = append(entries, PlanEntry{
-				Kind:     PlanUpdate,
-				Resource: ResFirewallRule,
-				Name:     fwName + ":" + port,
-				Detail:   fmt.Sprintf("%v → %v", liveCIDRs, desired[port]),
+				Status: PlanUpdate,
+				Kind:   KindFirewallRule,
+				Name:   fwName + ":" + port,
+				Detail: fmt.Sprintf("%v → %v", liveCIDRs, desired[port]),
 			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind:     PlanNoChange,
-			Resource: ResFirewallRule,
-			Name:     fwName + ":" + port,
-			Detail:   fmt.Sprintf("%v", liveCIDRs),
+			Status: PlanNoChange,
+			Kind:   KindFirewallRule,
+			Name:   fwName + ":" + port,
+			Detail: fmt.Sprintf("%v", liveCIDRs),
 		})
 	}
 	for _, port := range SortedPorts(live) {
@@ -320,10 +318,10 @@ func diffRules(fwName string, desired, live PortAllowList) []PlanEntry {
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind:     PlanDelete,
-			Resource: ResFirewallRule,
-			Name:     fwName + ":" + port,
-			Detail:   fmt.Sprintf("was %v ⚠ removes existing access", live[port]),
+			Status: PlanDelete,
+			Kind:   KindFirewallRule,
+			Name:   fwName + ":" + port,
+			Detail: fmt.Sprintf("was %v ⚠ removes existing access", live[port]),
 		})
 	}
 

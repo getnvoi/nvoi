@@ -160,7 +160,7 @@ func Databases(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 			{kube.KindSecret, desiredSecrets},
 			{kube.KindCronJob, desiredCronJobs},
 		} {
-			if err := kc.SweepOwned(ctx, ns, utils.OwnerDatabases, sweep.kind, sweep.desired); err != nil {
+			if err := provider.SweepOwned(ctx, kc, ns, provider.KindDatabase, sweep.kind, sweep.desired); err != nil {
 				if log := dc.Cluster.Log(); log != nil {
 					log.Warning(fmt.Sprintf("databases sweep %s: %s", sweep.kind, err))
 				}
@@ -288,7 +288,7 @@ func ReconcileOneDatabase(ctx context.Context, dc *config.DeployContext, cfg *co
 		return "", fmt.Errorf("databases.%s.reconcile: %w", name, err)
 	}
 	for _, obj := range plan.Workloads {
-		if err := dc.Cluster.MasterKube.ApplyOwned(ctx, names.KubeNamespace(), utils.OwnerDatabases, obj); err != nil {
+		if err := provider.ApplyOwned(ctx, dc.Cluster.MasterKube, names.KubeNamespace(), provider.KindDatabase, obj); err != nil {
 			return "", fmt.Errorf("databases.%s.apply: %w", name, err)
 		}
 	}
@@ -352,8 +352,9 @@ func ensureDatabaseBackupBucket(ctx context.Context, dc *config.DeployContext, c
 	// entrypoint contract stays in one place.
 	credsSecretName := names.KubeDatabaseBackupCreds(dbName)
 	if dc.Cluster.MasterKube != nil {
-		if err := dc.Cluster.MasterKube.EnsureSecret(
-			ctx, names.KubeNamespace(), utils.OwnerDatabases, credsSecretName,
+		if err := provider.EnsureSecret(
+			ctx, dc.Cluster.MasterKube, names.KubeNamespace(),
+			provider.KindDatabase, credsSecretName,
 			provider.BuildBackupCredsSecretData(bucketName, bucketCreds),
 		); err != nil {
 			return fmt.Errorf("databases.%s.backup: write %s: %w", dbName, credsSecretName, err)

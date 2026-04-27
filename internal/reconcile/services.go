@@ -8,6 +8,7 @@ import (
 	"github.com/getnvoi/nvoi/internal/config"
 	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -111,7 +112,7 @@ func Services(ctx context.Context, dc *config.DeployContext, cfg *config.AppConf
 		{kube.KindService, svcNames},
 		{kube.KindSecret, desiredSecrets},
 	} {
-		if err := kc.SweepOwned(ctx, ns, utils.OwnerServices, sweep.kind, sweep.desired); err != nil {
+		if err := provider.SweepOwned(ctx, kc, ns, provider.KindServiceWorkload, sweep.kind, sweep.desired); err != nil {
 			dc.Cluster.Log().Warning(fmt.Sprintf("services sweep %s: %s", sweep.kind, err))
 		}
 	}
@@ -186,7 +187,7 @@ func upsertServiceSecrets(ctx context.Context, dc *config.DeployContext, names *
 		return kc.DeleteSecret(ctx, ns, secretName)
 	}
 
-	if err := kc.EnsureSecret(ctx, ns, utils.OwnerServices, secretName, kvs); err != nil {
+	if err := provider.EnsureSecret(ctx, kc, ns, provider.KindServiceWorkload, secretName, kvs); err != nil {
 		return fmt.Errorf("service %s secret: %w", svcName, err)
 	}
 
