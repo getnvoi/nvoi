@@ -248,6 +248,43 @@ func TestPlanServices_ImageTagOnly_FlagsAuto(t *testing.T) {
 // TestPlanServices_FullImageChange_PromptsUser verifies the inverse:
 // when the user changes the registry host or repo, the entry must be
 // a non-auto UPDATE (Reason="" → Promptable=true).
+// Regression: the per-service Secret holds expansion keys (one ENDPOINT
+// /BUCKET/AKID/SAK quad per `storage:` ref + one DATABASE_URL_<NAME>
+// per `databases:` ref). desiredSecretKeys was returning only the
+// `secrets:` entries, so every storage/database expansion in the live
+// Secret got false-flagged as an orphan DELETE on every deploy.
+func TestDesiredSecretKeys_IncludesStorageAndDatabaseExpansions(t *testing.T) {
+	got := desiredSecretKeys(
+		[]string{"JWT_SECRET", "ALIAS=$ENC_KEY"},
+		[]string{"assets"},
+		[]string{"main", "DB_URL=other"},
+	)
+	want := map[string]bool{
+		"JWT_SECRET":                       true,
+		"ALIAS":                            true,
+		"STORAGE_ASSETS_ENDPOINT":          true,
+		"STORAGE_ASSETS_BUCKET":            true,
+		"STORAGE_ASSETS_ACCESS_KEY_ID":     true,
+		"STORAGE_ASSETS_SECRET_ACCESS_KEY": true,
+		"DATABASE_URL_MAIN":                true,
+		"DB_URL":                           true,
+	}
+	gotSet := map[string]bool{}
+	for _, k := range got {
+		gotSet[k] = true
+	}
+	for k := range want {
+		if !gotSet[k] {
+			t.Errorf("missing expected key %q in desiredSecretKeys output: got %v", k, got)
+		}
+	}
+	for k := range gotSet {
+		if !want[k] {
+			t.Errorf("unexpected key %q in desiredSecretKeys output", k)
+		}
+	}
+}
+
 func TestPlanServices_FullImageChange_PromptsUser(t *testing.T) {
 	dc := testDC(convergeMock())
 	dc.Cluster.DeployHash = "20260427-200000"

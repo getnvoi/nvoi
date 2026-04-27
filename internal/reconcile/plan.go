@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/getnvoi/nvoi/internal/config"
+	app "github.com/getnvoi/nvoi/pkg/core"
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
@@ -174,9 +175,13 @@ func ComputePlan(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 	}
 	plan.Entries = append(plan.Entries, cronEntries...)
 
-	// DNS records — gated on infra exposing public ingress + cfg
-	// declaring domains, mirroring reconcile.Deploy's gate.
-	if infra.HasPublicIngress() && len(cfg.Domains) > 0 {
+	// DNS records — gated on Caddy mode (no tunnel) + infra exposing
+	// public ingress + cfg declaring domains, mirroring Deploy's
+	// own gate. In tunnel mode, DNS is CNAMEs written by TunnelIngress
+	// (planTunnelIngress below); ListBindings only returns A/AAAA so
+	// running planRouteDomains here would emit phantom ADDs for every
+	// tunnel-routed domain on every plan.
+	if cfg.Providers.Tunnel == "" && infra.HasPublicIngress() && len(cfg.Domains) > 0 {
 		dnsEntries, err := planRouteDomains(ctx, dc, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("plan: dns: %w", err)
@@ -475,7 +480,8 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		if !live[name] {
 			continue // ADD entry above already covers initial keys
 		}
-		desiredKeys := desiredSecretKeys(cfg.Services[name].Secrets)
+		svc := cfg.Services[name]
+		desiredKeys := desiredSecretKeys(svc.Secrets, svc.Storage, svc.Databases)
 		liveKeys, err := kc.ListSecretKeys(ctx, ns, names.KubeServiceSecrets(name))
 		if err != nil {
 			continue // best-effort; treat as no diff
@@ -562,7 +568,11 @@ func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 		if !live[name] {
 			continue
 		}
-		desiredKeys := desiredSecretKeys(cfg.Crons[name].Secrets)
+		cr := cfg.Crons[name]
+		// Crons don't have a `databases:` field today (per CronDef
+		// shape); pass nil for that source. Storage + secrets follow
+		// the same expansion rules as services.
+		desiredKeys := desiredSecretKeys(cr.Secrets, cr.Storage, nil)
 		liveKeys, err := kc.ListSecretKeys(ctx, ns, names.KubeServiceSecrets(name))
 		if err != nil {
 			continue
@@ -622,16 +632,12 @@ func planStorage(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 			Kind: provider.PlanAdd, Resource: provider.ResBucket, Name: n,
 		})
 	}
-	for _, n := range sortedKeys(liveSet) {
-		if desired[n] {
-			continue
-		}
-		entries = append(entries, provider.PlanEntry{
-			Kind:     provider.PlanDelete,
-			Resource: provider.ResBucket, Name: n,
-			Detail: "⚠ holds user data — only `nvoi teardown --delete-storage` actually deletes",
-		})
-	}
+	// No DELETE entries: Storage() never deletes buckets (user data —
+	// only `nvoi teardown --delete-storage` does). Emitting a delete
+	// here would lie about what `nvoi deploy` actually does AND
+	// inflate the prompt's "N to delete" count for changes that won't
+	// happen. Stale buckets are reported by `nvoi resources` (with
+	// the Owned/External classifier) instead.
 	return entries, nil
 }
 
@@ -846,18 +852,42 @@ func getDeploymentOrSTSImage(ctx context.Context, kc *kube.Client, ns, name stri
 	return "", nil
 }
 
-// desiredSecretKeys mirrors resolveSecretEntries' key-derivation logic
-// without resolving values — bare entries shorthand `FOO` to `FOO`,
-// `ALIAS=$VAR` shorthands to `ALIAS`. Used by the planners to diff
-// keys without reaching into the credential source.
-func desiredSecretKeys(entries []string) []string {
-	out := make([]string, 0, len(entries))
-	for _, e := range entries {
+// desiredSecretKeys mirrors what Services()/Crons() actually write into
+// the per-workload `<name>-secrets` Secret. Three sources, all in one
+// place so the diff matches reality:
+//
+//  1. Bare/aliased `secrets:` entries — `FOO` → `FOO`, `ALIAS=$VAR` → `ALIAS`.
+//     Mirror of resolveSecretEntries.
+//  2. Storage credentials — every `storage:` ref expands to the four
+//     keys returned by app.StorageSecretKeys (ENDPOINT/BUCKET/AKID/SAK).
+//     Mirror of expandStorageCreds.
+//  3. Database URLs — every `databases:` ref expands to one
+//     DATABASE_URL_<NAME> (or the user-aliased name when written as
+//     `ALIAS=NAME`). Mirror of expandDatabaseCreds.
+//
+// Without (2) + (3), planServices/planCrons would false-flag every
+// expansion key as an orphan DELETE on every deploy.
+func desiredSecretKeys(secrets, storages, databases []string) []string {
+	out := make([]string, 0, len(secrets)+len(storages)*4+len(databases))
+	// (1) `secrets:` entries — bare or aliased.
+	for _, e := range secrets {
 		if i := strings.IndexByte(e, '='); i > 0 {
 			out = append(out, e[:i])
 		} else {
 			out = append(out, e)
 		}
+	}
+	// (2) `storage:` expansions.
+	for _, s := range storages {
+		out = append(out, app.StorageSecretKeys(s)...)
+	}
+	// (3) `databases:` expansions.
+	for _, d := range databases {
+		envName, dbName := parseDatabaseRef(d)
+		if envName == "" {
+			envName = utils.DatabaseEnvName(dbName)
+		}
+		out = append(out, envName)
 	}
 	return out
 }

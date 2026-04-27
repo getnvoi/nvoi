@@ -241,9 +241,16 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 }
 
 // diffRules emits PlanEntry per port that's added / removed / changed
-// between the desired and live PortAllowList for one firewall. SSH (22)
-// and internal cluster ports (6443/10250/8472/5000) are filtered out
-// upstream by GetFirewallRules; they don't appear in either map.
+// between the desired and live PortAllowList for one firewall.
+// Internal cluster ports (6443/10250/8472/5000) are stripped upstream
+// by GetFirewallRules. SSH (22) is the special case handled here:
+// nvoi always opens port 22 in buildFirewallRules whether the user
+// configured it or not, so it shows up in `live` unconditionally.
+// `desired` only contains "22" when the user explicitly overrode it
+// in `firewall:`. Treating absence-from-desired as DELETE would
+// always (incorrectly) emit a "remove SSH access" entry on every
+// deploy. Fix: when desired doesn't reference 22, treat live's 22
+// as nvoi-managed and skip the diff entirely.
 func diffRules(fwName string, desired, live PortAllowList) []PlanEntry {
 	var entries []PlanEntry
 
@@ -269,6 +276,13 @@ func diffRules(fwName string, desired, live PortAllowList) []PlanEntry {
 	}
 	for _, port := range SortedPorts(live) {
 		if _, exists := desired[port]; exists {
+			continue
+		}
+		// SSH (22) is nvoi-managed by default. buildFirewallRules always
+		// emits it; absence from desired ≠ "user wants it gone". Skip
+		// so we don't false-flag every deploy with a "removes SSH"
+		// destructive entry.
+		if port == "22" {
 			continue
 		}
 		entries = append(entries, PlanEntry{

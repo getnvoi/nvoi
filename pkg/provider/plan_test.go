@@ -215,6 +215,73 @@ func TestComputeInfraPlan_FirewallRule_Update_CIDRChange(t *testing.T) {
 	}
 }
 
+// Regression: port 22 was emitted as a destructive DELETE on every
+// deploy because GetFirewallRules returns the default-open SSH rule
+// in `live` while FirewallAllowList omits it from `desired` (it's
+// added separately in buildFirewallRules). Treating that as DELETE
+// would prompt the operator with a "removes SSH access" warning on
+// every redeploy.
+func TestComputeInfraPlan_FirewallRule_SSHNotInDesired_NoDelete(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+		},
+		// No user-overridden firewall rules → desired master rules
+		// nil → "22" not in desired.
+	}
+	snap := &LiveSnapshot{
+		Servers:   []string{"master"},
+		Firewalls: []string{"nvoi-myapp-prod-master-fw"},
+		FirewallRules: map[string]PortAllowList{
+			// Live includes "22" (from buildFirewallRules' default-open
+			// SSH rule). Plan must NOT emit a DELETE entry.
+			"nvoi-myapp-prod-master-fw": {"22": {"0.0.0.0/0", "::/0"}},
+		},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	for _, e := range got {
+		if e.Resource == ResFirewallRule && e.Kind == PlanDelete {
+			t.Errorf("port-22 false DELETE: %+v", e)
+		}
+	}
+}
+
+// Regression: when the user explicitly overrides SSH (e.g.
+// `firewall: 22:1.2.3.4/32`), CIDR drift on port 22 SHOULD still
+// surface as an UPDATE — the SSH-skip applies only to "live has 22 but
+// desired doesn't", not to legitimate user overrides.
+func TestComputeInfraPlan_FirewallRule_SSHUserOverride_DiffsNormally(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+		},
+		rules: []string{"22:1.2.3.4/32"},
+	}
+	snap := &LiveSnapshot{
+		Servers:   []string{"master"},
+		Firewalls: []string{"nvoi-myapp-prod-master-fw"},
+		FirewallRules: map[string]PortAllowList{
+			"nvoi-myapp-prod-master-fw": {"22": {"0.0.0.0/0", "::/0"}}, // wide open
+		},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	found := false
+	for _, e := range got {
+		if e.Resource == ResFirewallRule && e.Kind == PlanUpdate && e.Name == "nvoi-myapp-prod-master-fw:22" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected UPDATE for user-overridden port 22, got %#v", got)
+	}
+}
+
 func TestComputeInfraPlan_FirewallRule_NoChangeOnReorder(t *testing.T) {
 	cfg := &planView{
 		servers: []ServerSpec{
