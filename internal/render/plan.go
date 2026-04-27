@@ -66,7 +66,6 @@ func RenderPlan(plan *reconcile.Plan) {
 	header := fmt.Sprintf("Plan: %d to add, %d to change, %d to delete",
 		add, upd, del)
 	fmt.Println(planHeader.Render(header))
-	fmt.Println()
 
 	grouped := groupByResource(plan.Entries)
 	for _, res := range resourceOrder() {
@@ -81,7 +80,6 @@ func RenderPlan(plan *reconcile.Plan) {
 
 	prompted := len(plan.Promptable())
 	auto := len(plan.Entries) - prompted
-	fmt.Println()
 	var footer string
 	switch {
 	case prompted == 0:
