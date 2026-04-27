@@ -37,16 +37,34 @@ type Plan struct {
 	Entries []provider.PlanEntry
 }
 
-// IsEmpty returns true when no entries were produced (converged across
-// every step). Caller may shortcut to "No changes" output.
+// IsEmpty returns true when no entries were produced AT ALL. With
+// PlanNoChange entries now emitted for every in-scope resource, this
+// is essentially never true on a real cluster — use Changes() or
+// Promptable() to check for actual diffs.
 func (p *Plan) IsEmpty() bool { return len(p.Entries) == 0 }
 
-// HasInfraChanges returns true when any entry covers a provider-side
-// resource. Used by reconcile.Deploy to choose between Bootstrap (loud
-// path) and Connect (quiet path). Workload-only deltas (Services /
-// Crons / Caddy) leave infra unchanged → quiet path.
+// Changes returns the subset of entries that represent an actual diff
+// (add / delete / update) — drops PlanNoChange. This is what
+// reconcile.Deploy uses for its "No changes." early-exit and what the
+// deploy preamble renders.
+func (p *Plan) Changes() []provider.PlanEntry {
+	out := make([]provider.PlanEntry, 0, len(p.Entries))
+	for _, e := range p.Entries {
+		if e.Kind != provider.PlanNoChange {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// HasInfraChanges returns true when any CHANGE entry covers a
+// provider-side resource. PlanNoChange entries are ignored — only
+// real diffs trigger the loud/quiet path branch in Deploy.
 func (p *Plan) HasInfraChanges() bool {
 	for _, e := range p.Entries {
+		if e.Kind == provider.PlanNoChange {
+			continue
+		}
 		if isInfraResource(e.Resource) {
 			return true
 		}
@@ -55,11 +73,14 @@ func (p *Plan) HasInfraChanges() bool {
 }
 
 // Promptable returns the subset of entries that require user
-// confirmation. Image-tag-only updates and any other Reason-flagged
-// entries are filtered out (they apply silently).
+// confirmation. PlanNoChange entries (no diff) and Reason-flagged
+// entries (e.g. image-tag rebuilds) are filtered out.
 func (p *Plan) Promptable() []provider.PlanEntry {
 	out := make([]provider.PlanEntry, 0, len(p.Entries))
 	for _, e := range p.Entries {
+		if e.Kind == provider.PlanNoChange {
+			continue
+		}
 		if e.Promptable() {
 			out = append(out, e)
 		}
@@ -259,6 +280,13 @@ func planRegistries(ctx context.Context, dc *config.DeployContext, cfg *config.A
 			Resource: provider.ResRegistrySecret,
 			Name:     kube.PullSecretName,
 		}}, nil
+	case wantSecret && hasSecret:
+		return []provider.PlanEntry{{
+			Kind:     provider.PlanNoChange,
+			Resource: provider.ResRegistrySecret,
+			Name:     kube.PullSecretName,
+			Detail:   fmt.Sprintf("%d host(s)", len(cfg.Registry)),
+		}}, nil
 	}
 	return nil, nil
 }
@@ -308,16 +336,17 @@ func planRouteDomains(ctx context.Context, dc *config.DeployContext, cfg *config
 
 	var entries []provider.PlanEntry
 
-	// Adds: declared domains with no matching live record.
+	// Adds + unchanged: walk every declared domain.
 	desiredSorted := sortedKeys(desired)
 	for _, d := range desiredSorted {
 		if liveDomains[d] {
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanNoChange, Resource: provider.ResDNS, Name: d,
+			})
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
-			Kind:     provider.PlanAdd,
-			Resource: provider.ResDNS,
-			Name:     d,
+			Kind: provider.PlanAdd, Resource: provider.ResDNS, Name: d,
 		})
 	}
 
@@ -413,7 +442,7 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 
 	var entries []provider.PlanEntry
 
-	// Per-service add/update entries. Iterate in a stable order.
+	// Per-service add/update/unchanged entries. Iterate in a stable order.
 	for _, name := range utils.SortedKeys(cfg.Services) {
 		if !live[name] {
 			entries = append(entries, provider.PlanEntry{
@@ -424,12 +453,32 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 			})
 			continue
 		}
-		// Workload exists — compare image. Stamp DeployHash so the
-		// resolved image looks like what would be applied THIS deploy;
-		// stripDeployHash normalizes both sides for the equality check.
+		// changed flips to true when an UPDATE entry is emitted below
+		// (real diff). When false at the end, we emit the PlanNoChange
+		// baseline so the inventory shows every cfg service even when
+		// nothing changed.
+		changed := false
+		// Workload exists — compare image. Two distinct outcomes:
+		//
+		//   image-tag-only diff (only the trailing -YYYYMMDD-HHMMSS
+		//   deploy-hash differs): on `nvoi deploy` BuildImages already
+		//   ran, the rebuild is real, the workload will roll → emit
+		//   the auto-skip entry so the operator sees what's happening.
+		//   On `nvoi plan` (DeployHash unset) NO rebuild happens — the
+		//   command is read-only — so suppressing the entry avoids
+		//   misleading "image rebuilt" output for a no-op operation.
+		//
+		//   non-tag diff (repo / registry host / user-tag changed):
+		//   surface ALWAYS as a promptable UPDATE — the user actually
+		//   edited cfg, plan must show that regardless of call context.
+		//
+		// We use a placeholder hash for plan-only path so ResolveImage
+		// has a value to stamp; the suppression rule below catches the
+		// false-positive that placeholder would otherwise produce.
 		hash := dc.Cluster.DeployHash
-		if hash == "" {
-			hash = "00000000-000000" // placeholder for plan-only invocations
+		planOnly := hash == ""
+		if planOnly {
+			hash = "00000000-000000"
 		}
 		desiredImage, err := ResolveImage(cfg, name, hash)
 		if err != nil {
@@ -441,13 +490,19 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 		}
 		if liveImage != "" && liveImage != desiredImage {
 			if stripDeployHash(liveImage) == stripDeployHash(desiredImage) {
-				entries = append(entries, provider.PlanEntry{
-					Kind:     provider.PlanUpdate,
-					Resource: provider.ResWorkload,
-					Name:     name,
-					Detail:   "image rebuilt",
-					Reason:   "image-tag",
-				})
+				if !planOnly {
+					entries = append(entries, provider.PlanEntry{
+						Kind:     provider.PlanUpdate,
+						Resource: provider.ResWorkload,
+						Name:     name,
+						Detail:   "image rebuilt",
+						Reason:   "image-tag",
+					})
+					changed = true
+				}
+				// planOnly: no rebuild; falls through to the
+				// PlanNoChange emission below so the inventory still
+				// shows the service with status=unchanged.
 			} else {
 				entries = append(entries, provider.PlanEntry{
 					Kind:     provider.PlanUpdate,
@@ -455,7 +510,14 @@ func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.App
 					Name:     name,
 					Detail:   fmt.Sprintf("image: %s → %s", liveImage, desiredImage),
 				})
+				changed = true
 			}
+		}
+		if !changed {
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanNoChange, Resource: provider.ResWorkload,
+				Name: name, Detail: "service",
+			})
 		}
 	}
 
@@ -527,33 +589,47 @@ func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppCon
 			})
 			continue
 		}
+		// changed flips on any UPDATE entry below; when false at end,
+		// emit the PlanNoChange baseline.
+		changed := false
 		// Schedule + image diff via direct CronJob Get.
 		cj, err := kc.Clientset().BatchV1().CronJobs(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			continue // best-effort
-		}
-		if cj.Spec.Schedule != cfg.Crons[name].Schedule {
-			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
-				Detail: fmt.Sprintf("schedule: %s → %s", cj.Spec.Schedule, cfg.Crons[name].Schedule),
-			})
-		}
-		if len(cj.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
-			liveImage := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
-			desiredImage := cfg.Crons[name].Image
-			if liveImage != desiredImage && liveImage != "" {
-				if stripDeployHash(liveImage) == stripDeployHash(desiredImage) {
-					entries = append(entries, provider.PlanEntry{
-						Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
-						Detail: "image rebuilt", Reason: "image-tag",
-					})
-				} else {
-					entries = append(entries, provider.PlanEntry{
-						Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
-						Detail: fmt.Sprintf("image: %s → %s", liveImage, desiredImage),
-					})
+		if err == nil {
+			if cj.Spec.Schedule != cfg.Crons[name].Schedule {
+				entries = append(entries, provider.PlanEntry{
+					Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+					Detail: fmt.Sprintf("schedule: %s → %s", cj.Spec.Schedule, cfg.Crons[name].Schedule),
+				})
+				changed = true
+			}
+			if len(cj.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
+				liveImage := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
+				desiredImage := cfg.Crons[name].Image
+				if liveImage != desiredImage && liveImage != "" {
+					if stripDeployHash(liveImage) == stripDeployHash(desiredImage) {
+						// Same suppression as planServices.
+						if dc.Cluster.DeployHash != "" {
+							entries = append(entries, provider.PlanEntry{
+								Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+								Detail: "image rebuilt", Reason: "image-tag",
+							})
+							changed = true
+						}
+					} else {
+						entries = append(entries, provider.PlanEntry{
+							Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+							Detail: fmt.Sprintf("image: %s → %s", liveImage, desiredImage),
+						})
+						changed = true
+					}
 				}
 			}
+		}
+		if !changed {
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanNoChange, Resource: provider.ResCronJob, Name: name,
+				Detail: cfg.Crons[name].Schedule,
+			})
 		}
 	}
 	for _, n := range liveNames {
@@ -626,6 +702,9 @@ func planStorage(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 	var entries []provider.PlanEntry
 	for _, n := range sortedKeys(desired) {
 		if liveSet[n] {
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanNoChange, Resource: provider.ResBucket, Name: n,
+			})
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
@@ -688,17 +767,20 @@ func planDatabases(ctx context.Context, dc *config.DeployContext, cfg *config.Ap
 
 	var entries []provider.PlanEntry
 	for _, n := range utils.SortedKeys(cfg.Databases) {
-		if !liveDBs[n] {
-			def := cfg.Databases[n]
-			detail := def.Engine
-			if def.Server != "" {
-				detail = fmt.Sprintf("%s on %s", def.Engine, def.Server)
-			}
-			entries = append(entries, provider.PlanEntry{
-				Kind: provider.PlanAdd, Resource: provider.ResDatabase, Name: n,
-				Detail: detail,
-			})
+		def := cfg.Databases[n]
+		detail := def.Engine
+		if def.Server != "" {
+			detail = fmt.Sprintf("%s on %s", def.Engine, def.Server)
 		}
+		if !liveDBs[n] {
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanAdd, Resource: provider.ResDatabase, Name: n, Detail: detail,
+			})
+			continue
+		}
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanNoChange, Resource: provider.ResDatabase, Name: n, Detail: detail,
+		})
 	}
 	for _, n := range sortedKeys(liveDBs) {
 		if desired[n] {
@@ -731,10 +813,16 @@ func planIngress(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 		return nil, err
 	}
 	var entries []provider.PlanEntry
+	caddyDetail := "ingress controller (kube-system)"
 	if len(caddyDeploys) == 0 {
 		entries = append(entries, provider.PlanEntry{
 			Kind: provider.PlanAdd, Resource: provider.ResCaddyRoute, Name: "caddy",
-			Detail: "ingress controller (kube-system)",
+			Detail: caddyDetail,
+		})
+	} else {
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanNoChange, Resource: provider.ResCaddyRoute, Name: "caddy",
+			Detail: caddyDetail,
 		})
 	}
 
@@ -755,6 +843,9 @@ func planIngress(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 	}
 	for _, d := range sortedKeys(desired) {
 		if live[d] {
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanNoChange, Resource: provider.ResCaddyRoute, Name: d,
+			})
 			continue
 		}
 		entries = append(entries, provider.PlanEntry{
@@ -805,6 +896,14 @@ func planTunnelIngress(ctx context.Context, dc *config.DeployContext, cfg *confi
 			Kind:     provider.PlanDelete,
 			Resource: provider.ResTunnel,
 			Name:     "tunnel",
+		}}, nil
+	}
+	if len(agents) > 0 && cfg.Providers.Tunnel != "" {
+		return []provider.PlanEntry{{
+			Kind:     provider.PlanNoChange,
+			Resource: provider.ResTunnel,
+			Name:     cfg.Providers.Tunnel,
+			Detail:   "tunnel agent + provider-side tunnel",
 		}}, nil
 	}
 	return nil, nil
@@ -892,9 +991,9 @@ func desiredSecretKeys(secrets, storages, databases []string) []string {
 	return out
 }
 
-// secretKeyDiff emits per-key ADD/DELETE entries for a workload's
-// per-service Secret. Helps catch the "operator dropped a secret ref"
-// case which would otherwise apply silently.
+// secretKeyDiff emits per-key ADD / DELETE / NoChange entries for a
+// workload's per-service Secret. Helps catch the "operator dropped a
+// secret ref" case which would otherwise apply silently.
 func secretKeyDiff(workload string, desired, live []string) []provider.PlanEntry {
 	d := map[string]bool{}
 	for _, k := range desired {
@@ -906,13 +1005,17 @@ func secretKeyDiff(workload string, desired, live []string) []provider.PlanEntry
 	}
 	var out []provider.PlanEntry
 	for _, k := range desired {
-		if !l[k] {
+		if l[k] {
 			out = append(out, provider.PlanEntry{
-				Kind:     provider.PlanAdd,
-				Resource: provider.ResSecretKey,
-				Name:     workload + ":" + k,
+				Kind: provider.PlanNoChange, Resource: provider.ResSecretKey,
+				Name: workload + ":" + k,
 			})
+			continue
 		}
+		out = append(out, provider.PlanEntry{
+			Kind: provider.PlanAdd, Resource: provider.ResSecretKey,
+			Name: workload + ":" + k,
+		})
 	}
 	for _, k := range live {
 		if !d[k] {

@@ -138,7 +138,7 @@ func Deploy(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
 	}
-	if plan.IsEmpty() {
+	if len(plan.Changes()) == 0 {
 		dc.Cluster.Log().Success("No changes.")
 		return nil
 	}

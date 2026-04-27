@@ -169,8 +169,12 @@ func TestPlanRouteDomains_NoChange_DomainAlreadyLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planRouteDomains: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected empty plan when domain already routed, got %#v", got)
+	// One PlanNoChange entry expected for the already-routed domain;
+	// no add/delete entries.
+	for _, e := range got {
+		if e.Kind != provider.PlanNoChange {
+			t.Errorf("expected only PlanNoChange entries, got %+v", e)
+		}
 	}
 }
 
@@ -242,6 +246,38 @@ func TestPlanServices_ImageTagOnly_FlagsAuto(t *testing.T) {
 	}
 	if hit.Promptable() {
 		t.Errorf("image-tag UPDATE must NOT be promptable")
+	}
+}
+
+// Regression: `nvoi plan` (DeployHash unset, read-only) was emitting
+// the image-tag UPDATE entry as if a rebuild had happened — but plan
+// is read-only and never builds. Operator saw "image rebuilt" on a
+// no-op `nvoi plan` and (rightly) called it weird. The entry must
+// only surface on `nvoi deploy` where BuildImages actually ran.
+func TestPlanServices_ImageTagOnly_SuppressedOnPlanOnly(t *testing.T) {
+	dc := testDC(convergeMock())
+	dc.Cluster.DeployHash = "" // mimic `nvoi plan` standalone
+	kf := kfFor(dc)
+	names, _ := dc.Cluster.Names()
+	ns := names.KubeNamespace()
+	kf.SeedDeployment(ns, "api", utils.OwnerServices,
+		"docker.io/deemx/nvoi-api:20260427-100000")
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Registry: map[string]config.RegistryDef{"docker.io": {Username: "u", Password: "p"}},
+		Services: map[string]config.ServiceDef{
+			"api": {Image: "deemx/nvoi-api", Build: &config.BuildSpec{Context: "./"}},
+		},
+	}
+	got, err := planServices(context.Background(), dc, cfg)
+	if err != nil {
+		t.Fatalf("planServices: %v", err)
+	}
+	for _, e := range got {
+		if e.Resource == provider.ResWorkload && e.Name == "api" && e.Reason == "image-tag" {
+			t.Errorf("plan-only run emitted image-tag entry; should be suppressed: %+v", e)
+		}
 	}
 }
 
@@ -389,12 +425,15 @@ func TestComputePlan_Converged_NoEntries(t *testing.T) {
 		t.Fatalf("ComputePlan: %v", err)
 	}
 	// The seeded fake has worker-fw but cfg has no workers — that's a
-	// legitimate firewall existence DELETE. Everything else should be
-	// silent.
-	for _, e := range plan.Entries {
-		if e.Resource == provider.ResFirewall && e.Kind == provider.PlanDelete && e.Name == "nvoi-myapp-prod-worker-fw" {
-			continue // expected: seeded fixture artifact
-		}
-		t.Errorf("unexpected entry in converged plan: %+v", e)
+	// legitimate firewall existence DELETE in the change-set.
+	// PlanNoChange entries are inventory baseline and ignored here —
+	// what matters is plan.Changes() contains ONLY the worker-fw delete.
+	changes := plan.Changes()
+	if len(changes) != 1 {
+		t.Fatalf("expected exactly 1 change (worker-fw delete), got %#v", changes)
+	}
+	c := changes[0]
+	if c.Kind != provider.PlanDelete || c.Resource != provider.ResFirewall || c.Name != "nvoi-myapp-prod-worker-fw" {
+		t.Errorf("expected worker-fw delete, got %+v", c)
 	}
 }

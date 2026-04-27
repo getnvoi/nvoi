@@ -79,8 +79,12 @@ func TestComputeInfraPlan_Converged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("converged: expected empty plan, got %#v", got)
+	// Converged → every entry must be PlanNoChange (the inventory
+	// baseline). Zero changes.
+	for _, e := range got {
+		if e.Kind != PlanNoChange {
+			t.Errorf("converged: expected PlanNoChange entries only, got %+v", e)
+		}
 	}
 }
 
@@ -100,6 +104,9 @@ func TestComputeInfraPlan_AddAndDeleteServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
+	// Filter to changes (drop the unchanged-master + unchanged-firewall
+	// baseline entries that the inventory now emits).
+	got = filterChanges(got)
 	want := []PlanEntry{
 		{Kind: PlanAdd, Resource: ResServer, Name: "worker-2", Detail: "cax21 nbg1"},
 		{Kind: PlanDelete, Resource: ResServer, Name: "worker-1"},
@@ -151,6 +158,7 @@ func TestComputeInfraPlan_FirewallRule_Add(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
+	got = filterChanges(got)
 	want := []PlanEntry{
 		{Kind: PlanAdd, Resource: ResFirewallRule, Name: "nvoi-myapp-prod-master-fw:8080", Detail: "[0.0.0.0/0]"},
 	}
@@ -180,10 +188,11 @@ func TestComputeInfraPlan_FirewallRule_Delete_Destructive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 delete entry, got %#v", got)
+	changes := filterChanges(got)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change entry, got %#v", changes)
 	}
-	e := got[0]
+	e := changes[0]
 	if e.Kind != PlanDelete || e.Resource != ResFirewallRule || e.Name != "nvoi-myapp-prod-master-fw:80" {
 		t.Errorf("expected port-80 delete, got %+v", e)
 	}
@@ -210,8 +219,9 @@ func TestComputeInfraPlan_FirewallRule_Update_CIDRChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
-	if len(got) != 1 || got[0].Kind != PlanUpdate || got[0].Resource != ResFirewallRule {
-		t.Fatalf("expected one rule update entry, got %#v", got)
+	changes := filterChanges(got)
+	if len(changes) != 1 || changes[0].Kind != PlanUpdate || changes[0].Resource != ResFirewallRule {
+		t.Fatalf("expected one rule update entry, got %#v", changes)
 	}
 }
 
@@ -301,8 +311,8 @@ func TestComputeInfraPlan_FirewallRule_NoChangeOnReorder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("CIDR reorder should not produce diff; got %#v", got)
+	if changes := filterChanges(got); len(changes) != 0 {
+		t.Errorf("CIDR reorder should not produce diff; got %#v", changes)
 	}
 }
 
@@ -369,3 +379,16 @@ var (
 
 // Silence unused-import when no slice-comparison helpers are referenced.
 var _ = cmpopts.EquateEmpty
+
+// filterChanges drops PlanNoChange entries — used by tests that
+// assert on the change-set, not the full inventory. Mirror of the
+// reconcile.Plan.Changes() helper without the wrapper struct.
+func filterChanges(in []PlanEntry) []PlanEntry {
+	out := make([]PlanEntry, 0, len(in))
+	for _, e := range in {
+		if e.Kind != PlanNoChange {
+			out = append(out, e)
+		}
+	}
+	return out
+}

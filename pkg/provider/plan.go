@@ -34,22 +34,43 @@ const (
 type PlanKind string
 
 const (
-	PlanAdd    PlanKind = "add"
-	PlanDelete PlanKind = "delete"
-	PlanUpdate PlanKind = "update"
+	PlanAdd      PlanKind = "add"
+	PlanDelete   PlanKind = "delete"
+	PlanUpdate   PlanKind = "update"
+	PlanNoChange PlanKind = "unchanged"
 )
 
 // Glyph returns the renderer symbol for this kind (+ / - / ~).
+// `~` doubles for change AND unchanged — the Word column disambiguates
+// in the standalone plan inventory; the deploy preamble filters out
+// PlanNoChange so the conflation never matters there.
 func (k PlanKind) Glyph() string {
 	switch k {
 	case PlanAdd:
 		return "+"
 	case PlanDelete:
 		return "-"
-	case PlanUpdate:
+	case PlanUpdate, PlanNoChange:
 		return "~"
 	default:
 		return "?"
+	}
+}
+
+// Word returns the human-readable status word for the inventory
+// table's STATUS column ("add" / "change" / "unchanged" / "remove").
+func (k PlanKind) Word() string {
+	switch k {
+	case PlanAdd:
+		return "add"
+	case PlanDelete:
+		return "remove"
+	case PlanUpdate:
+		return "change"
+	case PlanNoChange:
+		return "unchanged"
+	default:
+		return string(k)
 	}
 }
 
@@ -94,16 +115,17 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 			liveServers[s] = true
 		}
 	}
-	// Iterate cfg.ServerDefs() in declared order for stable add output.
+	// Iterate cfg.ServerDefs() in declared order for stable output.
 	for _, s := range cfg.ServerDefs() {
-		if liveServers[s.Name] {
+		detail := fmt.Sprintf("%s %s", s.Type, s.Region)
+		if !liveServers[s.Name] {
+			entries = append(entries, PlanEntry{
+				Kind: PlanAdd, Resource: ResServer, Name: s.Name, Detail: detail,
+			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind:     PlanAdd,
-			Resource: ResServer,
-			Name:     s.Name,
-			Detail:   fmt.Sprintf("%s %s", s.Type, s.Region),
+			Kind: PlanNoChange, Resource: ResServer, Name: s.Name, Detail: detail,
 		})
 	}
 	if snap != nil {
@@ -136,14 +158,15 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 		}
 	}
 	for _, v := range cfg.VolumeDefs() {
-		if liveVols[v.Name] {
+		detail := fmt.Sprintf("%dGB on %s", v.Size, v.Server)
+		if !liveVols[v.Name] {
+			entries = append(entries, PlanEntry{
+				Kind: PlanAdd, Resource: ResVolume, Name: v.Name, Detail: detail,
+			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind:     PlanAdd,
-			Resource: ResVolume,
-			Name:     v.Name,
-			Detail:   fmt.Sprintf("%dGB on %s", v.Size, v.Server),
+			Kind: PlanNoChange, Resource: ResVolume, Name: v.Name, Detail: detail,
 		})
 	}
 	for _, s := range cfg.ServerDefs() {
@@ -151,14 +174,15 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 			continue
 		}
 		cacheName := names.BuilderCacheVolumeShort(s.Name)
-		if liveVols[cacheName] {
+		detail := fmt.Sprintf("%dGB on %s (builder cache)", utils.BuilderCacheVolumeSizeGB, s.Name)
+		if !liveVols[cacheName] {
+			entries = append(entries, PlanEntry{
+				Kind: PlanAdd, Resource: ResVolume, Name: cacheName, Detail: detail,
+			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind:     PlanAdd,
-			Resource: ResVolume,
-			Name:     cacheName,
-			Detail:   fmt.Sprintf("%dGB on %s (builder cache)", utils.BuilderCacheVolumeSizeGB, s.Name),
+			Kind: PlanNoChange, Resource: ResVolume, Name: cacheName, Detail: detail,
 		})
 	}
 	if snap != nil {
@@ -194,11 +218,14 @@ func ComputeInfraPlan(ctx context.Context, cfg ProviderConfigView, snap *LiveSna
 	}
 	desiredFWSorted := sortedKeys(desiredFW)
 	for _, fw := range desiredFWSorted {
-		if liveFW[fw] {
+		if !liveFW[fw] {
+			entries = append(entries, PlanEntry{
+				Kind: PlanAdd, Resource: ResFirewall, Name: fw,
+			})
 			continue
 		}
 		entries = append(entries, PlanEntry{
-			Kind: PlanAdd, Resource: ResFirewall, Name: fw,
+			Kind: PlanNoChange, Resource: ResFirewall, Name: fw,
 		})
 	}
 	for _, fw := range sortedKeys(liveFW) {
@@ -272,7 +299,14 @@ func diffRules(fwName string, desired, live PortAllowList) []PlanEntry {
 				Name:     fwName + ":" + port,
 				Detail:   fmt.Sprintf("%v → %v", liveCIDRs, desired[port]),
 			})
+			continue
 		}
+		entries = append(entries, PlanEntry{
+			Kind:     PlanNoChange,
+			Resource: ResFirewallRule,
+			Name:     fwName + ":" + port,
+			Detail:   fmt.Sprintf("%v", liveCIDRs),
+		})
 	}
 	for _, port := range SortedPorts(live) {
 		if _, exists := desired[port]; exists {
