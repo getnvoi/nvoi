@@ -39,7 +39,7 @@ func RenderPlan(plan *reconcile.Plan) {
 
 	add, del, upd := 0, 0, 0
 	for _, e := range changes {
-		switch e.Kind {
+		switch e.Status {
 		case provider.PlanAdd:
 			add++
 		case provider.PlanDelete:
@@ -100,7 +100,8 @@ func RenderPlanInventory(plan *reconcile.Plan, jsonOut bool) {
 func renderPlanJSON(plan *reconcile.Plan) {
 	type jsonEntry struct {
 		Status  string `json:"status"`
-		Type    string `json:"type"`
+		Layer   string `json:"layer"`
+		Kind    string `json:"kind"`
 		Name    string `json:"name"`
 		Details string `json:"details,omitempty"`
 		Reason  string `json:"reason,omitempty"`
@@ -119,13 +120,14 @@ func renderPlanJSON(plan *reconcile.Plan) {
 	out := jsonPlan{Entries: make([]jsonEntry, 0, len(plan.Entries))}
 	for _, e := range plan.Entries {
 		out.Entries = append(out.Entries, jsonEntry{
-			Status:  e.Kind.Word(),
-			Type:    e.Resource,
+			Status:  e.Status.Word(),
+			Layer:   string(e.Kind.Layer()),
+			Kind:    string(e.Kind),
 			Name:    e.Name,
 			Details: e.Detail,
 			Reason:  e.Reason,
 		})
-		switch e.Kind {
+		switch e.Status {
 		case provider.PlanAdd:
 			out.Summary.Add++
 		case provider.PlanUpdate:
@@ -151,7 +153,7 @@ func renderPlanTable(plan *reconcile.Plan) {
 	// "unchanged" added for the inventory case.
 	add, upd, del, noc := 0, 0, 0, 0
 	for _, e := range plan.Entries {
-		switch e.Kind {
+		switch e.Status {
 		case provider.PlanAdd:
 			add++
 		case provider.PlanUpdate:
@@ -171,13 +173,13 @@ func renderPlanTable(plan *reconcile.Plan) {
 	// order), then by name.
 	sorted := append([]provider.PlanEntry(nil), plan.Entries...)
 	sort.SliceStable(sorted, func(i, j int) bool {
-		ri := statusRank(sorted[i].Kind)
-		rj := statusRank(sorted[j].Kind)
+		ri := statusRank(sorted[i].Status)
+		rj := statusRank(sorted[j].Status)
 		if ri != rj {
 			return ri < rj
 		}
-		ti := typeRank(sorted[i].Resource)
-		tj := typeRank(sorted[j].Resource)
+		ti := typeRank(sorted[i].Kind)
+		tj := typeRank(sorted[j].Kind)
 		if ti != tj {
 			return ti < tj
 		}
@@ -186,15 +188,15 @@ func renderPlanTable(plan *reconcile.Plan) {
 
 	t := NewTable("STATUS", "TYPE", "NAME", "DETAILS")
 	for _, e := range sorted {
-		t.Row(formatStatusCell(e.Kind), e.Resource, e.Name, formatDetailCell(e))
+		t.Row(formatStatusCell(e.Status), string(e.Kind), e.Name, formatDetailCell(e))
 	}
 	t.Print()
 }
 
 // formatStatusCell returns "<glyph> <word>" with the glyph colored.
-func formatStatusCell(k provider.PlanKind) string {
-	glyph := k.Glyph()
-	switch k {
+func formatStatusCell(s provider.PlanStatus) string {
+	glyph := s.Glyph()
+	switch s {
 	case provider.PlanAdd:
 		glyph = planAddGlyph.Render(glyph)
 	case provider.PlanUpdate:
@@ -204,7 +206,7 @@ func formatStatusCell(k provider.PlanKind) string {
 	case provider.PlanNoChange:
 		glyph = planAuto.Render(glyph)
 	}
-	return glyph + " " + k.Word()
+	return glyph + " " + s.Word()
 }
 
 // formatDetailCell joins Detail + (auto reason annotation when set).
@@ -220,10 +222,10 @@ func formatDetailCell(e provider.PlanEntry) string {
 	return e.Detail + " " + planAuto.Render(fmt.Sprintf("(%s)", e.Reason))
 }
 
-// formatEntry is the deploy-preamble line formatter: "<glyph> <type> <name>  <detail>".
+// formatEntry is the deploy-preamble line formatter: "<glyph> <kind> <name>  <detail>".
 func formatEntry(e provider.PlanEntry) string {
-	glyph := e.Kind.Glyph()
-	switch e.Kind {
+	glyph := e.Status.Glyph()
+	switch e.Status {
 	case provider.PlanAdd:
 		glyph = planAddGlyph.Render(glyph)
 	case provider.PlanUpdate:
@@ -231,7 +233,7 @@ func formatEntry(e provider.PlanEntry) string {
 	case provider.PlanDelete:
 		glyph = planDeleteGlyph.Render(glyph)
 	}
-	line := fmt.Sprintf("%s %s %s", glyph, e.Resource, e.Name)
+	line := fmt.Sprintf("%s %s %s", glyph, e.Kind, e.Name)
 	if e.Detail != "" {
 		line += "  " + e.Detail
 	}
@@ -247,23 +249,23 @@ func planChanges(plan *reconcile.Plan) []provider.PlanEntry {
 	}
 	out := make([]provider.PlanEntry, 0, len(plan.Entries))
 	for _, e := range plan.Entries {
-		if e.Kind != provider.PlanNoChange {
+		if e.Status != provider.PlanNoChange {
 			out = append(out, e)
 		}
 	}
 	return out
 }
 
-func groupByResource(entries []provider.PlanEntry) map[string][]provider.PlanEntry {
-	out := map[string][]provider.PlanEntry{}
+func groupByResource(entries []provider.PlanEntry) map[provider.Kind][]provider.PlanEntry {
+	out := map[provider.Kind][]provider.PlanEntry{}
 	for _, e := range entries {
-		out[e.Resource] = append(out[e.Resource], e)
+		out[e.Kind] = append(out[e.Kind], e)
 	}
 	for k := range out {
 		group := out[k]
 		sort.SliceStable(group, func(i, j int) bool {
-			if group[i].Kind != group[j].Kind {
-				return statusRank(group[i].Kind) < statusRank(group[j].Kind)
+			if group[i].Status != group[j].Status {
+				return statusRank(group[i].Status) < statusRank(group[j].Status)
 			}
 			return group[i].Name < group[j].Name
 		})
@@ -275,31 +277,32 @@ func groupByResource(entries []provider.PlanEntry) map[string][]provider.PlanEnt
 // resourceOrder returns the rendering order for resource categories —
 // matches reconcile.Deploy's pipeline so the plan reads top-to-bottom
 // in apply order.
-func resourceOrder() []string {
-	return []string{
-		provider.ResServer,
-		provider.ResFirewall,
-		provider.ResFirewallRule,
-		provider.ResVolume,
-		provider.ResNetwork,
-		provider.ResBucket,
-		provider.ResDatabase,
-		provider.ResRegistrySecret,
-		provider.ResWorkload,
-		provider.ResCronJob,
-		provider.ResSecretKey,
-		provider.ResDNS,
-		provider.ResCaddyRoute,
-		provider.ResTunnel,
-		provider.ResNamespace,
+func resourceOrder() []provider.Kind {
+	return []provider.Kind{
+		provider.KindServer,
+		provider.KindFirewall,
+		provider.KindFirewallRule,
+		provider.KindVolume,
+		provider.KindNetwork,
+		provider.KindBucket,
+		provider.KindDatabase,
+		provider.KindRegistrySecret,
+		provider.KindServiceWorkload,
+		provider.KindCronWorkload,
+		provider.KindSecretKey,
+		provider.KindDNSRecord,
+		provider.KindCaddyIngress,
+		provider.KindTunnel,
+		provider.KindTunnelAgent,
+		provider.KindNamespace,
 	}
 }
 
-// typeRank returns the sort position of a resource for the inventory
+// typeRank returns the sort position of a Kind for the inventory
 // table — earlier in apply order = lower rank = closer to the top.
-func typeRank(resource string) int {
+func typeRank(k provider.Kind) int {
 	for i, r := range resourceOrder() {
-		if r == resource {
+		if r == k {
 			return i
 		}
 	}

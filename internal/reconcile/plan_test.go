@@ -18,7 +18,7 @@ func TestPlan_IsEmpty(t *testing.T) {
 	if !(&Plan{}).IsEmpty() {
 		t.Errorf("zero-entry plan must be empty")
 	}
-	p := &Plan{Entries: []provider.PlanEntry{{Kind: provider.PlanAdd, Resource: provider.ResServer}}}
+	p := &Plan{Entries: []provider.PlanEntry{{Status: provider.PlanAdd, Kind: provider.KindServer}}}
 	if p.IsEmpty() {
 		t.Errorf("plan with entries must not be empty")
 	}
@@ -31,12 +31,12 @@ func TestPlan_HasInfraChanges(t *testing.T) {
 		want    bool
 	}{
 		{"empty", nil, false},
-		{"server-add", []provider.PlanEntry{{Resource: provider.ResServer}}, true},
-		{"firewall-rule-delete", []provider.PlanEntry{{Resource: provider.ResFirewallRule}}, true},
-		{"dns-add", []provider.PlanEntry{{Resource: provider.ResDNS}}, true},
-		{"workload-only", []provider.PlanEntry{{Resource: provider.ResWorkload}}, false},
-		{"registry-only", []provider.PlanEntry{{Resource: provider.ResRegistrySecret}}, false},
-		{"mixed", []provider.PlanEntry{{Resource: provider.ResWorkload}, {Resource: provider.ResServer}}, true},
+		{"server-add", []provider.PlanEntry{{Kind: provider.KindServer}}, true},
+		{"firewall-rule-delete", []provider.PlanEntry{{Kind: provider.KindFirewallRule}}, true},
+		{"dns-add", []provider.PlanEntry{{Kind: provider.KindDNSRecord}}, true},
+		{"workload-only", []provider.PlanEntry{{Kind: provider.KindServiceWorkload}}, false},
+		{"registry-only", []provider.PlanEntry{{Kind: provider.KindRegistrySecret}}, false},
+		{"mixed", []provider.PlanEntry{{Kind: provider.KindServiceWorkload}, {Kind: provider.KindServer}}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,9 +50,9 @@ func TestPlan_HasInfraChanges(t *testing.T) {
 
 func TestPlan_Promptable_FiltersReasonFlagged(t *testing.T) {
 	p := &Plan{Entries: []provider.PlanEntry{
-		{Kind: provider.PlanAdd, Resource: provider.ResServer},
-		{Kind: provider.PlanUpdate, Resource: provider.ResWorkload, Reason: "image-tag"},
-		{Kind: provider.PlanDelete, Resource: provider.ResFirewallRule},
+		{Status: provider.PlanAdd, Kind: provider.KindServer},
+		{Status: provider.PlanUpdate, Kind: provider.KindServiceWorkload, Reason: "image-tag"},
+		{Status: provider.PlanDelete, Kind: provider.KindFirewallRule},
 	}}
 	got := p.Promptable()
 	if len(got) != 2 {
@@ -79,8 +79,8 @@ func TestPlanRegistries_AddWhenSecretMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planRegistries: %v", err)
 	}
-	if len(got) != 1 || got[0].Kind != provider.PlanAdd ||
-		got[0].Resource != provider.ResRegistrySecret ||
+	if len(got) != 1 || got[0].Status != provider.PlanAdd ||
+		got[0].Kind != provider.KindRegistrySecret ||
 		got[0].Name != kube.PullSecretName {
 		t.Errorf("expected single ADD entry for %s, got %#v", kube.PullSecretName, got)
 	}
@@ -102,8 +102,8 @@ func TestPlanRegistries_DeleteWhenOrphan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planRegistries: %v", err)
 	}
-	if len(got) != 1 || got[0].Kind != provider.PlanDelete ||
-		got[0].Resource != provider.ResRegistrySecret ||
+	if len(got) != 1 || got[0].Status != provider.PlanDelete ||
+		got[0].Kind != provider.KindRegistrySecret ||
 		got[0].Name != kube.PullSecretName {
 		t.Errorf("expected single DELETE entry for orphan %s, got %#v", kube.PullSecretName, got)
 	}
@@ -141,8 +141,8 @@ func TestPlanRouteDomains_AddWhenDomainMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planRouteDomains: %v", err)
 	}
-	if len(got) != 1 || got[0].Kind != provider.PlanAdd ||
-		got[0].Resource != provider.ResDNS ||
+	if len(got) != 1 || got[0].Status != provider.PlanAdd ||
+		got[0].Kind != provider.KindDNSRecord ||
 		got[0].Name != "api.myapp.com" {
 		t.Errorf("expected single DNS ADD for api.myapp.com, got %#v", got)
 	}
@@ -172,7 +172,7 @@ func TestPlanRouteDomains_NoChange_DomainAlreadyLive(t *testing.T) {
 	// One PlanNoChange entry expected for the already-routed domain;
 	// no add/delete entries.
 	for _, e := range got {
-		if e.Kind != provider.PlanNoChange {
+		if e.Status != provider.PlanNoChange {
 			t.Errorf("expected only PlanNoChange entries, got %+v", e)
 		}
 	}
@@ -234,7 +234,7 @@ func TestPlanServices_ImageTagOnly_FlagsAuto(t *testing.T) {
 	}
 	var hit *provider.PlanEntry
 	for i := range got {
-		if got[i].Resource == provider.ResWorkload && got[i].Name == "api" && got[i].Kind == provider.PlanUpdate {
+		if got[i].Kind == provider.KindServiceWorkload && got[i].Name == "api" && got[i].Status == provider.PlanUpdate {
 			hit = &got[i]
 		}
 	}
@@ -275,7 +275,7 @@ func TestPlanServices_ImageTagOnly_SuppressedOnPlanOnly(t *testing.T) {
 		t.Fatalf("planServices: %v", err)
 	}
 	for _, e := range got {
-		if e.Resource == provider.ResWorkload && e.Name == "api" && e.Reason == "image-tag" {
+		if e.Kind == provider.KindServiceWorkload && e.Name == "api" && e.Reason == "image-tag" {
 			t.Errorf("plan-only run emitted image-tag entry; should be suppressed: %+v", e)
 		}
 	}
@@ -346,7 +346,7 @@ func TestPlanServices_FullImageChange_PromptsUser(t *testing.T) {
 		t.Fatalf("planServices: %v", err)
 	}
 	for _, e := range got {
-		if e.Resource == provider.ResWorkload && e.Name == "api" && e.Kind == provider.PlanUpdate {
+		if e.Kind == provider.KindServiceWorkload && e.Name == "api" && e.Status == provider.PlanUpdate {
 			if e.Reason != "" {
 				t.Errorf("registry host change must prompt, got Reason=%q", e.Reason)
 			}
@@ -386,7 +386,7 @@ func TestComputePlan_DetectsFirewallRuleDriftFromCfg(t *testing.T) {
 	// The seeded fake firewall has no rules → expect rule ADDs.
 	addedPorts := map[string]bool{}
 	for _, e := range plan.Entries {
-		if e.Resource == provider.ResFirewallRule && e.Kind == provider.PlanAdd {
+		if e.Kind == provider.KindFirewallRule && e.Status == provider.PlanAdd {
 			// Name is "<fwname>:<port>" — split off the port.
 			name := e.Name
 			for i := len(name) - 1; i >= 0; i-- {
@@ -433,7 +433,7 @@ func TestComputePlan_Converged_NoEntries(t *testing.T) {
 		t.Fatalf("expected exactly 1 change (worker-fw delete), got %#v", changes)
 	}
 	c := changes[0]
-	if c.Kind != provider.PlanDelete || c.Resource != provider.ResFirewall || c.Name != "nvoi-myapp-prod-worker-fw" {
+	if c.Status != provider.PlanDelete || c.Kind != provider.KindFirewall || c.Name != "nvoi-myapp-prod-worker-fw" {
 		t.Errorf("expected worker-fw delete, got %+v", c)
 	}
 }

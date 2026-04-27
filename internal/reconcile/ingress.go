@@ -52,7 +52,7 @@ func Ingress(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfi
 	//    tunnel owner. Warn-and-continue — on a fresh cluster nothing
 	//    exists, sweep is a no-op.
 	for _, kind := range []kube.Kind{kube.KindDeployment, kube.KindSecret, kube.KindConfigMap} {
-		if err := kc.SweepOwned(ctx, ns, utils.OwnerTunnel, kind, nil); err != nil {
+		if err := provider.SweepOwned(ctx, kc, ns, provider.KindTunnelAgent, kind, nil); err != nil {
 			out.Warning(fmt.Sprintf("sweep orphan tunnel %s: %v", kind, err))
 		}
 	}
@@ -183,7 +183,7 @@ func TunnelIngress(ctx context.Context, dc *config.DeployContext, cfg *config.Ap
 
 	// Apply agent workloads into the app namespace.
 	for _, obj := range plan.Workloads {
-		if err := kc.ApplyOwned(ctx, ns, utils.OwnerTunnel, obj); err != nil {
+		if err := provider.ApplyOwned(ctx, kc, ns, provider.KindTunnelAgent, obj); err != nil {
 			return fmt.Errorf("apply tunnel workload: %w", err)
 		}
 	}
@@ -195,7 +195,7 @@ func TunnelIngress(ctx context.Context, dc *config.DeployContext, cfg *config.Ap
 	// operator switched to a tunnel. Empty desired = sweep everything
 	// for the caddy owner.
 	for _, kind := range []kube.Kind{kube.KindDeployment, kube.KindService, kube.KindConfigMap, kube.KindPVC} {
-		if err := kc.SweepOwned(ctx, kube.CaddyNamespace, utils.OwnerCaddy, kind, nil); err != nil {
+		if err := provider.SweepOwned(ctx, kc, kube.CaddyNamespace, provider.KindCaddyIngress, kind, nil); err != nil {
 			out.Warning(fmt.Sprintf("sweep orphan caddy %s: %v", kind, err))
 		}
 	}

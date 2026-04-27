@@ -16,7 +16,6 @@ import (
 
 	"github.com/getnvoi/nvoi/pkg/kube"
 	"github.com/getnvoi/nvoi/pkg/provider"
-	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
 // Provider implements DatabaseProvider for PlanetScale (Vitess-backed
@@ -312,7 +311,7 @@ func readPSSecret(ctx context.Context, kc *kube.Client, req provider.DatabaseReq
 }
 
 func writePSSecret(ctx context.Context, kc *kube.Client, req provider.DatabaseRequest, creds provider.DatabaseCredentials) error {
-	return kc.EnsureSecret(ctx, req.Namespace, utils.OwnerDatabases, req.CredentialsSecretName, map[string]string{
+	return provider.EnsureSecret(ctx, kc, req.Namespace, provider.KindDatabase, req.CredentialsSecretName, map[string]string{
 		"url":      creds.URL,
 		"host":     creds.Host,
 		"port":     strconv.Itoa(creds.Port),

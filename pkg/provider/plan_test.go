@@ -53,11 +53,11 @@ func TestComputeInfraPlan_FirstDeploy(t *testing.T) {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
 	want := []PlanEntry{
-		{Kind: PlanAdd, Resource: ResServer, Name: "master", Detail: "cax11 nbg1"},
-		{Kind: PlanAdd, Resource: ResServer, Name: "worker-1", Detail: "cax11 nbg1"},
-		{Kind: PlanAdd, Resource: ResVolume, Name: "pgdata", Detail: "20GB on master"},
-		{Kind: PlanAdd, Resource: ResFirewall, Name: "nvoi-myapp-prod-master-fw"},
-		{Kind: PlanAdd, Resource: ResFirewall, Name: "nvoi-myapp-prod-worker-fw"},
+		{Status: PlanAdd, Kind: KindServer, Name: "master", Detail: "cax11 nbg1"},
+		{Status: PlanAdd, Kind: KindServer, Name: "worker-1", Detail: "cax11 nbg1"},
+		{Status: PlanAdd, Kind: KindVolume, Name: "pgdata", Detail: "20GB on master"},
+		{Status: PlanAdd, Kind: KindFirewall, Name: "nvoi-myapp-prod-master-fw"},
+		{Status: PlanAdd, Kind: KindFirewall, Name: "nvoi-myapp-prod-worker-fw"},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("first-deploy plan (-want +got):\n%s", diff)
@@ -82,7 +82,7 @@ func TestComputeInfraPlan_Converged(t *testing.T) {
 	// Converged → every entry must be PlanNoChange (the inventory
 	// baseline). Zero changes.
 	for _, e := range got {
-		if e.Kind != PlanNoChange {
+		if e.Status != PlanNoChange {
 			t.Errorf("converged: expected PlanNoChange entries only, got %+v", e)
 		}
 	}
@@ -108,8 +108,8 @@ func TestComputeInfraPlan_AddAndDeleteServer(t *testing.T) {
 	// baseline entries that the inventory now emits).
 	got = filterChanges(got)
 	want := []PlanEntry{
-		{Kind: PlanAdd, Resource: ResServer, Name: "worker-2", Detail: "cax21 nbg1"},
-		{Kind: PlanDelete, Resource: ResServer, Name: "worker-1"},
+		{Status: PlanAdd, Kind: KindServer, Name: "worker-2", Detail: "cax21 nbg1"},
+		{Status: PlanDelete, Kind: KindServer, Name: "worker-1"},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("server diff (-want +got):\n%s", diff)
@@ -133,7 +133,7 @@ func TestComputeInfraPlan_BuilderCacheVolumeSynthesized(t *testing.T) {
 	cacheName := testNames(t).BuilderCacheVolumeShort("builder-1")
 	found := false
 	for _, e := range got {
-		if e.Kind == PlanAdd && e.Resource == ResVolume && e.Name == cacheName {
+		if e.Status == PlanAdd && e.Kind == KindVolume && e.Name == cacheName {
 			found = true
 		}
 	}
@@ -160,7 +160,7 @@ func TestComputeInfraPlan_FirewallRule_Add(t *testing.T) {
 	}
 	got = filterChanges(got)
 	want := []PlanEntry{
-		{Kind: PlanAdd, Resource: ResFirewallRule, Name: "nvoi-myapp-prod-master-fw:8080", Detail: "[0.0.0.0/0]"},
+		{Status: PlanAdd, Kind: KindFirewallRule, Name: "nvoi-myapp-prod-master-fw:8080", Detail: "[0.0.0.0/0]"},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("rule add (-want +got):\n%s", diff)
@@ -193,7 +193,7 @@ func TestComputeInfraPlan_FirewallRule_Delete_Destructive(t *testing.T) {
 		t.Fatalf("expected 1 change entry, got %#v", changes)
 	}
 	e := changes[0]
-	if e.Kind != PlanDelete || e.Resource != ResFirewallRule || e.Name != "nvoi-myapp-prod-master-fw:80" {
+	if e.Status != PlanDelete || e.Kind != KindFirewallRule || e.Name != "nvoi-myapp-prod-master-fw:80" {
 		t.Errorf("expected port-80 delete, got %+v", e)
 	}
 	if !e.Promptable() {
@@ -220,7 +220,7 @@ func TestComputeInfraPlan_FirewallRule_Update_CIDRChange(t *testing.T) {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
 	changes := filterChanges(got)
-	if len(changes) != 1 || changes[0].Kind != PlanUpdate || changes[0].Resource != ResFirewallRule {
+	if len(changes) != 1 || changes[0].Status != PlanUpdate || changes[0].Kind != KindFirewallRule {
 		t.Fatalf("expected one rule update entry, got %#v", changes)
 	}
 }
@@ -253,7 +253,7 @@ func TestComputeInfraPlan_FirewallRule_SSHNotInDesired_NoDelete(t *testing.T) {
 		t.Fatalf("ComputeInfraPlan: %v", err)
 	}
 	for _, e := range got {
-		if e.Resource == ResFirewallRule && e.Kind == PlanDelete {
+		if e.Kind == KindFirewallRule && e.Status == PlanDelete {
 			t.Errorf("port-22 false DELETE: %+v", e)
 		}
 	}
@@ -283,7 +283,7 @@ func TestComputeInfraPlan_FirewallRule_SSHUserOverride_DiffsNormally(t *testing.
 	}
 	found := false
 	for _, e := range got {
-		if e.Resource == ResFirewallRule && e.Kind == PlanUpdate && e.Name == "nvoi-myapp-prod-master-fw:22" {
+		if e.Kind == KindFirewallRule && e.Status == PlanUpdate && e.Name == "nvoi-myapp-prod-master-fw:22" {
 			found = true
 		}
 	}
@@ -338,14 +338,14 @@ func TestComputeInfraPlan_NewFirewallSuppressesRuleEntries(t *testing.T) {
 	}
 	// Expect: ResFirewall add for worker-fw. NO rule entries for it.
 	for _, e := range got {
-		if e.Resource == ResFirewallRule && e.Name == "nvoi-myapp-prod-worker-fw:0" {
+		if e.Kind == KindFirewallRule && e.Name == "nvoi-myapp-prod-worker-fw:0" {
 			t.Errorf("rule entry emitted for new firewall; got %+v", e)
 		}
 	}
 	// Confirm the worker firewall add IS present.
 	found := false
 	for _, e := range got {
-		if e.Kind == PlanAdd && e.Resource == ResFirewall && e.Name == "nvoi-myapp-prod-worker-fw" {
+		if e.Status == PlanAdd && e.Kind == KindFirewall && e.Name == "nvoi-myapp-prod-worker-fw" {
 			found = true
 		}
 	}
@@ -360,8 +360,8 @@ func TestPlanEntry_Promptable(t *testing.T) {
 		e    PlanEntry
 		want bool
 	}{
-		{"add-no-reason-prompts", PlanEntry{Kind: PlanAdd, Reason: ""}, true},
-		{"image-tag-update-skips", PlanEntry{Kind: PlanUpdate, Reason: "image-tag"}, false},
+		{"add-no-reason-prompts", PlanEntry{Status: PlanAdd, Reason: ""}, true},
+		{"image-tag-update-skips", PlanEntry{Status: PlanUpdate, Reason: "image-tag"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -386,7 +386,7 @@ var _ = cmpopts.EquateEmpty
 func filterChanges(in []PlanEntry) []PlanEntry {
 	out := make([]PlanEntry, 0, len(in))
 	for _, e := range in {
-		if e.Kind != PlanNoChange {
+		if e.Status != PlanNoChange {
 			out = append(out, e)
 		}
 	}

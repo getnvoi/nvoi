@@ -111,10 +111,10 @@ func ServiceSet(ctx context.Context, req ServiceSetRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := kc.ApplyOwned(ctx, ns, utils.OwnerServices, workload); err != nil {
+	if err := provider.ApplyOwned(ctx, kc, ns, provider.KindServiceWorkload, workload); err != nil {
 		return err
 	}
-	if err := kc.ApplyOwned(ctx, ns, utils.OwnerServices, svc); err != nil {
+	if err := provider.ApplyOwned(ctx, kc, ns, provider.KindServiceWorkload, svc); err != nil {
 		return err
 	}
 	out.Success("applied")

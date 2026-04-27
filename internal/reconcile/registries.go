@@ -6,6 +6,7 @@ import (
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
+	"github.com/getnvoi/nvoi/pkg/provider"
 	"github.com/getnvoi/nvoi/pkg/utils"
 )
 
@@ -63,7 +64,7 @@ func Registries(ctx context.Context, dc *config.DeployContext, cfg *config.AppCo
 	if err != nil {
 		return fmt.Errorf("build pull secret: %w", err)
 	}
-	if err := kc.ApplyOwned(ctx, ns, utils.OwnerRegistries, secret); err != nil {
+	if err := provider.ApplyOwned(ctx, kc, ns, provider.KindRegistrySecret, secret); err != nil {
 		return fmt.Errorf("apply pull secret: %w", err)
 	}
 	out.Success(fmt.Sprintf("pull secret %s/%s applied", ns, kube.PullSecretName))
