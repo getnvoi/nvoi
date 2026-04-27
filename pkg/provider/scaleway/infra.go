@@ -151,9 +151,16 @@ func (c *Client) LiveSnapshot(ctx context.Context, dc *provider.BootstrapContext
 	}
 
 	if fws, err := c.ListAllFirewalls(ctx); err == nil {
+		snap.FirewallRules = map[string]provider.PortAllowList{}
 		for _, fw := range fws {
 			if len(fw.Name) > len(prefix) && fw.Name[:len(prefix)] == prefix {
 				snap.Firewalls = append(snap.Firewalls, fw.Name)
+				// Best-effort rule fetch — a fetch failure leaves
+				// FirewallRules[fw.Name] zero-valued, which the planner
+				// treats as "unable to diff" (no rule entries emitted).
+				if rules, err := c.GetFirewallRules(ctx, fw.Name); err == nil {
+					snap.FirewallRules[fw.Name] = rules
+				}
 			}
 		}
 	}
@@ -162,6 +169,22 @@ func (c *Client) LiveSnapshot(ctx context.Context, dc *provider.BootstrapContext
 	sort.Strings(snap.Volumes)
 	sort.Strings(snap.Firewalls)
 	return snap, nil
+}
+
+// PlanInfra returns the diff between desired Scaleway infra (dc.Cfg)
+// and the current LiveSnapshot. Read-only — never mutates. Empty slice
+// means a converged Scaleway side; reconcile.Deploy can skip Bootstrap
+// and use Connect.
+func (c *Client) PlanInfra(ctx context.Context, dc *provider.BootstrapContext) ([]provider.PlanEntry, error) {
+	snap, err := c.LiveSnapshot(ctx, dc)
+	if err != nil {
+		return nil, err
+	}
+	names, err := utils.NewNames(dc.App, dc.Env)
+	if err != nil {
+		return nil, err
+	}
+	return provider.ComputeInfraPlan(ctx, dc.Cfg, snap, names)
 }
 
 func (c *Client) TeardownOrphans(ctx context.Context, dc *provider.BootstrapContext) error {

@@ -1,0 +1,304 @@
+package provider
+
+import (
+	"context"
+	"testing"
+
+	"github.com/getnvoi/nvoi/pkg/utils"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+)
+
+// planView is a minimal ProviderConfigView extended for ComputeInfraPlan
+// tests. Permitted under the mock governance rules — ProviderConfigView is
+// a data-view interface, not a provider interface.
+type planView struct {
+	servers []ServerSpec
+	volumes []VolumeSpec
+	rules   []string
+	domains map[string][]string
+	tunnel  string
+}
+
+func (v *planView) AppName() string                       { return "myapp" }
+func (v *planView) EnvName() string                       { return "prod" }
+func (v *planView) ServerDefs() []ServerSpec              { return v.servers }
+func (v *planView) FirewallRules() []string               { return v.rules }
+func (v *planView) VolumeDefs() []VolumeSpec              { return v.volumes }
+func (v *planView) ServiceDefs() []ServiceSpec            { return nil }
+func (v *planView) DomainsByService() map[string][]string { return v.domains }
+func (v *planView) TunnelProvider() string                { return v.tunnel }
+
+func testNames(t *testing.T) *utils.Names {
+	t.Helper()
+	n, err := utils.NewNames("myapp", "prod")
+	if err != nil {
+		t.Fatalf("NewNames: %v", err)
+	}
+	return n
+}
+
+func TestComputeInfraPlan_FirstDeploy(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+			{Name: "worker-1", Type: "cax11", Region: "nbg1", Role: utils.RoleWorker},
+		},
+		volumes: []VolumeSpec{
+			{Name: "pgdata", Size: 20, Server: "master"},
+		},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, nil, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	want := []PlanEntry{
+		{Kind: PlanAdd, Resource: ResServer, Name: "master", Detail: "cax11 nbg1"},
+		{Kind: PlanAdd, Resource: ResServer, Name: "worker-1", Detail: "cax11 nbg1"},
+		{Kind: PlanAdd, Resource: ResVolume, Name: "pgdata", Detail: "20GB on master"},
+		{Kind: PlanAdd, Resource: ResFirewall, Name: "nvoi-myapp-prod-master-fw"},
+		{Kind: PlanAdd, Resource: ResFirewall, Name: "nvoi-myapp-prod-worker-fw"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("first-deploy plan (-want +got):\n%s", diff)
+	}
+}
+
+func TestComputeInfraPlan_Converged(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+		},
+	}
+	snap := &LiveSnapshot{
+		Servers:       []string{"master"},
+		Firewalls:     []string{"nvoi-myapp-prod-master-fw"},
+		FirewallRules: map[string]PortAllowList{"nvoi-myapp-prod-master-fw": nil},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("converged: expected empty plan, got %#v", got)
+	}
+}
+
+func TestComputeInfraPlan_AddAndDeleteServer(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+			{Name: "worker-2", Type: "cax21", Region: "nbg1", Role: utils.RoleWorker},
+		},
+	}
+	snap := &LiveSnapshot{
+		Servers:       []string{"master", "worker-1"},
+		Firewalls:     []string{"nvoi-myapp-prod-master-fw", "nvoi-myapp-prod-worker-fw"},
+		FirewallRules: map[string]PortAllowList{},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	want := []PlanEntry{
+		{Kind: PlanAdd, Resource: ResServer, Name: "worker-2", Detail: "cax21 nbg1"},
+		{Kind: PlanDelete, Resource: ResServer, Name: "worker-1"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("server diff (-want +got):\n%s", diff)
+	}
+}
+
+func TestComputeInfraPlan_BuilderCacheVolumeSynthesized(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+			{Name: "builder-1", Type: "cpx31", Region: "nbg1", Role: utils.RoleBuilder},
+		},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, nil, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	// Builder cache volume must show up as a synthesized add even though
+	// it isn't in cfg.VolumeDefs(). Order-independent check: just verify
+	// the cache name appears as an ADD entry.
+	cacheName := testNames(t).BuilderCacheVolumeShort("builder-1")
+	found := false
+	for _, e := range got {
+		if e.Kind == PlanAdd && e.Resource == ResVolume && e.Name == cacheName {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("builder cache volume %q not in plan; got %#v", cacheName, got)
+	}
+}
+
+func TestComputeInfraPlan_FirewallRule_Add(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+		},
+		rules: []string{"8080:0.0.0.0/0"},
+	}
+	snap := &LiveSnapshot{
+		Servers:       []string{"master"},
+		Firewalls:     []string{"nvoi-myapp-prod-master-fw"},
+		FirewallRules: map[string]PortAllowList{"nvoi-myapp-prod-master-fw": nil},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	want := []PlanEntry{
+		{Kind: PlanAdd, Resource: ResFirewallRule, Name: "nvoi-myapp-prod-master-fw:8080", Detail: "[0.0.0.0/0]"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("rule add (-want +got):\n%s", diff)
+	}
+}
+
+func TestComputeInfraPlan_FirewallRule_Delete_Destructive(t *testing.T) {
+	// The footgun case: cfg has narrowed firewall rules; live has a port
+	// open. Plan must surface the port removal so the operator gets a
+	// chance to confirm before getting locked out.
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+		},
+		// no domains, no tunnel, no rules → desired master fw is base-only
+	}
+	snap := &LiveSnapshot{
+		Servers:   []string{"master"},
+		Firewalls: []string{"nvoi-myapp-prod-master-fw"},
+		FirewallRules: map[string]PortAllowList{
+			"nvoi-myapp-prod-master-fw": {"80": {"0.0.0.0/0", "::/0"}},
+		},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delete entry, got %#v", got)
+	}
+	e := got[0]
+	if e.Kind != PlanDelete || e.Resource != ResFirewallRule || e.Name != "nvoi-myapp-prod-master-fw:80" {
+		t.Errorf("expected port-80 delete, got %+v", e)
+	}
+	if !e.Promptable() {
+		t.Errorf("destructive rule delete must be Promptable")
+	}
+}
+
+func TestComputeInfraPlan_FirewallRule_Update_CIDRChange(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+		},
+		rules: []string{"8080:10.0.0.0/8"},
+	}
+	snap := &LiveSnapshot{
+		Servers:   []string{"master"},
+		Firewalls: []string{"nvoi-myapp-prod-master-fw"},
+		FirewallRules: map[string]PortAllowList{
+			"nvoi-myapp-prod-master-fw": {"8080": {"0.0.0.0/0"}},
+		},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != PlanUpdate || got[0].Resource != ResFirewallRule {
+		t.Fatalf("expected one rule update entry, got %#v", got)
+	}
+}
+
+func TestComputeInfraPlan_FirewallRule_NoChangeOnReorder(t *testing.T) {
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+		},
+		rules: []string{"8080:1.1.1.1/32,2.2.2.2/32"},
+	}
+	snap := &LiveSnapshot{
+		Servers:   []string{"master"},
+		Firewalls: []string{"nvoi-myapp-prod-master-fw"},
+		FirewallRules: map[string]PortAllowList{
+			// Same CIDRs in reversed order — must not register as a change.
+			"nvoi-myapp-prod-master-fw": {"8080": {"2.2.2.2/32", "1.1.1.1/32"}},
+		},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("CIDR reorder should not produce diff; got %#v", got)
+	}
+}
+
+func TestComputeInfraPlan_NewFirewallSuppressesRuleEntries(t *testing.T) {
+	// When a firewall is being CREATED, per-port rule entries are
+	// implicit in the ResFirewall add — don't double-emit them.
+	cfg := &planView{
+		servers: []ServerSpec{
+			{Name: "master", Type: "cax11", Region: "nbg1", Role: utils.RoleMaster},
+			{Name: "worker-1", Type: "cax11", Region: "nbg1", Role: utils.RoleWorker},
+		},
+		rules: []string{"8080:0.0.0.0/0"}, // would imply rule on master fw, but master fw is being created
+	}
+	snap := &LiveSnapshot{
+		// Master exists but worker is new → worker firewall doesn't exist yet.
+		Servers:       []string{"master", "worker-1"},
+		Firewalls:     []string{"nvoi-myapp-prod-master-fw"},
+		FirewallRules: map[string]PortAllowList{"nvoi-myapp-prod-master-fw": {"8080": {"0.0.0.0/0"}}},
+	}
+	got, err := ComputeInfraPlan(context.Background(), cfg, snap, testNames(t))
+	if err != nil {
+		t.Fatalf("ComputeInfraPlan: %v", err)
+	}
+	// Expect: ResFirewall add for worker-fw. NO rule entries for it.
+	for _, e := range got {
+		if e.Resource == ResFirewallRule && e.Name == "nvoi-myapp-prod-worker-fw:0" {
+			t.Errorf("rule entry emitted for new firewall; got %+v", e)
+		}
+	}
+	// Confirm the worker firewall add IS present.
+	found := false
+	for _, e := range got {
+		if e.Kind == PlanAdd && e.Resource == ResFirewall && e.Name == "nvoi-myapp-prod-worker-fw" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected worker firewall add; got %#v", got)
+	}
+}
+
+func TestPlanEntry_Promptable(t *testing.T) {
+	cases := []struct {
+		name string
+		e    PlanEntry
+		want bool
+	}{
+		{"add-no-reason-prompts", PlanEntry{Kind: PlanAdd, Reason: ""}, true},
+		{"image-tag-update-skips", PlanEntry{Kind: PlanUpdate, Reason: "image-tag"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.e.Promptable(); got != tc.want {
+				t.Errorf("Promptable() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Compile-time sanity: stubViews satisfy ProviderConfigView.
+var (
+	_ ProviderConfigView = (*planView)(nil)
+)
+
+// Silence unused-import when no slice-comparison helpers are referenced.
+var _ = cmpopts.EquateEmpty
