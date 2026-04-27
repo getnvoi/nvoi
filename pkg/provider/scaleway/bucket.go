@@ -4,7 +4,9 @@ package scaleway
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -126,6 +128,45 @@ func (c *BucketClient) ListResources(ctx context.Context) ([]provider.ResourceGr
 	return []provider.ResourceGroup{
 		{Name: "Scaleway Buckets", Columns: []string{"Name"}, Rows: rows},
 	}, nil
+}
+
+// ListBuckets returns the names of every Scaleway Object Storage
+// bucket on the account. Used by the plan engine to diff cfg.Storage
+// vs live (filtered by cluster prefix at the consumer).
+func (c *BucketClient) ListBuckets(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint+"/", nil)
+	if err != nil {
+		return nil, err
+	}
+	s3.Sign(req, nil, c.accessKey, c.secretKey, c.region)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("scaleway list buckets: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("scaleway list buckets: HTTP %d", resp.StatusCode)
+	}
+	// Minimal XML parse: <ListAllMyBucketsResult>...<Bucket><Name>x</Name>...
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("scaleway list buckets: read: %w", err)
+	}
+	var parsed struct {
+		Buckets struct {
+			Bucket []struct {
+				Name string `xml:"Name"`
+			} `xml:"Bucket"`
+		} `xml:"Buckets"`
+	}
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("scaleway list buckets: parse XML: %w", err)
+	}
+	out := make([]string, 0, len(parsed.Buckets.Bucket))
+	for _, b := range parsed.Buckets.Bucket {
+		out = append(out, b.Name)
+	}
+	return out, nil
 }
 
 func (c *BucketClient) creds() provider.BucketCredentials {

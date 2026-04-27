@@ -70,6 +70,7 @@ func rootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(newDeployCmd(&rt))
+	root.AddCommand(newPlanCmd(&rt))
 	root.AddCommand(newTeardownCmd(&rt))
 	root.AddCommand(newDescribeCmd(&rt))
 	root.AddCommand(newResourcesCmd(&rt))

@@ -62,10 +62,23 @@ type InfraProvider interface {
 	Bootstrap(ctx context.Context, dc *BootstrapContext) (*kube.Client, error)
 
 	// LiveSnapshot returns the provider's view of live infra resources
-	// (servers, volumes, firewalls) for orphan-detection input. Returns
-	// nil when no resources exist (first deploy). Used by reconcile's
-	// DescribeLive to feed TeardownOrphans.
+	// (servers, volumes, firewalls + per-firewall rule contents) for
+	// orphan-detection input AND plan-mode diffing. Returns nil when no
+	// resources exist (first deploy). Used by TeardownOrphans (orphan
+	// detection) and PlanInfra (cfg-vs-live diff).
 	LiveSnapshot(ctx context.Context, dc *BootstrapContext) (*LiveSnapshot, error)
+
+	// PlanInfra returns the diff between desired infra state (dc.Cfg)
+	// and the current LiveSnapshot. READ-ONLY — never mutates. Empty
+	// slice means no infra changes; the deploy can skip the loud
+	// per-resource ensure path and use Connect instead of Bootstrap.
+	//
+	// Default impl: each provider calls its own LiveSnapshot, then
+	// delegates to the shared ComputeInfraPlan helper. Provider-side
+	// PlanInfra exists as an interface method (not a free function) so
+	// future provider kinds (sandbox, managed-k8s) can short-circuit
+	// with an empty plan when the concept doesn't apply.
+	PlanInfra(ctx context.Context, dc *BootstrapContext) ([]PlanEntry, error)
 
 	// TeardownOrphans removes infra no longer referenced by the desired
 	// state. IaaS: drain and delete orphan servers / firewalls / volumes.
@@ -270,13 +283,22 @@ type BootstrapContext struct {
 }
 
 // LiveSnapshot is the orphan-detection input: what the provider sees in
-// the world right now (server names, volume names, firewall names).
-// Populated by the reconciler from DescribeLive.
+// the world right now (server names, volume names, firewall names +
+// per-firewall current rule contents). Populated by the reconciler from
+// DescribeLive.
+//
+// FirewallRules is keyed by full firewall name (matching entries in
+// Firewalls) and holds the current public/custom port rules. Internal
+// cluster ports (6443/10250/8472/5000) and SSH are filtered out by the
+// provider's GetFirewallRules — they're nvoi-managed and never appear
+// here. nil for a given firewall name means "unable to fetch" or
+// "base-only rules"; the planner treats both the same (no diff).
 type LiveSnapshot struct {
-	Servers    []string
-	ServerDisk map[string]int
-	Firewalls  []string
-	Volumes    []string
+	Servers       []string
+	ServerDisk    map[string]int
+	Firewalls     []string
+	FirewallRules map[string]PortAllowList
+	Volumes       []string
 }
 
 // ProviderConfigView is the projection of AppConfig the InfraProvider
