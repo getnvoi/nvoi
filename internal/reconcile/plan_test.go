@@ -174,6 +174,115 @@ func TestPlanRouteDomains_NoChange_DomainAlreadyLive(t *testing.T) {
 	}
 }
 
+// ── stripDeployHash + image-tag detection ─────────────────────────────────────
+
+func TestStripDeployHash(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"docker.io/foo/bar:20260427-100000", "docker.io/foo/bar"},       // no user tag → colon-separated hash
+		{"docker.io/foo/bar:v2-20260427-100000", "docker.io/foo/bar:v2"}, // user tag → dash-separated hash
+		{"foo/bar:v1", "foo/bar:v1"},                                     // no hash, untouched
+		{"foo/bar@sha256:abc", "foo/bar@sha256:abc"},                     // digest pin, untouched
+		{"plain", "plain"}, // no separator pattern
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := stripDeployHash(tc.in); got != tc.want {
+				t.Errorf("stripDeployHash(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPlanServices_ImageTagOnly_FlagsAuto verifies the load-bearing
+// 99% case: a service with `build:` set, already deployed, gets a new
+// hash on every deploy → the only diff is the trailing -YYYYMMDD-HHMMSS,
+// and that update must carry Reason="image-tag" so it auto-applies
+// instead of prompting.
+func TestPlanServices_ImageTagOnly_FlagsAuto(t *testing.T) {
+	dc := testDC(convergeMock())
+	dc.Cluster.DeployHash = "20260427-200000"
+	kf := kfFor(dc)
+	names, _ := dc.Cluster.Names()
+	ns := names.KubeNamespace()
+
+	// Seed a Deployment as if a previous deploy created it. Image
+	// matches what ResolveImage would produce minus the hash → the
+	// only diff this run will see is the per-deploy hash.
+	kf.SeedDeployment(ns, "api", utils.OwnerServices,
+		"docker.io/deemx/nvoi-api:20260427-100000")
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Registry: map[string]config.RegistryDef{"docker.io": {Username: "u", Password: "p"}},
+		Services: map[string]config.ServiceDef{
+			"api": {
+				Image: "deemx/nvoi-api",
+				Build: &config.BuildSpec{Context: "./"},
+			},
+		},
+	}
+
+	got, err := planServices(context.Background(), dc, cfg)
+	if err != nil {
+		t.Fatalf("planServices: %v", err)
+	}
+	var hit *provider.PlanEntry
+	for i := range got {
+		if got[i].Resource == provider.ResWorkload && got[i].Name == "api" && got[i].Kind == provider.PlanUpdate {
+			hit = &got[i]
+		}
+	}
+	if hit == nil {
+		t.Fatalf("expected an image-tag UPDATE entry for api, got %#v", got)
+	}
+	if hit.Reason != "image-tag" {
+		t.Errorf("expected Reason=image-tag (auto-skip), got %q (full entry: %+v)", hit.Reason, hit)
+	}
+	if hit.Promptable() {
+		t.Errorf("image-tag UPDATE must NOT be promptable")
+	}
+}
+
+// TestPlanServices_FullImageChange_PromptsUser verifies the inverse:
+// when the user changes the registry host or repo, the entry must be
+// a non-auto UPDATE (Reason="" → Promptable=true).
+func TestPlanServices_FullImageChange_PromptsUser(t *testing.T) {
+	dc := testDC(convergeMock())
+	dc.Cluster.DeployHash = "20260427-200000"
+	kf := kfFor(dc)
+	names, _ := dc.Cluster.Names()
+	ns := names.KubeNamespace()
+
+	kf.SeedDeployment(ns, "api", utils.OwnerServices,
+		"docker.io/deemx/nvoi-api:20260427-100000")
+
+	cfg := &config.AppConfig{
+		App: "myapp", Env: "prod",
+		Registry: map[string]config.RegistryDef{"ghcr.io": {Username: "u", Password: "p"}},
+		Services: map[string]config.ServiceDef{
+			"api": {
+				Image: "ghcr.io/deemx/nvoi-api", // different host
+				Build: &config.BuildSpec{Context: "./"},
+			},
+		},
+	}
+	got, err := planServices(context.Background(), dc, cfg)
+	if err != nil {
+		t.Fatalf("planServices: %v", err)
+	}
+	for _, e := range got {
+		if e.Resource == provider.ResWorkload && e.Name == "api" && e.Kind == provider.PlanUpdate {
+			if e.Reason != "" {
+				t.Errorf("registry host change must prompt, got Reason=%q", e.Reason)
+			}
+			return
+		}
+	}
+	t.Errorf("expected a full UPDATE entry for api, got %#v", got)
+}
+
 // ── ComputePlan integration ───────────────────────────────────────────────────
 
 // TestComputePlan_FreshCluster_EmitsInfraAdds verifies the orchestrator
@@ -224,32 +333,30 @@ func TestComputePlan_DetectsFirewallRuleDriftFromCfg(t *testing.T) {
 }
 
 func TestComputePlan_Converged_NoEntries(t *testing.T) {
-	// Use the activeHetzner from convergeDC and pre-seed master rules to
-	// match what cfg expects, so the planner sees zero diff.
+	// Use the activeHetzner from convergeDC and align cfg so the planner
+	// sees zero diff. cfg declares only the master (matches the seeded
+	// fake), no services (no workload ADDs from planServices), no
+	// domains (master rules base-only matches the seeded empty rules).
 	var log opLog
 	dc := convergeDC(&log, convergeMock())
 
-	// Pre-stamp the master firewall with the rules cfg will compute, so
-	// the rule diff is empty. cfg has no domains → master rules are nil
-	// (base only). Already the seeded state.
 	cfg := &config.AppConfig{
 		App: "myapp", Env: "prod",
 		Providers: config.ProvidersDef{Infra: "test-reconcile"},
 		Servers:   map[string]config.ServerDef{"master": {Type: "cax11", Region: "nbg1", Role: "master"}},
-		Services:  map[string]config.ServiceDef{"web": {Image: "nginx", Port: 80}},
-		// no domains, no tunnel → no Caddy 80/443 → master rules nil
+		// no services, no crons, no domains, no tunnel — nothing to diff
 	}
 
 	plan, err := ComputePlan(context.Background(), dc, cfg)
 	if err != nil {
 		t.Fatalf("ComputePlan: %v", err)
 	}
-	// Allow a worker-fw deletion entry IFF the seeded fake had one but
-	// cfg has no workers. convergeDC seeds worker-fw too, and cfg has no
-	// workers — that's a legitimate firewall existence DELETE.
+	// The seeded fake has worker-fw but cfg has no workers — that's a
+	// legitimate firewall existence DELETE. Everything else should be
+	// silent.
 	for _, e := range plan.Entries {
 		if e.Resource == provider.ResFirewall && e.Kind == provider.PlanDelete && e.Name == "nvoi-myapp-prod-worker-fw" {
-			continue // expected
+			continue // expected: seeded fixture artifact
 		}
 		t.Errorf("unexpected entry in converged plan: %+v", e)
 	}

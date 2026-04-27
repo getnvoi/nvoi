@@ -78,6 +78,32 @@ func (k *KubeFake) SeedReadyPod(ns, service string) {
 	_, _ = k.Typed.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{})
 }
 
+// SeedDeployment pre-populates the typed fake with a Deployment carrying
+// the given owner label and one container with the given image. Used by
+// the plan tests to simulate "this workload was created by a previous
+// deploy" without exercising the full apply pipeline.
+func (k *KubeFake) SeedDeployment(ns, name, owner, image string) {
+	dep := &appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				utils.LabelAppManagedBy: utils.LabelManagedBy,
+				utils.LabelNvoiOwner:    owner,
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: name, Image: image}},
+				},
+			},
+		},
+	}
+	_, _ = k.Typed.AppsV1().Deployments(ns).Create(context.Background(), dep, metav1.CreateOptions{})
+}
+
 // AutoReadyPods installs a reactor on the typed fake that responds to any
 // "list pods" call with a single ready pod matching the requested label
 // selector. Tests that exercise reconcilers calling WaitRollout opt in by

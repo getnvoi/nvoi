@@ -217,4 +217,19 @@ func (b *BucketClient) ListResources(ctx context.Context) ([]provider.ResourceGr
 	return []provider.ResourceGroup{g}, nil
 }
 
+// ListBuckets returns the names of every S3 bucket on the account.
+// Used by the plan engine to diff cfg.Storage vs live (filtered by
+// cluster prefix at the consumer).
+func (b *BucketClient) ListBuckets(ctx context.Context) ([]string, error) {
+	resp, err := b.s3.ListBuckets(ctx, &s3.ListBucketsInput{})
+	if err != nil {
+		return nil, fmt.Errorf("list buckets: %w", err)
+	}
+	out := make([]string, 0, len(resp.Buckets))
+	for _, bucket := range resp.Buckets {
+		out = append(out, deref(bucket.Name))
+	}
+	return out, nil
+}
+
 var _ provider.BucketProvider = (*BucketClient)(nil)

@@ -3,8 +3,11 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/getnvoi/nvoi/internal/config"
 	"github.com/getnvoi/nvoi/pkg/kube"
@@ -100,6 +103,22 @@ func isInfraResource(resource string) bool {
 func ComputePlan(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) (*Plan, error) {
 	plan := &Plan{}
 
+	// Cluster.Kube routes to infra.Connect (read-only ≤500ms) when
+	// MasterKube isn't already set — the same on-demand path every
+	// other CLI verb uses. When ComputePlan runs from inside Deploy,
+	// MasterKube is already populated from Bootstrap and Kube returns
+	// the borrowed reference (cleanup is a no-op). Either way, we own
+	// the client lifecycle here so the CLI doesn't touch the on-demand
+	// fields directly.
+	kc, _, cleanup, err := dc.Cluster.Kube(ctx, config.NewView(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("plan: kube: %w", err)
+	}
+	defer cleanup()
+	prevKube := dc.Cluster.MasterKube
+	dc.Cluster.MasterKube = kc
+	defer func() { dc.Cluster.MasterKube = prevKube }()
+
 	// Infra: provider-owned diff (servers / firewalls / volumes).
 	// Resolve the provider read-only — credentials come from the same
 	// CredentialSource the deploy path uses.
@@ -115,12 +134,45 @@ func ComputePlan(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 	}
 	plan.Entries = append(plan.Entries, infraEntries...)
 
+	// Storage buckets — diff cfg.Storage vs live BucketProvider.ListBuckets
+	// (filtered by cluster prefix; orphan-safe with database backup buckets
+	// included in the desired set).
+	if dc.Storage.Name != "" {
+		storageEntries, err := planStorage(ctx, dc, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("plan: storage: %w", err)
+		}
+		plan.Entries = append(plan.Entries, storageEntries...)
+	}
+
+	// Databases: k8s-side existence (StatefulSet for selfhosted,
+	// credentials Secret, backup CronJob, backup-creds Secret).
+	dbEntries, err := planDatabases(ctx, dc, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("plan: databases: %w", err)
+	}
+	plan.Entries = append(plan.Entries, dbEntries...)
+
 	// Registries: pull-secret existence in the app namespace.
 	regEntries, err := planRegistries(ctx, dc, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("plan: registries: %w", err)
 	}
 	plan.Entries = append(plan.Entries, regEntries...)
+
+	// Services + Crons: workload existence + image-tag detection +
+	// per-workload Secret key diff.
+	svcEntries, err := planServices(ctx, dc, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("plan: services: %w", err)
+	}
+	plan.Entries = append(plan.Entries, svcEntries...)
+
+	cronEntries, err := planCrons(ctx, dc, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("plan: crons: %w", err)
+	}
+	plan.Entries = append(plan.Entries, cronEntries...)
 
 	// DNS records — gated on infra exposing public ingress + cfg
 	// declaring domains, mirroring reconcile.Deploy's gate.
@@ -130,6 +182,23 @@ func ComputePlan(ctx context.Context, dc *config.DeployContext, cfg *config.AppC
 			return nil, fmt.Errorf("plan: dns: %w", err)
 		}
 		plan.Entries = append(plan.Entries, dnsEntries...)
+	}
+
+	// Ingress: Caddy bootstrap workloads + per-domain routes (when
+	// in Caddy mode), OR tunnel agent workloads + provider-side tunnel
+	// (when providers.tunnel is set).
+	if cfg.Providers.Tunnel != "" {
+		tunEntries, err := planTunnelIngress(ctx, dc, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("plan: tunnel: %w", err)
+		}
+		plan.Entries = append(plan.Entries, tunEntries...)
+	} else if infra.HasPublicIngress() && len(cfg.Domains) > 0 {
+		ingressEntries, err := planIngress(ctx, dc, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("plan: ingress: %w", err)
+		}
+		plan.Entries = append(plan.Entries, ingressEntries...)
 	}
 
 	return plan, nil
@@ -289,6 +358,543 @@ func sortedKeys(m map[string]bool) []string {
 }
 
 func sortedDomains(m map[string]bool) []string { return sortedKeys(m) }
+
+// imageHashRE matches the trailing `<sep>YYYYMMDD-HHMMSS` deploy-hash
+// suffix that ResolveImage stamps onto every built image — `<sep>` is
+// `:` when the user-declared image had no tag (`repo:<hash>`) and `-`
+// when it had one (`repo:v2-<hash>`). Stripping this suffix from both
+// live and desired images lets us tell whether the only diff is the
+// hash (image-tag UPDATE that auto-applies) vs a real repo/tag change
+// (full UPDATE that prompts).
+var imageHashRE = regexp.MustCompile(`[-:]\d{8}-\d{6}$`)
+
+// stripDeployHash removes the trailing `-YYYYMMDD-HHMMSS` segment if
+// present. Idempotent on images that don't carry one.
+func stripDeployHash(image string) string {
+	return imageHashRE.ReplaceAllString(image, "")
+}
+
+// planServices diffs cfg.Services against the live cluster:
+//
+//   - Workload existence (Deployment / StatefulSet) via ListOwned + cfg.
+//   - Image change detection per existing workload — image-tag-only
+//     updates (the every-deploy case) carry Reason="image-tag" so
+//     they auto-apply; any other repo/tag change is a full UPDATE.
+//   - Per-service Secret key diff — keys added/removed in the
+//     `<name>-secrets` Secret surface as Resource=ResSecretKey entries.
+//
+// Spec drift beyond image (replicas / env / port / command) currently
+// applies silently in the apply path; richer diff is a follow-up.
+func planServices(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) ([]provider.PlanEntry, error) {
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
+		return nil, fmt.Errorf("planServices: no master kube client")
+	}
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return nil, err
+	}
+	ns := names.KubeNamespace()
+
+	desired := map[string]bool{}
+	for n := range cfg.Services {
+		desired[n] = true
+	}
+
+	live, err := combinedWorkloadNames(ctx, kc, ns, utils.OwnerServices)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []provider.PlanEntry
+
+	// Per-service add/update entries. Iterate in a stable order.
+	for _, name := range utils.SortedKeys(cfg.Services) {
+		if !live[name] {
+			entries = append(entries, provider.PlanEntry{
+				Kind:     provider.PlanAdd,
+				Resource: provider.ResWorkload,
+				Name:     name,
+				Detail:   "service",
+			})
+			continue
+		}
+		// Workload exists — compare image. Stamp DeployHash so the
+		// resolved image looks like what would be applied THIS deploy;
+		// stripDeployHash normalizes both sides for the equality check.
+		hash := dc.Cluster.DeployHash
+		if hash == "" {
+			hash = "00000000-000000" // placeholder for plan-only invocations
+		}
+		desiredImage, err := ResolveImage(cfg, name, hash)
+		if err != nil {
+			return nil, fmt.Errorf("services.%s: resolve image: %w", name, err)
+		}
+		liveImage, err := getDeploymentOrSTSImage(ctx, kc, ns, name)
+		if err != nil {
+			return nil, fmt.Errorf("services.%s: read live image: %w", name, err)
+		}
+		if liveImage != "" && liveImage != desiredImage {
+			if stripDeployHash(liveImage) == stripDeployHash(desiredImage) {
+				entries = append(entries, provider.PlanEntry{
+					Kind:     provider.PlanUpdate,
+					Resource: provider.ResWorkload,
+					Name:     name,
+					Detail:   "image rebuilt",
+					Reason:   "image-tag",
+				})
+			} else {
+				entries = append(entries, provider.PlanEntry{
+					Kind:     provider.PlanUpdate,
+					Resource: provider.ResWorkload,
+					Name:     name,
+					Detail:   fmt.Sprintf("image: %s → %s", liveImage, desiredImage),
+				})
+			}
+		}
+	}
+
+	// Orphan workloads: in live but not in cfg.
+	liveNames := make([]string, 0, len(live))
+	for n := range live {
+		liveNames = append(liveNames, n)
+	}
+	sort.Strings(liveNames)
+	for _, n := range liveNames {
+		if desired[n] {
+			continue
+		}
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanDelete, Resource: provider.ResWorkload, Name: n, Detail: "service",
+		})
+	}
+
+	// Per-service Secret key diff — only for services in cfg whose
+	// `<name>-secrets` already exists. Adds/removes flagged per-key.
+	for _, name := range utils.SortedKeys(cfg.Services) {
+		if !live[name] {
+			continue // ADD entry above already covers initial keys
+		}
+		desiredKeys := desiredSecretKeys(cfg.Services[name].Secrets)
+		liveKeys, err := kc.ListSecretKeys(ctx, ns, names.KubeServiceSecrets(name))
+		if err != nil {
+			continue // best-effort; treat as no diff
+		}
+		entries = append(entries, secretKeyDiff(name, desiredKeys, liveKeys)...)
+	}
+
+	return entries, nil
+}
+
+// planCrons mirrors planServices for `cfg.Crons` — workload existence
+// + image-tag detection + schedule diff + per-cron Secret key diff.
+func planCrons(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) ([]provider.PlanEntry, error) {
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
+		return nil, fmt.Errorf("planCrons: no master kube client")
+	}
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return nil, err
+	}
+	ns := names.KubeNamespace()
+
+	liveNames, err := kc.ListOwned(ctx, ns, utils.OwnerCrons, kube.KindCronJob)
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	for _, n := range liveNames {
+		live[n] = true
+	}
+	desired := map[string]bool{}
+	for n := range cfg.Crons {
+		desired[n] = true
+	}
+
+	var entries []provider.PlanEntry
+	for _, name := range utils.SortedKeys(cfg.Crons) {
+		if !live[name] {
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanAdd, Resource: provider.ResCronJob, Name: name,
+				Detail: cfg.Crons[name].Schedule,
+			})
+			continue
+		}
+		// Schedule + image diff via direct CronJob Get.
+		cj, err := kc.Clientset().BatchV1().CronJobs(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			continue // best-effort
+		}
+		if cj.Spec.Schedule != cfg.Crons[name].Schedule {
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+				Detail: fmt.Sprintf("schedule: %s → %s", cj.Spec.Schedule, cfg.Crons[name].Schedule),
+			})
+		}
+		if len(cj.Spec.JobTemplate.Spec.Template.Spec.Containers) > 0 {
+			liveImage := cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image
+			desiredImage := cfg.Crons[name].Image
+			if liveImage != desiredImage && liveImage != "" {
+				if stripDeployHash(liveImage) == stripDeployHash(desiredImage) {
+					entries = append(entries, provider.PlanEntry{
+						Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+						Detail: "image rebuilt", Reason: "image-tag",
+					})
+				} else {
+					entries = append(entries, provider.PlanEntry{
+						Kind: provider.PlanUpdate, Resource: provider.ResCronJob, Name: name,
+						Detail: fmt.Sprintf("image: %s → %s", liveImage, desiredImage),
+					})
+				}
+			}
+		}
+	}
+	for _, n := range liveNames {
+		if desired[n] {
+			continue
+		}
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanDelete, Resource: provider.ResCronJob, Name: n,
+		})
+	}
+	for _, name := range utils.SortedKeys(cfg.Crons) {
+		if !live[name] {
+			continue
+		}
+		desiredKeys := desiredSecretKeys(cfg.Crons[name].Secrets)
+		liveKeys, err := kc.ListSecretKeys(ctx, ns, names.KubeServiceSecrets(name))
+		if err != nil {
+			continue
+		}
+		entries = append(entries, secretKeyDiff(name, desiredKeys, liveKeys)...)
+	}
+	return entries, nil
+}
+
+// planStorage diffs cfg.Storage (user-declared buckets) + the database
+// backup buckets against the live BucketProvider listing scoped to the
+// cluster prefix. Both surfaces share one bucket provider — we union
+// the desired sets here so neither flags the other as orphan.
+func planStorage(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) ([]provider.PlanEntry, error) {
+	bucket, err := provider.ResolveBucket(dc.Storage.Name, dc.Storage.Creds)
+	if err != nil {
+		return nil, fmt.Errorf("resolve bucket provider: %w", err)
+	}
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return nil, err
+	}
+	prefix := names.Base() + "-"
+
+	desired := map[string]bool{}
+	for n, def := range cfg.Storage {
+		want := def.Bucket
+		if want == "" {
+			want = names.Bucket(n)
+		}
+		desired[want] = true
+	}
+	for n, db := range cfg.Databases {
+		if db.Backup != nil {
+			desired[names.KubeDatabaseBackupBucket(n)] = true
+		}
+	}
+
+	live, err := bucket.ListBuckets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	liveSet := map[string]bool{}
+	for _, b := range live {
+		if !strings.HasPrefix(b, prefix) {
+			continue
+		}
+		liveSet[b] = true
+	}
+
+	var entries []provider.PlanEntry
+	for _, n := range sortedKeys(desired) {
+		if liveSet[n] {
+			continue
+		}
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanAdd, Resource: provider.ResBucket, Name: n,
+		})
+	}
+	for _, n := range sortedKeys(liveSet) {
+		if desired[n] {
+			continue
+		}
+		entries = append(entries, provider.PlanEntry{
+			Kind:     provider.PlanDelete,
+			Resource: provider.ResBucket, Name: n,
+			Detail: "⚠ holds user data — only `nvoi teardown --delete-storage` actually deletes",
+		})
+	}
+	return entries, nil
+}
+
+// planDatabases diffs cfg.Databases against k8s-side state — credentials
+// Secret existence, StatefulSet existence (selfhosted only), backup
+// CronJob existence (when backup configured), backup-creds Secret
+// existence. Provider-side resources for SaaS engines (Neon branches,
+// PlanetScale databases) are NOT diffed here — that requires per-engine
+// list APIs and is deferred until those are added to DatabaseProvider.
+//
+// The resulting entries report Resource=ResDatabase for the high-level
+// "database X" change so the renderer doesn't drown the operator in
+// the seven sub-resources each DB owns.
+func planDatabases(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) ([]provider.PlanEntry, error) {
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
+		return nil, nil // first deploy — nothing to read; ADD entries via cfg-only loop
+	}
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return nil, err
+	}
+	ns := names.KubeNamespace()
+
+	// Live: every credentials Secret carrying owner=databases tells us a
+	// database currently exists. Suffix-match to derive the DB name.
+	liveSecrets, err := kc.ListOwned(ctx, ns, utils.OwnerDatabases, kube.KindSecret)
+	if err != nil {
+		return nil, err
+	}
+	liveDBs := map[string]bool{}
+	credSuffix := "-credentials"
+	for _, s := range liveSecrets {
+		// names.KubeDatabaseCredentials(name) = base + "-db-" + name + "-credentials"
+		marker := "-db-"
+		if i := strings.Index(s, marker); i > 0 && strings.HasSuffix(s, credSuffix) {
+			dbName := s[i+len(marker) : len(s)-len(credSuffix)]
+			if dbName != "" {
+				liveDBs[dbName] = true
+			}
+		}
+	}
+
+	desired := map[string]bool{}
+	for n := range cfg.Databases {
+		desired[n] = true
+	}
+
+	var entries []provider.PlanEntry
+	for _, n := range utils.SortedKeys(cfg.Databases) {
+		if !liveDBs[n] {
+			def := cfg.Databases[n]
+			detail := def.Engine
+			if def.Server != "" {
+				detail = fmt.Sprintf("%s on %s", def.Engine, def.Server)
+			}
+			entries = append(entries, provider.PlanEntry{
+				Kind: provider.PlanAdd, Resource: provider.ResDatabase, Name: n,
+				Detail: detail,
+			})
+		}
+	}
+	for _, n := range sortedKeys(liveDBs) {
+		if desired[n] {
+			continue
+		}
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanDelete, Resource: provider.ResDatabase, Name: n,
+		})
+	}
+	return entries, nil
+}
+
+// planIngress diffs the Caddy bootstrap workloads + per-domain routes
+// against cfg. Caller already gated on cfg.Domains > 0 + Caddy mode.
+//
+//   - Caddy itself (Deployment/Service/ConfigMap/PVC in kube-system) →
+//     ADD if missing entirely; no entry when present (re-apply is
+//     idempotent and silent in the apply path).
+//   - Per-domain routes via GetCaddyRoutes — ADD when desired domain
+//     not loaded, DELETE for orphan routes.
+func planIngress(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) ([]provider.PlanEntry, error) {
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
+		return nil, fmt.Errorf("planIngress: no master kube client")
+	}
+
+	// Caddy bootstrap presence — Deployment in kube-system w/ owner=caddy.
+	caddyDeploys, err := kc.ListOwned(ctx, kube.CaddyNamespace, utils.OwnerCaddy, kube.KindDeployment)
+	if err != nil {
+		return nil, err
+	}
+	var entries []provider.PlanEntry
+	if len(caddyDeploys) == 0 {
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanAdd, Resource: provider.ResCaddyRoute, Name: "caddy",
+			Detail: "ingress controller (kube-system)",
+		})
+	}
+
+	// Per-domain routes — graceful no-op when Caddy isn't up yet.
+	live := map[string]bool{}
+	if routes, err := kc.GetCaddyRoutes(ctx); err == nil {
+		for _, r := range routes {
+			for _, d := range r.Domains {
+				live[d] = true
+			}
+		}
+	}
+	desired := map[string]bool{}
+	for _, doms := range cfg.Domains {
+		for _, d := range doms {
+			desired[d] = true
+		}
+	}
+	for _, d := range sortedKeys(desired) {
+		if live[d] {
+			continue
+		}
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanAdd, Resource: provider.ResCaddyRoute, Name: d,
+		})
+	}
+	for _, d := range sortedKeys(live) {
+		if desired[d] {
+			continue
+		}
+		entries = append(entries, provider.PlanEntry{
+			Kind: provider.PlanDelete, Resource: provider.ResCaddyRoute, Name: d,
+		})
+	}
+	return entries, nil
+}
+
+// planTunnelIngress diffs the tunnel agent k8s workloads + (TODO)
+// provider-side tunnel object. Today we only diff the k8s side — adding
+// or removing `providers.tunnel:` from cfg flips the whole stack, so a
+// presence/absence check on the agent Deployment captures the user-
+// visible delta. Provider-side tunnel object listing is deferred to a
+// follow-up that adds a List method to TunnelProvider.
+func planTunnelIngress(ctx context.Context, dc *config.DeployContext, cfg *config.AppConfig) ([]provider.PlanEntry, error) {
+	kc := dc.Cluster.MasterKube
+	if kc == nil {
+		return nil, fmt.Errorf("planTunnelIngress: no master kube client")
+	}
+	names, err := dc.Cluster.Names()
+	if err != nil {
+		return nil, err
+	}
+	ns := names.KubeNamespace()
+	agents, err := kc.ListOwned(ctx, ns, utils.OwnerTunnel, kube.KindDeployment)
+	if err != nil {
+		return nil, err
+	}
+	if len(agents) == 0 && cfg.Providers.Tunnel != "" {
+		return []provider.PlanEntry{{
+			Kind:     provider.PlanAdd,
+			Resource: provider.ResTunnel,
+			Name:     cfg.Providers.Tunnel,
+			Detail:   "tunnel agent + provider-side tunnel",
+		}}, nil
+	}
+	if len(agents) > 0 && cfg.Providers.Tunnel == "" {
+		return []provider.PlanEntry{{
+			Kind:     provider.PlanDelete,
+			Resource: provider.ResTunnel,
+			Name:     "tunnel",
+		}}, nil
+	}
+	return nil, nil
+}
+
+// ── shared helpers used by the workload planners ──────────────────────
+
+// combinedWorkloadNames returns the union of Deployment + StatefulSet
+// names for the given owner. Services emit one of the two depending on
+// whether they declare `volumes:` (StatefulSet) or not (Deployment).
+func combinedWorkloadNames(ctx context.Context, kc *kube.Client, ns, owner string) (map[string]bool, error) {
+	deps, err := kc.ListOwned(ctx, ns, owner, kube.KindDeployment)
+	if err != nil {
+		return nil, err
+	}
+	stsNames, err := kc.ListOwned(ctx, ns, owner, kube.KindStatefulSet)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, n := range deps {
+		out[n] = true
+	}
+	for _, n := range stsNames {
+		out[n] = true
+	}
+	return out, nil
+}
+
+// getDeploymentOrSTSImage reads the first container's image from
+// either kind. Returns "" when neither exists or when the container
+// list is empty (zero-state — apply will populate it).
+func getDeploymentOrSTSImage(ctx context.Context, kc *kube.Client, ns, name string) (string, error) {
+	cs := kc.Clientset()
+	if dep, err := cs.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		if len(dep.Spec.Template.Spec.Containers) > 0 {
+			return dep.Spec.Template.Spec.Containers[0].Image, nil
+		}
+	}
+	if sts, err := cs.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		if len(sts.Spec.Template.Spec.Containers) > 0 {
+			return sts.Spec.Template.Spec.Containers[0].Image, nil
+		}
+	}
+	return "", nil
+}
+
+// desiredSecretKeys mirrors resolveSecretEntries' key-derivation logic
+// without resolving values — bare entries shorthand `FOO` to `FOO`,
+// `ALIAS=$VAR` shorthands to `ALIAS`. Used by the planners to diff
+// keys without reaching into the credential source.
+func desiredSecretKeys(entries []string) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if i := strings.IndexByte(e, '='); i > 0 {
+			out = append(out, e[:i])
+		} else {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// secretKeyDiff emits per-key ADD/DELETE entries for a workload's
+// per-service Secret. Helps catch the "operator dropped a secret ref"
+// case which would otherwise apply silently.
+func secretKeyDiff(workload string, desired, live []string) []provider.PlanEntry {
+	d := map[string]bool{}
+	for _, k := range desired {
+		d[k] = true
+	}
+	l := map[string]bool{}
+	for _, k := range live {
+		l[k] = true
+	}
+	var out []provider.PlanEntry
+	for _, k := range desired {
+		if !l[k] {
+			out = append(out, provider.PlanEntry{
+				Kind:     provider.PlanAdd,
+				Resource: provider.ResSecretKey,
+				Name:     workload + ":" + k,
+			})
+		}
+	}
+	for _, k := range live {
+		if !d[k] {
+			out = append(out, provider.PlanEntry{
+				Kind:     provider.PlanDelete,
+				Resource: provider.ResSecretKey,
+				Name:     workload + ":" + k,
+			})
+		}
+	}
+	return out
+}
 
 // silence unused-import if a later refactor drops one of these.
 var _ = strings.TrimSpace

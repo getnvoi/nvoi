@@ -3,7 +3,7 @@ package provider
 import "context"
 
 // BucketProvider abstracts object storage operations.
-// Implementations: cloudflare (R2), aws (future), hetzner (future).
+// Implementations: cloudflare (R2), aws (S3), scaleway.
 type BucketProvider interface {
 	ValidateCredentials(ctx context.Context) error
 	EnsureBucket(ctx context.Context, name string) error
@@ -14,6 +14,12 @@ type BucketProvider interface {
 	SetLifecycle(ctx context.Context, name string, expireDays int) error
 	Credentials(ctx context.Context) (BucketCredentials, error)
 	ListResources(ctx context.Context) ([]ResourceGroup, error)
+
+	// ListBuckets returns the names of every bucket on the account,
+	// unfiltered. Callers (the planner) filter by cluster prefix
+	// `nvoi-{app}-{env}-` to scope to nvoi-managed buckets.
+	// Read-only; cheap (one list call per provider).
+	ListBuckets(ctx context.Context) ([]string, error)
 }
 
 // BucketCredentials holds S3-compatible access details for injection into services.

@@ -173,4 +173,25 @@ func (c *BucketClient) ListResources(ctx context.Context) ([]provider.ResourceGr
 	return []provider.ResourceGroup{g}, nil
 }
 
+// ListBuckets returns the names of every R2 bucket on the account.
+// Used by the plan engine to diff cfg.Storage vs live (filtered by
+// cluster prefix at the consumer).
+func (c *BucketClient) ListBuckets(ctx context.Context) ([]string, error) {
+	var resp struct {
+		Result struct {
+			Buckets []struct {
+				Name string `json:"name"`
+			} `json:"buckets"`
+		} `json:"result"`
+	}
+	if err := c.api.Do(ctx, "GET", fmt.Sprintf("/accounts/%s/r2/buckets", c.accountID), nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(resp.Result.Buckets))
+	for _, b := range resp.Result.Buckets {
+		out = append(out, b.Name)
+	}
+	return out, nil
+}
+
 var _ provider.BucketProvider = (*BucketClient)(nil)
